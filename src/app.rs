@@ -640,3 +640,26 @@ impl eframe::App for FerrotexApp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_file_roundtrip() {
+        let (graph, preview) = crate::demo::brick_wall();
+        let file = ProjectFile { app: "ferrotex".into(), version: 1, graph: graph.clone(), preview: Some(preview) };
+        let json = serde_json::to_string_pretty(&file).unwrap();
+        let mut back: ProjectFile = serde_json::from_str(&json).unwrap();
+        back.graph.normalize();
+        assert_eq!(back.graph, graph);
+        assert_eq!(back.preview, Some(preview));
+        // Older / hand-written files with missing fields still load.
+        let minimal = r#"{"app":"ferrotex","version":1,"graph":{"nodes":[{"id":1,"kind":"Blur","pos":[0,0]}],
+            "links":[],"inputs":[],"resolution":[512,512],"next_id":1}}"#;
+        let mut f: ProjectFile = serde_json::from_str(minimal).unwrap();
+        f.graph.normalize();
+        assert_eq!(f.graph.nodes[0].params.len(), 2); // tiling + radius
+        assert!(f.graph.next_id > 1);
+    }
+}

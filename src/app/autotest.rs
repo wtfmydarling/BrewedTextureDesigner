@@ -146,7 +146,7 @@ impl AutoPilot {
     /// Queue the events of the next step; returns its name, how long to let the app
     /// settle afterwards, and the check to run.
     fn plan(&mut self, app: &FerrotexApp) -> Option<(&'static str, f64, Check)> {
-        const LAST_STEP: usize = 22;
+        const LAST_STEP: usize = 30;
         let step = self.step;
         if step > LAST_STEP {
             return None;
@@ -579,6 +579,141 @@ impl AutoPilot {
                         } else {
                             Err(format!("zoom {zoom} -> {}", app.view.zoom))
                         }
+                    }),
+                ))
+            }
+            // ---------------------------------------------------------- Transform 2D gizmo
+            23 => {
+                self.move_to(at(0.5, 0.5));
+                self.key(Key::N, Modifiers::COMMAND);
+                let (shape, xform) = (lib("Shape")?, lib("Transform 2D")?);
+                self.drag(shape, at(0.2, 0.3));
+                self.drag(xform, at(0.55, 0.3));
+                Some((
+                    "build Shape -> Transform 2D in a new graph",
+                    0.4,
+                    Box::new(|app: &FerrotexApp| {
+                        let kinds: Vec<NodeKind> = app.graph.nodes.iter().map(|n| n.kind).collect();
+                        if kinds == [NodeKind::Shape, NodeKind::Transform2D] {
+                            Ok(())
+                        } else {
+                            Err(format!("nodes {kinds:?}"))
+                        }
+                    }),
+                ))
+            }
+            24 => {
+                let (shape, xform) = (node_of(NodeKind::Shape)?, node_of(NodeKind::Transform2D)?);
+                let (a, b) = (socket(shape, "o:output", true)?, socket(xform, "i:input", false)?);
+                self.drag(a, b);
+                let r = body(xform)?;
+                self.double_click(r.center());
+                Some((
+                    "connect and show the Transform 2D in the 2D view",
+                    0.6,
+                    Box::new(move |app: &FerrotexApp| {
+                        if app.graph.link_into(xform, "i:input").is_none() {
+                            return Err("not connected".into());
+                        }
+                        if app.preview.node != Some(xform) {
+                            return Err("not previewed".into());
+                        }
+                        if app.preview.debug_gizmo.is_none() { Err("gizmo not drawn".into()) } else { Ok(()) }
+                    }),
+                ))
+            }
+            25 => {
+                let xform = node_of(NodeKind::Transform2D)?;
+                let g = app.preview.debug_gizmo?;
+                let delta = vec2(60.0, 30.0);
+                self.drag(g.center, g.center + delta);
+                let expected = [delta.x / g.image_rect.width(), delta.y / g.image_rect.height()];
+                Some((
+                    "dragging the gizmo center moves the image (offset)",
+                    0.3,
+                    Box::new(move |app: &FerrotexApp| {
+                        let n = app.graph.node(xform).ok_or("node gone")?;
+                        match n.param("offset").map(|p| &p.value) {
+                            Some(crate::graph::ParamValue::Vec2(o))
+                                if (o[0] - expected[0]).abs() < 0.02 && (o[1] - expected[1]).abs() < 0.02 =>
+                            {
+                                Ok(())
+                            }
+                            other => Err(format!("offset {other:?}, expected {expected:?}")),
+                        }
+                    }),
+                ))
+            }
+            26 => {
+                let xform = node_of(NodeKind::Transform2D)?;
+                let g = app.preview.debug_gizmo?;
+                // Pull the top-left corner outwards: the image grows around the pivot.
+                self.drag(g.corners[0], g.corners[0] - vec2(30.0, 30.0));
+                Some((
+                    "dragging a gizmo corner scales the image",
+                    0.3,
+                    Box::new(move |app: &FerrotexApp| {
+                        let n = app.graph.node(xform).ok_or("node gone")?;
+                        match n.param("scale").map(|p| &p.value) {
+                            Some(crate::graph::ParamValue::Vec2(s)) if s[0] > 1.1 && s[1] > 1.1 => Ok(()),
+                            other => Err(format!("scale {other:?}")),
+                        }
+                    }),
+                ))
+            }
+            27 => {
+                let xform = node_of(NodeKind::Transform2D)?;
+                let g = app.preview.debug_gizmo?;
+                let r = g.ring_radius;
+                // From the ring's right side to its top: a quarter turn counter-clockwise.
+                self.drag(g.center + vec2(r, 0.0), g.center + vec2(0.0, -r));
+                Some((
+                    "dragging the gizmo ring rotates the image by 90 degrees",
+                    0.3,
+                    Box::new(move |app: &FerrotexApp| {
+                        let n = app.graph.node(xform).ok_or("node gone")?;
+                        let rot = n.param("rotation").map_or(0.0, |p| p.value.as_f32());
+                        if (rot - 90.0).abs() < 3.0 { Ok(()) } else { Err(format!("rotation {rot}")) }
+                    }),
+                ))
+            }
+            28 => {
+                self.key(Key::Z, Modifiers::COMMAND);
+                Some((
+                    "undo reverts the last gizmo drag",
+                    0.9,
+                    Box::new(|app: &FerrotexApp| {
+                        let n = app.graph.nodes.iter().find(|n| n.kind == NodeKind::Transform2D).ok_or("gone")?;
+                        let rot = n.param("rotation").map_or(0.0, |p| p.value.as_f32());
+                        if rot.abs() < 1e-3 { Ok(()) } else { Err(format!("rotation still {rot}")) }
+                    }),
+                ))
+            }
+            29 => {
+                // The transformed image must actually differ from the source on the GPU.
+                self.idle(3);
+                Some((
+                    "Transform 2D image is computed without errors",
+                    0.2,
+                    Box::new(|app: &FerrotexApp| {
+                        let n = app.graph.nodes.iter().find(|n| n.kind == NodeKind::Transform2D).ok_or("gone")?;
+                        let st = app.engine.state(n.id).ok_or("no state")?;
+                        if let Some(e) = &st.error {
+                            return Err(e.clone());
+                        }
+                        if st.image.is_none() { Err("no image".into()) } else { Ok(()) }
+                    }),
+                ))
+            }
+            30 => {
+                // Everything above must have run without a single wgpu validation error.
+                self.idle(2);
+                Some((
+                    "no GPU validation errors during the whole session",
+                    0.1,
+                    Box::new(|app: &FerrotexApp| {
+                        let errors = app.engine.gpu.errors.lock().map(|e| e.clone()).unwrap_or_default();
+                        if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
                     }),
                 ))
             }

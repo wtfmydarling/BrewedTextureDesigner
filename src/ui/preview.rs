@@ -43,6 +43,15 @@ struct GizmoDrag {
     start: Xform,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct GizmoDebug {
+    pub center: Pos2,
+    /// Transformed image corners: top-left, top-right, bottom-right, bottom-left.
+    pub corners: [Pos2; 4],
+    pub ring_radius: f32,
+    pub image_rect: Rect,
+}
+
 pub struct PreviewState {
     pub node: Option<NodeId>,
     pub mode: u32,
@@ -52,6 +61,8 @@ pub struct PreviewState {
     fit: bool,
     gizmo: Option<GizmoDrag>,
     shown: Option<NodeId>,
+    /// Screen geometry of the Transform 2D gizmo drawn last frame (used by the UI self-test).
+    pub debug_gizmo: Option<GizmoDebug>,
 }
 
 impl Default for PreviewState {
@@ -65,6 +76,7 @@ impl Default for PreviewState {
             fit: true,
             gizmo: None,
             shown: None,
+            debug_gizmo: None,
         }
     }
 }
@@ -124,6 +136,7 @@ fn set_param(graph: &mut Graph, id: NodeId, key: &str, value: ParamValue) {
 }
 
 pub fn show(ui: &mut Ui, graph: &mut Graph, engine: &mut Engine, state: &mut PreviewState) {
+    state.debug_gizmo = None;
     // Forget a node that was deleted.
     if state.node.is_some_and(|id| !graph.contains(id)) {
         state.node = None;
@@ -303,6 +316,7 @@ pub fn show(ui: &mut Ui, graph: &mut Graph, engine: &mut Engine, state: &mut Pre
             }
             None
         };
+        state.debug_gizmo = Some(GizmoDebug { center, corners: [quad[0], quad[1], quad[2], quad[3]], ring_radius: ring_r, image_rect: img_rect });
         let hovered = pointer.and_then(&hit);
         let gizmo_hover = hovered.is_some() || state.gizmo.is_some();
 

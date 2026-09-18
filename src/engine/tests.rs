@@ -245,3 +245,63 @@ fn every_image_node_runs_with_defaults() {
     }
     assert!(e.gpu.take_errors().is_empty());
 }
+
+#[test]
+fn bitmap_node_decodes_and_resamples() {
+    let Some(mut e) = engine() else { return };
+    let dir = std::env::temp_dir().join(format!("ferrotex_bitmap_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("tex.png");
+    // 4x2 image: distinct colors per texel.
+    let colors: [[u8; 4]; 8] = [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 255, 255],
+        [0, 0, 0, 255],
+        [128, 128, 128, 255],
+        [255, 255, 0, 255],
+        [0, 255, 255, 255],
+    ];
+    let raw: Vec<u8> = colors.iter().flatten().copied().collect();
+    image::RgbaImage::from_raw(4, 2, raw).unwrap().save(&path).unwrap();
+
+    let mut g = graph();
+    let b = g.add_node(NodeKind::Bitmap, [0.0, 0.0]);
+    set(&mut g, b, "tiling", ParamValue::Enum(0)); // clamp at the borders
+    set(&mut g, b, "path", ParamValue::Text(path.display().to_string()));
+    // Decoding happens on a worker thread; keep evaluating until it lands.
+    let mut ready = false;
+    for _ in 0..300 {
+        e.evaluate(&g);
+        let st = e.state(b).unwrap();
+        assert!(st.error.is_none(), "{:?}", st.error);
+        if st.warning.is_none() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(ready, "bitmap never finished loading");
+    let data = read_node(&e, b).unwrap();
+    // Centers of texel (1, 0) (green) and (2, 1) (yellow) in the 256x256 output.
+    let px = |tx: f32, ty: f32| pixel(&data, ((tx + 0.5) / 4.0 * RES as f32) as u32, ((ty + 0.5) / 2.0 * RES as f32) as u32);
+    let green = px(1.0, 0.0);
+    let yellow = px(2.0, 1.0);
+    assert!(close(green[0], 0.0, 0.02) && close(green[1], 1.0, 0.02), "{green:?}");
+    assert!(close(yellow[0], 1.0, 0.02) && close(yellow[1], 1.0, 0.02) && close(yellow[2], 0.0, 0.02), "{yellow:?}");
+
+    // A missing file is an error on the node, not a crash.
+    set(&mut g, b, "path", ParamValue::Text(dir.join("missing.png").display().to_string()));
+    let mut error = None;
+    for _ in 0..300 {
+        e.evaluate(&g);
+        error = e.state(b).unwrap().error.clone();
+        if error.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(error.as_deref().is_some_and(|m| m.contains("Cannot open")), "{error:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
