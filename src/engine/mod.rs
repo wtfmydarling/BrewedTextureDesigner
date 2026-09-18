@@ -619,6 +619,12 @@ impl Engine {
 
     // ------------------------------------------------------------------ 2D view
 
+    /// Display texture of `node` if it is the one currently prepared for the 2D view.
+    pub fn preview_info(&self, node: NodeId) -> Option<PreviewInfo> {
+        let p = self.preview.as_ref()?;
+        (p.node == node && p.version != 0).then(|| PreviewInfo { texture: p.id, size: p.image.size() })
+    }
+
     /// Prepare the display image (with mipmaps) of `node` for the 2D view.
     /// `mode`: 0 RGBA, 1 RGB, 2 R, 3 G, 4 B, 5 A.
     pub fn prepare_preview(&mut self, node: NodeId, mode: u32) -> Option<PreviewInfo> {

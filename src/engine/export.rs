@@ -118,6 +118,37 @@ pub fn export_outputs(engine: &Engine, graph: &Graph, dir: &Path, tx: &Sender<Ex
     started
 }
 
+/// Export one Output node to `path` (PNG). Returns false if nothing was started.
+pub fn export_node(engine: &Engine, graph: &Graph, node: crate::graph::NodeId, path: PathBuf, tx: &Sender<ExportMessage>) -> bool {
+    let Some(n) = graph.node(node) else { return false };
+    let format = engine
+        .state(node)
+        .and_then(|s| s.driven.get("format"))
+        .map_or(n.enum_value("format"), |v| v.as_f32() as u32);
+    let sixteen = n.enum_value("bit_depth") == 1;
+    let Some(image) = engine.image(node) else {
+        let _ = tx.send(ExportMessage::Failed("This output has no image yet".into()));
+        return false;
+    };
+    let rgba = match engine.gpu.read_image_blocking(image) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tx.send(ExportMessage::Failed(e));
+            return false;
+        }
+    };
+    let (w, h) = (image.width(), image.height());
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let msg = match write_png(&path, &rgba, w, h, format, sixteen) {
+            Ok(()) => ExportMessage::Saved(path),
+            Err(e) => ExportMessage::Failed(e),
+        };
+        let _ = tx.send(msg);
+    });
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
