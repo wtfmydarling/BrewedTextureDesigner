@@ -44,8 +44,12 @@ pub fn param_editor(ui: &mut Ui, def: &ParamDef, value: &mut ParamValue, width: 
             let mut changed = false;
             ui.horizontal(|ui| {
                 let w = ((width - 12.0) / 2.0).max(40.0);
-                changed |= ui.add_sized([w, 20.0], egui::DragValue::new(&mut v[0]).speed(speed).prefix("x ").max_decimals(3)).changed();
-                changed |= ui.add_sized([w, 20.0], egui::DragValue::new(&mut v[1]).speed(speed).prefix("y ").max_decimals(3)).changed();
+                changed |= ui
+                    .add_sized([w, 20.0], egui::DragValue::new(&mut v[0]).speed(speed).prefix("x ").max_decimals(3))
+                    .changed();
+                changed |= ui
+                    .add_sized([w, 20.0], egui::DragValue::new(&mut v[1]).speed(speed).prefix("y ").max_decimals(3))
+                    .changed();
             });
             changed
         }
@@ -54,7 +58,14 @@ pub fn param_editor(ui: &mut Ui, def: &ParamDef, value: &mut ParamValue, width: 
             ui.horizontal(|ui| {
                 for (i, label) in ["r", "g", "b", "a"].iter().enumerate() {
                     changed |= ui
-                        .add_sized([((width - 18.0) / 4.0).max(30.0), 20.0], egui::DragValue::new(&mut c[i]).speed(0.005).range(0.0..=1.0).prefix(*label).max_decimals(2))
+                        .add_sized(
+                            [((width - 18.0) / 4.0).max(30.0), 20.0],
+                            egui::DragValue::new(&mut c[i])
+                                .speed(0.005)
+                                .range(0.0..=1.0)
+                                .prefix(*label)
+                                .max_decimals(2),
+                        )
                         .changed();
                 }
             });
@@ -94,7 +105,12 @@ pub fn driven_label(ui: &mut Ui, def: &ParamDef, value: &ParamValue) {
         // A filled socket marker: the value comes from the link into this socket.
         let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 16.0), Sense::hover());
         let m = rect.center();
-        let pts = vec![m + egui::vec2(0.0, -5.0), m + egui::vec2(5.0, 0.0), m + egui::vec2(0.0, 5.0), m + egui::vec2(-5.0, 0.0)];
+        let pts = vec![
+            m + egui::vec2(0.0, -5.0),
+            m + egui::vec2(5.0, 0.0),
+            m + egui::vec2(0.0, 5.0),
+            m + egui::vec2(-5.0, 0.0),
+        ];
         ui.painter().add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
         ui.label(egui::RichText::new(text).color(color));
     })
@@ -189,7 +205,8 @@ pub fn highlight_expression(src: &str, error: Option<expr::Span>, font: FontId) 
         let next = chars.peek().map_or(src.len(), |(j, _)| *j);
         let key = |b: usize| {
             let in_err = error.is_some_and(|e| {
-                let (s, t) = if e.start == e.end { (e.start.saturating_sub(1), e.start.max(1)) } else { (e.start, e.end) };
+                let (s, t) =
+                    if e.start == e.end { (e.start.saturating_sub(1), e.start.max(1)) } else { (e.start, e.end) };
                 b >= s && b < t
             });
             (classes.get(b).copied().flatten(), in_err)

@@ -21,11 +21,8 @@ pub enum ExportMessage {
 
 /// Make an output name safe to use as a file name.
 pub fn sanitize_file_name(name: &str) -> String {
-    let cleaned: String = name
-        .trim()
-        .chars()
-        .map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c })
-        .collect();
+    let cleaned: String =
+        name.trim().chars().map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect();
     let cleaned = cleaned.trim_matches(|c| c == '.' || c == ' ').to_string();
     if cleaned.is_empty() { "output".to_string() } else { cleaned }
 }
@@ -42,7 +39,14 @@ fn file_channels(format: u32) -> &'static [usize] {
 }
 
 /// Encode already formatted RGBA f32 pixels to a PNG file.
-pub fn write_png(path: &Path, rgba: &[f32], width: u32, height: u32, format: u32, sixteen_bit: bool) -> Result<(), String> {
+pub fn write_png(
+    path: &Path,
+    rgba: &[f32],
+    width: u32,
+    height: u32,
+    format: u32,
+    sixteen_bit: bool,
+) -> Result<(), String> {
     let channels = file_channels(format);
     let err = |e: image::ImageError| format!("Cannot write '{}': {e}", path.display());
     if sixteen_bit {
@@ -84,9 +88,8 @@ pub fn export_outputs(engine: &Engine, graph: &Graph, dir: &Path, tx: &Sender<Ex
             n += 1;
         }
         let state = engine.state(node.id);
-        let format = state
-            .and_then(|s| s.driven.get("format"))
-            .map_or(node.enum_value("format"), |v| v.as_f32() as u32);
+        let format =
+            state.and_then(|s| s.driven.get("format")).map_or(node.enum_value("format"), |v| v.as_f32() as u32);
         let sixteen = node.enum_value("bit_depth") == 1;
         let Some(image) = engine.image(node.id) else {
             let _ = tx.send(ExportMessage::Failed(format!("Output '{name}' has no image")));
@@ -119,12 +122,16 @@ pub fn export_outputs(engine: &Engine, graph: &Graph, dir: &Path, tx: &Sender<Ex
 }
 
 /// Export one Output node to `path` (PNG). Returns false if nothing was started.
-pub fn export_node(engine: &Engine, graph: &Graph, node: crate::graph::NodeId, path: PathBuf, tx: &Sender<ExportMessage>) -> bool {
+pub fn export_node(
+    engine: &Engine,
+    graph: &Graph,
+    node: crate::graph::NodeId,
+    path: PathBuf,
+    tx: &Sender<ExportMessage>,
+) -> bool {
     let Some(n) = graph.node(node) else { return false };
-    let format = engine
-        .state(node)
-        .and_then(|s| s.driven.get("format"))
-        .map_or(n.enum_value("format"), |v| v.as_f32() as u32);
+    let format =
+        engine.state(node).and_then(|s| s.driven.get("format")).map_or(n.enum_value("format"), |v| v.as_f32() as u32);
     let sixteen = n.enum_value("bit_depth") == 1;
     let Some(image) = engine.image(node) else {
         let _ = tx.send(ExportMessage::Failed("This output has no image yet".into()));

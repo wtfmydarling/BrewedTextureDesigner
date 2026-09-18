@@ -15,9 +15,7 @@ use eframe::egui::{
 use super::{ACCENT, DragPayload, ERROR, WARNING, category_color, create_from_library, type_color};
 use crate::engine::Engine;
 use crate::graph::defs::{LibraryItem, library};
-use crate::graph::{
-    Clipboard, DataType, Graph, Link, Node, NodeId, NodeKind, SocketInfo, SocketKind, can_connect,
-};
+use crate::graph::{Clipboard, DataType, Graph, Link, Node, NodeId, NodeKind, SocketInfo, SocketKind, can_connect};
 
 const NODE_W: f32 = 168.0;
 const WIDE_NODE_W: f32 = 196.0;
@@ -359,18 +357,24 @@ impl GraphView {
                 scroll = 0.0;
             }
             let factor = (scroll * 0.0018).exp() * pinch;
-            if (factor - 1.0).abs() > 1e-4 {
-                if let Some(p) = pointer {
-                    let g = self.to_graph(p);
-                    self.zoom = (self.zoom * factor).clamp(0.12, 3.0);
-                    self.pan = p - rect.min - g.to_vec2() * self.zoom;
-                }
+            if (factor - 1.0).abs() > 1e-4
+                && let Some(p) = pointer
+            {
+                let g = self.to_graph(p);
+                self.zoom = (self.zoom * factor).clamp(0.12, 3.0);
+                self.pan = p - rect.min - g.to_vec2() * self.zoom;
             }
         }
 
         // ---------------------------------------------------------------- pan
         let (middle, secondary, primary, delta, alt) = ctx.input(|i| {
-            (i.pointer.middle_down(), i.pointer.secondary_down(), i.pointer.primary_down(), i.pointer.delta(), i.modifiers.alt)
+            (
+                i.pointer.middle_down(),
+                i.pointer.secondary_down(),
+                i.pointer.primary_down(),
+                i.pointer.delta(),
+                i.modifiers.alt,
+            )
         });
         let pan_button = middle || secondary || (primary && alt && self.drag == Drag::Pan);
         if self.drag == Drag::Pan {
@@ -409,10 +413,10 @@ impl GraphView {
             if (self.drag == Drag::Move || starts_move) && resp.dragged_by(PointerButton::Primary) {
                 actions.push(Action::Move(resp.drag_delta() / self.zoom));
             }
-            if let Some(state) = engine.state(*node_id) {
-                if let Some(msg) = state.error.as_ref().or(state.warning.as_ref()) {
-                    let _ = resp.clone().on_hover_text(msg.clone());
-                }
+            if let Some(state) = engine.state(*node_id)
+                && let Some(msg) = state.error.as_ref().or(state.warning.as_ref())
+            {
+                let _ = resp.clone().on_hover_text(msg.clone());
             }
             let node_id = *node_id;
             resp.context_menu(|ui| {
@@ -457,19 +461,17 @@ impl GraphView {
                     }
                     if sresp.drag_started_by(PointerButton::Primary) {
                         let me = SocketRef { node: node_id, key: s.key.clone(), output, ty: s.ty };
-                        if !output {
-                            if let Some(link) = graph.link_into(node_id, &s.key).cloned() {
-                                // Pick the link up from its input end and re-route it.
-                                actions.push(Action::Detach { node: node_id, key: s.key.clone() });
-                                let ty = graph.output_socket(link.from, &link.from_socket).map_or(s.ty, |o| o.ty);
-                                actions.push(Action::StartLink(SocketRef {
-                                    node: link.from,
-                                    key: link.from_socket.clone(),
-                                    output: true,
-                                    ty,
-                                }));
-                                continue;
-                            }
+                        if !output && let Some(link) = graph.link_into(node_id, &s.key).cloned() {
+                            // Pick the link up from its input end and re-route it.
+                            actions.push(Action::Detach { node: node_id, key: s.key.clone() });
+                            let ty = graph.output_socket(link.from, &link.from_socket).map_or(s.ty, |o| o.ty);
+                            actions.push(Action::StartLink(SocketRef {
+                                node: link.from,
+                                key: link.from_socket.clone(),
+                                output: true,
+                                ty,
+                            }));
+                            continue;
                         }
                         actions.push(Action::StartLink(me));
                     }
@@ -479,26 +481,29 @@ impl GraphView {
 
         // Hovered link (only over empty canvas).
         self.hovered_link = None;
-        if hovered && !any_node_hovered && matches!(self.drag, Drag::None) {
-            if let Some(p) = pointer {
-                let mut best = (8.0f32, None);
-                for link in &graph.links {
-                    if let Some((a, b)) = link_endpoints(&layouts, link) {
-                        let d = bezier_distance(&bezier_points(a, b, self.zoom), p);
-                        if d < best.0 {
-                            best = (d, Some(link.clone()));
-                        }
+        if hovered
+            && !any_node_hovered
+            && matches!(self.drag, Drag::None)
+            && let Some(p) = pointer
+        {
+            let mut best = (8.0f32, None);
+            for link in &graph.links {
+                if let Some((a, b)) = link_endpoints(&layouts, link) {
+                    let d = bezier_distance(&bezier_points(a, b, self.zoom), p);
+                    if d < best.0 {
+                        best = (d, Some(link.clone()));
                     }
                 }
-                self.hovered_link = best.1;
             }
+            self.hovered_link = best.1;
         }
 
         // Canvas background.
-        if canvas.drag_started_by(PointerButton::Primary) && !alt {
-            if let Some(origin) = ctx.input(|i| i.pointer.press_origin()) {
-                self.drag = Drag::Select { start: self.to_graph(origin), additive: shift || ctrl };
-            }
+        if canvas.drag_started_by(PointerButton::Primary)
+            && !alt
+            && let Some(origin) = ctx.input(|i| i.pointer.press_origin())
+        {
+            self.drag = Drag::Select { start: self.to_graph(origin), additive: shift || ctrl };
         }
         if canvas.drag_started_by(PointerButton::Primary) && alt {
             self.drag = Drag::Pan;
@@ -512,10 +517,10 @@ impl GraphView {
                 self.selected_link = None;
             }
         }
-        if canvas.double_clicked() || canvas.triple_clicked() {
-            if let Some(p) = pointer {
-                self.open_add_menu(p, None);
-            }
+        if (canvas.double_clicked() || canvas.triple_clicked())
+            && let Some(p) = pointer
+        {
+            self.open_add_menu(p, None);
         }
         if canvas.secondary_clicked() {
             self.context_link = self.hovered_link.clone();
@@ -553,17 +558,17 @@ impl GraphView {
         });
 
         // Drag and drop from the library / input panel.
-        if let Some(payload) = canvas.dnd_release_payload::<DragPayload>() {
-            if let Some(p) = pointer {
-                let g = self.to_graph(p);
-                let pos = [g.x - NODE_W * 0.5, g.y - HEADER_H * 0.5];
-                let id = match &*payload {
-                    DragPayload::Library(item) => create_from_library(graph, item, pos),
-                    DragPayload::GraphInput(input) => graph.add_input_node(*input, pos),
-                };
-                self.selected.clear();
-                self.selected.insert(id);
-            }
+        if let Some(payload) = canvas.dnd_release_payload::<DragPayload>()
+            && let Some(p) = pointer
+        {
+            let g = self.to_graph(p);
+            let pos = [g.x - NODE_W * 0.5, g.y - HEADER_H * 0.5];
+            let id = match &*payload {
+                DragPayload::Library(item) => create_from_library(graph, item, pos),
+                DragPayload::GraphInput(input) => graph.add_input_node(*input, pos),
+            };
+            self.selected.clear();
+            self.selected.insert(id);
         }
 
         // ---------------------------------------------------------------- apply actions
@@ -663,10 +668,8 @@ impl GraphView {
                 let only = !self.selected.is_empty();
                 self.frame_nodes(graph, only);
             }
-            if space {
-                if let Some(p) = pointer {
-                    self.open_add_menu(p, None);
-                }
+            if space && let Some(p) = pointer {
+                self.open_add_menu(p, None);
             }
             for e in events {
                 match e {
@@ -721,22 +724,22 @@ impl GraphView {
         }
 
         // ---------------------------------------------------------------- box selection
-        if let Drag::Select { start, additive } = self.drag {
-            if !primary {
-                if let Some(p) = pointer.or_else(|| ctx.pointer_interact_pos()) {
-                    let sel = Rect::from_two_pos(start, self.to_graph(p));
-                    if !additive {
-                        self.selected.clear();
-                    }
-                    for n in &graph.nodes {
-                        let r = Rect::from_min_size(pos2(n.pos[0], n.pos[1]), node_size(graph, n));
-                        if sel.intersects(r) {
-                            self.selected.insert(n.id);
-                        }
+        if let Drag::Select { start, additive } = self.drag
+            && !primary
+        {
+            if let Some(p) = pointer.or_else(|| ctx.pointer_interact_pos()) {
+                let sel = Rect::from_two_pos(start, self.to_graph(p));
+                if !additive {
+                    self.selected.clear();
+                }
+                for n in &graph.nodes {
+                    let r = Rect::from_min_size(pos2(n.pos[0], n.pos[1]), node_size(graph, n));
+                    if sel.intersects(r) {
+                        self.selected.insert(n.id);
                     }
                 }
-                self.drag = Drag::None;
             }
+            self.drag = Drag::None;
         }
 
         // ---------------------------------------------------------------- pass 2: paint
@@ -794,13 +797,10 @@ impl GraphView {
 
         // Link being dragged.
         if let (Some(from), Some(p)) = (&dragging_from, pointer.or_else(|| ctx.pointer_interact_pos())) {
-            let start = layouts
-                .iter()
-                .find(|(id, _)| *id == from.node)
-                .and_then(|(_, l)| {
-                    let list = if from.output { &l.outputs } else { &l.inputs };
-                    list.iter().find(|(s, _)| s.key == from.key).map(|(_, p)| *p)
-                });
+            let start = layouts.iter().find(|(id, _)| *id == from.node).and_then(|(_, l)| {
+                let list = if from.output { &l.outputs } else { &l.inputs };
+                list.iter().find(|(s, _)| s.key == from.key).map(|(_, p)| *p)
+            });
             if let Some(start) = start {
                 let (a, b) = if from.output { (start, p) } else { (p, start) };
                 let target_ok = self.socket_at(&layouts, p).is_some_and(|t| Self::can_link(graph, from, &t));
@@ -827,7 +827,13 @@ impl GraphView {
                 DragPayload::Library(item) => format!("Drop to add {}", item.label),
                 DragPayload::GraphInput(_) => "Drop to add an input node".into(),
             };
-            painter.text(rect.center_top() + vec2(0.0, 24.0), Align2::CENTER_CENTER, label, FontId::proportional(15.0), ACCENT);
+            painter.text(
+                rect.center_top() + vec2(0.0, 24.0),
+                Align2::CENTER_CENTER,
+                label,
+                FontId::proportional(15.0),
+                ACCENT,
+            );
             painter.rect_stroke(rect.shrink(2.0), CornerRadius::same(4), Stroke::new(2.0, ACCENT), StrokeKind::Inside);
         }
 
@@ -922,10 +928,10 @@ impl GraphView {
             let pos = [menu.graph_pos.x, menu.graph_pos.y];
             let pending = menu.pending.clone();
             let id = create_from_library(graph, &item, pos);
-            if let Some(p) = pending {
-                if let Err(e) = connect_new_node(graph, &p, id) {
-                    out.message = Some((e, true));
-                }
+            if let Some(p) = pending
+                && let Err(e) = connect_new_node(graph, &p, id)
+            {
+                out.message = Some((e, true));
             }
             self.selected.clear();
             self.selected.insert(id);
@@ -980,7 +986,11 @@ impl GraphView {
         let rounding = (6.0 * z).clamp(1.0, 255.0) as u8;
 
         // Shadow + body.
-        painter.rect_filled(l.rect.translate(vec2(3.0, 4.0) * z), CornerRadius::same(rounding), Color32::from_black_alpha(70));
+        painter.rect_filled(
+            l.rect.translate(vec2(3.0, 4.0) * z),
+            CornerRadius::same(rounding),
+            Color32::from_black_alpha(70),
+        );
         painter.rect_filled(l.rect, CornerRadius::same(rounding), Color32::from_rgb(44, 46, 51));
         let header_round = CornerRadius { nw: rounding, ne: rounding, sw: 0, se: 0 };
         painter.rect_filled(l.header, header_round, category_color(d.category));
@@ -1009,7 +1019,13 @@ impl GraphView {
             let c = if error.is_some() { ERROR } else { WARNING };
             painter.circle_filled(pos2(badge_x, l.header.center().y), 6.0 * z, c);
             if show_text {
-                painter.text(pos2(badge_x, l.header.center().y), Align2::CENTER_CENTER, "!", small.clone(), Color32::BLACK);
+                painter.text(
+                    pos2(badge_x, l.header.center().y),
+                    Align2::CENTER_CENTER,
+                    "!",
+                    small.clone(),
+                    Color32::BLACK,
+                );
             }
             badge_x -= 16.0 * z;
         }
@@ -1020,7 +1036,13 @@ impl GraphView {
         }
         if node.kind == NodeKind::Output && show_text {
             let fmt = crate::graph::defs::OUTPUT_FORMATS.get(node.enum_value("format") as usize).copied().unwrap_or("");
-            painter.text(pos2(badge_x, l.header.center().y), Align2::RIGHT_CENTER, fmt, small.clone(), Color32::from_gray(230));
+            painter.text(
+                pos2(badge_x, l.header.center().y),
+                Align2::RIGHT_CENTER,
+                fmt,
+                small.clone(),
+                Color32::from_gray(230),
+            );
         }
 
         // Socket labels.
@@ -1032,7 +1054,13 @@ impl GraphView {
                 painter.text(*p + vec2(10.0 * z, 0.0), Align2::LEFT_CENTER, &s.label, small.clone(), color);
             }
             for (s, p) in &l.outputs {
-                painter.text(*p - vec2(10.0 * z, 0.0), Align2::RIGHT_CENTER, &s.label, small.clone(), Color32::from_gray(200));
+                painter.text(
+                    *p - vec2(10.0 * z, 0.0),
+                    Align2::RIGHT_CENTER,
+                    &s.label,
+                    small.clone(),
+                    Color32::from_gray(200),
+                );
             }
         }
 
@@ -1055,7 +1083,12 @@ impl GraphView {
             if let Some(tex) = engine.thumbnail(node.id) {
                 painter.image(tex, t, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
-            painter.rect_stroke(t, CornerRadius::same(2), Stroke::new(1.0, Color32::from_gray(20)), StrokeKind::Outside);
+            painter.rect_stroke(
+                t,
+                CornerRadius::same(2),
+                Stroke::new(1.0, Color32::from_gray(20)),
+                StrokeKind::Outside,
+            );
         } else if show_text {
             let value = engine.value(node.id);
             let row = if node.kind == NodeKind::Math { 1.0 } else { 0.0 };
@@ -1068,9 +1101,21 @@ impl GraphView {
                     if let crate::graph::Value::Color(c) = v {
                         let sw = Rect::from_min_size(pos2(text_x, line(row) - 6.0 * z), vec2(28.0 * z, 12.0 * z));
                         painter.rect_filled(sw, CornerRadius::same(2), super::widgets::color32(c));
-                        painter.text(sw.right_center() + vec2(6.0 * z, 0.0), Align2::LEFT_CENTER, v.display(), small.clone(), Color32::from_gray(220));
+                        painter.text(
+                            sw.right_center() + vec2(6.0 * z, 0.0),
+                            Align2::LEFT_CENTER,
+                            v.display(),
+                            small.clone(),
+                            Color32::from_gray(220),
+                        );
                     } else {
-                        painter.text(pos2(text_x, line(row)), Align2::LEFT_CENTER, format!("= {}", v.display()), small.clone(), Color32::from_gray(230));
+                        painter.text(
+                            pos2(text_x, line(row)),
+                            Align2::LEFT_CENTER,
+                            format!("= {}", v.display()),
+                            small.clone(),
+                            Color32::from_gray(230),
+                        );
                     }
                 }
                 (None, None) => {}
@@ -1105,10 +1150,20 @@ impl GraphView {
                 };
                 let color = color.gamma_multiply(alpha);
                 if s.ty == DataType::Image {
-                    painter.circle(*p, radius, if linked { color } else { Color32::from_rgb(30, 31, 34) }, Stroke::new(1.6 * z.max(0.6), color));
+                    painter.circle(
+                        *p,
+                        radius,
+                        if linked { color } else { Color32::from_rgb(30, 31, 34) },
+                        Stroke::new(1.6 * z.max(0.6), color),
+                    );
                 } else {
                     // Value sockets are diamonds so they read differently from images.
-                    let pts = vec![*p + vec2(0.0, -radius * 1.15), *p + vec2(radius * 1.15, 0.0), *p + vec2(0.0, radius * 1.15), *p + vec2(-radius * 1.15, 0.0)];
+                    let pts = vec![
+                        *p + vec2(0.0, -radius * 1.15),
+                        *p + vec2(radius * 1.15, 0.0),
+                        *p + vec2(0.0, radius * 1.15),
+                        *p + vec2(-radius * 1.15, 0.0),
+                    ];
                     painter.add(egui::Shape::convex_polygon(
                         pts,
                         if linked { color } else { Color32::from_rgb(30, 31, 34) },
@@ -1152,11 +1207,7 @@ fn item_accepts(item: &LibraryItem, p: &SocketRef) -> bool {
 fn connect_new_node(graph: &mut Graph, p: &SocketRef, id: NodeId) -> Result<(), String> {
     let Some(node) = graph.node(id).cloned() else { return Ok(()) };
     if p.output {
-        let target = graph
-            .input_sockets(&node)
-            .into_iter()
-            .find(|s| can_connect(p.ty, s.ty))
-            .map(|s| s.key);
+        let target = graph.input_sockets(&node).into_iter().find(|s| can_connect(p.ty, s.ty)).map(|s| s.key);
         match target {
             Some(key) => graph.connect(p.node, &p.key, id, &key),
             None => Ok(()),

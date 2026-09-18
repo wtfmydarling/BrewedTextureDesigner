@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use eframe::egui::{
+    self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2,
+};
 
 use super::inputs_panel::{InputsPanelState, input_details};
 use super::widgets::{color32, driven_label, expression_editor, param_editor};
@@ -44,7 +46,8 @@ fn expose_toggle(ui: &mut Ui, exposed: bool, ty: DataType, enabled: bool) -> egu
     if ty == DataType::Image {
         ui.painter().circle(m, r, fill, Stroke::new(1.5, c));
     } else {
-        let pts = vec![m + vec2(0.0, -r * 1.2), m + vec2(r * 1.2, 0.0), m + vec2(0.0, r * 1.2), m + vec2(-r * 1.2, 0.0)];
+        let pts =
+            vec![m + vec2(0.0, -r * 1.2), m + vec2(r * 1.2, 0.0), m + vec2(0.0, r * 1.2), m + vec2(-r * 1.2, 0.0)];
         ui.painter().add(egui::Shape::convex_polygon(pts, fill, Stroke::new(1.5, c)));
     }
     if enabled {
@@ -148,10 +151,10 @@ fn node_properties(
     ui.horizontal(|ui| {
         ui.label("Label");
         let mut label = node.label.clone();
-        if ui.add(egui::TextEdit::singleline(&mut label).hint_text(d.name).desired_width(f32::INFINITY)).changed() {
-            if let Some(n) = graph.node_mut(id) {
-                n.label = label;
-            }
+        if ui.add(egui::TextEdit::singleline(&mut label).hint_text(d.name).desired_width(f32::INFINITY)).changed()
+            && let Some(n) = graph.node_mut(id)
+        {
+            n.label = label;
         }
     });
     if let Some(e) = &error {
@@ -201,26 +204,32 @@ fn node_properties(
                 }
                 ui.add_enabled_ui(!tiling_na, |ui| {
                     ui.set_width(editor_w);
-                    ui.push_id(pd.key, |ui| ui.vertical(|ui| {
-                        if linked {
-                            match driven.get(pd.key) {
-                                Some(v) => driven_label(ui, pd, v),
-                                None => {
-                                    ui.label(RichText::new("(invalid input, using own value)").color(WARNING));
+                    ui.push_id(pd.key, |ui| {
+                        ui.vertical(|ui| {
+                            if linked {
+                                match driven.get(pd.key) {
+                                    Some(v) => driven_label(ui, pd, v),
+                                    None => {
+                                        ui.label(RichText::new("(invalid input, using own value)").color(WARNING));
+                                    }
                                 }
-                            }
-                        } else {
-                            let mut v = slot.value.clone();
-                            if param_editor(ui, pd, &mut v, editor_w) {
-                                if let Some(s) = graph.node_mut(id).and_then(|n| n.param_mut(pd.key)) {
+                            } else {
+                                let mut v = slot.value.clone();
+                                if param_editor(ui, pd, &mut v, editor_w)
+                                    && let Some(s) = graph.node_mut(id).and_then(|n| n.param_mut(pd.key))
+                                {
                                     s.value = v;
                                 }
                             }
-                        }
-                    }));
+                        })
+                    });
                 })
                 .response
-                .on_hover_text(if tiling_na { "Value nodes produce numbers, not images: tiling does not apply" } else { "" });
+                .on_hover_text(if tiling_na {
+                    "Value nodes produce numbers, not images: tiling does not apply"
+                } else {
+                    ""
+                });
                 let ty = slot.value.socket_type().unwrap_or(DataType::Float);
                 let can = pd.can_expose() && !tiling_na;
                 let toggle = expose_toggle(ui, slot.exposed, ty, can);
@@ -233,7 +242,14 @@ fn node_properties(
             .rect;
         // Zebra striping for readability.
         if row % 2 == 1 {
-            ui.painter().set(stripe, egui::epaint::RectShape::filled(row_rect.expand2(vec2(2.0, 1.0)), CornerRadius::same(2), Color32::from_white_alpha(5)));
+            ui.painter().set(
+                stripe,
+                egui::epaint::RectShape::filled(
+                    row_rect.expand2(vec2(2.0, 1.0)),
+                    CornerRadius::same(2),
+                    Color32::from_white_alpha(5),
+                ),
+            );
         }
     }
 
@@ -263,17 +279,17 @@ fn node_properties(
         NodeKind::Transform2D => {
             ui.separator();
             ui.weak("Tip: drag the gizmo in the 2D view (center moves, ring rotates, corners scale, Shift = uniform).");
-            if ui.button("Reset transform").clicked() {
-                if let Some(n) = graph.node_mut(id) {
-                    for (k, v) in [
-                        ("offset", ParamValue::Vec2([0.0, 0.0])),
-                        ("rotation", ParamValue::Float(0.0)),
-                        ("scale", ParamValue::Vec2([1.0, 1.0])),
-                        ("pivot", ParamValue::Vec2([0.5, 0.5])),
-                    ] {
-                        if let Some(p) = n.param_mut(k) {
-                            p.value = v;
-                        }
+            if ui.button("Reset transform").clicked()
+                && let Some(n) = graph.node_mut(id)
+            {
+                for (k, v) in [
+                    ("offset", ParamValue::Vec2([0.0, 0.0])),
+                    ("rotation", ParamValue::Float(0.0)),
+                    ("scale", ParamValue::Vec2([1.0, 1.0])),
+                    ("pivot", ParamValue::Vec2([0.5, 0.5])),
+                ] {
+                    if let Some(p) = n.param_mut(k) {
+                        p.value = v;
                     }
                 }
             }
@@ -282,7 +298,14 @@ fn node_properties(
     }
 }
 
-fn expression_section(ui: &mut Ui, graph: &mut Graph, engine: &Engine, node: &Node, vars: &[crate::engine::VarInfo], state: &mut PropsState) {
+fn expression_section(
+    ui: &mut Ui,
+    graph: &mut Graph,
+    engine: &Engine,
+    node: &Node,
+    vars: &[crate::engine::VarInfo],
+    state: &mut PropsState,
+) {
     let id = node.id;
     ui.separator();
     ui.label(RichText::new("Expression").strong());
@@ -292,10 +315,10 @@ fn expression_section(ui: &mut Ui, graph: &mut Graph, engine: &Engine, node: &No
     let mut text = src.clone();
     let editor = expression_editor(ui, &mut text, err_span);
     state.debug_rects.insert("expr".into(), editor.rect);
-    if editor.changed() {
-        if let Some(p) = graph.node_mut(id).and_then(|n| n.param_mut("expression")) {
-            p.value = ParamValue::Text(text);
-        }
+    if editor.changed()
+        && let Some(p) = graph.node_mut(id).and_then(|n| n.param_mut("expression"))
+    {
+        p.value = ParamValue::Text(text);
     }
     match &*compiled {
         Err(e) => {
@@ -320,21 +343,22 @@ fn expression_section(ui: &mut Ui, graph: &mut Graph, engine: &Engine, node: &No
                     VarSource::Local => {
                         let mut value = graph.node(id).and_then(|n| n.var_values.get(&v.name).copied()).unwrap_or(0.0);
                         ui.push_id(&v.name, |ui| {
-                            if ui.add(egui::DragValue::new(&mut value).speed(0.01).max_decimals(4)).changed() {
-                                if let Some(n) = graph.node_mut(id) {
-                                    n.var_values.insert(v.name.clone(), value);
-                                }
+                            if ui.add(egui::DragValue::new(&mut value).speed(0.01).max_decimals(4)).changed()
+                                && let Some(n) = graph.node_mut(id)
+                            {
+                                n.var_values.insert(v.name.clone(), value);
                             }
                         });
                         ui.weak("local value");
                     }
                     VarSource::Link(from) => {
-                        ui.label(format!("{}", crate::graph::Value::Float(v.value as f32).display()));
-                        let name = graph.node(*from).map(|n| super::graph_view::node_title(graph, n)).unwrap_or_default();
+                        ui.label(crate::graph::Value::Float(v.value as f32).display().to_string());
+                        let name =
+                            graph.node(*from).map(|n| super::graph_view::node_title(graph, n)).unwrap_or_default();
                         ui.weak(format!("from {name}"));
                     }
                     VarSource::GraphInput(name) => {
-                        ui.label(format!("{}", crate::graph::Value::Float(v.value as f32).display()));
+                        ui.label(crate::graph::Value::Float(v.value as f32).display().to_string());
                         ui.weak(format!("graph input '{name}'"));
                     }
                     VarSource::Builtin => {
@@ -343,25 +367,27 @@ fn expression_section(ui: &mut Ui, graph: &mut Graph, engine: &Engine, node: &No
                     }
                     VarSource::Image(from) => {
                         ui.label("image");
-                        let name = graph.node(*from).map(|n| super::graph_view::node_title(graph, n)).unwrap_or_default();
+                        let name =
+                            graph.node(*from).map(|n| super::graph_view::node_title(graph, n)).unwrap_or_default();
                         ui.weak(format!("from {name}"));
                     }
                 }
                 ui.end_row();
             }
         });
-        ui.weak("Unconnected variables use their local value, or a graph input with the same name when auto-bind is on.");
+        ui.weak(
+            "Unconnected variables use their local value, or a graph input with the same name when auto-bind is on.",
+        );
     }
 
     // Plot of the Math expression over one variable.
-    if node.kind == NodeKind::Math {
-        if let Ok(program) = &*compiled {
-            if !program.vars.is_empty() {
-                egui::CollapsingHeader::new("Plot").id_salt(("plot", id.0)).default_open(true).show(ui, |ui| {
-                    plot_expression(ui, program, vars, state);
-                });
-            }
-        }
+    if node.kind == NodeKind::Math
+        && let Ok(program) = &*compiled
+        && !program.vars.is_empty()
+    {
+        egui::CollapsingHeader::new("Plot").id_salt(("plot", id.0)).default_open(true).show(ui, |ui| {
+            plot_expression(ui, program, vars, state);
+        });
     }
 
     egui::CollapsingHeader::new("Functions & constants").id_salt(("funcs", id.0)).show(ui, |ui| {
@@ -393,13 +419,14 @@ fn plot_expression(ui: &mut Ui, program: &expr::Program, vars: &[crate::engine::
     let (mut lo, mut hi) = state.plot_range.unwrap_or((-5.0, 5.0));
     ui.horizontal(|ui| {
         ui.label("f(");
-        egui::ComboBox::from_id_salt("plot_var")
-            .selected_text(program.vars[state.plot_var].as_str())
-            .show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("plot_var").selected_text(program.vars[state.plot_var].as_str()).show_ui(
+            ui,
+            |ui| {
                 for (i, v) in program.vars.iter().enumerate() {
                     ui.selectable_value(&mut state.plot_var, i, v.as_str());
                 }
-            });
+            },
+        );
         ui.label(") for");
         ui.add(egui::DragValue::new(&mut lo).speed(0.1).max_decimals(2));
         ui.label("…");
@@ -410,11 +437,8 @@ fn plot_expression(ui: &mut Ui, program: &expr::Program, vars: &[crate::engine::
     }
     state.plot_range = Some((lo, hi));
 
-    let mut args: Vec<f64> = program
-        .vars
-        .iter()
-        .map(|name| vars.iter().find(|v| &v.name == name).map_or(0.0, |v| v.value))
-        .collect();
+    let mut args: Vec<f64> =
+        program.vars.iter().map(|name| vars.iter().find(|v| &v.name == name).map_or(0.0, |v| v.value)).collect();
     let current = args[state.plot_var];
     let n = 256;
     let samples: Vec<(f64, f64)> = (0..n)
@@ -425,7 +449,8 @@ fn plot_expression(ui: &mut Ui, program: &expr::Program, vars: &[crate::engine::
         })
         .collect();
     let finite: Vec<f64> = samples.iter().map(|s| s.1).filter(|v| v.is_finite()).collect();
-    let (mut ymin, mut ymax) = finite.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(*v), b.max(*v)));
+    let (mut ymin, mut ymax) =
+        finite.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(*v), b.max(*v)));
     if !ymin.is_finite() {
         ymin = -1.0;
         ymax = 1.0;
@@ -484,7 +509,8 @@ fn input_section(ui: &mut Ui, graph: &mut Graph, node: &Node, inputs_state: &mut
     let mut chosen: Option<InputId> = None;
     egui::ComboBox::from_id_salt(("bind", node.id.0)).selected_text(label).show_ui(ui, |ui| {
         for input in &graph.inputs {
-            if ui.selectable_label(current == Some(input.id), format!("{} ({})", input.name, input.ty.name())).clicked() {
+            if ui.selectable_label(current == Some(input.id), format!("{} ({})", input.name, input.ty.name())).clicked()
+            {
                 chosen = Some(input.id);
             }
         }
@@ -536,7 +562,13 @@ fn levels_section(
         ui.weak("Computing histogram…");
         return;
     };
-    let get = |k: &str| -> f32 { driven.get(k).cloned().unwrap_or_else(|| node.param(k).map_or(ParamValue::Float(0.0), |p| p.value.clone())).as_f32() };
+    let get = |k: &str| -> f32 {
+        driven
+            .get(k)
+            .cloned()
+            .unwrap_or_else(|| node.param(k).map_or(ParamValue::Float(0.0), |p| p.value.clone()))
+            .as_f32()
+    };
     let (lo, hi, gamma) = (get("in_low"), get("in_high"), get("gamma").max(1e-3));
 
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 110.0), Sense::click_and_drag());
@@ -558,7 +590,11 @@ fn levels_section(
             }
             let x = plot.left() + i as f32 * bar_w;
             let h = scale(*count);
-            p.rect_filled(Rect::from_min_max(pos2(x, plot.bottom() - h), pos2(x + bar_w.max(1.0), plot.bottom())), CornerRadius::ZERO, *color);
+            p.rect_filled(
+                Rect::from_min_max(pos2(x, plot.bottom() - h), pos2(x + bar_w.max(1.0), plot.bottom())),
+                CornerRadius::ZERO,
+                *color,
+            );
         }
     }
     let mut lum_line = Vec::with_capacity(256);
@@ -567,7 +603,13 @@ fn levels_section(
     }
     p.line(lum_line, Stroke::new(1.2, Color32::from_gray(230)));
     if !fresh {
-        p.text(rect.right_top() + vec2(-4.0, 2.0), Align2::RIGHT_TOP, "updating…", FontId::proportional(10.0), Color32::GRAY);
+        p.text(
+            rect.right_top() + vec2(-4.0, 2.0),
+            Align2::RIGHT_TOP,
+            "updating…",
+            FontId::proportional(10.0),
+            Color32::GRAY,
+        );
     }
 
     // Handles: 0 = black point, 1 = gamma (mid gray), 2 = white point.
@@ -575,37 +617,38 @@ fn levels_section(
     let xs = [lo, mid, hi].map(|v| plot.left() + v.clamp(0.0, 1.0) * plot.width());
     for (i, x) in xs.iter().enumerate() {
         let c = [Color32::BLACK, Color32::from_gray(128), Color32::WHITE][i];
-        let tri = vec![pos2(*x, plot.bottom() - 10.0), pos2(x - 6.0, plot.bottom() + 2.0), pos2(x + 6.0, plot.bottom() + 2.0)];
+        let tri = vec![
+            pos2(*x, plot.bottom() - 10.0),
+            pos2(x - 6.0, plot.bottom() + 2.0),
+            pos2(x + 6.0, plot.bottom() + 2.0),
+        ];
         p.add(egui::Shape::convex_polygon(tri, c, Stroke::new(1.0, ACCENT)));
         p.vline(*x, plot.y_range(), Stroke::new(1.0, Color32::from_white_alpha(40)));
     }
     let locked = |k: &str| driven.contains_key(k);
-    if resp.drag_started() {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            state.levels_drag = xs
-                .iter()
-                .enumerate()
-                .min_by(|a, b| (a.1 - pos.x).abs().total_cmp(&(b.1 - pos.x).abs()))
-                .map(|(i, _)| i);
-        }
+    if resp.drag_started()
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        state.levels_drag =
+            xs.iter().enumerate().min_by(|a, b| (a.1 - pos.x).abs().total_cmp(&(b.1 - pos.x).abs())).map(|(i, _)| i);
     }
-    if resp.dragged() {
-        if let (Some(h), Some(pos)) = (state.levels_drag, resp.interact_pointer_pos()) {
-            let v = ((pos.x - plot.left()) / plot.width()).clamp(0.0, 1.0);
-            let set = |graph: &mut Graph, k: &str, v: f32| {
-                if let Some(s) = graph.node_mut(node.id).and_then(|n| n.param_mut(k)) {
-                    s.value = ParamValue::Float(v);
-                }
-            };
-            match h {
-                0 if !locked("in_low") => set(graph, "in_low", v.min(hi - 0.01)),
-                2 if !locked("in_high") => set(graph, "in_high", v.max(lo + 0.01)),
-                1 if !locked("gamma") => {
-                    let t = ((v - lo) / (hi - lo)).clamp(0.01, 0.99);
-                    set(graph, "gamma", (t.ln() / 0.5f32.ln()).clamp(0.1, 10.0));
-                }
-                _ => {}
+    if resp.dragged()
+        && let (Some(h), Some(pos)) = (state.levels_drag, resp.interact_pointer_pos())
+    {
+        let v = ((pos.x - plot.left()) / plot.width()).clamp(0.0, 1.0);
+        let set = |graph: &mut Graph, k: &str, v: f32| {
+            if let Some(s) = graph.node_mut(node.id).and_then(|n| n.param_mut(k)) {
+                s.value = ParamValue::Float(v);
             }
+        };
+        match h {
+            0 if !locked("in_low") => set(graph, "in_low", v.min(hi - 0.01)),
+            2 if !locked("in_high") => set(graph, "in_high", v.max(lo + 0.01)),
+            1 if !locked("gamma") => {
+                let t = ((v - lo) / (hi - lo)).clamp(0.01, 0.99);
+                set(graph, "gamma", (t.ln() / 0.5f32.ln()).clamp(0.1, 10.0));
+            }
+            _ => {}
         }
     }
     if resp.drag_stopped() {
@@ -613,7 +656,11 @@ fn levels_section(
     }
 
     ui.horizontal(|ui| {
-        if ui.button("Auto levels").on_hover_text("Stretch the input range to the darkest and brightest pixel").clicked() {
+        if ui
+            .button("Auto levels")
+            .on_hover_text("Stretch the input range to the darkest and brightest pixel")
+            .clicked()
+        {
             let mn = stats.min[..3].iter().copied().fold(f32::INFINITY, f32::min).clamp(0.0, 1.0);
             let mx = stats.max[..3].iter().copied().fold(f32::NEG_INFINITY, f32::max).clamp(0.0, 1.0);
             if mx > mn {

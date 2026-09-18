@@ -150,10 +150,7 @@ pub fn tokenize(src: &str) -> Vec<Token> {
                 j += 1;
             }
             let end = byte_at(j);
-            tokens.push(Token {
-                kind: TokenKind::Ident(src[start..end].to_string()),
-                span: Span::new(start, end),
-            });
+            tokens.push(Token { kind: TokenKind::Ident(src[start..end].to_string()), span: Span::new(start, end) });
             i = j;
             continue;
         }
@@ -212,10 +209,7 @@ mod tests {
         assert_eq!(kinds("1.5"), vec![TokenKind::Number(1.5), TokenKind::Eof]);
         assert_eq!(kinds(".5"), vec![TokenKind::Number(0.5), TokenKind::Eof]);
         assert_eq!(kinds("2e-3"), vec![TokenKind::Number(2e-3), TokenKind::Eof]);
-        assert_eq!(
-            kinds("2e"),
-            vec![TokenKind::Number(2.0), TokenKind::Ident("e".into()), TokenKind::Eof]
-        );
+        assert_eq!(kinds("2e"), vec![TokenKind::Number(2.0), TokenKind::Ident("e".into()), TokenKind::Eof]);
     }
 
     #[test]

@@ -65,15 +65,21 @@ pub fn show(ui: &mut Ui, graph: &mut Graph, state: &mut InputsPanelState) {
     let names: Vec<(InputId, String)> = graph.inputs.iter().map(|i| (i.id, i.name.clone())).collect();
     for (id, name) in names {
         let unique = graph.unique_input_name(&name, Some(id));
-        if unique != name {
-            if let Some(i) = graph.input_mut(id) {
-                i.name = unique;
-            }
+        if unique != name
+            && let Some(i) = graph.input_mut(id)
+        {
+            i.name = unique;
         }
     }
 }
 
-fn input_row(ui: &mut Ui, input: &mut GraphInput, users: usize, state: &mut InputsPanelState, remove: &mut Option<InputId>) {
+fn input_row(
+    ui: &mut Ui,
+    input: &mut GraphInput,
+    users: usize,
+    state: &mut InputsPanelState,
+    remove: &mut Option<InputId>,
+) {
     let expanded = state.expanded.contains(&input.id);
     ui.horizontal(|ui| {
         // Drag handle: drop on the canvas to create an input node.
@@ -126,7 +132,11 @@ pub fn input_details(
     egui::Grid::new(("input_details", input.id.0)).num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
         ui.label("Name");
         let editing = state.name_edit.as_ref().is_some_and(|(id, _)| *id == input.id);
-        let mut text = if editing { state.name_edit.as_ref().map(|(_, s)| s.clone()).unwrap_or_default() } else { input.name.clone() };
+        let mut text = if editing {
+            state.name_edit.as_ref().map(|(_, s)| s.clone()).unwrap_or_default()
+        } else {
+            input.name.clone()
+        };
         let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(140.0));
         if r.changed() || r.has_focus() {
             state.name_edit = Some((input.id, text.clone()));

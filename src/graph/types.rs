@@ -161,7 +161,13 @@ impl Value {
         match self {
             Value::Float(v) => f(*v),
             Value::Int(v) => v.to_string(),
-            Value::Bool(v) => if *v { "true".into() } else { "false".into() },
+            Value::Bool(v) => {
+                if *v {
+                    "true".into()
+                } else {
+                    "false".into()
+                }
+            }
             Value::Vec2([x, y]) => format!("({}, {})", f(*x), f(*y)),
             Value::Color([r, g, b, a]) => format!("({}, {}, {}, {})", f(*r), f(*g), f(*b), f(*a)),
         }

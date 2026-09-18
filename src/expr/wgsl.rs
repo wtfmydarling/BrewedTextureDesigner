@@ -5,9 +5,9 @@
 //! negative base, rounding halves away from zero, the PCG hash) so that the same
 //! expression gives the same result on both sides.
 
+use super::Program;
 use super::builtins::Func;
 use super::parser::{BinOp, Node, UnOp};
-use super::Program;
 
 pub const PRELUDE: &str = r#"
 fn fx_bool(b: bool) -> f32 { return select(0.0, 1.0, b); }

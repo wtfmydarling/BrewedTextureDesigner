@@ -43,12 +43,12 @@ pub fn gallery_graph() -> (Graph, Vec<(NodeId, String)>) {
         if let Some(p) = g.node_mut(id).and_then(|n| n.param_mut(key)) {
             p.value = value.clone();
         }
-        if *kind == NodeKind::TileGenerator {
-            if let Some(n) = g.node_mut(id) {
-                n.param_mut("random_rotation").unwrap().value = ParamValue::Float(45.0);
-                n.param_mut("random_scale").unwrap().value = ParamValue::Float(0.5);
-                n.param_mut("random_luminance").unwrap().value = ParamValue::Float(0.5);
-            }
+        if *kind == NodeKind::TileGenerator
+            && let Some(n) = g.node_mut(id)
+        {
+            n.param_mut("random_rotation").unwrap().value = ParamValue::Float(45.0);
+            n.param_mut("random_scale").unwrap().value = ParamValue::Float(0.5);
+            n.param_mut("random_luminance").unwrap().value = ParamValue::Float(0.5);
         }
         out.push((id, label.to_string()));
     }

@@ -100,10 +100,7 @@ fn snapshot(graph: &Graph) -> String {
 
 impl FerrotexApp {
     pub fn new(cc: &eframe::CreationContext<'_>, options: StartupOptions) -> Result<FerrotexApp, String> {
-        let rs = cc
-            .wgpu_render_state
-            .as_ref()
-            .ok_or("Ferrotex needs the wgpu renderer (no compatible GPU found)")?;
+        let rs = cc.wgpu_render_state.as_ref().ok_or("Ferrotex needs the wgpu renderer (no compatible GPU found)")?;
         let info = rs.adapter.get_info();
         log::info!("GPU: {} ({:?})", info.name, info.backend);
         let gpu = Gpu::new(rs.device.clone(), rs.queue.clone(), format!("{} · {:?}", info.name, info.backend));
@@ -141,10 +138,10 @@ impl FerrotexApp {
         if let Some(n) = app.graph.nodes.iter().find(|n| format!("{:?}", n.kind).eq_ignore_ascii_case(select_kind)) {
             app.view.selected.insert(n.id);
         }
-        if let Some(kind) = options.preview.as_deref() {
-            if let Some(n) = app.graph.nodes.iter().find(|n| format!("{:?}", n.kind).eq_ignore_ascii_case(kind)) {
-                app.preview.node = Some(n.id);
-            }
+        if let Some(kind) = options.preview.as_deref()
+            && let Some(n) = app.graph.nodes.iter().find(|n| format!("{:?}", n.kind).eq_ignore_ascii_case(kind))
+        {
+            app.preview.node = Some(n.id);
         }
         if let Some(path) = options.open {
             app.open_path(path);
@@ -203,7 +200,8 @@ impl FerrotexApp {
                 self.project_path = Some(path);
             }
             Err(e) => {
-                self.status = Some(Status { text: format!("Cannot open {}: {e}", path.display()), error: true, time: 0.0 });
+                self.status =
+                    Some(Status { text: format!("Cannot open {}: {e}", path.display()), error: true, time: 0.0 });
             }
         }
     }
@@ -218,7 +216,8 @@ impl FerrotexApp {
                 .save_file(),
         };
         let Some(path) = path else { return };
-        let file = ProjectFile { app: "ferrotex".into(), version: 1, graph: self.graph.clone(), preview: self.preview.node };
+        let file =
+            ProjectFile { app: "ferrotex".into(), version: 1, graph: self.graph.clone(), preview: self.preview.node };
         let result = serde_json::to_string_pretty(&file)
             .map_err(|e| e.to_string())
             .and_then(|json| std::fs::write(&path, json).map_err(|e| e.to_string()));
@@ -249,10 +248,9 @@ impl FerrotexApp {
             .add_filter("PNG image", &["png"])
             .set_file_name(format!("{name}.png"))
             .save_file()
+            && export::export_node(&self.engine, &self.graph, node, path, &self.export_tx)
         {
-            if export::export_node(&self.engine, &self.graph, node, path, &self.export_tx) {
-                self.set_status("Exporting…", false, now);
-            }
+            self.set_status("Exporting…", false, now);
         }
     }
 
@@ -376,15 +374,15 @@ impl FerrotexApp {
             // Texture size of the whole graph.
             ui.label("Size");
             let mut res = self.graph.resolution;
-            for axis in 0..2 {
-                egui::ComboBox::from_id_salt(("res", axis))
-                    .width(64.0)
-                    .selected_text(res[axis].to_string())
-                    .show_ui(ui, |ui| {
+            for (axis, value) in res.iter_mut().enumerate() {
+                egui::ComboBox::from_id_salt(("res", axis)).width(64.0).selected_text(value.to_string()).show_ui(
+                    ui,
+                    |ui| {
                         for r in RESOLUTIONS {
-                            ui.selectable_value(&mut res[axis], r, r.to_string());
+                            ui.selectable_value(value, r, r.to_string());
                         }
-                    });
+                    },
+                );
                 if axis == 0 {
                     ui.label("×");
                 }
@@ -406,52 +404,58 @@ impl FerrotexApp {
                     self.engine.gpu.adapter_info
                 ));
 
-            if let Some(s) = &self.status {
-                if now - s.time < 7.0 || s.error && now - s.time < 12.0 {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let color = if s.error { ERROR } else { Color32::from_rgb(140, 200, 140) };
-                        ui.label(RichText::new(&s.text).color(color));
-                    });
-                }
+            if let Some(s) = &self.status
+                && (now - s.time < 7.0 || s.error && now - s.time < 12.0)
+            {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let color = if s.error { ERROR } else { Color32::from_rgb(140, 200, 140) };
+                    ui.label(RichText::new(&s.text).color(color));
+                });
             }
         });
     }
 
     fn windows(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Shortcuts").open(&mut self.show_shortcuts).resizable(false).collapsible(false).show(ctx, |ui| {
-            egui::Grid::new("shortcuts").num_columns(2).spacing([16.0, 4.0]).striped(true).show(ui, |ui| {
-                for (k, v) in [
-                    ("Drag from library", "Add a node"),
-                    ("Space / double-click", "Search and add a node at the cursor"),
-                    ("Drag from a socket", "Connect (drop on empty space to add + connect)"),
-                    ("Drag a connected input", "Re-route or remove the link"),
-                    ("Double-click a node", "Show it in the 2D view"),
-                    ("Mouse wheel", "Zoom (graph and 2D view)"),
-                    ("Middle / right drag, Alt+drag", "Pan"),
-                    ("Left drag on empty space", "Box select (Shift/Ctrl adds)"),
-                    ("Del / Backspace", "Delete selection"),
-                    ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste nodes"),
-                    ("Ctrl+D", "Duplicate"),
-                    ("Ctrl+A", "Select all"),
-                    ("F", "Frame selection / all"),
-                    ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
-                    ("Ctrl+S / Ctrl+O / Ctrl+N", "Save / open / new"),
-                    ("Ctrl+E", "Export all outputs"),
-                    ("Shift while dragging gizmo", "Snap rotation / uniform scale"),
-                ] {
-                    ui.label(RichText::new(k).strong());
-                    ui.label(v);
-                    ui.end_row();
-                }
-            });
-        });
-        egui::Window::new("About Ferrotex").open(&mut self.show_about).resizable(false).collapsible(false).show(ctx, |ui| {
-            ui.heading("Ferrotex");
-            ui.label("GPU accelerated procedural texture editor.");
-            ui.label("Rust · wgpu compute shaders · egui · SIMD (wide) + rayon.");
-            ui.label(format!("GPU: {}", self.engine.gpu.adapter_info));
-            ui.label(format!("CPU threads: {}", rayon::current_num_threads()));
-        });
+        egui::Window::new("Shortcuts").open(&mut self.show_shortcuts).resizable(false).collapsible(false).show(
+            ctx,
+            |ui| {
+                egui::Grid::new("shortcuts").num_columns(2).spacing([16.0, 4.0]).striped(true).show(ui, |ui| {
+                    for (k, v) in [
+                        ("Drag from library", "Add a node"),
+                        ("Space / double-click", "Search and add a node at the cursor"),
+                        ("Drag from a socket", "Connect (drop on empty space to add + connect)"),
+                        ("Drag a connected input", "Re-route or remove the link"),
+                        ("Double-click a node", "Show it in the 2D view"),
+                        ("Mouse wheel", "Zoom (graph and 2D view)"),
+                        ("Middle / right drag, Alt+drag", "Pan"),
+                        ("Left drag on empty space", "Box select (Shift/Ctrl adds)"),
+                        ("Del / Backspace", "Delete selection"),
+                        ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste nodes"),
+                        ("Ctrl+D", "Duplicate"),
+                        ("Ctrl+A", "Select all"),
+                        ("F", "Frame selection / all"),
+                        ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+                        ("Ctrl+S / Ctrl+O / Ctrl+N", "Save / open / new"),
+                        ("Ctrl+E", "Export all outputs"),
+                        ("Shift while dragging gizmo", "Snap rotation / uniform scale"),
+                    ] {
+                        ui.label(RichText::new(k).strong());
+                        ui.label(v);
+                        ui.end_row();
+                    }
+                });
+            },
+        );
+        egui::Window::new("About Ferrotex").open(&mut self.show_about).resizable(false).collapsible(false).show(
+            ctx,
+            |ui| {
+                ui.heading("Ferrotex");
+                ui.label("GPU accelerated procedural texture editor.");
+                ui.label("Rust · wgpu compute shaders · egui · SIMD (wide) + rayon.");
+                ui.label(format!("GPU: {}", self.engine.gpu.adapter_info));
+                ui.label(format!("CPU threads: {}", rayon::current_num_threads()));
+            },
+        );
     }
 
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
@@ -520,75 +524,64 @@ impl eframe::App for FerrotexApp {
         }
 
         // Left: node library.
-        egui::Panel::left("library")
-            .resizable(true)
-            .default_size(200.0)
-            .size_range(150.0..=380.0)
-            .show(ui, |ui| {
-                if let Some(item) = ui::library::show(ui, &mut self.library) {
-                    let pos = self.view.center_graph_pos();
-                    let id = ui::create_from_library(&mut self.graph, &item, pos);
-                    self.view.selected.clear();
-                    self.view.selected.insert(id);
-                }
-            });
+        egui::Panel::left("library").resizable(true).default_size(200.0).size_range(150.0..=380.0).show(ui, |ui| {
+            if let Some(item) = ui::library::show(ui, &mut self.library) {
+                let pos = self.view.center_graph_pos();
+                let id = ui::create_from_library(&mut self.graph, &item, pos);
+                self.view.selected.clear();
+                self.view.selected.insert(id);
+            }
+        });
 
         // Right: input values (top) and properties (bottom), split by a draggable edge.
-        egui::Panel::right("right")
-            .resizable(true)
-            .default_size(350.0)
-            .size_range(270.0..=640.0)
-            .show(ui, |ui| {
-                let total = ui.available_height();
-                let max_top = (total - 140.0).max(100.0);
-                egui::Panel::top("inputs")
-                    .resizable(true)
-                    .default_size((total * 0.36).clamp(100.0, max_top))
-                    .size_range(90.0..=max_top)
-                    .show(ui, |ui| {
-                        ui::inputs_panel::show(ui, &mut self.graph, &mut self.inputs);
-                    });
-                egui::CentralPanel::default().show(ui, |ui| {
-                    let out = ui::properties::show(
-                        ui,
-                        &mut self.graph,
-                        &mut self.engine,
-                        &self.view.selected,
-                        &mut self.inputs,
-                        &mut self.props,
-                    );
-                    if let Some(id) = out.export_node {
-                        self.export_one(id, now);
-                    }
-                    if let Some(id) = out.preview {
-                        self.preview.node = Some(id);
-                    }
-                    if let Some(id) = out.browse_bitmap {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_title("Choose an image")
-                            .add_filter("Images", &["png", "jpg", "jpeg", "tga", "bmp"])
-                            .pick_file()
-                        {
-                            if let Some(p) = self.graph.node_mut(id).and_then(|n| n.param_mut("path")) {
-                                p.value = ParamValue::Text(path.display().to_string());
-                            }
-                        }
-                    }
+        egui::Panel::right("right").resizable(true).default_size(350.0).size_range(270.0..=640.0).show(ui, |ui| {
+            let total = ui.available_height();
+            let max_top = (total - 140.0).max(100.0);
+            egui::Panel::top("inputs")
+                .resizable(true)
+                .default_size((total * 0.36).clamp(100.0, max_top))
+                .size_range(90.0..=max_top)
+                .show(ui, |ui| {
+                    ui::inputs_panel::show(ui, &mut self.graph, &mut self.inputs);
                 });
+            egui::CentralPanel::default().show(ui, |ui| {
+                let out = ui::properties::show(
+                    ui,
+                    &mut self.graph,
+                    &mut self.engine,
+                    &self.view.selected,
+                    &mut self.inputs,
+                    &mut self.props,
+                );
+                if let Some(id) = out.export_node {
+                    self.export_one(id, now);
+                }
+                if let Some(id) = out.preview {
+                    self.preview.node = Some(id);
+                }
+                if let Some(id) = out.browse_bitmap
+                    && let Some(path) = rfd::FileDialog::new()
+                        .set_title("Choose an image")
+                        .add_filter("Images", &["png", "jpg", "jpeg", "tga", "bmp"])
+                        .pick_file()
+                    && let Some(p) = self.graph.node_mut(id).and_then(|n| n.param_mut("path"))
+                {
+                    p.value = ParamValue::Text(path.display().to_string());
+                }
             });
+        });
 
         // Center: toolbar, graph and 2D view.
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             egui::Panel::top("toolbar")
                 .frame(egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(8, 4)))
                 .show(ui, |ui| self.toolbar(ui, now));
-            egui::Panel::bottom("preview")
-                .resizable(true)
-                .default_size(340.0)
-                .size_range(120.0..=1200.0)
-                .show(ui, |ui| {
+            egui::Panel::bottom("preview").resizable(true).default_size(340.0).size_range(120.0..=1200.0).show(
+                ui,
+                |ui| {
                     ui::preview::show(ui, &mut self.graph, &mut self.engine, &mut self.preview);
-                });
+                },
+            );
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                 let out = self.view.show(ui, &mut self.graph, &self.engine, self.preview.node, &mut self.clipboard);
                 if let Some(p) = out.preview {

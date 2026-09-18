@@ -124,7 +124,8 @@ fn blur_preserves_mean_with_tiling() {
     let (a, b) = (mean(&src), mean(&out));
     assert!((a - b).abs() < 0.01, "mean {a} vs {b}");
     // And it is actually smooth.
-    let var = |d: &[f32], m: f64| d.iter().step_by(4).map(|v| (*v as f64 - m).powi(2)).sum::<f64>() / (RES * RES) as f64;
+    let var =
+        |d: &[f32], m: f64| d.iter().step_by(4).map(|v| (*v as f64 - m).powi(2)).sum::<f64>() / (RES * RES) as f64;
     assert!(var(&out, b) < var(&src, a) * 0.05);
 }
 

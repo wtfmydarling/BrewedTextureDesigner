@@ -440,7 +440,12 @@ impl Gpu {
     }
 
     /// Record a copy of a single pixel (for the color probe of the 2D view).
-    pub fn encode_readback_region(&self, encoder: &mut wgpu::CommandEncoder, img: &GpuImage, pixel: [u32; 2]) -> Readback {
+    pub fn encode_readback_region(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        img: &GpuImage,
+        pixel: [u32; 2],
+    ) -> Readback {
         let padded_row = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("probe"),
@@ -457,7 +462,11 @@ impl Gpu {
             },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(1) },
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row),
+                    rows_per_image: Some(1),
+                },
             },
             wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
         );
@@ -470,9 +479,7 @@ impl Gpu {
         let rb = self.encode_readback(&mut encoder, img);
         self.queue.submit(Some(encoder.finish()));
         rb.map();
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| format!("GPU poll failed: {e}"))?;
+        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU poll failed: {e}"))?;
         match rb.poll() {
             Some(Ok(())) => Ok(rb.to_f32()),
             Some(Err(e)) => Err(e),

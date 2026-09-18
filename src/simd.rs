@@ -93,8 +93,14 @@ pub fn u8_to_f32(src: &[u8], dst: &mut [f32]) {
         let mut d_chunks = d.chunks_exact_mut(8);
         for (sc, dc) in (&mut s_chunks).zip(&mut d_chunks) {
             let i = i32x8::new([
-                sc[0] as i32, sc[1] as i32, sc[2] as i32, sc[3] as i32,
-                sc[4] as i32, sc[5] as i32, sc[6] as i32, sc[7] as i32,
+                sc[0] as i32,
+                sc[1] as i32,
+                sc[2] as i32,
+                sc[3] as i32,
+                sc[4] as i32,
+                sc[5] as i32,
+                sc[6] as i32,
+                sc[7] as i32,
             ]);
             dc.copy_from_slice(&(f32x8::from_i32x8(i) * inv).to_array());
         }
@@ -113,8 +119,14 @@ pub fn u16_to_f32(src: &[u16], dst: &mut [f32]) {
         let mut d_chunks = d.chunks_exact_mut(8);
         for (sc, dc) in (&mut s_chunks).zip(&mut d_chunks) {
             let i = i32x8::new([
-                sc[0] as i32, sc[1] as i32, sc[2] as i32, sc[3] as i32,
-                sc[4] as i32, sc[5] as i32, sc[6] as i32, sc[7] as i32,
+                sc[0] as i32,
+                sc[1] as i32,
+                sc[2] as i32,
+                sc[3] as i32,
+                sc[4] as i32,
+                sc[5] as i32,
+                sc[6] as i32,
+                sc[7] as i32,
             ]);
             dc.copy_from_slice(&(f32x8::from_i32x8(i) * inv).to_array());
         }
@@ -267,14 +279,7 @@ pub fn image_stats(rgba: &[f32], width: u32, height: u32) -> ImageStats {
 
     let mn = partial.min.to_array();
     let mx = partial.max.to_array();
-    let mut stats = ImageStats {
-        width,
-        height,
-        hist: partial.hist,
-        min: [0.0; 4],
-        max: [0.0; 4],
-        mean: [0.0; 4],
-    };
+    let mut stats = ImageStats { width, height, hist: partial.hist, min: [0.0; 4], max: [0.0; 4], mean: [0.0; 4] };
     let count = pixels.max(1) as f64;
     for c in 0..4 {
         stats.min[c] = mn[c].min(mn[c + 4]);

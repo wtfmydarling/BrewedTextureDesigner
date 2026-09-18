@@ -258,11 +258,8 @@ pub fn output_socket_key(key: &str) -> String {
 
 /// Turn arbitrary text into an identifier usable in expressions.
 pub fn sanitize_identifier(text: &str) -> String {
-    let mut out: String = text
-        .trim()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
-        .collect();
+    let mut out: String =
+        text.trim().chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
     if out.is_empty() {
         out.push_str("input");
     }
@@ -356,9 +353,7 @@ impl Graph {
     }
 
     pub fn unique_output_name(&self, base: &str) -> String {
-        let taken = |name: &str| {
-            self.nodes.iter().any(|n| n.kind == NodeKind::Output && n.text("name") == name)
-        };
+        let taken = |name: &str| self.nodes.iter().any(|n| n.kind == NodeKind::Output && n.text("name") == name);
         if !taken(base) {
             return base.to_string();
         }
@@ -478,12 +473,7 @@ impl Graph {
     pub fn connect(&mut self, from: NodeId, from_socket: &str, to: NodeId, to_socket: &str) -> Result<(), String> {
         self.check_connection(from, from_socket, to, to_socket)?;
         self.links.retain(|l| !(l.to == to && l.to_socket == to_socket));
-        self.links.push(Link {
-            from,
-            from_socket: from_socket.to_string(),
-            to,
-            to_socket: to_socket.to_string(),
-        });
+        self.links.push(Link { from, from_socket: from_socket.to_string(), to, to_socket: to_socket.to_string() });
         Ok(())
     }
 
@@ -533,8 +523,7 @@ impl Graph {
                 children.entry(l.from).or_default().push(l.to);
             }
         }
-        let mut queue: VecDeque<NodeId> =
-            self.nodes.iter().map(|n| n.id).filter(|id| indegree[id] == 0).collect();
+        let mut queue: VecDeque<NodeId> = self.nodes.iter().map(|n| n.id).filter(|id| indegree[id] == 0).collect();
         let mut order = Vec::with_capacity(self.nodes.len());
         while let Some(id) = queue.pop_front() {
             order.push(id);
@@ -561,13 +550,7 @@ impl Graph {
         for i in &mut self.inputs {
             i.normalize();
         }
-        let max_id = self
-            .nodes
-            .iter()
-            .map(|n| n.id.0)
-            .chain(self.inputs.iter().map(|i| i.id.0))
-            .max()
-            .unwrap_or(0);
+        let max_id = self.nodes.iter().map(|n| n.id.0).chain(self.inputs.iter().map(|i| i.id.0)).max().unwrap_or(0);
         self.next_id = self.next_id.max(max_id + 1);
         self.resolution = self.resolution.map(|r| r.clamp(16, 8192));
         let mut seen = HashSet::new();
@@ -581,11 +564,7 @@ impl Graph {
         let set: HashSet<NodeId> = ids.iter().copied().collect();
         let nodes: Vec<Node> = self.nodes.iter().filter(|n| set.contains(&n.id)).cloned().collect();
         let links = self.links.iter().filter(|l| set.contains(&l.from) && set.contains(&l.to)).cloned().collect();
-        let inputs = nodes
-            .iter()
-            .filter_map(|n| n.input_ref)
-            .filter_map(|i| self.input(i).cloned())
-            .collect();
+        let inputs = nodes.iter().filter_map(|n| n.input_ref).filter_map(|i| self.input(i).cloned()).collect();
         Clipboard { nodes, links, inputs }
     }
 

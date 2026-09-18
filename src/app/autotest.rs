@@ -179,37 +179,63 @@ impl AutoPilot {
         match step {
             0 => {
                 self.idle(5);
-                Some(("demo graph evaluates without errors", 1.5, Box::new(|app: &FerrotexApp| {
-                    if app.graph.nodes.len() != 21 {
-                        return Err(format!("expected 21 demo nodes, got {}", app.graph.nodes.len()));
-                    }
-                    for n in &app.graph.nodes {
-                        if let Some(e) = app.engine.state(n.id).and_then(|s| s.error.clone()) {
-                            return Err(format!("{:?}: {e}", n.kind));
+                Some((
+                    "demo graph evaluates without errors",
+                    1.5,
+                    Box::new(|app: &FerrotexApp| {
+                        if app.graph.nodes.len() != 21 {
+                            return Err(format!("expected 21 demo nodes, got {}", app.graph.nodes.len()));
                         }
-                    }
-                    if app.engine.preview_info(app.preview.node.ok_or("no preview node")?).is_none() {
-                        return Err("2D view has no texture".into());
-                    }
-                    Ok(())
-                })))
+                        for n in &app.graph.nodes {
+                            if let Some(e) = app.engine.state(n.id).and_then(|s| s.error.clone()) {
+                                return Err(format!("{:?}: {e}", n.kind));
+                            }
+                        }
+                        if app.engine.preview_info(app.preview.node.ok_or("no preview node")?).is_none() {
+                            return Err("2D view has no texture".into());
+                        }
+                        Ok(())
+                    }),
+                ))
             }
             1 => {
                 self.move_to(at(0.5, 0.5));
                 self.key(Key::N, Modifiers::COMMAND);
-                Some(("Ctrl+N creates an empty graph", 0.3, Box::new(|app: &FerrotexApp| {
-                    if app.graph.nodes.is_empty() { Ok(()) } else { Err(format!("{} nodes left", app.graph.nodes.len())) }
-                })))
+                Some((
+                    "Ctrl+N creates an empty graph",
+                    0.3,
+                    Box::new(|app: &FerrotexApp| {
+                        if app.graph.nodes.is_empty() {
+                            Ok(())
+                        } else {
+                            Err(format!("{} nodes left", app.graph.nodes.len()))
+                        }
+                    }),
+                ))
             }
             2 | 3 => {
                 let (label, target) = if step == 2 { ("Noise", at(0.2, 0.3)) } else { ("Blur", at(0.55, 0.3)) };
-                let Some(from) = lib(label) else { return Some(("drag from library", 0.0, fail(format!("no library item {label}")))) };
+                let Some(from) = lib(label) else {
+                    return Some(("drag from library", 0.0, fail(format!("no library item {label}"))));
+                };
                 self.drag(from, target);
                 let kind = if step == 2 { NodeKind::Noise } else { NodeKind::Blur };
-                let name = if step == 2 { "drag Noise from the library onto the graph" } else { "drag Blur from the library onto the graph" };
-                Some((name, 0.3, Box::new(move |app: &FerrotexApp| {
-                    if app.graph.nodes.iter().any(|n| n.kind == kind) { Ok(()) } else { Err("node not created".into()) }
-                })))
+                let name = if step == 2 {
+                    "drag Noise from the library onto the graph"
+                } else {
+                    "drag Blur from the library onto the graph"
+                };
+                Some((
+                    name,
+                    0.3,
+                    Box::new(move |app: &FerrotexApp| {
+                        if app.graph.nodes.iter().any(|n| n.kind == kind) {
+                            Ok(())
+                        } else {
+                            Err("node not created".into())
+                        }
+                    }),
+                ))
             }
             4 => {
                 let (Some(noise), Some(blur)) = (node_of(NodeKind::Noise), node_of(NodeKind::Blur)) else {
@@ -219,20 +245,30 @@ impl AutoPilot {
                     return Some(("connect sockets", 0.0, fail("sockets not found".into())));
                 };
                 self.drag(a, b);
-                Some(("drag from an output socket to an input socket connects them", 0.3, Box::new(move |app: &FerrotexApp| {
-                    match app.graph.link_into(blur, "i:input") {
+                Some((
+                    "drag from an output socket to an input socket connects them",
+                    0.3,
+                    Box::new(move |app: &FerrotexApp| match app.graph.link_into(blur, "i:input") {
                         Some(l) if l.from == noise => Ok(()),
                         _ => Err("no link Noise -> Blur".into()),
-                    }
-                })))
+                    }),
+                ))
             }
             5 => {
                 let blur = node_of(NodeKind::Blur)?;
                 let h = header(blur)?;
                 self.click(h.center());
-                Some(("clicking a node selects it", 0.2, Box::new(move |app: &FerrotexApp| {
-                    if app.view.selected.len() == 1 && app.view.selected.contains(&blur) { Ok(()) } else { Err(format!("selection {:?}", app.view.selected)) }
-                })))
+                Some((
+                    "clicking a node selects it",
+                    0.2,
+                    Box::new(move |app: &FerrotexApp| {
+                        if app.view.selected.len() == 1 && app.view.selected.contains(&blur) {
+                            Ok(())
+                        } else {
+                            Err(format!("selection {:?}", app.view.selected))
+                        }
+                    }),
+                ))
             }
             6 => {
                 let blur = node_of(NodeKind::Blur)?;
@@ -240,19 +276,35 @@ impl AutoPilot {
                 let before = app.graph.node(blur)?.pos;
                 let zoom = app.view.zoom;
                 self.drag(h.center(), h.center() + vec2(90.0, 70.0));
-                Some(("dragging a node moves it", 0.2, Box::new(move |app: &FerrotexApp| {
-                    let after = app.graph.node(blur).ok_or("node gone")?.pos;
-                    let (dx, dy) = ((after[0] - before[0]) * zoom, (after[1] - before[1]) * zoom);
-                    if (dx - 90.0).abs() < 12.0 && (dy - 70.0).abs() < 12.0 { Ok(()) } else { Err(format!("moved by ({dx:.1}, {dy:.1}) px")) }
-                })))
+                Some((
+                    "dragging a node moves it",
+                    0.2,
+                    Box::new(move |app: &FerrotexApp| {
+                        let after = app.graph.node(blur).ok_or("node gone")?.pos;
+                        let (dx, dy) = ((after[0] - before[0]) * zoom, (after[1] - before[1]) * zoom);
+                        if (dx - 90.0).abs() < 12.0 && (dy - 70.0).abs() < 12.0 {
+                            Ok(())
+                        } else {
+                            Err(format!("moved by ({dx:.1}, {dy:.1}) px"))
+                        }
+                    }),
+                ))
             }
             7 => {
                 let blur = node_of(NodeKind::Blur)?;
                 let r = body(blur)?;
                 self.double_click(r.center());
-                Some(("double-click shows the node in the 2D view", 0.5, Box::new(move |app: &FerrotexApp| {
-                    if app.preview.node == Some(blur) { Ok(()) } else { Err(format!("preview is {:?}", app.preview.node)) }
-                })))
+                Some((
+                    "double-click shows the node in the 2D view",
+                    0.5,
+                    Box::new(move |app: &FerrotexApp| {
+                        if app.preview.node == Some(blur) {
+                            Ok(())
+                        } else {
+                            Err(format!("preview is {:?}", app.preview.node))
+                        }
+                    }),
+                ))
             }
             8 => {
                 let blur = node_of(NodeKind::Blur)?;
@@ -260,19 +312,35 @@ impl AutoPilot {
                     return Some(("expose toggle", 0.0, fail("no expose toggle for radius".into())));
                 };
                 self.click(r.center());
-                Some(("expose toggle adds an input socket to the node", 0.3, Box::new(move |app: &FerrotexApp| {
-                    let node = app.graph.node(blur).ok_or("node gone")?;
-                    if app.graph.input_sockets(node).iter().any(|s| s.key == "p:radius") { Ok(()) } else { Err("no p:radius socket".into()) }
-                })))
+                Some((
+                    "expose toggle adds an input socket to the node",
+                    0.3,
+                    Box::new(move |app: &FerrotexApp| {
+                        let node = app.graph.node(blur).ok_or("node gone")?;
+                        if app.graph.input_sockets(node).iter().any(|s| s.key == "p:radius") {
+                            Ok(())
+                        } else {
+                            Err("no p:radius socket".into())
+                        }
+                    }),
+                ))
             }
             9 => {
                 self.move_to(at(0.3, 0.75));
                 self.key(Key::Space, Modifiers::NONE);
                 self.text("levels");
                 self.key(Key::Enter, Modifiers::NONE);
-                Some(("Space opens the node search and Enter adds the node", 0.3, Box::new(|app: &FerrotexApp| {
-                    if app.graph.nodes.iter().any(|n| n.kind == NodeKind::Levels) { Ok(()) } else { Err("no Levels node".into()) }
-                })))
+                Some((
+                    "Space opens the node search and Enter adds the node",
+                    0.3,
+                    Box::new(|app: &FerrotexApp| {
+                        if app.graph.nodes.iter().any(|n| n.kind == NodeKind::Levels) {
+                            Ok(())
+                        } else {
+                            Err("no Levels node".into())
+                        }
+                    }),
+                ))
             }
             10 => {
                 let blur = node_of(NodeKind::Blur)?;
@@ -280,21 +348,30 @@ impl AutoPilot {
                 self.drag(out, at(0.85, 0.7));
                 self.text("invert");
                 self.key(Key::Enter, Modifiers::NONE);
-                Some(("dropping a link on empty space adds and connects a node", 0.3, Box::new(move |app: &FerrotexApp| {
-                    let inv = app.graph.nodes.iter().find(|n| n.kind == NodeKind::Invert).ok_or("no Invert node")?;
-                    match app.graph.link_into(inv.id, "i:input") {
-                        Some(l) if l.from == blur => Ok(()),
-                        _ => Err("Invert is not connected to Blur".into()),
-                    }
-                })))
+                Some((
+                    "dropping a link on empty space adds and connects a node",
+                    0.3,
+                    Box::new(move |app: &FerrotexApp| {
+                        let inv =
+                            app.graph.nodes.iter().find(|n| n.kind == NodeKind::Invert).ok_or("no Invert node")?;
+                        match app.graph.link_into(inv.id, "i:input") {
+                            Some(l) if l.from == blur => Ok(()),
+                            _ => Err("Invert is not connected to Blur".into()),
+                        }
+                    }),
+                ))
             }
             11 => {
                 let from = lib("Math")?;
                 self.drag(from, at(0.2, 0.65));
-                Some(("drag Math from the library", 0.4, Box::new(|app: &FerrotexApp| {
-                    let m = app.graph.nodes.iter().find(|n| n.kind == NodeKind::Math).ok_or("no Math node")?;
-                    if app.view.selected.contains(&m.id) { Ok(()) } else { Err("new node is not selected".into()) }
-                })))
+                Some((
+                    "drag Math from the library",
+                    0.4,
+                    Box::new(|app: &FerrotexApp| {
+                        let m = app.graph.nodes.iter().find(|n| n.kind == NodeKind::Math).ok_or("no Math node")?;
+                        if app.view.selected.contains(&m.id) { Ok(()) } else { Err("new node is not selected".into()) }
+                    }),
+                ))
             }
             12 => {
                 let Some(r) = app.props.debug_rects.get("expr").copied() else {
@@ -303,61 +380,77 @@ impl AutoPilot {
                 self.click(r.center());
                 self.key(Key::A, Modifiers::COMMAND);
                 self.text("sin(x");
-                Some(("an invalid expression reports an error instead of crashing", 0.4, Box::new(|app: &FerrotexApp| {
-                    let m = app.graph.nodes.iter().find(|n| n.kind == NodeKind::Math).ok_or("no Math node")?;
-                    if m.text("expression") != "sin(x" {
-                        return Err(format!("expression is '{}'", m.text("expression")));
-                    }
-                    match app.engine.state(m.id).and_then(|s| s.error.clone()) {
-                        Some(e) if e.contains("incorrect") => Ok(()),
-                        other => Err(format!("unexpected state {other:?}")),
-                    }
-                })))
+                Some((
+                    "an invalid expression reports an error instead of crashing",
+                    0.4,
+                    Box::new(|app: &FerrotexApp| {
+                        let m = app.graph.nodes.iter().find(|n| n.kind == NodeKind::Math).ok_or("no Math node")?;
+                        if m.text("expression") != "sin(x" {
+                            return Err(format!("expression is '{}'", m.text("expression")));
+                        }
+                        match app.engine.state(m.id).and_then(|s| s.error.clone()) {
+                            Some(e) if e.contains("incorrect") => Ok(()),
+                            other => Err(format!("unexpected state {other:?}")),
+                        }
+                    }),
+                ))
             }
             13 => {
                 let r = app.props.debug_rects.get("expr").copied()?;
                 self.click(r.center());
                 self.key(Key::A, Modifiers::COMMAND);
                 self.text("(1+x)*sin(myVar)-2.4/cos(myVar2)");
-                Some(("typing the example expression creates three variable sockets", 0.4, Box::new(|app: &FerrotexApp| {
-                    let m = app.graph.nodes.iter().find(|n| n.kind == NodeKind::Math).ok_or("no Math node")?;
-                    let keys: Vec<String> = app.graph.input_sockets(m).into_iter().map(|s| s.key).collect();
-                    if keys != ["v:x", "v:myVar", "v:myVar2"] {
-                        return Err(format!("sockets {keys:?}"));
-                    }
-                    match app.engine.value(m.id) {
-                        Some(crate::graph::Value::Float(v)) if (v + 2.4).abs() < 1e-4 => Ok(()),
-                        other => Err(format!("value {other:?}, expected -2.4")),
-                    }
-                })))
+                Some((
+                    "typing the example expression creates three variable sockets",
+                    0.4,
+                    Box::new(|app: &FerrotexApp| {
+                        let m = app.graph.nodes.iter().find(|n| n.kind == NodeKind::Math).ok_or("no Math node")?;
+                        let keys: Vec<String> = app.graph.input_sockets(m).into_iter().map(|s| s.key).collect();
+                        if keys != ["v:x", "v:myVar", "v:myVar2"] {
+                            return Err(format!("sockets {keys:?}"));
+                        }
+                        match app.engine.value(m.id) {
+                            Some(crate::graph::Value::Float(v)) if (v + 2.4).abs() < 1e-4 => Ok(()),
+                            other => Err(format!("value {other:?}, expected -2.4")),
+                        }
+                    }),
+                ))
             }
             14 => {
                 let (math, blur) = (node_of(NodeKind::Math)?, node_of(NodeKind::Blur)?);
                 let (a, b) = (socket(math, "o:result", true)?, socket(blur, "p:radius", false)?);
                 self.drag(a, b);
-                Some(("a Math result drives an exposed parameter", 0.4, Box::new(move |app: &FerrotexApp| {
-                    if app.graph.link_into(blur, "p:radius").is_none() {
-                        return Err("no link into radius".into());
-                    }
-                    match app.engine.state(blur).and_then(|s| s.driven.get("radius").cloned()) {
-                        Some(v) if (v.as_f32() + 2.4).abs() < 1e-4 => Ok(()),
-                        other => Err(format!("driven radius {other:?}")),
-                    }
-                })))
+                Some((
+                    "a Math result drives an exposed parameter",
+                    0.4,
+                    Box::new(move |app: &FerrotexApp| {
+                        if app.graph.link_into(blur, "p:radius").is_none() {
+                            return Err("no link into radius".into());
+                        }
+                        match app.engine.state(blur).and_then(|s| s.driven.get("radius").cloned()) {
+                            Some(v) if (v.as_f32() + 2.4).abs() < 1e-4 => Ok(()),
+                            other => Err(format!("driven radius {other:?}")),
+                        }
+                    }),
+                ))
             }
             15 => {
                 let (noise, math) = (node_of(NodeKind::Noise)?, node_of(NodeKind::Math)?);
                 let (a, b) = (socket(noise, "o:output", true)?, socket(math, "v:x", false)?);
                 self.drag(a, b);
-                Some(("an image cannot be connected to a float input", 0.3, Box::new(move |app: &FerrotexApp| {
-                    if app.graph.link_into(math, "v:x").is_some() {
-                        return Err("incompatible link was created".into());
-                    }
-                    match &app.status {
-                        Some(s) if s.error && s.text.contains("Cannot connect") => Ok(()),
-                        _ => Err("no error message shown".into()),
-                    }
-                })))
+                Some((
+                    "an image cannot be connected to a float input",
+                    0.3,
+                    Box::new(move |app: &FerrotexApp| {
+                        if app.graph.link_into(math, "v:x").is_some() {
+                            return Err("incompatible link was created".into());
+                        }
+                        match &app.status {
+                            Some(s) if s.error && s.text.contains("Cannot connect") => Ok(()),
+                            _ => Err("no error message shown".into()),
+                        }
+                    }),
+                ))
             }
             16 => {
                 // Box select from an empty corner over Noise and Blur.
@@ -366,52 +459,104 @@ impl AutoPilot {
                 let area = rn.union(rb);
                 let start = area.min - vec2(25.0, 25.0);
                 self.drag(start, area.max + vec2(10.0, 10.0));
-                Some(("box selection selects the covered nodes", 0.3, Box::new(move |app: &FerrotexApp| {
-                    if app.view.selected.contains(&noise) && app.view.selected.contains(&blur) { Ok(()) } else { Err(format!("selection {:?}", app.view.selected)) }
-                })))
+                Some((
+                    "box selection selects the covered nodes",
+                    0.3,
+                    Box::new(move |app: &FerrotexApp| {
+                        if app.view.selected.contains(&noise) && app.view.selected.contains(&blur) {
+                            Ok(())
+                        } else {
+                            Err(format!("selection {:?}", app.view.selected))
+                        }
+                    }),
+                ))
             }
             17 => {
                 self.move_to(at(0.95, 0.95));
                 self.key(Key::Delete, Modifiers::NONE);
-                Some(("Delete removes the selected nodes and their links", 0.9, Box::new(|app: &FerrotexApp| {
-                    let left = app.graph.nodes.iter().filter(|n| matches!(n.kind, NodeKind::Noise | NodeKind::Blur)).count();
-                    let dangling = app.graph.links.iter().any(|l| !app.graph.contains(l.from) || !app.graph.contains(l.to));
-                    if left == 0 && !dangling { Ok(()) } else { Err(format!("{left} nodes left, dangling links: {dangling}")) }
-                })))
+                Some((
+                    "Delete removes the selected nodes and their links",
+                    0.9,
+                    Box::new(|app: &FerrotexApp| {
+                        let left = app
+                            .graph
+                            .nodes
+                            .iter()
+                            .filter(|n| matches!(n.kind, NodeKind::Noise | NodeKind::Blur))
+                            .count();
+                        let dangling =
+                            app.graph.links.iter().any(|l| !app.graph.contains(l.from) || !app.graph.contains(l.to));
+                        if left == 0 && !dangling {
+                            Ok(())
+                        } else {
+                            Err(format!("{left} nodes left, dangling links: {dangling}"))
+                        }
+                    }),
+                ))
             }
             18 => {
                 self.key(Key::Z, Modifiers::COMMAND);
-                Some(("Ctrl+Z restores the deleted nodes and links", 0.9, Box::new(|app: &FerrotexApp| {
-                    let blur = app.graph.nodes.iter().find(|n| n.kind == NodeKind::Blur).ok_or("Blur not restored")?;
-                    let noise = app.graph.nodes.iter().find(|n| n.kind == NodeKind::Noise).ok_or("Noise not restored")?;
-                    match app.graph.link_into(blur.id, "i:input") {
-                        Some(l) if l.from == noise.id => Ok(()),
-                        _ => Err("link not restored".into()),
-                    }
-                })))
+                Some((
+                    "Ctrl+Z restores the deleted nodes and links",
+                    0.9,
+                    Box::new(|app: &FerrotexApp| {
+                        let blur =
+                            app.graph.nodes.iter().find(|n| n.kind == NodeKind::Blur).ok_or("Blur not restored")?;
+                        let noise =
+                            app.graph.nodes.iter().find(|n| n.kind == NodeKind::Noise).ok_or("Noise not restored")?;
+                        match app.graph.link_into(blur.id, "i:input") {
+                            Some(l) if l.from == noise.id => Ok(()),
+                            _ => Err("link not restored".into()),
+                        }
+                    }),
+                ))
             }
             19 => {
                 let add = app.inputs.debug_rects.get("add").copied()?;
                 self.click(add.center());
-                Some(("open the '+ Add' input menu", 0.3, Box::new(|app: &FerrotexApp| {
-                    if app.inputs.debug_rects.contains_key("add:Float") { Ok(()) } else { Err("menu did not open".into()) }
-                })))
+                Some((
+                    "open the '+ Add' input menu",
+                    0.3,
+                    Box::new(|app: &FerrotexApp| {
+                        if app.inputs.debug_rects.contains_key("add:Float") {
+                            Ok(())
+                        } else {
+                            Err("menu did not open".into())
+                        }
+                    }),
+                ))
             }
             20 => {
                 let item = app.inputs.debug_rects.get("add:Float").copied()?;
                 self.click(item.center());
-                Some(("adding a Float graph input", 0.3, Box::new(|app: &FerrotexApp| {
-                    if app.graph.inputs.iter().any(|i| i.ty == crate::graph::DataType::Float) { Ok(()) } else { Err("no input".into()) }
-                })))
+                Some((
+                    "adding a Float graph input",
+                    0.3,
+                    Box::new(|app: &FerrotexApp| {
+                        if app.graph.inputs.iter().any(|i| i.ty == crate::graph::DataType::Float) {
+                            Ok(())
+                        } else {
+                            Err("no input".into())
+                        }
+                    }),
+                ))
             }
             21 => {
                 // Right click on empty canvas opens the context menu (it must not pan or crash).
                 let p = at(0.9, 0.12);
                 self.click_with(p, PointerButton::Secondary);
                 self.key(Key::Escape, Modifiers::NONE);
-                Some(("context menu on the canvas", 0.3, Box::new(|app: &FerrotexApp| {
-                    if app.engine.gpu.errors.lock().map(|e| e.is_empty()).unwrap_or(false) { Ok(()) } else { Err("GPU errors reported".into()) }
-                })))
+                Some((
+                    "context menu on the canvas",
+                    0.3,
+                    Box::new(|app: &FerrotexApp| {
+                        if app.engine.gpu.errors.lock().map(|e| e.is_empty()).unwrap_or(false) {
+                            Ok(())
+                        } else {
+                            Err("GPU errors reported".into())
+                        }
+                    }),
+                ))
             }
             22 => {
                 self.move_to(at(0.5, 0.5));
@@ -425,12 +570,19 @@ impl AutoPilot {
                 }
                 self.idle(2);
                 let zoom = app.view.zoom;
-                Some(("mouse wheel zooms the graph", 0.2, Box::new(move |app: &FerrotexApp| {
-                    if app.view.zoom > zoom * 1.1 { Ok(()) } else { Err(format!("zoom {zoom} -> {}", app.view.zoom)) }
-                })))
+                Some((
+                    "mouse wheel zooms the graph",
+                    0.2,
+                    Box::new(move |app: &FerrotexApp| {
+                        if app.view.zoom > zoom * 1.1 {
+                            Ok(())
+                        } else {
+                            Err(format!("zoom {zoom} -> {}", app.view.zoom))
+                        }
+                    }),
+                ))
             }
             _ => None,
         }
     }
 }
-

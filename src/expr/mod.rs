@@ -141,11 +141,7 @@ pub fn highlight(src: &str) -> Vec<(Span, TokenClass)> {
             TokenKind::Ident(name) => {
                 let is_call = matches!(tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::LParen));
                 if is_call {
-                    if builtins::find_function(name).is_some() {
-                        TokenClass::Function
-                    } else {
-                        TokenClass::Error
-                    }
+                    if builtins::find_function(name).is_some() { TokenClass::Function } else { TokenClass::Error }
                 } else if builtins::find_constant(name).is_some() {
                     TokenClass::Constant
                 } else if builtins::find_function(name).is_some() {
@@ -239,8 +235,7 @@ fn fold(node: Node) -> Node {
         Node::Call(func, args) => {
             let args: Vec<Node> = args.into_iter().map(fold).collect();
             if func != builtins::Func::Hash && args.iter().all(|a| matches!(a, Node::Num(_))) {
-                let values: Vec<f64> =
-                    args.iter().map(|a| if let Node::Num(v) = a { *v } else { 0.0 }).collect();
+                let values: Vec<f64> = args.iter().map(|a| if let Node::Num(v) = a { *v } else { 0.0 }).collect();
                 Node::Num(builtins::call(func, &values))
             } else {
                 Node::Call(func, args)
@@ -269,11 +264,8 @@ mod tests {
 
     fn eval(src: &str, vars: &[(&str, f64)]) -> f64 {
         let p = compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
-        let values: Vec<f64> = p
-            .vars
-            .iter()
-            .map(|name| vars.iter().find(|(n, _)| n == name).map_or(0.0, |(_, v)| *v))
-            .collect();
+        let values: Vec<f64> =
+            p.vars.iter().map(|name| vars.iter().find(|(n, _)| n == name).map_or(0.0, |(_, v)| *v)).collect();
         p.eval(&values)
     }
 

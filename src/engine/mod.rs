@@ -23,8 +23,7 @@ use eframe::wgpu;
 
 use crate::gpu::{Gpu, GpuImage, Readback};
 use crate::graph::{
-    Graph, Node, NodeId, NodeKind, PIXEL_MATH_BUILTINS, ParamValue, Value, param_socket_key,
-    var_socket_key,
+    Graph, Node, NodeId, NodeKind, PIXEL_MATH_BUILTINS, ParamValue, Value, param_socket_key, var_socket_key,
 };
 use crate::simd::ImageStats;
 use exec::{DisplayU, EffParams, ExecCtx, PixelVar};
@@ -51,9 +50,11 @@ impl TextureRegistry {
     }
 
     pub fn register(&self, view: &wgpu::TextureView, nearest_mag: bool) -> TextureId {
-        self.renderer
-            .write()
-            .register_native_texture_with_sampler_options(&self.device, view, Self::sampler(nearest_mag))
+        self.renderer.write().register_native_texture_with_sampler_options(
+            &self.device,
+            view,
+            Self::sampler(nearest_mag),
+        )
     }
 
     pub fn update(&self, id: TextureId, view: &wgpu::TextureView, nearest_mag: bool) {
@@ -170,6 +171,7 @@ pub struct Engine {
     probe_job: Option<ProbeJob>,
     probe: Option<(NodeId, [u32; 2], u64, [f32; 4])>,
     pub report: EvalReport,
+    last_resolution: [u32; 2],
 }
 
 impl Engine {
@@ -194,6 +196,7 @@ impl Engine {
             probe_job: None,
             probe: None,
             report: EvalReport::default(),
+            last_resolution: [0, 0],
         }
     }
 
@@ -238,12 +241,11 @@ impl Engine {
     }
 
     fn remove_state(&mut self, id: NodeId) {
-        if let Some(state) = self.states.remove(&id) {
-            if let (Some(reg), Some(thumb)) = (&self.registry, state.thumb) {
-                if let Some(tid) = thumb.id {
-                    reg.free(tid);
-                }
-            }
+        if let Some(state) = self.states.remove(&id)
+            && let (Some(reg), Some(thumb)) = (&self.registry, state.thumb)
+            && let Some(tid) = thumb.id
+        {
+            reg.free(tid);
         }
         self.stats.remove(&id);
     }
@@ -316,6 +318,11 @@ impl Engine {
         }
 
         let resolution = graph.resolution.map(|r| r.clamp(16, 8192));
+        if resolution != self.last_resolution {
+            // Scratch textures of the old size would only waste GPU memory.
+            self.gpu.clear_pool();
+            self.last_resolution = resolution;
+        }
         let mut encoder = self.gpu.encoder();
         let mut report = EvalReport::default();
         for id in order {
@@ -348,13 +355,13 @@ impl Engine {
         let mut values = Vec::with_capacity(node.params.len());
         for slot in &node.params {
             let mut value = slot.value.clone();
-            if slot.exposed {
-                if let Some((_, Some(v))) = self.linked_value(graph, node.id, &param_socket_key(&slot.key)) {
-                    let count = d.param(&slot.key).map_or(0, |p| p.enum_options().len());
-                    if let Some(pv) = slot.value.from_driven(&v, count) {
-                        driven.insert(slot.key.clone(), pv.clone());
-                        value = pv;
-                    }
+            if slot.exposed
+                && let Some((_, Some(v))) = self.linked_value(graph, node.id, &param_socket_key(&slot.key))
+            {
+                let count = d.param(&slot.key).map_or(0, |p| p.enum_options().len());
+                if let Some(pv) = slot.value.from_driven(&v, count) {
+                    driven.insert(slot.key.clone(), pv.clone());
+                    value = pv;
                 }
             }
             values.push((slot.key.clone(), value));
@@ -364,17 +371,16 @@ impl Engine {
 
     /// Scalar value for an expression variable that is not linked to an image.
     fn scalar_var(&self, graph: &Graph, node: &Node, name: &str) -> (f64, VarSource) {
-        if let Some((from, value)) = self.linked_value(graph, node.id, &var_socket_key(name)) {
-            if let Some(v) = value.and_then(|v| v.as_f64()) {
-                return (v, VarSource::Link(from));
-            }
+        if let Some((from, value)) = self.linked_value(graph, node.id, &var_socket_key(name))
+            && let Some(v) = value.and_then(|v| v.as_f64())
+        {
+            return (v, VarSource::Link(from));
         }
-        if node.bool_value("auto_bind") {
-            if let Some(input) = graph.input_by_name(name) {
-                if let Some(v) = input.value.as_f64() {
-                    return (v, VarSource::GraphInput(input.name.clone()));
-                }
-            }
+        if node.bool_value("auto_bind")
+            && let Some(input) = graph.input_by_name(name)
+            && let Some(v) = input.value.as_f64()
+        {
+            return (v, VarSource::GraphInput(input.name.clone()));
         }
         (node.var_values.get(name).copied().unwrap_or(0.0) as f64, VarSource::Local)
     }
@@ -420,9 +426,7 @@ impl Engine {
                 }
             }
             NodeKind::ComposeVec2 => Some(Value::Vec2([params.f("x"), params.f("y")])),
-            NodeKind::ComposeColor => {
-                Some(Value::Color([params.f("r"), params.f("g"), params.f("b"), params.f("a")]))
-            }
+            NodeKind::ComposeColor => Some(Value::Color([params.f("r"), params.f("g"), params.f("b"), params.f("a")])),
             _ => None,
         };
         let changed = self.states.get(&node.id).is_none_or(|s| s.value != value);
@@ -498,36 +502,34 @@ impl Engine {
         // Pixel Math variables.
         let mut pixel_vars = Vec::new();
         let mut vars_info = Vec::new();
-        if node.kind == NodeKind::PixelMath {
-            if let Ok(program) = &*crate::expr::compile_cached(node.text("expression")) {
-                for name in &program.vars {
-                    if let Some(b) = PIXEL_MATH_BUILTINS.iter().find(|b| **b == name.as_str()) {
-                        pixel_vars.push(PixelVar::Builtin(b));
-                        vars_info.push(VarInfo { name: name.clone(), value: 0.0, source: VarSource::Builtin });
-                        (2u8, name).hash(&mut hasher);
-                        continue;
-                    }
-                    let link = graph.link_into(node.id, &var_socket_key(name));
-                    let img = link.and_then(|l| self.states.get(&l.from).map(|s| (l.from, s)));
-                    if let Some((from, st)) = img.filter(|(_, s)| s.image.is_some()) {
-                        (1u8, from.0, st.version).hash(&mut hasher);
-                        pixel_vars.push(PixelVar::Image(st.image.clone().expect("checked")));
-                        vars_info.push(VarInfo { name: name.clone(), value: 0.0, source: VarSource::Image(from) });
-                    } else {
-                        let (v, source) = self.scalar_var(graph, node, name);
-                        (0u8, (v as f32).to_bits()).hash(&mut hasher);
-                        pixel_vars.push(PixelVar::Constant(v as f32));
-                        vars_info.push(VarInfo { name: name.clone(), value: v, source });
-                    }
+        if node.kind == NodeKind::PixelMath
+            && let Ok(program) = &*crate::expr::compile_cached(node.text("expression"))
+        {
+            for name in &program.vars {
+                if let Some(b) = PIXEL_MATH_BUILTINS.iter().find(|b| **b == name.as_str()) {
+                    pixel_vars.push(PixelVar::Builtin(b));
+                    vars_info.push(VarInfo { name: name.clone(), value: 0.0, source: VarSource::Builtin });
+                    (2u8, name).hash(&mut hasher);
+                    continue;
+                }
+                let link = graph.link_into(node.id, &var_socket_key(name));
+                let img = link.and_then(|l| self.states.get(&l.from).map(|s| (l.from, s)));
+                if let Some((from, st)) = img.filter(|(_, s)| s.image.is_some()) {
+                    (1u8, from.0, st.version).hash(&mut hasher);
+                    pixel_vars.push(PixelVar::Image(st.image.clone().expect("checked")));
+                    vars_info.push(VarInfo { name: name.clone(), value: 0.0, source: VarSource::Image(from) });
+                } else {
+                    let (v, source) = self.scalar_var(graph, node, name);
+                    (0u8, (v as f32).to_bits()).hash(&mut hasher);
+                    pixel_vars.push(PixelVar::Constant(v as f32));
+                    vars_info.push(VarInfo { name: name.clone(), value: v, source });
                 }
             }
         }
 
         let key = hasher.finish();
-        let needs_alloc = self
-            .states
-            .get(&node.id)
-            .is_none_or(|s| s.image.as_ref().is_none_or(|img| img.size() != resolution));
+        let needs_alloc =
+            self.states.get(&node.id).is_none_or(|s| s.image.as_ref().is_none_or(|img| img.size() != resolution));
         let unchanged = !needs_alloc && self.states.get(&node.id).is_some_and(|s| s.key == key);
         if unchanged {
             let state = self.states.get_mut(&node.id).expect("exists");
@@ -609,10 +611,10 @@ impl Engine {
                 [THUMB_SIZE, THUMB_SIZE],
             );
             thumb.version = state.version;
-            if thumb.id.is_none() {
-                if let Some(reg) = &self.registry {
-                    thumb.id = Some(reg.register(&thumb.image.view, false));
-                }
+            if thumb.id.is_none()
+                && let Some(reg) = &self.registry
+            {
+                thumb.id = Some(reg.register(&thumb.image.view, false));
             }
         }
     }
@@ -723,14 +725,16 @@ impl Engine {
         let version = self.states.get(&node)?.version;
         let cached = self.stats.get(&node).cloned();
         let fresh = cached.as_ref().is_some_and(|(v, _)| *v == version);
-        if !fresh && self.stats_job.is_none() && !self.stats_running {
-            if let Some(image) = self.image(node).cloned() {
-                let mut encoder = self.gpu.encoder();
-                let readback = self.gpu.encode_readback(&mut encoder, &image);
-                self.gpu.queue.submit(Some(encoder.finish()));
-                readback.map();
-                self.stats_job = Some(StatsJob { node, version, readback });
-            }
+        if !fresh
+            && self.stats_job.is_none()
+            && !self.stats_running
+            && let Some(image) = self.image(node).cloned()
+        {
+            let mut encoder = self.gpu.encoder();
+            let readback = self.gpu.encode_readback(&mut encoder, &image);
+            self.gpu.queue.submit(Some(encoder.finish()));
+            readback.map();
+            self.stats_job = Some(StatsJob { node, version, readback });
         }
         cached.map(|(_, s)| (s, fresh))
     }
@@ -781,7 +785,6 @@ fn decode_bitmap(path: &str) -> Result<(u32, u32, Vec<u16>), String> {
 pub fn read_node(engine: &Engine, id: NodeId) -> Option<Vec<f32>> {
     engine.image(id).and_then(|img| engine.gpu.read_image_blocking(img).ok())
 }
-
 
 #[cfg(test)]
 mod tests;

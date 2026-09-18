@@ -22,11 +22,7 @@ pub fn show(ui: &mut Ui, state: &mut LibraryState) -> Option<LibraryItem> {
     ui.horizontal(|ui| {
         ui.heading("Nodes");
     });
-    ui.add(
-        egui::TextEdit::singleline(&mut state.search)
-            .hint_text("Search…")
-            .desired_width(f32::INFINITY),
-    );
+    ui.add(egui::TextEdit::singleline(&mut state.search).hint_text("Search…").desired_width(f32::INFINITY));
     ui.add_space(4.0);
     let query = state.search.trim().to_lowercase();
     let items = library();

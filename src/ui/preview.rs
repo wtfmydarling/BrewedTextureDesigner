@@ -5,8 +5,8 @@
 //! interactive gizmo (move, rotate, scale).
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, Event, FontId, PointerButton, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui,
-    Vec2, pos2, vec2,
+    self, Align2, Color32, CornerRadius, Event, FontId, PointerButton, Pos2, Rect, RichText, Sense, Stroke, StrokeKind,
+    Ui, Vec2, pos2, vec2,
 };
 
 use super::ACCENT;
@@ -28,7 +28,11 @@ enum Handle {
     Move,
     Rotate,
     /// Source-space point being dragged, and which axes it scales.
-    Scale { src: [f32; 2], x: bool, y: bool },
+    Scale {
+        src: [f32; 2],
+        x: bool,
+        y: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -52,7 +56,16 @@ pub struct PreviewState {
 
 impl Default for PreviewState {
     fn default() -> Self {
-        PreviewState { node: None, mode: 0, show_tiling: false, zoom: 1.0, pan: Vec2::ZERO, fit: true, gizmo: None, shown: None }
+        PreviewState {
+            node: None,
+            mode: 0,
+            show_tiling: false,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+            fit: true,
+            gizmo: None,
+            shown: None,
+        }
     }
 }
 
@@ -70,7 +83,12 @@ impl Xform {
             Some(ParamValue::Vec2(v)) => v,
             _ => [0.0; 2],
         };
-        let x = Xform { offset: v2("offset"), rotation: get("rotation").map_or(0.0, |v| v.as_f32()), scale: v2("scale"), pivot: v2("pivot") };
+        let x = Xform {
+            offset: v2("offset"),
+            rotation: get("rotation").map_or(0.0, |v| v.as_f32()),
+            scale: v2("scale"),
+            pivot: v2("pivot"),
+        };
         let locked = ["offset", "rotation", "scale", "pivot"].map(|k| driven.contains_key(k));
         Some((x, locked))
     }
@@ -152,7 +170,13 @@ pub fn show(ui: &mut Ui, graph: &mut Graph, engine: &mut Engine, state: &mut Pre
     painter.rect_filled(rect, CornerRadius::ZERO, Color32::from_rgb(18, 18, 20));
 
     let Some(node) = node else {
-        painter.text(rect.center(), Align2::CENTER_CENTER, "No node shown", FontId::proportional(15.0), Color32::from_gray(110));
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            "No node shown",
+            FontId::proportional(15.0),
+            Color32::from_gray(110),
+        );
         return;
     };
     let id = node.id;
@@ -241,136 +265,149 @@ pub fn show(ui: &mut Ui, graph: &mut Graph, engine: &mut Engine, state: &mut Pre
 
     // ---------------------------------------------------------------- Transform 2D gizmo
 
-    if node.kind == NodeKind::Transform2D {
-        if let Some((xf, locked)) = Xform::from_node(graph, engine, id) {
-            let aspect = img_px.x / img_px.y;
-            let corners = [vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0)];
-            let quad: Vec<Pos2> = corners.iter().map(|c| uv_to_screen(xf.forward(*c, aspect))).collect();
-            let center = uv_to_screen(xf.center());
-            let ring_r = 64.0;
+    if node.kind == NodeKind::Transform2D
+        && let Some((xf, locked)) = Xform::from_node(graph, engine, id)
+    {
+        let aspect = img_px.x / img_px.y;
+        let corners = [vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0)];
+        let quad: Vec<Pos2> = corners.iter().map(|c| uv_to_screen(xf.forward(*c, aspect))).collect();
+        let center = uv_to_screen(xf.center());
+        let ring_r = 64.0;
 
-            // Handles: (screen position, handle)
-            let mut handles: Vec<(Pos2, Handle)> = Vec::new();
-            for (i, c) in corners.iter().enumerate() {
-                handles.push((quad[i], Handle::Scale { src: [c.x, c.y], x: true, y: true }));
+        // Handles: (screen position, handle)
+        let mut handles: Vec<(Pos2, Handle)> = Vec::new();
+        for (i, c) in corners.iter().enumerate() {
+            handles.push((quad[i], Handle::Scale { src: [c.x, c.y], x: true, y: true }));
+        }
+        let mids = [
+            (vec2(0.5, 0.0), false, true),
+            (vec2(1.0, 0.5), true, false),
+            (vec2(0.5, 1.0), false, true),
+            (vec2(0.0, 0.5), true, false),
+        ];
+        for (m, x, y) in mids {
+            handles.push((uv_to_screen(xf.forward(m, aspect)), Handle::Scale { src: [m.x, m.y], x, y }));
+        }
+
+        let hit = |p: Pos2| -> Option<Handle> {
+            if p.distance(center) < 10.0 {
+                return Some(Handle::Move);
             }
-            let mids = [(vec2(0.5, 0.0), false, true), (vec2(1.0, 0.5), true, false), (vec2(0.5, 1.0), false, true), (vec2(0.0, 0.5), true, false)];
-            for (m, x, y) in mids {
-                handles.push((uv_to_screen(xf.forward(m, aspect)), Handle::Scale { src: [m.x, m.y], x, y }));
-            }
-
-            let hit = |p: Pos2| -> Option<Handle> {
-                if p.distance(center) < 10.0 {
-                    return Some(Handle::Move);
-                }
-                for (hp, h) in &handles {
-                    if hp.distance(p) < 8.0 {
-                        return Some(*h);
-                    }
-                }
-                if (p.distance(center) - ring_r).abs() < 6.0 {
-                    return Some(Handle::Rotate);
-                }
-                None
-            };
-            let hovered = pointer.and_then(|p| hit(p));
-            let gizmo_hover = hovered.is_some() || state.gizmo.is_some();
-
-            if resp.drag_started_by(PointerButton::Primary) {
-                if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
-                    if let Some(h) = hit(origin) {
-                        state.gizmo = Some(GizmoDrag { handle: h, start_uv: screen_to_uv(origin).to_pos2(), start_screen: origin, start: xf });
-                    }
+            for (hp, h) in &handles {
+                if hp.distance(p) < 8.0 {
+                    return Some(*h);
                 }
             }
-            if let (Some(g), Some(p)) = (state.gizmo, ui.ctx().pointer_interact_pos()) {
-                if resp.dragged_by(PointerButton::Primary) {
-                    let shift = ui.input(|i| i.modifiers.shift);
-                    let uv = screen_to_uv(p);
-                    match g.handle {
-                        Handle::Move if !locked[0] => {
-                            let mut o = Vec2::from(g.start.offset) + (uv - g.start_uv.to_vec2());
-                            if shift {
-                                // Constrain to the dominant axis.
-                                let d = uv - g.start_uv.to_vec2();
-                                if d.x.abs() > d.y.abs() {
-                                    o.y = g.start.offset[1];
-                                } else {
-                                    o.x = g.start.offset[0];
-                                }
-                            }
-                            set_param(graph, id, "offset", ParamValue::Vec2([o.x, o.y]));
+            if (p.distance(center) - ring_r).abs() < 6.0 {
+                return Some(Handle::Rotate);
+            }
+            None
+        };
+        let hovered = pointer.and_then(&hit);
+        let gizmo_hover = hovered.is_some() || state.gizmo.is_some();
+
+        if resp.drag_started_by(PointerButton::Primary)
+            && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+            && let Some(h) = hit(origin)
+        {
+            state.gizmo = Some(GizmoDrag {
+                handle: h,
+                start_uv: screen_to_uv(origin).to_pos2(),
+                start_screen: origin,
+                start: xf,
+            });
+        }
+        if let (Some(g), Some(p)) = (state.gizmo, ui.ctx().pointer_interact_pos())
+            && resp.dragged_by(PointerButton::Primary)
+        {
+            let shift = ui.input(|i| i.modifiers.shift);
+            let uv = screen_to_uv(p);
+            match g.handle {
+                Handle::Move if !locked[0] => {
+                    let mut o = Vec2::from(g.start.offset) + (uv - g.start_uv.to_vec2());
+                    if shift {
+                        // Constrain to the dominant axis.
+                        let d = uv - g.start_uv.to_vec2();
+                        if d.x.abs() > d.y.abs() {
+                            o.y = g.start.offset[1];
+                        } else {
+                            o.x = g.start.offset[0];
                         }
-                        Handle::Rotate if !locked[1] => {
-                            let c = uv_to_screen(g.start.center());
-                            let a0 = (g.start_screen - c).angle();
-                            let a1 = (p - c).angle();
-                            let mut r = g.start.rotation - (a1 - a0).to_degrees();
-                            r = (r + 180.0).rem_euclid(360.0) - 180.0;
-                            if shift {
-                                r = (r / 15.0).round() * 15.0;
-                            }
-                            set_param(graph, id, "rotation", ParamValue::Float(r));
-                        }
-                        Handle::Scale { src, x, y } if !locked[2] => {
-                            let local = g.start.local(uv, aspect);
-                            let rel = Vec2::from(src) - Vec2::from(g.start.pivot);
-                            let mut s = g.start.scale;
-                            if x && rel.x.abs() > 1e-4 {
-                                s[0] = local.x / rel.x;
-                            }
-                            if y && rel.y.abs() > 1e-4 {
-                                s[1] = local.y / rel.y;
-                            }
-                            if shift {
-                                let fx = if x { s[0] / g.start.scale[0] } else { s[1] / g.start.scale[1] };
-                                let fy = if y { s[1] / g.start.scale[1] } else { fx };
-                                let f = if x && y { (fx + fy) * 0.5 } else { fx.max(fy) };
-                                s = [g.start.scale[0] * f, g.start.scale[1] * f];
-                            }
-                            let clamp = |v: f32| if v.abs() < 0.01 { 0.01f32.copysign(v) } else { v.clamp(-64.0, 64.0) };
-                            set_param(graph, id, "scale", ParamValue::Vec2([clamp(s[0]), clamp(s[1])]));
-                        }
-                        _ => {}
                     }
+                    set_param(graph, id, "offset", ParamValue::Vec2([o.x, o.y]));
                 }
+                Handle::Rotate if !locked[1] => {
+                    let c = uv_to_screen(g.start.center());
+                    let a0 = (g.start_screen - c).angle();
+                    let a1 = (p - c).angle();
+                    let mut r = g.start.rotation - (a1 - a0).to_degrees();
+                    r = (r + 180.0).rem_euclid(360.0) - 180.0;
+                    if shift {
+                        r = (r / 15.0).round() * 15.0;
+                    }
+                    set_param(graph, id, "rotation", ParamValue::Float(r));
+                }
+                Handle::Scale { src, x, y } if !locked[2] => {
+                    let local = g.start.local(uv, aspect);
+                    let rel = Vec2::from(src) - Vec2::from(g.start.pivot);
+                    let mut s = g.start.scale;
+                    if x && rel.x.abs() > 1e-4 {
+                        s[0] = local.x / rel.x;
+                    }
+                    if y && rel.y.abs() > 1e-4 {
+                        s[1] = local.y / rel.y;
+                    }
+                    if shift {
+                        let fx = if x { s[0] / g.start.scale[0] } else { s[1] / g.start.scale[1] };
+                        let fy = if y { s[1] / g.start.scale[1] } else { fx };
+                        let f = if x && y { (fx + fy) * 0.5 } else { fx.max(fy) };
+                        s = [g.start.scale[0] * f, g.start.scale[1] * f];
+                    }
+                    let clamp = |v: f32| if v.abs() < 0.01 { 0.01f32.copysign(v) } else { v.clamp(-64.0, 64.0) };
+                    set_param(graph, id, "scale", ParamValue::Vec2([clamp(s[0]), clamp(s[1])]));
+                }
+                _ => {}
             }
-            if !ui.input(|i| i.pointer.primary_down()) {
-                state.gizmo = None;
-            }
+        }
+        if !ui.input(|i| i.pointer.primary_down()) {
+            state.gizmo = None;
+        }
 
-            // Paint.
-            let active = state.gizmo.map(|g| g.handle).or(hovered);
-            let col = |h: Handle, locked: bool| {
-                if locked {
-                    Color32::from_gray(110)
-                } else if active == Some(h) {
-                    Color32::WHITE
-                } else {
-                    ACCENT
-                }
-            };
-            let mut closed = quad.clone();
-            closed.push(quad[0]);
-            painter.add(egui::Shape::line(closed, Stroke::new(1.5, ACCENT.gamma_multiply(0.9))));
-            painter.circle_stroke(center, ring_r, Stroke::new(if active == Some(Handle::Rotate) { 2.5 } else { 1.2 }, col(Handle::Rotate, locked[1])));
-            // Rotation indicator: where the image's "up" axis points.
-            let up = uv_to_screen(xf.forward(vec2(xf.pivot[0], xf.pivot[1] - 0.5), aspect)) - center;
-            if up.length() > 1.0 {
-                let tip = center + up.normalized() * ring_r;
-                painter.line_segment([center, tip], Stroke::new(1.0, col(Handle::Rotate, locked[1])));
-                painter.circle_filled(tip, 4.0, col(Handle::Rotate, locked[1]));
+        // Paint.
+        let active = state.gizmo.map(|g| g.handle).or(hovered);
+        let col = |h: Handle, locked: bool| {
+            if locked {
+                Color32::from_gray(110)
+            } else if active == Some(h) {
+                Color32::WHITE
+            } else {
+                ACCENT
             }
-            for (p, h) in &handles {
-                let r = Rect::from_center_size(*p, Vec2::splat(9.0));
-                painter.rect_filled(r, CornerRadius::same(1), Color32::from_black_alpha(160));
-                painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.5, col(*h, locked[2])), StrokeKind::Middle);
-            }
-            painter.circle_filled(center, 6.0, Color32::from_black_alpha(160));
-            painter.circle_stroke(center, 6.0, Stroke::new(2.0, col(Handle::Move, locked[0])));
-            if gizmo_hover {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-            }
+        };
+        let mut closed = quad.clone();
+        closed.push(quad[0]);
+        painter.add(egui::Shape::line(closed, Stroke::new(1.5, ACCENT.gamma_multiply(0.9))));
+        painter.circle_stroke(
+            center,
+            ring_r,
+            Stroke::new(if active == Some(Handle::Rotate) { 2.5 } else { 1.2 }, col(Handle::Rotate, locked[1])),
+        );
+        // Rotation indicator: where the image's "up" axis points.
+        let up = uv_to_screen(xf.forward(vec2(xf.pivot[0], xf.pivot[1] - 0.5), aspect)) - center;
+        if up.length() > 1.0 {
+            let tip = center + up.normalized() * ring_r;
+            painter.line_segment([center, tip], Stroke::new(1.0, col(Handle::Rotate, locked[1])));
+            painter.circle_filled(tip, 4.0, col(Handle::Rotate, locked[1]));
+        }
+        for (p, h) in &handles {
+            let r = Rect::from_center_size(*p, Vec2::splat(9.0));
+            painter.rect_filled(r, CornerRadius::same(1), Color32::from_black_alpha(160));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.5, col(*h, locked[2])), StrokeKind::Middle);
+        }
+        painter.circle_filled(center, 6.0, Color32::from_black_alpha(160));
+        painter.circle_stroke(center, 6.0, Stroke::new(2.0, col(Handle::Move, locked[0])));
+        if gizmo_hover {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
     }
 
@@ -383,7 +420,8 @@ pub fn show(ui: &mut Ui, graph: &mut Graph, engine: &mut Engine, state: &mut Pre
     }
 
     // ---------------------------------------------------------------- pixel probe
-    let mut footer = format!("{}×{}  ·  {:.0}%", info.size[0], info.size[1], state.zoom * 100.0 * ui.ctx().pixels_per_point());
+    let mut footer =
+        format!("{}×{}  ·  {:.0}%", info.size[0], info.size[1], state.zoom * 100.0 * ui.ctx().pixels_per_point());
     if let Some(p) = pointer {
         let mut uv = screen_to_uv(p);
         let wrap_x = state.show_tiling && tiling & 1 != 0;
@@ -404,7 +442,13 @@ pub fn show(ui: &mut Ui, graph: &mut Graph, engine: &mut Engine, state: &mut Pre
     }
     let footer_rect = Rect::from_min_size(rect.left_bottom() - vec2(0.0, 20.0), vec2(rect.width(), 20.0));
     painter.rect_filled(footer_rect, CornerRadius::ZERO, Color32::from_black_alpha(150));
-    painter.text(footer_rect.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, footer, FontId::monospace(11.5), Color32::from_gray(210));
+    painter.text(
+        footer_rect.left_center() + vec2(8.0, 0.0),
+        Align2::LEFT_CENTER,
+        footer,
+        FontId::monospace(11.5),
+        Color32::from_gray(210),
+    );
     if let Some(err) = engine.state(id).and_then(|s| s.error.clone()) {
         painter.text(rect.left_top() + vec2(8.0, 8.0), Align2::LEFT_TOP, err, FontId::proportional(13.0), super::ERROR);
     }

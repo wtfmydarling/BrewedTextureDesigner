@@ -30,7 +30,12 @@ fn main() -> eframe::Result {
                 let out = args.get(i + 1).cloned().unwrap_or_else(|| "contact_sheet.png".into());
                 let (graph, nodes) = if args.get(i + 2).map(String::as_str) == Some("demo") {
                     let (g, _) = ferrotex::demo::brick_wall();
-                    let nodes = g.nodes.iter().filter(|n| n.def().has_image).map(|n| (n.id, n.def().name.to_string())).collect();
+                    let nodes = g
+                        .nodes
+                        .iter()
+                        .filter(|n| n.def().has_image)
+                        .map(|n| (n.id, n.def().name.to_string()))
+                        .collect();
                     (g, nodes)
                 } else {
                     ferrotex::tools::gallery_graph()

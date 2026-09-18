@@ -280,7 +280,8 @@ pub fn output_format_channels(format: u32) -> &'static [usize] {
     }
 }
 
-const SHUFFLE_SOURCES: &[&str] = &["A.Red", "A.Green", "A.Blue", "A.Alpha", "B.Red", "B.Green", "B.Blue", "B.Alpha", "Zero", "One"];
+const SHUFFLE_SOURCES: &[&str] =
+    &["A.Red", "A.Green", "A.Blue", "A.Alpha", "B.Red", "B.Green", "B.Blue", "B.Alpha", "Zero", "One"];
 
 const NO_SOCKETS: &[SocketDef] = &[];
 const IMAGE_OUT: &[SocketDef] = &[image("output", "Output")];
@@ -304,40 +305,77 @@ macro_rules! def {
 }
 
 pub static DEFS: &[NodeDef] = &[
-    def!(Input, "Input", Values,
+    def!(
+        Input,
+        "Input",
+        Values,
         "Reads one of the graph's input values (see the Input Values panel).",
-        NO_SOCKETS, &[SocketDef { key: "value", label: "Value", ty: DataType::Float }], &[], false),
-    def!(Math, "Math", Values,
+        NO_SOCKETS,
+        &[SocketDef { key: "value", label: "Value", ty: DataType::Float }],
+        &[],
+        false
+    ),
+    def!(
+        Math,
+        "Math",
+        Values,
         "Evaluates a scalar expression. Every unknown word becomes an input on the left.",
-        NO_SOCKETS, &[SocketDef { key: "result", label: "Result", ty: DataType::Float }],
+        NO_SOCKETS,
+        &[SocketDef { key: "result", label: "Result", ty: DataType::Float }],
         &[
             text("expression", "Expression", DEFAULT_MATH_EXPRESSION),
             boolean("auto_bind", "Auto-bind inputs", true)
                 .tip("Unconnected variables named like a graph input take that input's value."),
-        ], false),
-    def!(ComposeVec2, "Compose Vec2", Values,
+        ],
+        false
+    ),
+    def!(
+        ComposeVec2,
+        "Compose Vec2",
+        Values,
         "Builds a 2D vector from two numbers.",
-        NO_SOCKETS, &[SocketDef { key: "value", label: "Vec2", ty: DataType::Vec2 }],
-        &[float("x", "X", 0.0, -1.0, 1.0).exposed(), float("y", "Y", 0.0, -1.0, 1.0).exposed()], false),
-    def!(ComposeColor, "Compose Color", Values,
+        NO_SOCKETS,
+        &[SocketDef { key: "value", label: "Vec2", ty: DataType::Vec2 }],
+        &[float("x", "X", 0.0, -1.0, 1.0).exposed(), float("y", "Y", 0.0, -1.0, 1.0).exposed()],
+        false
+    ),
+    def!(
+        ComposeColor,
+        "Compose Color",
+        Values,
         "Builds an RGBA color from four numbers.",
-        NO_SOCKETS, &[SocketDef { key: "value", label: "Color", ty: DataType::Color }],
+        NO_SOCKETS,
+        &[SocketDef { key: "value", label: "Color", ty: DataType::Color }],
         &[
             float("r", "Red", 0.5, 0.0, 1.0).exposed(),
             float("g", "Green", 0.5, 0.0, 1.0).exposed(),
             float("b", "Blue", 0.5, 0.0, 1.0).exposed(),
             float("a", "Alpha", 1.0, 0.0, 1.0),
-        ], false),
+        ],
+        false
+    ),
     // ---------------------------------------------------------------- generators
-    def!(UniformColor, "Uniform Color", Generators,
+    def!(
+        UniformColor,
+        "Uniform Color",
+        Generators,
         "Fills the image with a single color.",
-        NO_SOCKETS, IMAGE_OUT, &[color("color", "Color", [0.5, 0.5, 0.5, 1.0])], true),
-    def!(Shape, "Shape", Generators,
+        NO_SOCKETS,
+        IMAGE_OUT,
+        &[color("color", "Color", [0.5, 0.5, 0.5, 1.0])],
+        true
+    ),
+    def!(
+        Shape,
+        "Shape",
+        Generators,
         "Anti-aliased geometric shapes and height profiles.",
-        NO_SOCKETS, IMAGE_OUT,
+        NO_SOCKETS,
+        IMAGE_OUT,
         &[
             choice("shape", "Shape", 0, SHAPES),
-            vec2("size", "Size", [0.6, 0.6], 0.0, 2.0).tip("Extent of the shape relative to its cell (1 = touches the edges)."),
+            vec2("size", "Size", [0.6, 0.6], 0.0, 2.0)
+                .tip("Extent of the shape relative to its cell (1 = touches the edges)."),
             float("scale", "Scale", 1.0, 0.0, 2.0),
             angle("rotation", "Rotation", 0.0, -180.0, 180.0).tip("Degrees, counter-clockwise."),
             vec2("offset", "Offset", [0.0, 0.0], -1.0, 1.0),
@@ -348,10 +386,16 @@ pub static DEFS: &[NodeDef] = &[
             float("thickness", "Thickness", 0.2, 0.01, 1.0).when("shape", &[SHAPE_RING, SHAPE_CROSS]),
             float("corner_radius", "Corner Radius", 0.25, 0.0, 1.0).when("shape", &[SHAPE_ROUNDED]),
             boolean("invert", "Invert", false),
-        ], true),
-    def!(TileGenerator, "Tile Generator", Generators,
+        ],
+        true
+    ),
+    def!(
+        TileGenerator,
+        "Tile Generator",
+        Generators,
         "Scatters a pattern on a grid with per-tile randomness.",
-        &[image("pattern", "Pattern")], IMAGE_OUT,
+        &[image("pattern", "Pattern")],
+        IMAGE_OUT,
         &[
             choice("pattern", "Pattern", 1, TILE_PATTERNS),
             int("x_amount", "X Amount", 8, 1, 64),
@@ -373,10 +417,16 @@ pub static DEFS: &[NodeDef] = &[
             float("corner_radius", "Corner Radius", 0.25, 0.0, 1.0).when("pattern", &[SHAPE_ROUNDED]),
             choice("blend_mode", "Overlap", 0, &["Max", "Add"]),
             int("seed", "Seed", 0, 0, 9999),
-        ], true),
-    def!(Gradient, "Gradient", Generators,
+        ],
+        true
+    ),
+    def!(
+        Gradient,
+        "Gradient",
+        Generators,
         "Linear, radial, angular and diamond gradients.",
-        NO_SOCKETS, IMAGE_OUT,
+        NO_SOCKETS,
+        IMAGE_OUT,
         &[
             choice("type", "Type", 0, &["Linear", "Mirrored Linear", "Radial", "Angular", "Diamond"]),
             angle("angle", "Angle", 0.0, -180.0, 180.0),
@@ -384,10 +434,16 @@ pub static DEFS: &[NodeDef] = &[
             float("repeat", "Repeat", 1.0, 0.1, 16.0),
             float("offset", "Offset", 0.0, -1.0, 1.0),
             boolean("invert", "Invert", false),
-        ], true),
-    def!(Noise, "Noise", Generators,
+        ],
+        true
+    ),
+    def!(
+        Noise,
+        "Noise",
+        Generators,
         "Tileable procedural noises (fBm, ridged, cells, white).",
-        NO_SOCKETS, IMAGE_OUT,
+        NO_SOCKETS,
+        IMAGE_OUT,
         &[
             choice("type", "Type", 0, &["Perlin fBm", "Value fBm", "Ridged", "Cells", "Cell Edges", "White Noise"]),
             int("scale", "Scale", 8, 1, 128).tip("Number of noise cells across the image (integer so it tiles)."),
@@ -396,14 +452,27 @@ pub static DEFS: &[NodeDef] = &[
             float("jitter", "Jitter", 1.0, 0.0, 1.0).when("type", &[3, 4]),
             int("seed", "Seed", 0, 0, 9999),
             boolean("invert", "Invert", false),
-        ], true),
-    def!(Bitmap, "Bitmap", Generators,
+        ],
+        true
+    ),
+    def!(
+        Bitmap,
+        "Bitmap",
+        Generators,
         "Loads an image file (PNG, JPEG, TGA, BMP).",
-        NO_SOCKETS, IMAGE_OUT, &[text("path", "File", "")], true),
+        NO_SOCKETS,
+        IMAGE_OUT,
+        &[text("path", "File", "")],
+        true
+    ),
     // ---------------------------------------------------------------- filters
-    def!(Transform2D, "Transform 2D", Filters,
+    def!(
+        Transform2D,
+        "Transform 2D",
+        Filters,
         "Offset, rotate and scale the input. Drag the gizmo in the 2D view.",
-        IMAGE_IN, IMAGE_OUT,
+        IMAGE_IN,
+        IMAGE_OUT,
         &[
             vec2("offset", "Offset", [0.0, 0.0], -1.0, 1.0),
             angle("rotation", "Rotation", 0.0, -180.0, 180.0).tip("Degrees, counter-clockwise."),
@@ -411,61 +480,114 @@ pub static DEFS: &[NodeDef] = &[
             vec2("pivot", "Pivot", [0.5, 0.5], 0.0, 1.0),
             choice("filtering", "Filtering", 0, &["Bilinear", "Nearest"]),
             color("matte", "Matte Color", [0.0, 0.0, 0.0, 0.0]).tip("Fill outside the image when tiling is off."),
-        ], true),
-    def!(Blend, "Blend", Filters,
+        ],
+        true
+    ),
+    def!(
+        Blend,
+        "Blend",
+        Filters,
         "Blends a foreground over a background with an optional mask.",
-        &[image("foreground", "Foreground"), image("background", "Background"), image("mask", "Mask")], IMAGE_OUT,
+        &[image("foreground", "Foreground"), image("background", "Background"), image("mask", "Mask")],
+        IMAGE_OUT,
         &[
             choice("mode", "Blending Mode", 0, BLEND_MODES),
             float("opacity", "Opacity", 1.0, 0.0, 1.0),
             choice("alpha", "Alpha Blending", 0, &["Use Foreground Alpha", "Ignore Alpha"]),
             boolean("clamp", "Clamp Result", true),
-        ], true),
-    def!(Blur, "Blur", Filters,
+        ],
+        true
+    ),
+    def!(
+        Blur,
+        "Blur",
+        Filters,
         "High quality Gaussian blur.",
-        IMAGE_IN, IMAGE_OUT,
+        IMAGE_IN,
+        IMAGE_OUT,
         &[float("radius", "Radius", 8.0, 0.0, 128.0)
-            .tip("Blur radius in pixels at 1024 px, so the look is the same at every resolution.")], true),
-    def!(Sharpen, "Sharpen", Filters,
+            .tip("Blur radius in pixels at 1024 px, so the look is the same at every resolution.")],
+        true
+    ),
+    def!(
+        Sharpen,
+        "Sharpen",
+        Filters,
         "Unsharp-mask sharpening.",
-        IMAGE_IN, IMAGE_OUT,
+        IMAGE_IN,
+        IMAGE_OUT,
         &[
             float("intensity", "Intensity", 1.0, 0.0, 10.0),
             float("radius", "Radius", 1.5, 0.1, 16.0).tip("Detail radius in pixels at 1024 px."),
-        ], true),
-    def!(Warp, "Warp", Filters,
+        ],
+        true
+    ),
+    def!(
+        Warp,
+        "Warp",
+        Filters,
         "Displaces the input along the slopes of a gradient map.",
-        &[image("input", "Input"), image("warp", "Warp Map")], IMAGE_OUT,
-        &[float("intensity", "Intensity", 0.1, 0.0, 1.0)], true),
-    def!(Mirror, "Mirror", Filters,
+        &[image("input", "Input"), image("warp", "Warp Map")],
+        IMAGE_OUT,
+        &[float("intensity", "Intensity", 0.1, 0.0, 1.0)],
+        true
+    ),
+    def!(
+        Mirror,
+        "Mirror",
+        Filters,
         "Mirrors one half of the image onto the other.",
-        IMAGE_IN, IMAGE_OUT,
+        IMAGE_IN,
+        IMAGE_OUT,
         &[
-            choice("mode", "Mode", 0, &["Left to Right", "Right to Left", "Top to Bottom", "Bottom to Top", "Four-way"]),
+            choice(
+                "mode",
+                "Mode",
+                0,
+                &["Left to Right", "Right to Left", "Top to Bottom", "Bottom to Top", "Four-way"]
+            ),
             float("offset", "Axis", 0.5, 0.0, 1.0),
-        ], true),
-    def!(NormalMap, "Normal", Filters,
+        ],
+        true
+    ),
+    def!(
+        NormalMap,
+        "Normal",
+        Filters,
         "Converts a height map into a tangent-space normal map.",
-        IMAGE_IN, IMAGE_OUT,
+        IMAGE_IN,
+        IMAGE_OUT,
         &[
             float("intensity", "Intensity", 4.0, 0.0, 32.0),
             choice("format", "Format", 0, &["OpenGL (Y+)", "DirectX (Y-)"]),
-        ], true),
-    def!(PixelMath, "Pixel Math", Filters,
+        ],
+        true
+    ),
+    def!(
+        PixelMath,
+        "Pixel Math",
+        Filters,
         "Evaluates an expression for every pixel on the GPU. Unknown words become image inputs; \
          u, v, px, py, width and height are built in.",
-        NO_SOCKETS, IMAGE_OUT,
+        NO_SOCKETS,
+        IMAGE_OUT,
         &[
             text("expression", "Expression", "u * v"),
             choice("channel", "Read Channel", 0, &["Luminance", "Red", "Green", "Blue", "Alpha"])
                 .tip("Which channel of connected images the variables read."),
             boolean("auto_bind", "Auto-bind inputs", true)
                 .tip("Unconnected variables named like a graph input take that input's value."),
-        ], true),
+        ],
+        true
+    ),
     // ---------------------------------------------------------------- adjustments
-    def!(Levels, "Levels", Adjustments,
+    def!(
+        Levels,
+        "Levels",
+        Adjustments,
         "Remaps input levels with gamma, then output levels.",
-        IMAGE_IN, IMAGE_OUT,
+        IMAGE_IN,
+        IMAGE_OUT,
         &[
             float("in_low", "Input Low", 0.0, 0.0, 1.0),
             float("in_high", "Input High", 1.0, 0.0, 1.0),
@@ -474,25 +596,50 @@ pub static DEFS: &[NodeDef] = &[
             float("out_high", "Output High", 1.0, 0.0, 1.0),
             choice("channels", "Channels", 0, &["RGB", "RGBA", "R", "G", "B", "A"]),
             boolean("clamp", "Clamp", true),
-        ], true),
-    def!(Invert, "Invert", Adjustments,
+        ],
+        true
+    ),
+    def!(
+        Invert,
+        "Invert",
+        Adjustments,
         "Inverts colors.",
-        IMAGE_IN, IMAGE_OUT, &[boolean("invert_alpha", "Invert Alpha", false)], true),
-    def!(Grayscale, "Grayscale", Adjustments,
+        IMAGE_IN,
+        IMAGE_OUT,
+        &[boolean("invert_alpha", "Invert Alpha", false)],
+        true
+    ),
+    def!(
+        Grayscale,
+        "Grayscale",
+        Adjustments,
         "Converts to grayscale.",
-        IMAGE_IN, IMAGE_OUT,
-        &[choice("mode", "Mode", 0, &["Luminance", "Average", "Red", "Green", "Blue", "Alpha", "Max"])], true),
-    def!(Hsl, "HSL", Adjustments,
+        IMAGE_IN,
+        IMAGE_OUT,
+        &[choice("mode", "Mode", 0, &["Luminance", "Average", "Red", "Green", "Blue", "Alpha", "Max"])],
+        true
+    ),
+    def!(
+        Hsl,
+        "HSL",
+        Adjustments,
         "Hue, saturation and lightness adjustment.",
-        IMAGE_IN, IMAGE_OUT,
+        IMAGE_IN,
+        IMAGE_OUT,
         &[
             angle("hue", "Hue", 0.0, -180.0, 180.0),
             float("saturation", "Saturation", 0.0, -1.0, 1.0),
             float("lightness", "Lightness", 0.0, -1.0, 1.0),
-        ], true),
-    def!(GradientMap, "Gradient Map", Adjustments,
+        ],
+        true
+    ),
+    def!(
+        GradientMap,
+        "Gradient Map",
+        Adjustments,
         "Colorizes a grayscale image with a color ramp.",
-        IMAGE_IN, IMAGE_OUT,
+        IMAGE_IN,
+        IMAGE_OUT,
         &[
             choice("stops", "Stops", 1, &["2 colors", "3 colors", "4 colors"]),
             color("color_a", "Color A (0)", [0.05, 0.04, 0.03, 1.0]),
@@ -501,28 +648,49 @@ pub static DEFS: &[NodeDef] = &[
             color("color_c", "Color C", [0.75, 0.55, 0.3, 1.0]).when("stops", &[2]),
             float("pos_c", "Position C", 0.75, 0.0, 1.0).when("stops", &[2]),
             color("color_d", "Color D (1)", [0.95, 0.9, 0.8, 1.0]),
-        ], true),
-    def!(ChannelShuffle, "Channel Shuffle", Adjustments,
+        ],
+        true
+    ),
+    def!(
+        ChannelShuffle,
+        "Channel Shuffle",
+        Adjustments,
         "Builds an image from arbitrary channels of two inputs.",
-        &[image("a", "A"), image("b", "B")], IMAGE_OUT,
+        &[image("a", "A"), image("b", "B")],
+        IMAGE_OUT,
         &[
             choice("red", "Red", 0, SHUFFLE_SOURCES),
             choice("green", "Green", 1, SHUFFLE_SOURCES),
             choice("blue", "Blue", 2, SHUFFLE_SOURCES),
             choice("alpha", "Alpha", 3, SHUFFLE_SOURCES),
-        ], true),
-    def!(Posterize, "Posterize", Adjustments,
+        ],
+        true
+    ),
+    def!(
+        Posterize,
+        "Posterize",
+        Adjustments,
         "Quantizes values to a number of steps.",
-        IMAGE_IN, IMAGE_OUT, &[int("steps", "Steps", 8, 2, 64)], true),
+        IMAGE_IN,
+        IMAGE_OUT,
+        &[int("steps", "Steps", 8, 2, 64)],
+        true
+    ),
     // ---------------------------------------------------------------- output
-    def!(Output, "Output", Output,
+    def!(
+        Output,
+        "Output",
+        Output,
         "A graph output that can be exported to an image file.",
-        IMAGE_IN, NO_SOCKETS,
+        IMAGE_IN,
+        NO_SOCKETS,
         &[
             text("name", "Name", "output"),
             choice("format", "Format", 0, OUTPUT_FORMATS).tip("Channels written by the export."),
             choice("bit_depth", "Bit Depth", 0, &["8 bit", "16 bit"]),
-        ], true),
+        ],
+        true
+    ),
 ];
 
 pub fn def(kind: NodeKind) -> &'static NodeDef {
@@ -541,11 +709,36 @@ pub struct LibraryItem {
 
 pub fn library() -> Vec<LibraryItem> {
     let mut items = vec![
-        LibraryItem { label: "Float Input", kind: NodeKind::Input, input_type: Some(DataType::Float), category: Category::Values },
-        LibraryItem { label: "Integer Input", kind: NodeKind::Input, input_type: Some(DataType::Int), category: Category::Values },
-        LibraryItem { label: "Boolean Input", kind: NodeKind::Input, input_type: Some(DataType::Bool), category: Category::Values },
-        LibraryItem { label: "Vec2 Input", kind: NodeKind::Input, input_type: Some(DataType::Vec2), category: Category::Values },
-        LibraryItem { label: "Color Input", kind: NodeKind::Input, input_type: Some(DataType::Color), category: Category::Values },
+        LibraryItem {
+            label: "Float Input",
+            kind: NodeKind::Input,
+            input_type: Some(DataType::Float),
+            category: Category::Values,
+        },
+        LibraryItem {
+            label: "Integer Input",
+            kind: NodeKind::Input,
+            input_type: Some(DataType::Int),
+            category: Category::Values,
+        },
+        LibraryItem {
+            label: "Boolean Input",
+            kind: NodeKind::Input,
+            input_type: Some(DataType::Bool),
+            category: Category::Values,
+        },
+        LibraryItem {
+            label: "Vec2 Input",
+            kind: NodeKind::Input,
+            input_type: Some(DataType::Vec2),
+            category: Category::Values,
+        },
+        LibraryItem {
+            label: "Color Input",
+            kind: NodeKind::Input,
+            input_type: Some(DataType::Color),
+            category: Category::Values,
+        },
     ];
     for d in DEFS.iter().filter(|d| d.kind != NodeKind::Input) {
         items.push(LibraryItem { label: d.name, kind: d.kind, input_type: None, category: d.category });

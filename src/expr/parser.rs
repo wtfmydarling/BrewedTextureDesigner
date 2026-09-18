@@ -133,10 +133,9 @@ impl<'a> Parser<'a> {
             TokenKind::Eof => Ok(node),
             TokenKind::RParen => Err(self.error_at(&tok, "Unmatched ')'")),
             TokenKind::Error(msg) => Err(self.error_at(&tok, msg.clone())),
-            TokenKind::Number(_) | TokenKind::Ident(_) | TokenKind::LParen => Err(self.error_at(
-                &tok,
-                format!("Unexpected {}: missing operator before it?", tok.kind.describe()),
-            )),
+            TokenKind::Number(_) | TokenKind::Ident(_) | TokenKind::LParen => {
+                Err(self.error_at(&tok, format!("Unexpected {}: missing operator before it?", tok.kind.describe())))
+            }
             other => Err(self.error_at(&tok, format!("Unexpected {}", other.describe()))),
         }
     }
@@ -213,10 +212,7 @@ impl<'a> Parser<'a> {
     }
 
     fn implicit_product_follows(&self) -> bool {
-        let prev_ok = matches!(
-            self.prev().map(|t| &t.kind),
-            Some(TokenKind::Number(_) | TokenKind::RParen)
-        );
+        let prev_ok = matches!(self.prev().map(|t| &t.kind), Some(TokenKind::Number(_) | TokenKind::RParen));
         let next_ok = matches!(self.peek().kind, TokenKind::Ident(_) | TokenKind::LParen);
         prev_ok && next_ok
     }
@@ -310,10 +306,7 @@ impl<'a> Parser<'a> {
                 } else if let Some(value) = builtins::find_constant(name) {
                     Ok(Node::Num(value))
                 } else if builtins::find_function(name).is_some() {
-                    Err(self.error_at(
-                        &tok,
-                        format!("'{name}' is a function: write {name}(...) with its arguments"),
-                    ))
+                    Err(self.error_at(&tok, format!("'{name}' is a function: write {name}(...) with its arguments")))
                 } else {
                     let index = match self.vars.iter().position(|v| v == name) {
                         Some(i) => i,

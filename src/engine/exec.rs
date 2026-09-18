@@ -281,7 +281,10 @@ pub fn execute(kind: NodeKind, cx: &mut ExecCtx) -> Result<Option<String>, Strin
     let px_scale = output.width() as f32 / 1024.0;
     let mut warning = None;
     let connected = |i: usize| inputs.get(i).is_some_and(|x| x.is_some());
-    if !inputs.is_empty() && !connected(0) && !matches!(kind, NodeKind::TileGenerator | NodeKind::Blend | NodeKind::ChannelShuffle) {
+    if !inputs.is_empty()
+        && !connected(0)
+        && !matches!(kind, NodeKind::TileGenerator | NodeKind::Blend | NodeKind::ChannelShuffle)
+    {
         warning = Some("Input is not connected".to_string());
     }
 
@@ -467,11 +470,7 @@ pub fn execute(kind: NodeKind, cx: &mut ExecCtx) -> Result<Option<String>, Strin
             gpu.run(encoder, "normal", bytes(&u), &[&input.view], output)?;
         }
         NodeKind::ChannelShuffle => {
-            let u = ShuffleU {
-                channels: [p.u("red"), p.u("green"), p.u("blue"), p.u("alpha")],
-                tiling,
-                pad: [0; 3],
-            };
+            let u = ShuffleU { channels: [p.u("red"), p.u("green"), p.u("blue"), p.u("alpha")], tiling, pad: [0; 3] };
             let a = input_or(inputs, 0, &gpu.black);
             let b = input_or(inputs, 1, &gpu.black);
             gpu.run(encoder, "shuffle", bytes(&u), &[&a.view, &b.view], output)?;
@@ -686,7 +685,8 @@ fn pixel_math(
     ));
 
     let kernel = gpu.dynamic_kernel(&source, images.len())?;
-    let mut u = PixelMathU { consts: [[0.0; 4]; 4], tiling: params.tiling(), channel: params.u("channel"), pad: [0; 2] };
+    let mut u =
+        PixelMathU { consts: [[0.0; 4]; 4], tiling: params.tiling(), channel: params.u("channel"), pad: [0; 2] };
     for (i, v) in consts.iter().enumerate() {
         u.consts[i / 4][i % 4] = *v;
     }
