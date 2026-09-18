@@ -1,0 +1,18 @@
+[package]
+name = "tessera-engine"
+description = "GPU (wgpu compute) evaluation of Tessera graphs, multithreaded SIMD pixel kernels and export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tessera-core.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+bytemuck.workspace = true
+half.workspace = true
+wide.workspace = true
+rayon.workspace = true
+image.workspace = true
+log.workspace = true
