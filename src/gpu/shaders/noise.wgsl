@@ -59,8 +59,9 @@ fn worley(p: vec2<f32>, period: vec2<i32>, seed: u32) -> vec2<f32> {
     let i = vec2<i32>(fl);
     var f1 = 10.0;
     var f2 = 10.0;
-    for (var dy = -1; dy <= 1; dy++) {
-        for (var dx = -1; dx <= 1; dx++) {
+    // 5x5 neighbourhood: with full jitter the second nearest point can be two cells away.
+    for (var dy = -2; dy <= 2; dy++) {
+        for (var dx = -2; dx <= 2; dx++) {
             let cell = i + vec2<i32>(dx, dy);
             let lc = lattice(cell, period);
             let h = hash3(lc.x, lc.y, seed);
