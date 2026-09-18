@@ -1,0 +1,4 @@
+# Let the compiler use every SIMD extension of the build machine (AVX2/FMA on modern x86-64).
+# The `wide` SIMD types pick the widest native implementation at compile time.
+[build]
+rustflags = ["-C", "target-cpu=native"]

@@ -1,0 +1,31 @@
+[package]
+name = "ferrotex"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "GPU-accelerated node-based procedural texture editor (Substance Designer-like) built with Rust, wgpu and egui"
+license = "MIT"
+
+[dependencies]
+eframe = "0.36.2"
+bytemuck = { version = "1.25", features = ["derive"] }
+half = { version = "2.7", features = ["bytemuck"] }
+wide = "1.7"
+rayon = "1.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp"] }
+rfd = "0.17"
+pollster = "1"
+log = "0.4"
+env_logger = "0.11"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
