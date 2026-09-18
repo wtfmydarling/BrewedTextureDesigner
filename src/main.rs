@@ -51,6 +51,13 @@ fn main() -> eframe::Result {
                 options.screenshot = args.get(i).map(PathBuf::from);
             }
             "--ui-test" => options.ui_test = true,
+            "--bench" => {
+                if let Err(e) = ferrotex::tools::bench() {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
             "--preview" => {
                 i += 1;
                 options.preview = args.get(i).cloned();
