@@ -439,6 +439,31 @@ impl Gpu {
         Readback { buffer, width: w, height: h, padded_row, state: Arc::new(AtomicU8::new(STATE_IDLE)) }
     }
 
+    /// Record a copy of a single pixel (for the color probe of the 2D view).
+    pub fn encode_readback_region(&self, encoder: &mut wgpu::CommandEncoder, img: &GpuImage, pixel: [u32; 2]) -> Readback {
+        let padded_row = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("probe"),
+            size: padded_row as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &img.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: pixel[0], y: pixel[1], z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(1) },
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        Readback { buffer, width: 1, height: 1, padded_row, state: Arc::new(AtomicU8::new(STATE_IDLE)) }
+    }
+
     /// Read an image back to the CPU as RGBA f32, blocking until the GPU is done.
     pub fn read_image_blocking(&self, img: &GpuImage) -> Result<Vec<f32>, String> {
         let mut encoder = self.encoder();
