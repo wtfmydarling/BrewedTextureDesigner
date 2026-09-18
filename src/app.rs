@@ -44,6 +44,8 @@ pub struct StartupOptions {
     pub screenshot: Option<PathBuf>,
     /// Select the first node of this kind at startup (e.g. "Math").
     pub select: Option<String>,
+    /// Show the first node of this kind in the 2D view at startup.
+    pub preview: Option<String>,
     /// Drive the UI with synthetic input and check the results, then quit.
     pub ui_test: bool,
 }
@@ -138,6 +140,11 @@ impl FerrotexApp {
         let select_kind = options.select.as_deref().unwrap_or("Math");
         if let Some(n) = app.graph.nodes.iter().find(|n| format!("{:?}", n.kind).eq_ignore_ascii_case(select_kind)) {
             app.view.selected.insert(n.id);
+        }
+        if let Some(kind) = options.preview.as_deref() {
+            if let Some(n) = app.graph.nodes.iter().find(|n| format!("{:?}", n.kind).eq_ignore_ascii_case(kind)) {
+                app.preview.node = Some(n.id);
+            }
         }
         if let Some(path) = options.open {
             app.open_path(path);

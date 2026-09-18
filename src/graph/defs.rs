@@ -441,7 +441,7 @@ pub static DEFS: &[NodeDef] = &[
         "Mirrors one half of the image onto the other.",
         IMAGE_IN, IMAGE_OUT,
         &[
-            choice("mode", "Mode", 0, &["Left → Right", "Right → Left", "Top → Bottom", "Bottom → Top", "Four-way"]),
+            choice("mode", "Mode", 0, &["Left to Right", "Right to Left", "Top to Bottom", "Bottom to Top", "Four-way"]),
             float("offset", "Axis", 0.5, 0.0, 1.0),
         ], true),
     def!(NormalMap, "Normal", Filters,

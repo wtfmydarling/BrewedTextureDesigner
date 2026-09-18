@@ -180,8 +180,8 @@ impl AutoPilot {
             0 => {
                 self.idle(5);
                 Some(("demo graph evaluates without errors", 1.5, Box::new(|app: &FerrotexApp| {
-                    if app.graph.nodes.len() != 19 {
-                        return Err(format!("expected 19 demo nodes, got {}", app.graph.nodes.len()));
+                    if app.graph.nodes.len() != 21 {
+                        return Err(format!("expected 21 demo nodes, got {}", app.graph.nodes.len()));
                     }
                     for n in &app.graph.nodes {
                         if let Some(e) = app.engine.state(n.id).and_then(|s| s.error.clone()) {

@@ -44,20 +44,20 @@ pub fn brick_wall() -> (Graph, NodeId) {
     setup(&mut g, tint, brick, Value::Color([0.0; 4]), Value::Color([1.0; 4]), "Brick color");
 
     // Column 0: input nodes.
-    let in_x = g.add_input_node(bricks_x, [-560.0, -40.0]);
-    let in_y = g.add_input_node(bricks_y, [-560.0, 40.0]);
-    let in_mortar = g.add_input_node(mortar, [-560.0, 140.0]);
-    let in_wear = g.add_input_node(wear, [-560.0, 380.0]);
-    let in_angle = g.add_input_node(angle, [-560.0, 560.0]);
-    let in_tint = g.add_input_node(tint, [720.0, 470.0]);
+    let in_x = g.add_input_node(bricks_x, [-470.0, -40.0]);
+    let in_y = g.add_input_node(bricks_y, [-470.0, 40.0]);
+    let in_mortar = g.add_input_node(mortar, [-470.0, 150.0]);
+    let in_wear = g.add_input_node(wear, [-470.0, 360.0]);
+    let in_angle = g.add_input_node(angle, [-470.0, 560.0]);
+    let in_tint = g.add_input_node(tint, [540.0, 470.0]);
 
     // Mortar gap -> tile size (float broadcasts into the Vec2 size parameter).
-    let size_math = g.add_node(NodeKind::Math, [-330.0, 140.0]);
+    let size_math = g.add_node(NodeKind::Math, [-280.0, 150.0]);
     set(&mut g, size_math, "expression", ParamValue::Text("1 - 2*mortar".into()));
     link(&mut g, in_mortar, "o:value", size_math, "v:mortar");
 
     // Bricks.
-    let tiles = g.add_node(NodeKind::TileGenerator, [-100.0, -60.0]);
+    let tiles = g.add_node(NodeKind::TileGenerator, [-40.0, -60.0]);
     set(&mut g, tiles, "pattern", ParamValue::Enum(2)); // rounded square
     set(&mut g, tiles, "row_offset", ParamValue::Float(0.5));
     set(&mut g, tiles, "corner_radius", ParamValue::Float(0.15));
@@ -72,21 +72,21 @@ pub fn brick_wall() -> (Graph, NodeId) {
     link(&mut g, size_math, "o:result", tiles, "p:size");
 
     // Dirt: rotated noise.
-    let noise = g.add_node(NodeKind::Noise, [-330.0, 420.0]);
+    let noise = g.add_node(NodeKind::Noise, [-280.0, 380.0]);
     set(&mut g, noise, "scale", ParamValue::Int(6));
     set(&mut g, noise, "octaves", ParamValue::Int(7));
     set(&mut g, noise, "roughness", ParamValue::Float(0.55));
-    let rotate_math = g.add_node(NodeKind::Math, [-330.0, 640.0]);
+    let rotate_math = g.add_node(NodeKind::Math, [-280.0, 600.0]);
     set(&mut g, rotate_math, "expression", ParamValue::Text("angle + 5*sin(angle/10)".into()));
     link(&mut g, in_angle, "o:value", rotate_math, "v:angle");
-    let transform = g.add_node(NodeKind::Transform2D, [-100.0, 420.0]);
+    let transform = g.add_node(NodeKind::Transform2D, [-40.0, 380.0]);
     set(&mut g, transform, "scale", ParamValue::Vec2([1.0, 1.0]));
     g.set_exposed(transform, "rotation", true);
     link(&mut g, noise, "o:output", transform, "i:input");
     link(&mut g, rotate_math, "o:result", transform, "p:rotation");
 
     // Height = bricks multiplied with dirt, then levels + a touch of blur.
-    let blend = g.add_node(NodeKind::Blend, [130.0, 120.0]);
+    let blend = g.add_node(NodeKind::Blend, [170.0, 120.0]);
     set(&mut g, blend, "mode", ParamValue::Enum(3)); // multiply
     g.set_exposed(blend, "opacity", true);
     link(&mut g, transform, "o:output", blend, "i:foreground");
@@ -99,12 +99,12 @@ pub fn brick_wall() -> (Graph, NodeId) {
     set(&mut g, levels, "gamma", ParamValue::Float(0.9));
     link(&mut g, blend, "o:output", levels, "i:input");
 
-    let blur = g.add_node(NodeKind::Blur, [590.0, 120.0]);
+    let blur = g.add_node(NodeKind::Blur, [550.0, 120.0]);
     set(&mut g, blur, "radius", ParamValue::Float(1.5));
     link(&mut g, levels, "o:output", blur, "i:input");
 
     // Base color via a gradient map whose middle color is the tint input.
-    let gmap = g.add_node(NodeKind::GradientMap, [940.0, 290.0]);
+    let gmap = g.add_node(NodeKind::GradientMap, [740.0, 290.0]);
     set(&mut g, gmap, "stops", ParamValue::Enum(2));
     set(&mut g, gmap, "color_a", ParamValue::Color([0.12, 0.11, 0.1, 1.0]));
     set(&mut g, gmap, "pos_b", ParamValue::Float(0.35));
@@ -115,26 +115,35 @@ pub fn brick_wall() -> (Graph, NodeId) {
     link(&mut g, blur, "o:output", gmap, "i:input");
     link(&mut g, in_tint, "o:value", gmap, "p:color_b");
 
-    let normal = g.add_node(NodeKind::NormalMap, [940.0, -80.0]);
+    let normal = g.add_node(NodeKind::NormalMap, [740.0, -80.0]);
     set(&mut g, normal, "intensity", ParamValue::Float(6.0));
     link(&mut g, blur, "o:output", normal, "i:input");
 
     // Outputs.
-    let out_color = g.add_node(NodeKind::Output, [1200.0, 290.0]);
+    let out_color = g.add_node(NodeKind::Output, [930.0, 290.0]);
     set(&mut g, out_color, "name", ParamValue::Text("basecolor".into()));
     set(&mut g, out_color, "format", ParamValue::Enum(1)); // RGB
     link(&mut g, gmap, "o:output", out_color, "i:input");
 
-    let out_normal = g.add_node(NodeKind::Output, [1200.0, -80.0]);
+    let out_normal = g.add_node(NodeKind::Output, [930.0, -80.0]);
     set(&mut g, out_normal, "name", ParamValue::Text("normal".into()));
     set(&mut g, out_normal, "format", ParamValue::Enum(1));
     link(&mut g, normal, "o:output", out_normal, "i:input");
 
-    let out_height = g.add_node(NodeKind::Output, [940.0, 640.0]);
+    let out_height = g.add_node(NodeKind::Output, [740.0, 620.0]);
     set(&mut g, out_height, "name", ParamValue::Text("height".into()));
     set(&mut g, out_height, "format", ParamValue::Enum(3)); // R
     set(&mut g, out_height, "bit_depth", ParamValue::Enum(1));
     link(&mut g, blur, "o:output", out_height, "i:input");
+
+    // Roughness computed per pixel on the GPU from an expression over the height.
+    let rough = g.add_node(NodeKind::PixelMath, [530.0, 600.0]);
+    set(&mut g, rough, "expression", ParamValue::Text("0.3 + 0.6*(1 - h)^2".into()));
+    link(&mut g, blur, "o:output", rough, "v:h");
+    let out_rough = g.add_node(NodeKind::Output, [930.0, 620.0]);
+    set(&mut g, out_rough, "name", ParamValue::Text("roughness".into()));
+    set(&mut g, out_rough, "format", ParamValue::Enum(3)); // R
+    link(&mut g, rough, "o:output", out_rough, "i:input");
 
     (g, out_color)
 }
@@ -147,6 +156,9 @@ mod tests {
         assert!(g.node(preview).is_some());
         let (_, cyclic) = g.topo_order();
         assert!(cyclic.is_empty());
-        assert!(g.links.len() >= 20, "links: {}", g.links.len());
+        for out in g.nodes.iter().filter(|n| n.kind == crate::graph::NodeKind::Output) {
+            assert!(g.link_into(out.id, "i:input").is_some(), "output {} is not connected", out.text("name"));
+        }
+        assert_eq!(g.links.len(), 20);
     }
 }

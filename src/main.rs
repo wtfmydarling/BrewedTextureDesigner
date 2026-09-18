@@ -46,6 +46,10 @@ fn main() -> eframe::Result {
                 options.screenshot = args.get(i).map(PathBuf::from);
             }
             "--ui-test" => options.ui_test = true,
+            "--preview" => {
+                i += 1;
+                options.preview = args.get(i).cloned();
+            }
             "--select" => {
                 i += 1;
                 options.select = args.get(i).cloned();

@@ -84,3 +84,46 @@ pub fn create_from_library(graph: &mut Graph, item: &LibraryItem, pos: [f32; 2])
         None => graph.add_node(item.kind, pos),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use eframe::egui::{self, FontId};
+
+    /// Every non-ASCII character shown by the UI must exist in egui's default fonts,
+    /// otherwise it renders as a box.
+    #[test]
+    fn ui_text_has_glyphs() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+        let sources = [
+            include_str!("graph_view.rs"),
+            include_str!("inputs_panel.rs"),
+            include_str!("library.rs"),
+            include_str!("preview.rs"),
+            include_str!("properties.rs"),
+            include_str!("widgets.rs"),
+            include_str!("../app.rs"),
+            include_str!("../graph/defs.rs"),
+            include_str!("../expr/builtins.rs"),
+            include_str!("../engine/mod.rs"),
+        ];
+        let mut missing = std::collections::BTreeSet::new();
+        for src in sources {
+            for line in src.lines() {
+                let code = line.trim_start();
+                if code.starts_with("//") {
+                    continue;
+                }
+                for c in code.chars().filter(|c| !c.is_ascii()) {
+                    for font in [FontId::proportional(14.0)] {
+                        if !ctx.fonts_mut(|f| f.has_glyph(&font, c)) {
+                            missing.insert((c, font.family.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "characters without glyphs: {missing:?}");
+    }
+}

@@ -1024,7 +1024,7 @@ impl GraphView {
         }
 
         // Socket labels.
-        if z > 0.55 {
+        if z > 0.48 {
             for (s, p) in &l.inputs {
                 let linked = graph.link_into(node.id, &s.key).is_some();
                 let driven = s.kind == SocketKind::Param && linked;

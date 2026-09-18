@@ -20,8 +20,8 @@ fn speed_for(min: f32, max: f32) -> f64 {
 }
 
 /// Editor for a node parameter. Returns true when the value changed.
-pub fn param_editor(ui: &mut Ui, def: &ParamDef, value: &mut ParamValue) -> bool {
-    let width = ui.available_width().max(60.0);
+pub fn param_editor(ui: &mut Ui, def: &ParamDef, value: &mut ParamValue, width: f32) -> bool {
+    let width = width.max(60.0);
     match (def.kind, value) {
         (ParamKind::Float { min, max, log, suffix, .. }, ParamValue::Float(v)) => {
             ui.spacing_mut().slider_width = (width - 70.0).max(40.0);
@@ -54,7 +54,7 @@ pub fn param_editor(ui: &mut Ui, def: &ParamDef, value: &mut ParamValue) -> bool
             ui.horizontal(|ui| {
                 for (i, label) in ["r", "g", "b", "a"].iter().enumerate() {
                     changed |= ui
-                        .add(egui::DragValue::new(&mut c[i]).speed(0.005).range(0.0..=1.0).prefix(*label).max_decimals(2))
+                        .add_sized([((width - 18.0) / 4.0).max(30.0), 20.0], egui::DragValue::new(&mut c[i]).speed(0.005).range(0.0..=1.0).prefix(*label).max_decimals(2))
                         .changed();
                 }
             });
@@ -89,8 +89,17 @@ pub fn driven_label(ui: &mut Ui, def: &ParamDef, value: &ParamValue) {
         ParamValue::Enum(i) => def.enum_options().get(*i as usize).copied().unwrap_or("?").to_string(),
         other => other.as_value().map_or_else(|| format!("{other:?}"), |v| v.display()),
     };
-    ui.label(egui::RichText::new(format!("⇐ {text}")).color(super::type_color(value.socket_type().unwrap_or(DataType::Float))))
-        .on_hover_text("Driven by the connected input socket");
+    let color = super::type_color(value.socket_type().unwrap_or(DataType::Float));
+    ui.horizontal(|ui| {
+        // A filled socket marker: the value comes from the link into this socket.
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 16.0), Sense::hover());
+        let m = rect.center();
+        let pts = vec![m + egui::vec2(0.0, -5.0), m + egui::vec2(5.0, 0.0), m + egui::vec2(0.0, 5.0), m + egui::vec2(-5.0, 0.0)];
+        ui.painter().add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+        ui.label(egui::RichText::new(text).color(color));
+    })
+    .response
+    .on_hover_text("Driven by the link connected to this parameter's socket");
 }
 
 /// Editor for a graph input value within its [min, max] range.

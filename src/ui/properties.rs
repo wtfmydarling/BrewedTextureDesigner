@@ -165,59 +165,77 @@ fn node_properties(
     ui.separator();
 
     // ---------------------------------------------------------------- parameters
+    // Fixed column widths: label | editor | expose toggle. (egui grids size columns
+    // from the previous frame, which would squeeze sliders that fill their cell.)
     let value_node = d.is_value_node();
-    egui::Grid::new(("params", id.0)).num_columns(3).spacing([6.0, 6.0]).striped(true).show(ui, |ui| {
-        for pd in d.all_params() {
-            if let Some((key, values)) = pd.visible_if {
-                let current = driven
-                    .get(key)
-                    .map(|v| v.as_f32() as u32)
-                    .unwrap_or_else(|| node.enum_value(key));
-                if !values.contains(&current) {
-                    continue;
+    let label_w = 122.0;
+    let toggle_w = 20.0;
+    let editor_w = (ui.available_width() - label_w - toggle_w - 3.0 * ui.spacing().item_spacing.x).max(110.0);
+    for (row, pd) in d.all_params().enumerate() {
+        if let Some((key, values)) = pd.visible_if {
+            let current = driven.get(key).map(|v| v.as_f32() as u32).unwrap_or_else(|| node.enum_value(key));
+            if !values.contains(&current) {
+                continue;
+            }
+        }
+        if pd.key == "expression" {
+            continue; // dedicated editor below
+        }
+        let Some(slot) = node.param(pd.key).cloned() else { continue };
+        let tiling_na = value_node && pd.key == "tiling";
+        let linked = slot.exposed && graph.link_into(id, &param_socket_key(pd.key)).is_some();
+        let stripe = ui.painter().add(egui::Shape::Noop);
+        let row_rect = ui
+            .horizontal(|ui| {
+                let (lrect, lresp) = ui.allocate_exact_size(vec2(label_w, 20.0), Sense::hover());
+                let text_color = if tiling_na { ui.visuals().weak_text_color() } else { ui.visuals().text_color() };
+                ui.painter().text(
+                    lrect.left_center() + vec2(4.0, 0.0),
+                    Align2::LEFT_CENTER,
+                    pd.label,
+                    egui::TextStyle::Body.resolve(ui.style()),
+                    text_color,
+                );
+                if !pd.tooltip.is_empty() {
+                    lresp.on_hover_text(pd.tooltip);
                 }
-            }
-            if pd.key == "expression" {
-                continue; // dedicated editor below
-            }
-            let Some(slot) = node.param(pd.key).cloned() else { continue };
-            let tiling_na = value_node && pd.key == "tiling";
-            let label = ui.label(pd.label);
-            if !pd.tooltip.is_empty() {
-                label.on_hover_text(pd.tooltip);
-            }
-            let linked = slot.exposed && graph.link_into(id, &param_socket_key(pd.key)).is_some();
-            ui.add_enabled_ui(!tiling_na, |ui| {
-                ui.push_id(pd.key, |ui| {
-                    if linked {
-                        match driven.get(pd.key) {
-                            Some(v) => driven_label(ui, pd, v),
-                            None => {
-                                ui.label(RichText::new("← (invalid input, using own value)").color(WARNING));
+                ui.add_enabled_ui(!tiling_na, |ui| {
+                    ui.set_width(editor_w);
+                    ui.push_id(pd.key, |ui| ui.vertical(|ui| {
+                        if linked {
+                            match driven.get(pd.key) {
+                                Some(v) => driven_label(ui, pd, v),
+                                None => {
+                                    ui.label(RichText::new("(invalid input, using own value)").color(WARNING));
+                                }
+                            }
+                        } else {
+                            let mut v = slot.value.clone();
+                            if param_editor(ui, pd, &mut v, editor_w) {
+                                if let Some(s) = graph.node_mut(id).and_then(|n| n.param_mut(pd.key)) {
+                                    s.value = v;
+                                }
                             }
                         }
-                    } else {
-                        let mut v = slot.value.clone();
-                        if param_editor(ui, pd, &mut v) {
-                            if let Some(s) = graph.node_mut(id).and_then(|n| n.param_mut(pd.key)) {
-                                s.value = v;
-                            }
-                        }
-                    }
+                    }));
                 })
+                .response
+                .on_hover_text(if tiling_na { "Value nodes produce numbers, not images: tiling does not apply" } else { "" });
+                let ty = slot.value.socket_type().unwrap_or(DataType::Float);
+                let can = pd.can_expose() && !tiling_na;
+                let toggle = expose_toggle(ui, slot.exposed, ty, can);
+                state.debug_rects.insert(format!("expose:{}", pd.key), toggle.rect);
+                if toggle.clicked() && can {
+                    graph.set_exposed(id, pd.key, !slot.exposed);
+                }
             })
             .response
-            .on_hover_text(if tiling_na { "Value nodes produce numbers, not images: tiling does not apply" } else { "" });
-            let ty = slot.value.socket_type().unwrap_or(DataType::Float);
-            let can = pd.can_expose() && !tiling_na;
-            let toggle = expose_toggle(ui, slot.exposed, ty, can);
-            state.debug_rects.insert(format!("expose:{}", pd.key), toggle.rect);
-            if toggle.clicked() && can {
-                graph.set_exposed(id, pd.key, !slot.exposed);
-            }
-            ui.end_row();
+            .rect;
+        // Zebra striping for readability.
+        if row % 2 == 1 {
+            ui.painter().set(stripe, egui::epaint::RectShape::filled(row_rect.expand2(vec2(2.0, 1.0)), CornerRadius::same(2), Color32::from_white_alpha(5)));
         }
-    });
+    }
 
     // ---------------------------------------------------------------- node specific
     match node.kind {
