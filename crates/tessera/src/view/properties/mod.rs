@@ -275,7 +275,7 @@ fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                 Message::Seal,
             ));
         }
-        col = col.push(crate::view::inputs::details(app, var));
+        col = col.push(crate::view::inputs::details(app, var, false));
     }
     col.into()
 }

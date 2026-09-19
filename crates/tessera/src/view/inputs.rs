@@ -26,8 +26,9 @@ fn set_value(name: &str) -> impl Fn(tessera_core::Value) -> Message + Clone + 's
     move |value| Message::Edit(Edit::SetVariable { name: name.clone(), value })
 }
 
-/// Settings of a variable (also shown in the properties of an Input node).
-pub fn details<'a>(app: &'a App, var: &'a Variable) -> Element<'a, Message> {
+/// Settings of a variable (also shown in the properties of an Input node). `rename`
+/// adds the Name field, which renames the variable for all its Input nodes.
+pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a, Message> {
     let name = var.name.clone();
     let renaming = app.ui.renaming_var.as_ref().filter(|(from, _)| *from == var.name).map(|(_, t)| t.as_str());
     let name_input = text_input("name", renaming.unwrap_or(&var.name))
@@ -39,8 +40,11 @@ pub fn details<'a>(app: &'a App, var: &'a Variable) -> Element<'a, Message> {
         .size(style::TEXT_SIZE)
         .padding([3, 6])
         .style(style::text_input);
-    let mut col = column![field_row("Name", name_input)].spacing(5);
-    if renaming.is_some_and(|t| t != var.name) {
+    let mut col = column![].spacing(5);
+    if rename {
+        col = col.push(field_row("Name", name_input));
+    }
+    if rename && renaming.is_some_and(|t| t != var.name) {
         col = col.push(field_row("", text("Enter renames it everywhere, Esc cancels").size(style::SMALL).color(style::ACCENT_TEXT)));
     }
     col = col.push(field_row(
@@ -175,7 +179,7 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
         ));
     }
     if expanded {
-        col = col.push(container(details(app, var)).padding(iced::Padding { left: 22.0, ..iced::Padding::ZERO }));
+        col = col.push(container(details(app, var, true)).padding(iced::Padding { left: 22.0, ..iced::Padding::ZERO }));
     }
     container(col).padding([5, 6]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2))).into()
 }

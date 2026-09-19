@@ -546,7 +546,7 @@ impl App {
             app.open_path(path);
         }
         let graph = app.doc.graph();
-        if let Some(id) = find_kind(graph, opts.select.as_deref().unwrap_or("math")) {
+        if let Some(id) = opts.select.as_deref().and_then(|k| find_kind(graph, k)) {
             app.ui.selection.insert(id);
         }
         if let Some(id) = opts.preview.as_deref().and_then(|k| find_kind(graph, k)) {
@@ -907,7 +907,7 @@ impl App {
                 }
                 dialog.save_file()
             }),
-            Message::SavePicked,
+            |p| Message::SavePicked(p.flatten()),
         )
     }
 
@@ -947,7 +947,7 @@ impl App {
                         .add_filter("Tessera graph", &[project::FILE_EXTENSION, project::LEGACY_EXTENSION, "json"])
                         .pick_file()
                 }),
-                Message::OpenPicked,
+                |p| Message::OpenPicked(p.flatten()),
             ),
             PendingAction::Quit => iced::exit(),
         }
@@ -1013,7 +1013,7 @@ impl App {
                     self.engine = Some(service);
                     self.events = Some(source);
                     self.send_graph();
-                    return Task::perform(blocking(gpu::adapter_name), Message::GpuName);
+                    return Task::perform(blocking(gpu::adapter_name), |name| Message::GpuName(name.unwrap_or_default()));
                 }
             }
             Message::GpuName(name) => {
@@ -1106,7 +1106,7 @@ impl App {
                 } else {
                     return Task::perform(
                         blocking(|| rfd::FileDialog::new().set_title("Export outputs to folder").pick_folder()),
-                        Message::ExportFolderPicked,
+                        |p| Message::ExportFolderPicked(p.flatten()),
                     );
                 }
             }
@@ -1134,7 +1134,7 @@ impl App {
                             .set_file_name(name)
                             .save_file()
                     }),
-                    move |p| Message::ExportNodePicked(id, p),
+                    move |p| Message::ExportNodePicked(id, p.flatten()),
                 );
             }
             Message::ExportNodePicked(id, Some(path)) => {
@@ -1299,7 +1299,7 @@ impl App {
                         }
                         dialog.pick_file()
                     }),
-                    move |p| Message::FilePicked(node, key.clone(), p),
+                    move |p| Message::FilePicked(node, key.clone(), p.flatten()),
                 );
             }
             Message::FilePicked(node, key, Some(path)) => {
@@ -1833,7 +1833,7 @@ impl App {
                         std::thread::sleep(Duration::from_millis(120));
                         picker::capture()
                     }),
-                    |shots| Message::Pick(PickMessage::Captured(shots)),
+                    |shots| Message::Pick(PickMessage::Captured(shots.unwrap_or_else(|| Err("The screen capture failed".into())))),
                 )
             }
             PickMessage::Captured(Err(e)) => {
@@ -2135,11 +2135,12 @@ pub fn menu_index(menu: Option<&AddMenu>, len: usize) -> usize {
     menu.map_or(0, |m| m.selected.min(len.saturating_sub(1)))
 }
 
-/// Run blocking work (file dialogs) on a thread without blocking the UI.
-pub fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl Future<Output = T> + Send {
+/// Run blocking work (file dialogs, screen capture) on a thread without blocking the UI.
+/// `None` if the work panicked (the app carries on).
+pub fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl Future<Output = Option<T>> + Send {
     let (tx, rx) = futures::channel::oneshot::channel();
     std::thread::spawn(move || {
         let _ = tx.send(f());
     });
-    async move { rx.await.expect("worker thread") }
+    async move { rx.await.ok() }
 }
