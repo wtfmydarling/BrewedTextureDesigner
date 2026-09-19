@@ -182,15 +182,7 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let vars = &app.graph().variables;
-    let header = container(
-        row![
-            crate::view::heading("Input Values"),
-            space().width(Length::Fill),
-            text(format!("{}", vars.len())).size(style::SMALL).color(style::TEXT_FAINT),
-        ]
-        .align_y(Alignment::Center),
-    )
-    .padding([8, 10]);
+    let header = crate::view::pane_header("Input Values", text(vars.len().to_string()).size(style::SMALL).color(style::TEXT_FAINT));
     let body: Element<'_, Message> = if vars.is_empty() {
         container(
             column![

@@ -21,6 +21,7 @@ pub enum Icon {
     Reverse,
     Distribute,
     Bypass,
+    Link,
 }
 
 fn path(icon: Icon) -> &'static str {
@@ -43,6 +44,7 @@ fn path(icon: Icon) -> &'static str {
         Icon::Reverse => r#"<path d="M4 8h14l-3.5-3.5M20 16H6l3.5 3.5"/>"#,
         Icon::Distribute => r#"<path d="M4 4v16M20 4v16M9 8h6v8H9z"/>"#,
         Icon::Bypass => r#"<path d="M3 12h6M15 12h6M9 12c0-5 6-5 6 0"/><path d="M9 12c0 5 6 5 6 0" stroke-dasharray="2 2"/>"#,
+        Icon::Link => r#"<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>"#,
     }
 }
 

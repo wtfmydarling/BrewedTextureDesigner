@@ -43,7 +43,7 @@ fn set(node: NodeId, key: &'static str, value: ParamValue) -> Message {
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
-    let header = container(crate::view::heading("Properties")).padding([8, 10]);
+    let header = crate::view::pane_header("Properties", space());
     let ids: Vec<NodeId> = app.ui.selection.iter().copied().filter(|id| app.graph().contains(*id)).collect();
     let body: Element<'_, Message> = match ids.len() {
         0 => {

@@ -16,7 +16,7 @@ use iced::widget::tooltip::Position;
 const CHANNELS: [&str; 6] = ["RGBA", "RGB", "R", "G", "B", "A"];
 
 fn tab<'a>(label: &'a str, ic: Icon, active: bool, message: Message) -> Element<'a, Message> {
-    button(row![icon(ic, 14.0, if active { style::ACCENT } else { style::TEXT_DIM }), text(label).size(style::TEXT_SIZE)].spacing(5).align_y(Alignment::Center))
+    button(row![icon(ic, 14.0, if active { style::ACCENT_TEXT } else { style::TEXT_DIM }), text(label).size(style::TEXT_SIZE)].spacing(5).align_y(Alignment::Center))
         .padding([3, 8])
         .style(style::toggle_button(active))
         .on_press(message)
@@ -34,7 +34,7 @@ fn toolbar(app: &App) -> Element<'_, Message> {
     .align_y(Alignment::Center);
     if p.mode == ViewMode::TwoD {
         bar = bar.push(match node_name {
-            Some(n) => text(n).size(style::TEXT_SIZE).color(style::ACCENT),
+            Some(n) => text(n).size(style::TEXT_SIZE).color(style::TEXT),
             None => text("double-click a node to show it here").size(style::SMALL).color(style::TEXT_DIM),
         });
         bar = bar.push(space().width(Length::Fill));
@@ -48,7 +48,7 @@ fn toolbar(app: &App) -> Element<'_, Message> {
             );
         }
         bar = bar.push(tip(
-            button(icon(Icon::Grid, 15.0, if p.show_tiling { style::ACCENT } else { style::TEXT_DIM }))
+            button(icon(Icon::Grid, 15.0, if p.show_tiling { style::ACCENT_TEXT } else { style::TEXT_DIM }))
                 .padding(4)
                 .style(style::toggle_button(p.show_tiling))
                 .on_press(Message::Preview(PreviewMessage::ToggleTiling)),
@@ -70,7 +70,7 @@ fn toolbar(app: &App) -> Element<'_, Message> {
         bar = bar.push(space().width(Length::Fill));
         bar = bar.push(crate::view::view3d::toolbar(app));
     }
-    container(bar.align_y(Alignment::Center).height(Length::Fixed(28.0))).padding([3, 8]).width(Length::Fill).style(style::header_bar).into()
+    container(bar.align_y(Alignment::Center).height(Length::Fixed(crate::view::HEADER_H))).padding([0, 8]).width(Length::Fill).style(style::header_bar).into()
 }
 
 fn footer(app: &App) -> Element<'_, Message> {

@@ -48,7 +48,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+O / Ctrl+N", "Open / new"),
     ("Ctrl+E", "Export all outputs"),
     ("Drop a file on the window", "Open a .tessera graph, or add an image as a Bitmap node"),
-    ("Esc", "Close menus, cancel a gradient pick or a rename"),
+    ("Esc", "Close menus, cancel picking from the screen or a rename"),
     ("Number fields", "Drag to change (Shift fine, Ctrl snaps), click to type; expressions like 2*pi work"),
     ("Transform 2D gizmo", "Center moves, ring rotates, handles scale; Shift snaps / keeps proportions"),
     ("3D view", "Left drag orbits, right drag moves the light"),
@@ -109,9 +109,18 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
         }
         Dialog::About => {
             let gpu = if app.adapter.is_empty() { "starting…".to_string() } else { app.adapter.clone() };
+            let title = row![
+                iced::widget::image(crate::brand::logo_large()).width(Length::Fixed(48.0)).height(Length::Fixed(48.0)),
+                column![
+                    text(tessera_core::APP_NAME).size(24).font(style::bold()),
+                    text(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(style::TEXT_SIZE).color(style::TEXT_DIM),
+                ]
+                .spacing(2),
+            ]
+            .spacing(14)
+            .align_y(Alignment::Center);
             let body = column![
-                text(tessera_core::APP_NAME).size(24).font(style::bold()),
-                text(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(style::TEXT_SIZE).color(style::TEXT_DIM),
+                title,
                 text("A node based procedural texture editor. Every image node runs as a compute shader on the GPU; \
                       CPU side pixel work (export, histograms, file decoding) uses SIMD on all cores.")
                 .size(style::TEXT_SIZE),

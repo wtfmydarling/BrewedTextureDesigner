@@ -6,6 +6,19 @@
 
 pub mod art;
 
+/// The icon as an image for the interface (drawn at 32 px, shown at 16 px: sharp on
+/// high-DPI screens).
+pub fn logo() -> iced::widget::image::Handle {
+    static LOGO: std::sync::OnceLock<iced::widget::image::Handle> = std::sync::OnceLock::new();
+    LOGO.get_or_init(|| iced::widget::image::Handle::from_rgba(32, 32, art::icon_rgba(32))).clone()
+}
+
+/// The icon for the About dialog (shown at 48 px).
+pub fn logo_large() -> iced::widget::image::Handle {
+    static LOGO: std::sync::OnceLock<iced::widget::image::Handle> = std::sync::OnceLock::new();
+    LOGO.get_or_init(|| iced::widget::image::Handle::from_rgba(128, 128, art::icon_rgba(128))).clone()
+}
+
 /// The icon given to iced windows (title bar, and the taskbar where there is no
 /// executable icon).
 pub fn window_icon() -> Option<iced::window::Icon> {

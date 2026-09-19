@@ -14,8 +14,8 @@ pub mod properties;
 pub mod toolbar;
 pub mod view3d;
 
-use iced::widget::{column, container, mouse_area, opaque, pane_grid, pin, space, stack, text, tooltip};
-use iced::{Element, Length, Point};
+use iced::widget::{column, container, mouse_area, opaque, pane_grid, pin, row, space, stack, text, tooltip};
+use iced::{Alignment, Element, Length, Point};
 
 use crate::app::{App, Message, Pane};
 use crate::style;
@@ -24,14 +24,14 @@ pub fn root(app: &App) -> Element<'_, Message> {
     let grid = pane_grid(&app.ui.panes, |_, pane, _| {
         let body: Element<'_, Message> = match pane {
             Pane::Library => library::view(app),
-            Pane::Graph => column![toolbar::view(app), graph::view(app)].into(),
+            Pane::Graph => column![toolbar::graph_header(app), graph::view(app)].into(),
             Pane::Preview => preview::view(app),
             Pane::Inputs => inputs::view(app),
             Pane::Properties => properties::view(app),
         };
         pane_grid::Content::new(container(body).width(Length::Fill).height(Length::Fill).style(style::panel))
     })
-    .spacing(4)
+    .spacing(3)
     .min_size(140)
     .on_resize(8, Message::PaneResized)
     .style(|_| pane_grid::Style {
@@ -43,8 +43,12 @@ pub fn root(app: &App) -> Element<'_, Message> {
         hovered_split: pane_grid::Line { color: style::ACCENT_DIM, width: 2.0 },
     });
 
-    let mut layers: Vec<Element<'_, Message>> =
-        vec![container(grid).style(|_| container::Style { background: Some(style::BORDER.into()), ..Default::default() }).into()];
+    let window = column![
+        toolbar::menu_bar(app),
+        container(grid).height(Length::Fill).style(style::window_bar),
+        toolbar::status_bar(app),
+    ];
+    let mut layers: Vec<Element<'_, Message>> = vec![window.into()];
     if let Some(ctx) = &app.ui.context {
         layers.push(context_menu::view(app, ctx));
     }
@@ -85,10 +89,6 @@ pub fn popup_layer<'a>(
     .into()
 }
 
-pub fn heading<'a>(s: impl text::IntoFragment<'a>) -> text::Text<'a> {
-    text(s).size(style::TEXT_SIZE + 1.0).font(style::bold())
-}
-
 /// Wrap an element in a tooltip with the app's style.
 pub fn tip<'a>(content: impl Into<Element<'a, Message>>, tip: &'a str, position: tooltip::Position) -> Element<'a, Message> {
     if tip.is_empty() {
@@ -103,11 +103,38 @@ pub fn tip<'a>(content: impl Into<Element<'a, Message>>, tip: &'a str, position:
     .into()
 }
 
-/// Section header inside panels.
+/// Section header inside panels: an upper-case caption over a hairline.
 pub fn section<'a>(title: &'a str) -> Element<'a, Message> {
-    container(text(title).size(style::SMALL).font(style::bold()).color(style::TEXT_DIM))
-        .padding(iced::Padding { top: 10.0, bottom: 4.0, left: 2.0, right: 0.0 })
+    container(column![caption(title), hairline()].spacing(4))
+        .padding(iced::Padding { top: 12.0, bottom: 4.0, left: 2.0, right: 0.0 })
         .into()
+}
+
+/// Upper-case caption (pane titles, sections).
+pub fn caption<'a>(title: &str) -> iced::widget::Text<'a> {
+    text(title.to_uppercase()).size(style::CAPTION).font(style::bold()).color(style::TEXT_DIM)
+}
+
+/// A horizontal 1 px line.
+pub fn hairline<'a>() -> Element<'a, Message> {
+    container(space().height(1)).width(Length::Fill).height(1).style(style::hairline(style::LINE)).into()
+}
+
+/// Height of pane headers.
+pub const HEADER_H: f32 = 30.0;
+
+/// The strip at the top of a pane: its title, and tools on the right.
+pub fn pane_header<'a>(title: &str, tools: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(
+        row![caption(title), space().width(Length::Fill), tools.into()]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .height(Length::Fixed(HEADER_H)),
+    )
+    .padding([0, 10])
+    .width(Length::Fill)
+    .style(style::header_bar)
+    .into()
 }
 
 /// The size of the window (for keeping popups inside it).

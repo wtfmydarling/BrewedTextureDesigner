@@ -1,14 +1,19 @@
-//! The bar above the graph: menus, texture size, evaluation statistics and status.
+//! The bars around the panes: the menu bar at the top of the window, the status bar at
+//! the bottom, and the header of the graph pane with the texture size.
 
-use iced::widget::{Space, button, column, container, pick_list, row, rule, space, text};
+use iced::widget::{button, column, container, image, pick_list, row, rule, space, text, tooltip};
 use iced::{Alignment, Element, Length};
 use tessera_core::Edit;
 
 use crate::app::{App, Dialog, MenuId, Message, PreviewMessage, ViewMode};
+use crate::icons::{Icon, icon};
 use crate::style;
+use crate::view::tip;
 use crate::widget::dropdown::dropdown;
 
 const RESOLUTIONS: [u32; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
+const MENU_BAR_H: f32 = 30.0;
+const STATUS_BAR_H: f32 = 24.0;
 
 fn item<'a>(label: impl Into<String>, shortcut: &'a str, message: Option<Message>) -> Element<'a, Message> {
     let enabled = message.is_some();
@@ -31,7 +36,7 @@ fn item<'a>(label: impl Into<String>, shortcut: &'a str, message: Option<Message
 
 fn separator<'a>() -> Element<'a, Message> {
     container(rule::horizontal(1).style(|_| rule::Style {
-        color: style::BORDER_LIGHT,
+        color: style::LINE,
         radius: 0.0.into(),
         fill_mode: rule::FillMode::Full,
         snap: true,
@@ -47,7 +52,7 @@ fn menu_body<'a>(items: Vec<Element<'a, Message>>) -> Element<'a, Message> {
 fn menu<'a>(app: &'a App, id: MenuId, title: &'a str, items: Vec<Element<'a, Message>>) -> Element<'a, Message> {
     let open = app.ui.menu == Some(id);
     let title_button = button(text(title).size(style::TEXT_SIZE))
-        .padding([3, 10])
+        .padding([4, 10])
         .style(style::toggle_button(open))
         .on_press(Message::Menu(Some(id)));
     dropdown(title_button, menu_body(items), open).on_dismiss(Message::Menu(None)).into()
@@ -111,78 +116,92 @@ fn help_menu(_app: &App) -> Vec<Element<'_, Message>> {
     ]
 }
 
-pub fn view(app: &App) -> Element<'_, Message> {
-    let menus = row![
-        menu(app, MenuId::File, "File", file_menu(app)),
-        menu(app, MenuId::Edit, "Edit", edit_menu(app)),
-        menu(app, MenuId::View, "View", view_menu(app)),
-        menu(app, MenuId::Help, "Help", help_menu(app)),
-    ]
-    .spacing(2);
+/// The menu bar across the top of the window: the menus and the document's name.
+pub fn menu_bar(app: &App) -> Element<'_, Message> {
+    let logo = image(crate::brand::logo()).width(Length::Fixed(16.0)).height(Length::Fixed(16.0));
+    let dirty = if app.doc.is_dirty() { "  •" } else { "" };
+    let document = text(format!("{}{dirty}", app.doc.title())).size(style::SMALL).color(style::TEXT_DIM);
+    container(
+        row![
+            container(logo).padding([0, 6]),
+            menu(app, MenuId::File, "File", file_menu(app)),
+            menu(app, MenuId::Edit, "Edit", edit_menu(app)),
+            menu(app, MenuId::View, "View", view_menu(app)),
+            menu(app, MenuId::Help, "Help", help_menu(app)),
+            space().width(Length::Fill),
+            document,
+        ]
+        .spacing(2)
+        .align_y(Alignment::Center)
+        .height(Length::Fixed(MENU_BAR_H)),
+    )
+    .padding([0, 8])
+    .width(Length::Fill)
+    .style(style::window_bar)
+    .into()
+}
 
+/// Header of the graph pane, with the size of the textures.
+pub fn graph_header(app: &App) -> Element<'_, Message> {
     let [w, h] = app.graph().resolution;
     let lock = app.ui.lock_square;
-    let size = row![
-        text("Size").size(style::TEXT_SIZE).color(style::TEXT_DIM),
-        pick_list(RESOLUTIONS, Some(w), move |nw| Message::Edit(Edit::SetResolution([nw, if lock { nw } else { h }])))
-            .text_size(style::TEXT_SIZE)
-            .padding([2, 6])
-            .style(style::pick_list),
-        text("×").size(style::TEXT_SIZE).color(style::TEXT_DIM),
-        pick_list(RESOLUTIONS, Some(h), move |nh| Message::Edit(Edit::SetResolution([if lock { nh } else { w }, nh])))
-            .text_size(style::TEXT_SIZE)
-            .padding([2, 6])
-            .style(style::pick_list),
-        crate::view::tip(
-            button(text("Square").size(style::SMALL)).padding([3, 8]).style(style::toggle_button(lock)).on_press(Message::LockSquare),
-            "Keep width and height equal",
-            iced::widget::tooltip::Position::Bottom,
+    let size_list = |value: u32, on_select: Box<dyn Fn(u32) -> Message>| {
+        pick_list(RESOLUTIONS, Some(value), on_select).text_size(style::SMALL).padding([2, 6]).style(style::pick_list)
+    };
+    let tools = row![
+        text("Texture size").size(style::SMALL).color(style::TEXT_DIM),
+        size_list(w, Box::new(move |nw| Message::Edit(Edit::SetResolution([nw, if lock { nw } else { h }])))),
+        text("×").size(style::SMALL).color(style::TEXT_DIM),
+        size_list(h, Box::new(move |nh| Message::Edit(Edit::SetResolution([if lock { nh } else { w }, nh])))),
+        tip(
+            button(icon(Icon::Link, 14.0, if lock { style::ACCENT_TEXT } else { style::TEXT_DIM }))
+                .padding(4)
+                .style(style::toggle_button(lock))
+                .on_press(Message::LockSquare),
+            if lock { "Width and height are kept equal (click to size them separately)" } else { "Keep width and height equal" },
+            tooltip::Position::Bottom,
         ),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
+    crate::view::pane_header("Graph", tools)
+}
 
-    let r = &app.res.report;
-    let gpu_state = if app.engine.is_none() { " · starting GPU…".to_string() } else { String::new() };
-    let stats = text(format!(
-        "{} nodes · {} recomputed · {:.1} ms{gpu_state}",
-        app.graph().nodes.len(),
-        r.recomputed,
-        r.cpu_ms
-    ))
-    .size(style::SMALL)
-    .color(style::TEXT_FAINT);
-    let stats = crate::view::tip(
-        stats,
-        "Only nodes whose inputs or parameters changed are recomputed on the GPU",
-        iced::widget::tooltip::Position::Bottom,
-    );
-
-    let status: Element<'_, Message> = match &app.ui.status {
-        Some(s) => text(s.text.clone())
-            .size(style::SMALL)
-            .color(if s.error { style::ERROR } else { style::SUCCESS })
-            .wrapping(text::Wrapping::None)
-            .into(),
-        None => Space::new().into(),
+/// The status bar across the bottom of the window: the latest message, then what the
+/// last evaluation did and the GPU.
+pub fn status_bar(app: &App) -> Element<'_, Message> {
+    let status = match &app.ui.status {
+        Some(s) => text(s.text.clone()).size(style::SMALL).color(if s.error { style::ERROR } else { style::TEXT }),
+        None => text("Ready").size(style::SMALL).color(style::TEXT_FAINT),
     };
-
+    let r = &app.res.report;
+    let stats = tip(
+        text(format!("{} nodes  ·  {} recomputed  ·  {:.1} ms", app.graph().nodes.len(), r.recomputed, r.cpu_ms))
+            .size(style::SMALL)
+            .color(style::TEXT_DIM),
+        "Only nodes whose inputs or parameters changed are recomputed on the GPU",
+        tooltip::Position::Top,
+    );
+    let gpu = if app.engine.is_none() {
+        "Starting the GPU…".to_string()
+    } else if app.adapter.is_empty() {
+        "GPU".to_string()
+    } else {
+        app.adapter.clone()
+    };
     container(
         row![
-            menus,
-            rule::vertical(1),
-            size,
-            rule::vertical(1),
+            container(status.wrapping(text::Wrapping::None)).clip(true).width(Length::Fill),
             stats,
-            space().width(Length::Fill),
-            container(status).clip(true).max_width(620),
+            container(space().width(1).height(12)).style(style::hairline(style::LINE)),
+            text(gpu).size(style::SMALL).color(style::TEXT_FAINT),
         ]
-        .spacing(10)
-        .height(Length::Fixed(28.0))
-        .align_y(Alignment::Center),
+        .spacing(12)
+        .align_y(Alignment::Center)
+        .height(Length::Fixed(STATUS_BAR_H)),
     )
-    .padding([3, 6])
+    .padding([0, 10])
     .width(Length::Fill)
-    .style(style::header_bar)
+    .style(style::window_bar)
     .into()
 }

@@ -440,7 +440,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
             Some(e) if e.invalid => style::ERROR,
             Some(_) => style::ACCENT,
             None if hovered || state.drag.is_some() => style::BORDER_LIGHT,
-            None => style::BORDER,
+            None => style::LINE,
         };
         renderer.fill_quad(
             renderer::Quad {
@@ -465,11 +465,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
                                 border: Border { radius: 2.0.into(), ..Border::default() },
                                 ..renderer::Quad::default()
                             },
-                            Background::Color(if hovered || state.drag.is_some() {
-                                style::rgb(118, 82, 36)
-                            } else {
-                                style::rgb(92, 66, 32)
-                            }),
+                            Background::Color(if hovered || state.drag.is_some() { style::VALUE_FILL_HOT } else { style::VALUE_FILL }),
                         );
                     }
                 }

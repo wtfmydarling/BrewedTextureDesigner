@@ -3,6 +3,7 @@
 pub mod color;
 pub mod dropdown;
 pub mod gradient;
+pub mod layered;
 pub mod number;
 pub mod pressable;
 

@@ -40,7 +40,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         let header = iced::widget::button(
             row![
                 icon(if collapsed { Icon::ChevronRight } else { Icon::ChevronDown }, 12.0, style::TEXT_DIM),
-                text(category.name()).size(style::SMALL).font(style::bold()).color(style::TEXT_DIM),
+                crate::view::caption(category.name()),
                 space().width(Length::Fill),
                 text(kinds.len().to_string()).size(style::SMALL).color(style::TEXT_FAINT),
             ]
@@ -69,16 +69,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .style(style::text_input);
 
     column![
-        container(
-            row![
-                crate::view::heading("Library"),
-                space().width(Length::Fill),
-                text("drag to the graph").size(style::SMALL).color(style::TEXT_FAINT)
-            ]
-            .align_y(Alignment::Center)
-        )
-        .padding([8, 10]),
-        container(search).padding([0, 8]),
+        crate::view::pane_header("Library", space()),
+        container(search).padding([2, 8]),
         scrollable(container(list).padding([6, 6]))
             .height(Length::Fill)
             .style(style::scrollable)

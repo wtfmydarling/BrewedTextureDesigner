@@ -10,7 +10,7 @@ use iced::alignment::Vertical;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
 use iced::widget::text::{Alignment as TextAlign, LineHeight, Shaping};
 use iced::advanced::mouse;
-use iced::{Color, Element, Length, Pixels, Point, Rectangle, Size, Vector, keyboard};
+use iced::{Color, Element, Pixels, Point, Rectangle, Size, Vector, keyboard};
 use tessera_core::graph::{Link, Node, NodeId, SocketRef};
 use tessera_core::nodes::{OUTPUT_FORMATS, Role};
 use tessera_core::{DataType, NodeKind, Value, can_connect};
@@ -69,7 +69,8 @@ pub struct GraphCanvas<'a> {
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
-    iced::widget::canvas(GraphCanvas { app }).width(Length::Fill).height(Length::Fill).into()
+    // Layered: every node is drawn in a layer of its own (see `widget::layered`).
+    crate::widget::layered::layered(GraphCanvas { app }).into()
 }
 
 fn publish(message: GraphMessage) -> Option<canvas::Action<Message>> {
@@ -438,6 +439,7 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
+        // Layers, bottom to top: grid and links, every node, then what is being dragged.
         let mut frame = Frame::new(renderer, bounds.size());
         let t = self.transform();
         let z = t.zoom;
@@ -482,14 +484,20 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
             Interaction::Linking { from, ty, .. } => Some((from.clone(), *ty)),
             _ => None,
         };
+        let mut geometries = vec![frame.into_geometry()];
         let visible = Rectangle::with_size(bounds.size());
-        for l in &layouts {
+        // Selected nodes on top.
+        let order = layouts.iter().filter(|l| !sel.contains(&l.id)).chain(layouts.iter().filter(|l| sel.contains(&l.id)));
+        for l in order {
             if !l.rect.intersects(&visible) {
                 continue;
             }
             let Some(node) = graph.node(l.id) else { continue };
+            let mut frame = Frame::new(renderer, bounds.size());
             self.draw_node(&mut frame, node, l, linking.as_ref());
+            geometries.push(frame.into_geometry());
         }
+        let mut frame = Frame::new(renderer, bounds.size());
 
         // The link being dragged.
         if let Interaction::Linking { from, ty, anchor, current } = &state.interaction {
@@ -541,7 +549,8 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
             style::TEXT_FAINT,
             TextAlign::Right,
         );
-        vec![frame.into_geometry()]
+        geometries.push(frame.into_geometry());
+        geometries
     }
 }
 
@@ -641,8 +650,8 @@ impl GraphCanvas<'_> {
         );
         frame.fill(&shadow, Color::from_rgba(0.0, 0.0, 0.0, 0.28));
         let body = Path::rounded_rectangle(l.rect.position(), l.rect.size(), radius.into());
-        frame.fill(&body, if node.bypass { style::rgb(38, 39, 43) } else { style::NODE_BODY });
-        let header_color = if node.bypass { style::rgb(70, 70, 74) } else { style::category_color(d.category) };
+        frame.fill(&body, if node.bypass { style::NODE_BYPASSED } else { style::NODE_BODY });
+        let header_color = if node.bypass { style::HOVER } else { style::category_color(d.category) };
         let header = Path::rounded_rectangle(
             l.header.position(),
             l.header.size(),
@@ -692,7 +701,7 @@ impl GraphCanvas<'_> {
         }
         if node.kind == NodeKind::OUTPUT && show_text {
             let format = OUTPUT_FORMATS.get(node.enum_value("format") as usize).copied().unwrap_or("");
-            text_at(frame, format.to_string(), Point::new(badge_x + 4.0 * z, cy), small, style::rgb(230, 230, 230), TextAlign::Right);
+            text_at(frame, format.to_string(), Point::new(badge_x + 4.0 * z, cy), small, style::NODE_TEXT, TextAlign::Right);
         }
 
         // Socket labels.
@@ -702,12 +711,12 @@ impl GraphCanvas<'_> {
                 let color = if linked && s.kind == tessera_core::SocketKind::Param {
                     style::type_color(s.ty)
                 } else {
-                    style::rgb(200, 200, 204)
+                    style::NODE_TEXT
                 };
                 text_at(frame, s.label.clone(), *p + Vector::new(10.0 * z, 0.0), small, color, TextAlign::Left);
             }
             for (s, p) in &l.outputs {
-                text_at(frame, s.label.clone(), *p - Vector::new(10.0 * z, 0.0), small, style::rgb(200, 200, 204), TextAlign::Right);
+                text_at(frame, s.label.clone(), *p - Vector::new(10.0 * z, 0.0), small, style::NODE_TEXT, TextAlign::Right);
             }
         }
 
@@ -731,7 +740,7 @@ impl GraphCanvas<'_> {
             });
         }
         if let Some(thumb) = l.thumb {
-            frame.fill_rectangle(thumb.position(), thumb.size(), style::rgb(20, 20, 22));
+            frame.fill_rectangle(thumb.position(), thumb.size(), style::THUMB_BACKGROUND);
             if let Some(handle) = app.res.thumbs.get(&node.id) {
                 frame.draw_image(thumb, canvas::Image::new(handle.clone()));
             }
@@ -748,10 +757,10 @@ impl GraphCanvas<'_> {
                     let sw = Rectangle::new(Point::new(text_x, line(row) - 6.0 * z), Size::new(28.0 * z, 12.0 * z));
                     frame.fill_rectangle(sw.position(), sw.size(), style::color_of(c));
                     let label = Value::Color(c).display();
-                    text_at(frame, label, Point::new(sw.x + sw.width + 6.0 * z, line(row)), small, style::rgb(220, 220, 224), TextAlign::Left);
+                    text_at(frame, label, Point::new(sw.x + sw.width + 6.0 * z, line(row)), small, style::NODE_TEXT, TextAlign::Left);
                 }
                 (None, Some(v)) => {
-                    text_at(frame, format!("= {}", v.display()), Point::new(text_x, line(row)), small, style::rgb(230, 230, 234), TextAlign::Left);
+                    text_at(frame, format!("= {}", v.display()), Point::new(text_x, line(row)), small, style::NODE_TEXT, TextAlign::Left);
                 }
                 (None, None) => {}
             }
@@ -763,7 +772,7 @@ impl GraphCanvas<'_> {
         } else if error.is_some() {
             (1.5, style::ERROR)
         } else {
-            (1.0, style::rgb(18, 18, 20))
+            (1.0, style::NODE_OUTLINE)
         };
         frame.stroke(&body, Stroke::default().with_width(w).with_color(c));
 
@@ -787,7 +796,7 @@ impl GraphCanvas<'_> {
                         color = style::alpha(color, 0.3);
                     }
                 }
-                let fill = if linked { color } else { style::rgb(30, 31, 34) };
+                let fill = if linked { color } else { style::SOCKET_EMPTY };
                 let path = if s.ty == DataType::Image { Path::circle(*p, radius) } else { diamond(*p, radius * 1.2) };
                 frame.fill(&path, fill);
                 frame.stroke(&path, Stroke::default().with_width(1.6 * z.max(0.6)).with_color(color));

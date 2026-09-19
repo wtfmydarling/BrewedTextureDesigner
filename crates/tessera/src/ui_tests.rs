@@ -103,6 +103,9 @@ impl Harness {
         let (cursor, size) = (self.cursor, self.size);
         let theme = crate::style::theme();
         let rgba = self.frame(|ui, renderer| {
+            // Widgets take their look from the redraw event the window sends before drawing.
+            let redraw = iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()));
+            let _ = ui.update(&[redraw], cursor, renderer, &mut clipboard::Null, &mut Vec::new());
             ui.draw(renderer, &theme, &renderer::Style { text_color: Color::WHITE }, cursor);
             Headless::screenshot(renderer, iced::Size::new(size.width as u32, size.height as u32), 1.0, crate::style::CANVAS)
         });
@@ -348,4 +351,102 @@ fn escape_cancels_a_pick() {
     w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
     assert_eq!(gradient_of(&w.app, gm), before);
     assert!(!w.app.doc.can_undo());
+}
+
+// ---------------------------------------------------------------------------- whole window
+
+/// Thumbnails as the engine would send them: a pattern per node.
+fn fake_thumbnails(app: &mut App) {
+    let ids: Vec<_> = app.graph().nodes.iter().filter(|n| n.def().has_image()).map(|n| n.id).collect();
+    for (k, id) in ids.into_iter().enumerate() {
+        let size = 64u32;
+        let mut rgba = Vec::with_capacity((size * size * 4) as usize);
+        for y in 0..size {
+            for x in 0..size {
+                let v = (((x / 8 + y / 8 + k as u32) % 2) * 120 + 60) as u8;
+                rgba.extend([v, (v as u32 * 3 / 4) as u8, (v as u32 / 2) as u8, 255]);
+            }
+        }
+        app.res.thumbs.insert(id, iced::widget::image::Handle::from_rgba(size, size, rgba));
+    }
+}
+
+/// The whole window renders (and, with snapshots on, is saved for a look at the design).
+/// A node dragged over another stays on top of the other's thumbnail.
+#[test]
+fn the_window_renders() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    fake_thumbnails(&mut w.app);
+    let gm = w.app.graph().nodes_of(NodeKind::GRADIENT_MAP).next().unwrap().id;
+    w.send(Message::Graph(GraphMessage::Select { node: gm, mode: SelectMode::Replace }));
+    // The graph canvas reports its bounds and frames the graph.
+    w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+    w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+    w.snapshot("window");
+    // The graph at 100 %, around the Tile Generator.
+    let tile = w.app.graph().nodes_of(NodeKind::TILE_GENERATOR).next().unwrap().pos;
+    let bounds = w.app.ui.graph_view.bounds;
+    let pan = iced::Vector::new(bounds.width * 0.3 - tile[0], bounds.height * 0.25 - tile[1]);
+    w.send(Message::Graph(GraphMessage::View { pan, zoom: 1.0 }));
+    w.input(&[]);
+    w.snapshot("window_graph_100");
+    w.send(Message::Frame);
+
+    // Put the Levels node over the Blur node's thumbnail.
+    let levels = w.app.graph().nodes_of(NodeKind::LEVELS).next().unwrap();
+    let blur = w.app.graph().nodes_of(NodeKind::BLUR).next().unwrap();
+    let delta = [blur.pos[0] - levels.pos[0] + 30.0, blur.pos[1] - levels.pos[1] + 40.0];
+    let id = levels.id;
+    w.send(Message::Graph(GraphMessage::Move { ids: vec![id], delta }));
+    w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+    w.input(&[]);
+    w.snapshot("window_overlap");
+}
+
+/// The main states of the window render; with snapshots on, each is saved for review.
+#[test]
+fn window_states_render() {
+    use crate::app::{AddMenu, ContextMenu, ContextTarget, MenuId, VarField};
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    fake_thumbnails(&mut w.app);
+    w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+    w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+    let first = |w: &Harness, kind: NodeKind| w.app.graph().nodes_of(kind).next().unwrap().id;
+    let select = |w: &mut Harness, id| w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+
+    let math = first(&w, NodeKind::MATH);
+    select(&mut w, math);
+    w.snapshot("state_math");
+    let levels = first(&w, NodeKind::LEVELS);
+    select(&mut w, levels);
+    w.snapshot("state_levels");
+    let transform = first(&w, NodeKind::TRANSFORM_2D);
+    select(&mut w, transform);
+    w.snapshot("state_transform");
+
+    w.send(Message::ToggleVariable("mortar".into()));
+    w.send(Message::ColorPicker(Some(ColorTarget::Variable("tint".into(), VarField::Value))));
+    w.snapshot("state_inputs");
+    w.send(Message::ToggleVariable("mortar".into()));
+    w.send(Message::ColorPicker(None));
+
+    w.send(Message::Menu(Some(MenuId::Edit)));
+    w.snapshot("state_menu");
+    w.send(Message::Menu(None));
+
+    w.app.ui.add_menu = Some(AddMenu { at: Point::new(700.0, 300.0), graph_pos: [0.0, 0.0], query: "bl".into(), selected: 0, scroll: 0.0, pending: None });
+    w.snapshot("state_add_menu");
+    w.app.ui.add_menu = None;
+
+    w.send(Message::Context(Some(ContextMenu { at: Point::new(640.0, 360.0), target: ContextTarget::Node(levels) })));
+    w.snapshot("state_context_menu");
+    w.send(Message::Context(None));
+
+    w.send(Message::Edit(Edit::SetResolution([1024, 1024])));
+    w.send(Message::Dialog(Some(Dialog::Unsaved(PendingAction::Quit))));
+    w.snapshot("state_dialog_unsaved");
+    w.send(Message::Dialog(Some(Dialog::Shortcuts)));
+    w.snapshot("state_dialog_shortcuts");
+    w.send(Message::Dialog(Some(Dialog::About)));
+    w.snapshot("state_dialog_about");
 }
