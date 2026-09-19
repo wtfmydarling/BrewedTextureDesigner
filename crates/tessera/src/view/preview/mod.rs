@@ -37,15 +37,6 @@ fn toolbar(app: &App) -> Element<'_, Message> {
             Some(n) => text(n).size(style::TEXT_SIZE).color(style::ACCENT),
             None => text("double-click a node to show it here").size(style::SMALL).color(style::TEXT_DIM),
         });
-        if p.pick.is_some() {
-            bar = bar.push(text("· picking a gradient").size(style::SMALL).color(style::TEXT_DIM));
-            bar = bar.push(
-                button(text("Cancel").size(style::SMALL))
-                    .padding([2, 8])
-                    .style(style::button)
-                    .on_press(Message::Preview(PreviewMessage::CancelPick)),
-            );
-        }
         bar = bar.push(space().width(Length::Fill));
         for (i, name) in CHANNELS.iter().enumerate() {
             let active = p.channel == i as u32;

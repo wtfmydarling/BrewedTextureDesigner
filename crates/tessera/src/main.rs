@@ -3,9 +3,11 @@
 //! Tessera: a GPU accelerated, node based procedural texture editor.
 
 mod app;
+mod brand;
 mod gpu;
 mod highlight;
 mod icons;
+mod picker;
 mod style;
 mod view;
 mod widget;
@@ -33,6 +35,7 @@ usage: tessera [FILE.tessera]
   --bench          measure GPU evaluation and the SIMD kernels";
 
 fn main() -> iced::Result {
+    attach_console();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,tessera=info")).init();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -97,17 +100,22 @@ fn main() -> iced::Result {
         i += 1;
     }
 
-    iced::application(move || App::boot(options.clone()), App::update, App::view)
+    // A daemon: besides the main window, the eyedropper opens a window on every monitor.
+    iced::daemon(move || App::boot(options.clone()), App::update, App::view)
         .title(App::title)
         .theme(App::theme)
         .subscription(App::subscription)
         .default_font(style::ui_font())
         .antialiasing(true)
-        .window(iced::window::Settings {
-            size: iced::Size::new(1680.0, 1000.0),
-            min_size: Some(iced::Size::new(1000.0, 640.0)),
-            exit_on_close_request: false,
-            ..Default::default()
-        })
         .run()
+}
+
+/// Release builds are GUI programs on Windows, without a console: when started from a
+/// terminal, write to that terminal (for --help, --bench and errors).
+fn attach_console() {
+    #[cfg(windows)]
+    // SAFETY: no preconditions; fails harmlessly without a parent console.
+    unsafe {
+        windows_sys::Win32::System::Console::AttachConsole(windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS);
+    }
 }

@@ -8,6 +8,7 @@ pub mod editors;
 pub mod graph;
 pub mod inputs;
 pub mod library;
+pub mod picker;
 pub mod preview;
 pub mod properties;
 pub mod toolbar;

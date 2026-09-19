@@ -57,7 +57,6 @@ static KERNELS: &[KernelSource] = &[
     kernel!("curvature", "height.wgsl", "curvature", 1),
     kernel!("edge_detect", "height.wgsl", "edge_detect", 1),
     kernel!("emboss", "emboss.wgsl", "main", 2),
-    kernel!("sample_line", "sample_line.wgsl", "main", 1),
     kernel!("mip", "display.wgsl", "mip", 1),
     kernel!("thumbnail", "display.wgsl", "thumbnail", 1),
 ];

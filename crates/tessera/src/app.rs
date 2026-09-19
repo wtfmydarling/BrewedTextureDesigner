@@ -16,11 +16,12 @@ use iced::{Point, Rectangle, Size, Subscription, Task, Theme, Vector, keyboard, 
 use tessera_core::eval::{self, Evaluation};
 use tessera_core::graph::{Clipboard, Graph, Link, NodeId, SocketRef};
 use tessera_core::project::{self, ViewState};
-use tessera_core::{Category, Document, Edit, NodeKind, ParamValue};
+use tessera_core::{Category, Document, Edit, NodeKind, ParamValue, Value};
 use tessera_engine::{DisplayImage, EngineService, EvalReport, Event, ExportJob, ImageReport, Request};
 use tessera_engine::simd::ImageStats;
 
 use crate::gpu::{self, EventSource};
+use crate::picker::{self, PickTarget, Shot};
 use crate::view;
 
 // ---------------------------------------------------------------------------- options
@@ -96,8 +97,6 @@ pub struct PreviewState {
     pub fit: bool,
     pub bounds: Rectangle,
     pub mode: ViewMode,
-    /// Picking a gradient along a line: the Gradient Map node and parameter to fill.
-    pub pick: Option<(NodeId, String)>,
     pub probe: Option<[u32; 2]>,
     pub view3d: view::view3d::Camera,
 }
@@ -181,6 +180,28 @@ pub enum VarField {
     Default,
 }
 
+/// A color or gradient being picked from the screen. Exists from the click on the
+/// eyedropper until the pick is done or cancelled.
+#[derive(Debug)]
+pub struct ScreenPick {
+    pub target: PickTarget,
+    /// The captured monitors (empty while capturing).
+    pub shots: Vec<Shot>,
+    /// The window covering each monitor, in the order of `shots`.
+    pub windows: Vec<window::Id>,
+    /// Picked or cancelled. The windows keep showing the capture until they are closed.
+    pub done: bool,
+    /// Windows that are closed already.
+    pub closed: Vec<window::Id>,
+}
+
+impl ScreenPick {
+    /// The shot a picker window shows.
+    pub fn shot_of(&self, window: window::Id) -> Option<usize> {
+        self.windows.iter().position(|w| *w == window)
+    }
+}
+
 pub struct Ui {
     pub selection: BTreeSet<NodeId>,
     pub selected_link: Option<Link>,
@@ -216,8 +237,8 @@ pub struct Ui {
     /// Variable name being typed for an Input node.
     pub binding: Option<(NodeId, String)>,
     pub show_functions: bool,
-    /// Pending line pick request tag (gradient picking).
-    pub pick_tag: u64,
+    /// Picking a color or a gradient from the screen (see [`crate::picker`]).
+    pub screen_pick: Option<ScreenPick>,
     /// Files dropped on the window in quick succession (time of the last, count), to
     /// lay the new nodes out in a column.
     pub drop_burst: Option<(Instant, u32)>,
@@ -251,6 +272,17 @@ pub struct App {
     window: Option<window::Id>,
     started: Instant,
     screenshot_requested: bool,
+    /// The `eyedropper` self-check scenario.
+    check: Option<PickCheck>,
+}
+
+/// Steps of the `eyedropper` scenario: picker windows with a test pattern are opened on
+/// every monitor, then their placement is logged and they are captured.
+#[derive(Clone, Copy, Debug)]
+enum PickCheck {
+    Waiting,
+    Opened(Instant),
+    Capturing { remaining: usize },
 }
 
 // ---------------------------------------------------------------------------- messages
@@ -291,9 +323,19 @@ pub enum PreviewMessage {
     View { zoom: f32, pan: Vector, fit: bool },
     Bounds(Rectangle),
     Probe(Option<[u32; 2]>),
-    PickLine { from: [f32; 2], to: [f32; 2] },
-    CancelPick,
     Camera(view::view3d::Camera),
+}
+
+#[derive(Clone, Debug)]
+pub enum PickMessage {
+    /// The eyedropper was clicked: capture the screen.
+    Start(PickTarget),
+    Captured(Result<Vec<Shot>, String>),
+    /// A click on a picker window, at a pixel of its shot.
+    Color { shot: usize, at: [f32; 2] },
+    /// A line dragged on a picker window, in pixels of its shot.
+    Line { shot: usize, from: [f32; 2], to: [f32; 2] },
+    Cancel,
 }
 
 #[derive(Clone, Debug)]
@@ -374,7 +416,6 @@ pub enum Message {
     BindingText(NodeId, String),
     CommitBinding,
     ShowFunctions,
-    PickGradient(NodeId, String),
     PlotVar(usize),
     PlotRange(f32, f32),
     BrowseFile(NodeId, String),
@@ -387,10 +428,26 @@ pub enum Message {
     CommitRename,
     // 2D / 3D view
     Preview(PreviewMessage),
+    // eyedropper
+    Pick(PickMessage),
     Screenshot(window::Screenshot),
+    // `eyedropper` scenario: where a picker window is, and what it shows
+    CheckRect(usize, Option<[i32; 4]>),
+    CheckShot(usize, window::Screenshot),
 }
 
 // ---------------------------------------------------------------------------- boot
+
+fn main_window_settings() -> window::Settings {
+    window::Settings {
+        size: Size::new(1680.0, 1000.0),
+        min_size: Some(Size::new(1000.0, 640.0)),
+        // Closing asks about unsaved changes first.
+        exit_on_close_request: false,
+        icon: crate::brand::window_icon(),
+        ..Default::default()
+    }
+}
 
 fn default_panes() -> pane_grid::State<Pane> {
     use pane_grid::{Axis, Configuration as C};
@@ -443,7 +500,6 @@ impl App {
                     fit: true,
                     bounds: Rectangle::default(),
                     mode: ViewMode::TwoD,
-                    pick: None,
                     probe: None,
                     view3d: view::view3d::Camera::default(),
                 },
@@ -472,13 +528,14 @@ impl App {
                 renaming_var: None,
                 binding: None,
                 show_functions: false,
-                pick_tag: 0,
+                screen_pick: None,
                 drop_burst: None,
             },
             opts: opts.clone(),
             window: None,
             started: Instant::now(),
             screenshot_requested: false,
+            check: None,
         };
         if let Some(path) = opts.open.clone() {
             app.open_path(path);
@@ -491,20 +548,35 @@ impl App {
             app.ui.preview.node = Some(id);
         }
         app.refresh();
-        let task = match opts.scenario.as_deref() {
+        let scenario = match opts.scenario.as_deref() {
             Some(s) => app.apply_scenario(s),
             None => Task::none(),
         };
         app.sync_expression();
-        (app, task)
+        // The app runs as a daemon (the eyedropper opens more windows): it opens its main
+        // window itself.
+        let (main, open) = window::open(main_window_settings());
+        app.window = Some(main);
+        #[cfg(windows)]
+        let open = open.then(|id| window::run(id, crate::brand::use_embedded_icon));
+        (app, Task::batch([open.discard(), scenario]))
     }
 
-    pub fn title(&self) -> String {
+    /// The main window (as opposed to the eyedropper's windows).
+    #[cfg(test)]
+    pub fn main_window(&self) -> Option<window::Id> {
+        self.window
+    }
+
+    pub fn title(&self, window: window::Id) -> String {
+        if Some(window) != self.window {
+            return format!("{} — pick from the screen", tessera_core::APP_NAME);
+        }
         let dirty = if self.doc.is_dirty() { " •" } else { "" };
         format!("{}{dirty} — {}", self.doc.title(), tessera_core::APP_NAME)
     }
 
-    pub fn theme(&self) -> Theme {
+    pub fn theme(&self, _window: window::Id) -> Theme {
         crate::style::theme()
     }
 
@@ -523,6 +595,7 @@ impl App {
                     | E::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::ButtonReleased(_))
                     | E::Window(
                         window::Event::CloseRequested
+                            | window::Event::Closed
                             | window::Event::Opened { .. }
                             | window::Event::Resized(_)
                             | window::Event::FileDropped(_),
@@ -572,11 +645,6 @@ impl App {
         }
         if self.ui.preview.node.is_some_and(|id| !graph.contains(id)) {
             self.ui.preview.node = None;
-        }
-        if let Some((id, _)) = &self.ui.preview.pick
-            && !graph.contains(*id)
-        {
-            self.ui.preview.pick = None;
         }
         self.res.thumbs.retain(|id, _| graph.contains(*id));
         self.send_graph();
@@ -639,7 +707,6 @@ impl App {
 
     fn set_preview(&mut self, node: Option<NodeId>) {
         if self.ui.preview.node != node {
-            // A gradient pick stays active: showing the image to pick from is part of it.
             self.ui.preview.node = node;
             self.ui.preview.fit = true;
             self.res.probe = None;
@@ -777,7 +844,6 @@ impl App {
         self.ui.frame_request = true;
         self.ui.preview.node = preview;
         self.ui.preview.fit = true;
-        self.ui.preview.pick = None;
         self.res = Results::default();
         self.send(Request::Reset);
         self.refresh();
@@ -860,10 +926,7 @@ impl App {
                 }),
                 Message::OpenPicked,
             ),
-            PendingAction::Quit => match self.window {
-                Some(id) => window::close(id),
-                None => iced::exit(),
-            },
+            PendingAction::Quit => iced::exit(),
         }
     }
 
@@ -935,10 +998,7 @@ impl App {
                 self.adapter = name;
             }
             Message::Engine(event) => return self.engine_event(event),
-            Message::Runtime(event, status, id) => {
-                self.window.get_or_insert(id);
-                return self.runtime_event(event, status, id);
-            }
+            Message::Runtime(event, status, id) => return self.runtime_event(event, status, id),
             Message::Tick => {
                 if self.ui.status.as_ref().is_some_and(|s| s.at.elapsed() > Duration::from_secs(if s.error { 12 } else { 6 })) {
                     self.ui.status = None;
@@ -1180,14 +1240,6 @@ impl App {
                 }
             }
             Message::ShowFunctions => self.ui.show_functions = !self.ui.show_functions,
-            Message::PickGradient(node, key) => {
-                let active = self.ui.preview.pick.as_ref() == Some(&(node, key.clone()));
-                self.ui.preview.pick = if active { None } else { Some((node, key)) };
-                if self.ui.preview.pick.is_some() {
-                    self.ui.preview.mode = ViewMode::TwoD;
-                    self.set_status("Drag a line across the 2D view to pick the gradient along it", false);
-                }
-            }
             Message::PlotVar(i) => self.ui.plot_var = i,
             Message::PlotRange(lo, hi) => {
                 if lo.is_finite() && hi.is_finite() {
@@ -1242,7 +1294,34 @@ impl App {
                 }
             }
             Message::Preview(msg) => return self.preview_message(msg),
+            Message::Pick(msg) => return self.pick_message(msg),
             Message::Screenshot(shot) => return self.save_screenshot(shot),
+            Message::CheckRect(i, rect) => {
+                if let Some(shot) = self.ui.screen_pick.as_ref().and_then(|p| p.shots.get(i)) {
+                    let monitor = [shot.x, shot.y, shot.x + shot.width as i32, shot.y + shot.height as i32];
+                    let verdict = if rect == Some(monitor) { "covers its monitor" } else { "MISPLACED" };
+                    println!("picker window {i}: {rect:?}, monitor {monitor:?} (scale {}): {verdict}", shot.scale);
+                }
+            }
+            Message::CheckShot(i, shot) => {
+                if let Some(path) = &self.opts.screenshot {
+                    let path = path.with_file_name(format!(
+                        "{}_picker{i}.png",
+                        path.file_stem().map_or("screenshot".into(), |s| s.to_string_lossy())
+                    ));
+                    let (w, h) = (shot.size.width, shot.size.height);
+                    match ::image::RgbaImage::from_raw(w, h, shot.rgba.to_vec()).map(|img| img.save(&path)) {
+                        Some(Ok(())) => println!("picker window {i}: {w}x{h} (scale {}) saved to {}", shot.scale_factor, path.display()),
+                        other => eprintln!("picker window {i}: screenshot failed: {other:?}"),
+                    }
+                }
+                if let Some(PickCheck::Capturing { remaining }) = &mut self.check {
+                    *remaining = remaining.saturating_sub(1);
+                    if *remaining == 0 {
+                        return iced::exit();
+                    }
+                }
+            }
         }
         Task::none()
     }
@@ -1324,22 +1403,6 @@ impl App {
                     self.res.probe = Some((node, pixel, rgba));
                 }
             }
-            Event::LineSamples { tag, colors } => {
-                if tag == self.ui.pick_tag
-                    && let Some((node, key)) = self.ui.preview.pick.take()
-                    && colors.len() >= 2
-                {
-                    let gradient = tessera_core::Gradient::from_samples(&colors, 0.012, tessera_core::Gradient::MAX_STOPS);
-                    let stops = gradient.stops.len();
-                    if self.apply(tessera_core::edit::gradient_edit(node, &key, gradient)) {
-                        self.doc.seal();
-                        // Show the result in the properties (the image picked from stays in view).
-                        self.ui.selection = [node].into_iter().collect();
-                        self.ui.gradient_stop.remove(&(node, key));
-                        self.set_status(format!("Picked a gradient with {stops} stops"), false);
-                    }
-                }
-            }
             Event::Exported(result) => {
                 self.res.exports_pending = self.res.exports_pending.saturating_sub(1);
                 match result {
@@ -1383,11 +1446,22 @@ impl App {
 
     fn runtime_event(&mut self, event: iced::Event, status: iced::event::Status, id: window::Id) -> Task<Message> {
         use iced::Event as E;
-        match event {
-            E::Window(window::Event::CloseRequested) => {
-                self.window = Some(id);
-                return self.guarded(PendingAction::Quit);
+        if Some(id) != self.window {
+            // A picker window: Esc or closing it (Alt+F4) cancels the pick; its own canvas
+            // handles the mouse.
+            if let E::Window(window::Event::Closed) = event {
+                self.picker_window_closed(id);
+                return Task::none();
             }
+            let cancel = matches!(
+                &event,
+                E::Window(window::Event::CloseRequested)
+                    | E::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. })
+            );
+            return if cancel { self.pick_message(PickMessage::Cancel) } else { Task::none() };
+        }
+        match event {
+            E::Window(window::Event::CloseRequested) => return self.guarded(PendingAction::Quit),
             E::Window(window::Event::Opened { size, .. } | window::Event::Resized(size)) => {
                 self.ui.window_size = size;
             }
@@ -1449,12 +1523,13 @@ impl App {
         let char = |c: &str| matches!(&key, Key::Character(s) if s.as_str().eq_ignore_ascii_case(c));
         // Escape closes whatever is open, even when a text field has focus.
         if key == Key::Named(Named::Escape) {
+            if self.ui.screen_pick.is_some() {
+                return self.pick_message(PickMessage::Cancel);
+            }
             if self.ui.add_menu.is_some() || self.ui.menu.is_some() || self.ui.context.is_some() {
                 self.close_popups();
             } else if self.ui.dialog.is_some() {
                 self.ui.dialog = None;
-            } else if self.ui.preview.pick.is_some() {
-                self.ui.preview.pick = None;
             } else if self.ui.renaming_var.is_some() || self.ui.binding.is_some() {
                 // Typing a variable name: forget the text, the name stays as it was.
                 self.ui.renaming_var = None;
@@ -1664,9 +1739,6 @@ impl App {
             }
             PreviewMessage::Mode(mode) => {
                 p.mode = mode;
-                if mode == ViewMode::ThreeD {
-                    p.pick = None;
-                }
                 let nodes = self.material_nodes();
                 self.send(Request::Materials(nodes));
             }
@@ -1682,16 +1754,173 @@ impl App {
                     self.send(Request::Probe { node, pixel: px });
                 }
             }
-            PreviewMessage::PickLine { from, to } => {
-                if let Some(node) = p.node {
-                    self.ui.pick_tag += 1;
-                    self.send(Request::SampleLine { node, from, to, count: 256, tag: self.ui.pick_tag });
-                }
-            }
-            PreviewMessage::CancelPick => p.pick = None,
             PreviewMessage::Camera(c) => p.view3d = c,
         }
         Task::none()
+    }
+
+    // ------------------------------------------------------------------ eyedropper
+
+    fn pick_message(&mut self, msg: PickMessage) -> Task<Message> {
+        match msg {
+            PickMessage::Start(target) => {
+                if !picker::SUPPORTED {
+                    self.set_status("Picking colors from the screen is not supported on this platform yet", true);
+                    return Task::none();
+                }
+                if self.ui.screen_pick.is_some() {
+                    return Task::none();
+                }
+                self.close_popups();
+                self.ui.screen_pick = Some(ScreenPick { target, shots: Vec::new(), windows: Vec::new(), done: false, closed: Vec::new() });
+                // A short pause lets the window redraw without its menus before the capture.
+                Task::perform(
+                    blocking(|| {
+                        std::thread::sleep(Duration::from_millis(120));
+                        picker::capture()
+                    }),
+                    |shots| Message::Pick(PickMessage::Captured(shots)),
+                )
+            }
+            PickMessage::Captured(Err(e)) => {
+                self.ui.screen_pick = None;
+                self.set_status(e, true);
+                Task::none()
+            }
+            PickMessage::Captured(Ok(shots)) => {
+                // Cancelled (Esc) while capturing: nothing to show.
+                let Some(pick) = &mut self.ui.screen_pick else { return Task::none() };
+                let focused = picker::cursor_position().and_then(|p| picker::shot_at(&shots, p)).unwrap_or(0);
+                let mut tasks = Vec::new();
+                for (i, shot) in shots.iter().enumerate() {
+                    let (id, open) = window::open(picker::overlay_settings(shot, crate::brand::window_icon()));
+                    pick.windows.push(id);
+                    #[cfg(windows)]
+                    let open = {
+                        let shot = shot.clone();
+                        let focus = i == focused;
+                        open.then(move |id| {
+                            let shot = shot.clone();
+                            window::run(id, move |w| picker::cover(w, &shot, focus))
+                        })
+                    };
+                    #[cfg(not(windows))]
+                    let open = {
+                        let focus = i == focused;
+                        open.then(move |id| if focus { window::gain_focus(id) } else { Task::none() })
+                    };
+                    tasks.push(open.discard());
+                }
+                pick.shots = shots;
+                Task::batch(tasks)
+            }
+            PickMessage::Color { shot, at } => {
+                let Some((target, shot)) = self.finish_pick(shot) else { return Task::none() };
+                if let PickTarget::Color(target) = &target {
+                    let color = shot.pixel(at[0].floor() as i64, at[1].floor() as i64);
+                    self.apply_picked_color(target, color);
+                }
+                self.close_picker_windows()
+            }
+            PickMessage::Line { shot, from, to } => {
+                let Some((target, shot)) = self.finish_pick(shot) else { return Task::none() };
+                if let PickTarget::Gradient(node, key) = &target {
+                    let gradient = shot.gradient(from, to);
+                    let stops = gradient.stops.len();
+                    if self.apply(tessera_core::edit::gradient_edit(*node, key, gradient)) {
+                        self.doc.seal();
+                        self.ui.gradient_stop.remove(&(*node, key.clone()));
+                        self.set_status(format!("Picked a gradient with {stops} stops"), false);
+                    }
+                }
+                self.close_picker_windows()
+            }
+            PickMessage::Cancel => {
+                let Some(pick) = &mut self.ui.screen_pick else { return Task::none() };
+                if pick.done {
+                    return Task::none();
+                }
+                if pick.windows.is_empty() {
+                    // Still capturing: forget the pick, the capture will find nothing to do.
+                    self.ui.screen_pick = None;
+                    return Task::none();
+                }
+                pick.done = true;
+                self.close_picker_windows()
+            }
+        }
+    }
+
+    /// End a pick with a result from one of its shots; `None` if it is over already.
+    fn finish_pick(&mut self, shot: usize) -> Option<(PickTarget, Shot)> {
+        let pick = self.ui.screen_pick.as_mut().filter(|p| !p.done)?;
+        pick.done = true;
+        Some((pick.target.clone(), pick.shots.get(shot)?.clone()))
+    }
+
+    fn close_picker_windows(&self) -> Task<Message> {
+        let Some(pick) = &self.ui.screen_pick else { return Task::none() };
+        let mut tasks: Vec<Task<Message>> = pick.windows.iter().map(|id| window::close(*id)).collect();
+        if let Some(main) = self.window {
+            tasks.push(window::gain_focus(main));
+        }
+        Task::batch(tasks)
+    }
+
+    /// A picker window has closed; the pick is gone with the last one.
+    fn picker_window_closed(&mut self, id: window::Id) {
+        let Some(pick) = &mut self.ui.screen_pick else { return };
+        if pick.windows.contains(&id) && !pick.closed.contains(&id) {
+            pick.closed.push(id);
+        }
+        if pick.closed.len() == pick.windows.len() {
+            self.ui.screen_pick = None;
+        }
+    }
+
+    /// Put a color picked from the screen where the eyedropper was clicked. A screen has
+    /// no transparency: the target keeps its alpha.
+    fn apply_picked_color(&mut self, target: &ColorTarget, rgb: [f32; 4]) {
+        let graph = self.doc.graph();
+        let with_alpha = |a: f32| [rgb[0], rgb[1], rgb[2], a];
+        let edit = match target {
+            ColorTarget::Param(node, key) => {
+                let alpha = match graph.node(*node).and_then(|n| n.value(key)) {
+                    Some(ParamValue::Color(c)) => c[3],
+                    _ => 1.0,
+                };
+                Some(Edit::SetParam { node: *node, key: key.clone(), value: ParamValue::Color(with_alpha(alpha)) })
+            }
+            ColorTarget::Variable(name, field) => graph.variable(name).map(|var| {
+                let current = if *field == VarField::Value { var.value } else { var.default };
+                let alpha = if let Value::Color(c) = current { c[3] } else { 1.0 };
+                let value = Value::Color(with_alpha(alpha));
+                match field {
+                    VarField::Value => Edit::SetVariable { name: name.clone(), value },
+                    VarField::Default => Edit::SetVariableDefault { name: name.clone(), value },
+                }
+            }),
+            ColorTarget::GradientStop(node, key) => {
+                let gradient = graph.node(*node).and_then(|n| n.value(key)).and_then(ParamValue::as_gradient).cloned();
+                let stop = self.ui.gradient_stop.get(&(*node, key.clone())).copied();
+                match (gradient, stop) {
+                    (Some(mut g), Some(i)) if i < g.stops.len() => {
+                        g.stops[i].color = with_alpha(g.stops[i].color[3]);
+                        Some(tessera_core::edit::gradient_edit(*node, key, g))
+                    }
+                    _ => None,
+                }
+            }
+        };
+        match edit {
+            Some(edit) => {
+                if self.apply(edit) {
+                    self.doc.seal();
+                }
+                self.set_status(format!("Picked {}", picker::hex(rgb)), false);
+            }
+            None => self.set_status("The color to set no longer exists", true),
+        }
     }
 
     // ------------------------------------------------------------------ screenshots (testing)
@@ -1758,6 +1987,12 @@ impl App {
                     self.ui.preview.node = Some(id);
                 }
             }
+            "eyedropper" => {
+                if let Some(id) = first(NodeKind::GRADIENT_MAP) {
+                    self.ui.selection = [id].into_iter().collect();
+                }
+                self.check = Some(PickCheck::Waiting);
+            }
             other => log::warn!("unknown scenario '{other}'"),
         }
         Task::none()
@@ -1777,9 +2012,44 @@ impl App {
             }
             return Task::none();
         }
+        if self.check.is_some() {
+            return self.pick_check();
+        }
         let Some(id) = self.window else { return Task::none() };
         self.screenshot_requested = true;
         window::screenshot(id).map(Message::Screenshot)
+    }
+
+    /// The `eyedropper` scenario, one step per tick once the app has settled.
+    fn pick_check(&mut self) -> Task<Message> {
+        match self.check {
+            Some(PickCheck::Waiting) => {
+                let Some(gm) = self.graph().nodes_of(NodeKind::GRADIENT_MAP).next().map(|n| n.id) else { return iced::exit() };
+                match picker::test_pattern() {
+                    Ok(shots) => {
+                        let target = PickTarget::Gradient(gm, "gradient".into());
+                        self.ui.screen_pick = Some(ScreenPick { target, shots: Vec::new(), windows: Vec::new(), done: false, closed: Vec::new() });
+                        self.check = Some(PickCheck::Opened(Instant::now()));
+                        self.pick_message(PickMessage::Captured(Ok(shots)))
+                    }
+                    Err(e) => {
+                        eprintln!("eyedropper check: {e}");
+                        iced::exit()
+                    }
+                }
+            }
+            Some(PickCheck::Opened(at)) if at.elapsed() > Duration::from_millis(1500) => {
+                let windows = self.ui.screen_pick.as_ref().map(|p| p.windows.clone()).unwrap_or_default();
+                self.check = Some(PickCheck::Capturing { remaining: windows.len() });
+                Task::batch(windows.into_iter().enumerate().flat_map(|(i, id)| {
+                    [
+                        window::run(id, picker::window_rect).map(move |r| Message::CheckRect(i, r)),
+                        window::screenshot(id).map(move |s| Message::CheckShot(i, s)),
+                    ]
+                }))
+            }
+            _ => Task::none(),
+        }
     }
 
     fn save_screenshot(&mut self, shot: window::Screenshot) -> Task<Message> {
@@ -1793,8 +2063,8 @@ impl App {
         iced::exit()
     }
 
-    pub fn view(&self) -> iced::Element<'_, Message> {
-        view::root(self)
+    pub fn view(&self, window: window::Id) -> iced::Element<'_, Message> {
+        if Some(window) == self.window { view::root(self) } else { view::picker::view(self, window) }
     }
 }
 

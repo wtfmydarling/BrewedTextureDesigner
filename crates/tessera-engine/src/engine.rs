@@ -20,7 +20,7 @@ use tessera_core::graph::{Graph, Node, NodeId, input_socket_key};
 use tessera_core::nodes::{NodeKind, PIXEL_MATH_BUILTINS};
 
 use crate::gpu::{Gpu, GpuImage};
-use crate::kernels::{self, DisplayU, ExecCtx, LineU, PixelVar};
+use crate::kernels::{self, DisplayU, ExecCtx, PixelVar};
 use crate::simd::{self, ImageStats};
 
 pub const THUMB_SIZE: u32 = 128;
@@ -572,24 +572,6 @@ impl Engine {
         }
     }
 
-    /// `count` colors along the line `from` → `to` (uv) of a node's image (blocking).
-    pub fn sample_line(&self, node: NodeId, from: [f32; 2], to: [f32; 2], count: u32) -> Option<Vec<[f32; 4]>> {
-        let image = self.image(node)?;
-        let count = count.clamp(2, 4096);
-        let out = self.gpu.create_image(count, 1, "line samples");
-        let mut encoder = self.gpu.encoder();
-        // Clamp at the borders: interpolating with the opposite edge would invent colors.
-        let params = LineU { from, to, tiling: 0, pad: [0; 3] };
-        self.gpu.run(&mut encoder, "sample_line", bytemuck::bytes_of(&params), &[&image.view], &out).ok()?;
-        let rb = self.gpu.encode_readback(&mut encoder, &out);
-        self.gpu.queue.submit(Some(encoder.finish()));
-        rb.map();
-        self.wait_idle();
-        match rb.poll() {
-            Some(Ok(())) => Some(rb.to_f32().chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect()),
-            _ => None,
-        }
-    }
 }
 
 /// Decode an image file into RGBA half floats (SIMD conversion on all cores).

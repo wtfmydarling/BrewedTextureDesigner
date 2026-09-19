@@ -73,6 +73,7 @@ pub fn details<'a>(app: &'a App, var: &'a Variable) -> Element<'a, Message> {
         let name = name.clone();
         col = col.push(color_editor(
             c,
+            ColorTarget::Variable(var.name.clone(), VarField::Default),
             move |c| Message::Edit(Edit::SetVariableDefault { name: name.clone(), value: tessera_core::Value::Color(c) }),
             Message::Seal,
         ));
@@ -168,6 +169,7 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
         let name = var.name.clone();
         col = col.push(color_editor(
             c,
+            ColorTarget::Variable(var.name.clone(), VarField::Value),
             move |c| Message::Edit(Edit::SetVariable { name: name.clone(), value: tessera_core::Value::Color(c) }),
             Message::Seal,
         ));

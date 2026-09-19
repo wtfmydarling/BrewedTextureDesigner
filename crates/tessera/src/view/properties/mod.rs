@@ -16,7 +16,8 @@ use tessera_core::{Edit, Gradient, Interpolation, ParamValue, Tiling, Value};
 use crate::app::{App, ColorTarget, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
-use crate::view::editors::{color_editor, swatch};
+use crate::picker::PickTarget;
+use crate::view::editors::{color_editor, eyedropper, swatch};
 use crate::view::{tip, section};
 use crate::widget::gradient::gradient_editor;
 use crate::widget::number::number;
@@ -267,7 +268,12 @@ fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
         col = col.push(row![text("Value").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W)), editor].align_y(Alignment::Center));
         if color_open && let Value::Color(c) = var.value {
             let name = var.name.clone();
-            col = col.push(color_editor(c, move |c| Message::Edit(Edit::SetVariable { name: name.clone(), value: Value::Color(c) }), Message::Seal));
+            col = col.push(color_editor(
+                c,
+                ColorTarget::Variable(var.name.clone(), crate::app::VarField::Value),
+                move |c| Message::Edit(Edit::SetVariable { name: name.clone(), value: Value::Color(c) }),
+                Message::Seal,
+            ));
         }
         col = col.push(crate::view::inputs::details(app, var));
     }
@@ -367,7 +373,12 @@ fn param_row<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, index: usi
     if !exposed {
         match (&slot.value, pd.kind) {
             (ParamValue::Color(c), _) if app.ui.color_picker == Some(ColorTarget::Param(id, pd.key.to_string())) => {
-                col = col.push(color_editor(*c, move |c| set(id, pd.key, ParamValue::Color(c)), Message::Seal));
+                col = col.push(color_editor(
+                    *c,
+                    ColorTarget::Param(id, pd.key.to_string()),
+                    move |c| set(id, pd.key, ParamValue::Color(c)),
+                    Message::Seal,
+                ));
             }
             (ParamValue::Gradient(g), _) => col = col.push(gradient_block(app, node, pd.key, g)),
             _ => {}
@@ -478,15 +489,11 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'static str, g: &'a Gr
         move |i| Message::GradientStop(id, key.to_string(), i),
     )
     .on_release(Message::Seal);
-    let picking = app.ui.preview.pick.as_ref() == Some(&(id, key.to_string()));
     let tools = row![
-        tip(
-            button(row![icon(Icon::Pipette, 14.0, if picking { style::ACCENT } else { style::TEXT_DIM }), text("Pick from 2D view").size(style::SMALL)].spacing(5).align_y(Alignment::Center))
-                .padding([3, 8])
-                .style(style::toggle_button(picking))
-                .on_press(Message::PickGradient(id, key.to_string())),
-            "Drag a line across the image in the 2D view: the colors along it become the gradient",
-            tooltip::Position::Top,
+        eyedropper(
+            PickTarget::Gradient(id, key.to_string()),
+            "Pick from screen",
+            "Drag a line across any image on any monitor: the colors along it become the gradient (Esc cancels)",
         ),
         space().width(Length::Fill),
         tip(
@@ -548,6 +555,7 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'static str, g: &'a Gr
         let base = g.clone();
         col = col.push(color_editor(
             stop.color,
+            ColorTarget::GradientStop(id, key.to_string()),
             move |c| {
                 let mut n = base.clone();
                 n.stops[i].color = c;

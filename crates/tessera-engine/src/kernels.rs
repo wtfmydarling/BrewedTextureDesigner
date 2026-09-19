@@ -303,15 +303,6 @@ pub struct DisplayU {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-pub struct LineU {
-    pub from: [f32; 2],
-    pub to: [f32; 2],
-    pub tiling: u32,
-    pub pad: [u32; 3],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
 struct PixelMathU {
     consts: [[f32; 4]; 4],
     tiling: u32,

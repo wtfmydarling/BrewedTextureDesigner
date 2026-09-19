@@ -1,19 +1,22 @@
 //! Headless UI tests: the real views are built and driven with input events the way the
 //! window does it, keeping the widget state between frames.
+//!
+//! With `TESSERA_UI_SNAPSHOTS=<folder>` the tests also save what they draw as PNG files.
 
 use iced::advanced::clipboard;
-use iced::advanced::renderer::Headless;
+use iced::advanced::renderer::{self, Headless};
 use iced::advanced::widget::operation::{self, Operation, Outcome, focusable};
 use iced::keyboard::{self, Key};
-use iced::{Element, Pixels, Point, Size, mouse, window};
+use iced::{Color, Element, Pixels, Point, Size, mouse, window};
 use iced_runtime::user_interface::{Cache, UserInterface};
-use tessera_core::{Edit, NodeKind};
+use tessera_core::{Edit, NodeKind, ParamValue};
 
-use crate::app::{App, Dialog, DragPayload, GraphMessage, Message, PendingAction, SelectMode, StartupOptions};
+use crate::app::{App, ColorTarget, Dialog, DragPayload, GraphMessage, Message, PendingAction, ScreenPick, SelectMode, StartupOptions};
+use crate::picker::{PickTarget, Shot};
 use crate::view;
 use crate::view::properties::expression::editor_id;
 
-type View = for<'a> fn(&'a App) -> Element<'a, Message>;
+type View = Box<dyn for<'a> Fn(&'a App) -> Element<'a, Message>>;
 
 /// A view of an app, rendered without a window.
 struct Harness {
@@ -22,6 +25,7 @@ struct Harness {
     renderer: iced::Renderer,
     cache: Cache,
     size: Size,
+    cursor: mouse::Cursor,
 }
 
 impl Harness {
@@ -30,7 +34,7 @@ impl Harness {
         let renderer = futures::executor::block_on(<iced::Renderer as Headless>::new(crate::style::ui_font(), Pixels(13.0), None))?;
         let (mut app, _) = App::boot(StartupOptions::default());
         app.ui.window_size = size;
-        Some(Harness { app, view, renderer, cache: Cache::default(), size })
+        Some(Harness { app, view, renderer, cache: Cache::default(), size, cursor: mouse::Cursor::Unavailable })
     }
 
     fn send(&mut self, message: Message) {
@@ -47,10 +51,11 @@ impl Harness {
         out
     }
 
-    /// Feed input events with the cursor at `cursor`; returns how many messages the
-    /// widgets produced (they are applied to the app).
-    fn input_at(&mut self, cursor: mouse::Cursor, events: &[iced::Event]) -> usize {
+    /// Feed input events; returns how many messages the widgets produced (they are
+    /// applied to the app).
+    fn input(&mut self, events: &[iced::Event]) -> usize {
         let mut messages = Vec::new();
+        let cursor = self.cursor;
         self.frame(|ui, renderer| {
             let _ = ui.update(events, cursor, renderer, &mut clipboard::Null, &mut messages);
         });
@@ -61,8 +66,14 @@ impl Harness {
         count
     }
 
-    fn input(&mut self, events: &[iced::Event]) -> usize {
-        self.input_at(mouse::Cursor::Unavailable, events)
+    /// Move the mouse (the widgets see a CursorMoved event).
+    fn hover(&mut self, to: Point) -> usize {
+        self.cursor = mouse::Cursor::Available(to);
+        self.input(&[iced::Event::Mouse(mouse::Event::CursorMoved { position: to })])
+    }
+
+    fn mouse(&mut self, event: mouse::Event) -> usize {
+        self.input(&[iced::Event::Mouse(event)])
     }
 
     fn operate<T>(&mut self, mut operation: impl Operation<T>) -> Outcome<T> {
@@ -77,10 +88,26 @@ impl Harness {
         }
     }
 
-    /// What the window's event subscription reports for a cursor move.
-    fn move_cursor(&mut self, to: Point) {
-        let event = iced::Event::Mouse(mouse::Event::CursorMoved { position: to });
-        self.send(Message::Runtime(event, iced::event::Status::Ignored, window::Id::unique()));
+    /// What the window's event subscription reports.
+    fn window_event(&mut self, window: window::Id, event: iced::Event) {
+        self.send(Message::Runtime(event, iced::event::Status::Ignored, window));
+    }
+
+    fn main_window(&self) -> window::Id {
+        self.app.main_window().expect("main window")
+    }
+
+    /// Save what the view draws, when snapshots are asked for.
+    fn snapshot(&mut self, name: &str) {
+        let Some(dir) = std::env::var_os("TESSERA_UI_SNAPSHOTS") else { return };
+        let (cursor, size) = (self.cursor, self.size);
+        let theme = crate::style::theme();
+        let rgba = self.frame(|ui, renderer| {
+            ui.draw(renderer, &theme, &renderer::Style { text_color: Color::WHITE }, cursor);
+            Headless::screenshot(renderer, iced::Size::new(size.width as u32, size.height as u32), 1.0, crate::style::CANVAS)
+        });
+        let path = std::path::Path::new(&dir).join(format!("{name}.png"));
+        image::RgbaImage::from_raw(size.width as u32, size.height as u32, rgba).expect("snapshot size").save(&path).expect("save snapshot");
     }
 }
 
@@ -112,9 +139,22 @@ fn typing(text: &str) -> Vec<iced::Event> {
         .collect()
 }
 
+fn escape() -> iced::Event {
+    let key = Key::Named(keyboard::key::Named::Escape);
+    iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key: key.clone(),
+        modified_key: key,
+        physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::default(),
+        text: None,
+        repeat: false,
+    })
+}
+
 macro_rules! harness {
     ($view:expr, $w:expr, $h:expr) => {
-        match Harness::new($view, Size::new($w, $h)) {
+        match Harness::new(Box::new($view), Size::new($w, $h)) {
             Some(h) => h,
             None => {
                 eprintln!("no GPU for the headless renderer: test skipped");
@@ -159,19 +199,17 @@ fn library_items_can_be_dropped_on_the_graph() {
     let bounds = window.app.ui.graph_view.bounds;
     assert!(bounds.width > 300.0 && bounds.height > 200.0, "graph bounds {bounds:?}");
 
+    let main = window.main_window();
     let before = window.app.graph().nodes.len();
-    window.move_cursor(Point::new(60.0, 200.0));
+    window.window_event(main, iced::Event::Mouse(mouse::Event::CursorMoved { position: Point::new(60.0, 200.0) }));
     window.send(Message::PanelPress(DragPayload::Node(NodeKind::BLUR)));
     assert!(window.app.ui.drag.is_none(), "a press alone is not a drag");
     let target = Point::new(bounds.x + 40.0, bounds.y + bounds.height - 40.0);
-    window.move_cursor(target);
+    window.window_event(main, iced::Event::Mouse(mouse::Event::CursorMoved { position: target }));
     assert_eq!(window.app.ui.drag, Some(DragPayload::Node(NodeKind::BLUR)));
 
-    let release = [
-        iced::Event::Mouse(mouse::Event::CursorMoved { position: target }),
-        iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
-    ];
-    window.input_at(mouse::Cursor::Available(target), &release);
+    window.hover(target);
+    window.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
     assert_eq!(window.app.graph().nodes.len(), before + 1, "the drop added a node");
     let added = window.app.graph().nodes.iter().max_by_key(|n| n.id.0).unwrap();
     assert_eq!(added.kind, NodeKind::BLUR);
@@ -185,7 +223,8 @@ fn library_items_can_be_dropped_on_the_graph() {
 #[test]
 fn closing_with_unsaved_changes_asks_first() {
     let (mut app, _) = App::boot(StartupOptions::default());
-    let close = || Message::Runtime(iced::Event::Window(window::Event::CloseRequested), iced::event::Status::Ignored, window::Id::unique());
+    let main = app.main_window().unwrap();
+    let close = || Message::Runtime(iced::Event::Window(window::Event::CloseRequested), iced::event::Status::Ignored, main);
     let _ = app.update(Message::Edit(Edit::SetResolution([512, 512])));
     assert!(app.doc.is_dirty());
     let _ = app.update(close());
@@ -194,4 +233,119 @@ fn closing_with_unsaved_changes_asks_first() {
     assert_eq!(app.ui.dialog, None);
     assert!(app.doc.is_dirty(), "cancelling keeps the changes");
     assert_eq!(app.graph().resolution, [512, 512]);
+}
+
+// ---------------------------------------------------------------------------- eyedropper
+
+const SCREEN: [u32; 2] = [800, 240];
+
+/// A fake capture of a monitor: a red → green → blue ramp across, darker at the bottom.
+fn fake_screen() -> Shot {
+    let [w, h] = SCREEN;
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        let shade = 1.0 - 0.5 * y as f32 / h as f32;
+        for x in 0..w {
+            let t = x as f32 / (w - 1) as f32;
+            let (r, g, b) = if t < 0.5 { (1.0 - t * 2.0, t * 2.0, 0.0) } else { (0.0, 2.0 - t * 2.0, t * 2.0 - 1.0) };
+            let q = |v: f32| (v * shade * 255.0).round() as u8;
+            rgba.extend([q(r), q(g), q(b), 255]);
+        }
+    }
+    Shot::from_image(SCREEN, rgba)
+}
+
+/// A picker window showing the fake screen, for the given target.
+fn picker_window(target: PickTarget) -> Option<(Harness, window::Id)> {
+    let overlay = window::Id::unique();
+    let mut h = Harness::new(Box::new(move |app: &App| view::picker::view(app, overlay)), Size::new(SCREEN[0] as f32, SCREEN[1] as f32))?;
+    h.app.ui.screen_pick = Some(ScreenPick { target, shots: vec![fake_screen()], windows: vec![overlay], done: false, closed: Vec::new() });
+    Some((h, overlay))
+}
+
+fn gradient_of(app: &App, node: tessera_core::graph::NodeId) -> tessera_core::Gradient {
+    app.graph().node(node).and_then(|n| n.value("gradient")).and_then(ParamValue::as_gradient).cloned().expect("gradient")
+}
+
+/// Dragging a line on a picker window turns the colors along it into the gradient; the
+/// windows then close and the pick is over.
+#[test]
+fn a_gradient_is_picked_along_a_line_on_the_screen() {
+    let (graph, _) = tessera_core::demo::brick_wall();
+    let gm = graph.nodes_of(NodeKind::GRADIENT_MAP).next().unwrap().id;
+    let Some((mut w, overlay)) = picker_window(PickTarget::Gradient(gm, "gradient".into())) else {
+        eprintln!("no GPU for the headless renderer: test skipped");
+        return;
+    };
+    let y = 20.0;
+    w.hover(Point::new(0.0, y));
+    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    w.hover(Point::new(400.0, y));
+    w.snapshot("eyedropper_gradient_dragging");
+    assert!(!w.app.ui.screen_pick.as_ref().unwrap().done, "still dragging");
+    w.hover(Point::new(799.0, y));
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+
+    let pick = w.app.ui.screen_pick.as_ref().expect("windows still closing");
+    assert!(pick.done);
+    let g = gradient_of(&w.app, gm);
+    assert!(g.stops.len() <= 6, "few stops: {}", g.stops.len());
+    let shade = 1.0 - 0.5 * y / SCREEN[1] as f32;
+    for (t, expected) in [(0.0, [1.0, 0.0, 0.0]), (0.5, [0.0, 1.0, 0.0]), (1.0, [0.0, 0.0, 1.0])] {
+        let c = g.sample(t);
+        for i in 0..3 {
+            assert!((c[i] - expected[i] * shade).abs() < 0.05, "at {t}: {c:?}");
+        }
+    }
+    assert!(w.app.doc.can_undo());
+    // The window closes; with it the pick is gone.
+    w.window_event(overlay, iced::Event::Window(window::Event::Closed));
+    assert!(w.app.ui.screen_pick.is_none());
+}
+
+/// A click picks the color under the cursor; the parameter keeps its alpha.
+#[test]
+fn a_color_is_picked_with_a_click_and_keeps_its_alpha() {
+    // A new node (the demo's Uniform Color is driven by an input, so its color is locked).
+    let (mut graph, _) = tessera_core::demo::brick_wall();
+    let uniform = graph.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    let target = PickTarget::Color(ColorTarget::Param(uniform, "color".into()));
+    let Some((mut w, _)) = picker_window(target) else {
+        eprintln!("no GPU for the headless renderer: test skipped");
+        return;
+    };
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::UNIFORM_COLOR, pos: [0.0, 0.0] }));
+    assert!(w.app.graph().contains(uniform), "same id as in the copy of the demo");
+    w.send(Message::Edit(Edit::SetParam { node: uniform, key: "color".into(), value: ParamValue::Color([0.1, 0.1, 0.1, 0.5]) }));
+    w.hover(Point::new(600.0, 120.0));
+    w.snapshot("eyedropper_color_loupe");
+    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    let expected = fake_screen().pixel(600, 120);
+    let got = match w.app.graph().node(uniform).and_then(|n| n.value("color")) {
+        Some(ParamValue::Color(c)) => *c,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(&got[..3], &expected[..3]);
+    assert_eq!(got[3], 0.5, "alpha kept");
+}
+
+/// Esc (or a right click) ends the pick without changing anything.
+#[test]
+fn escape_cancels_a_pick() {
+    let (graph, _) = tessera_core::demo::brick_wall();
+    let gm = graph.nodes_of(NodeKind::GRADIENT_MAP).next().unwrap().id;
+    let Some((mut w, overlay)) = picker_window(PickTarget::Gradient(gm, "gradient".into())) else {
+        eprintln!("no GPU for the headless renderer: test skipped");
+        return;
+    };
+    let before = gradient_of(&w.app, gm);
+    w.hover(Point::new(10.0, 10.0));
+    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    w.window_event(overlay, escape());
+    assert!(w.app.ui.screen_pick.as_ref().is_some_and(|p| p.done));
+    // The release that ends the drag changes nothing either.
+    w.hover(Point::new(700.0, 10.0));
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    assert_eq!(gradient_of(&w.app, gm), before);
+    assert!(!w.app.doc.can_undo());
 }

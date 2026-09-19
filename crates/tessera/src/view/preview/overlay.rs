@@ -1,11 +1,8 @@
-//! Interaction layer of the 2D view: zoom and pan, pixel probe, the Transform 2D gizmo
-//! and picking a gradient along a line.
+//! Interaction layer of the 2D view: zoom and pan, pixel probe and the Transform 2D gizmo.
 
-use iced::alignment::Vertical;
-use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
-use iced::widget::text::{Alignment as TextAlign, LineHeight, Shaping};
 use iced::advanced::mouse;
-use iced::{Color, Pixels, Point, Rectangle, Size, Vector, keyboard};
+use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
+use iced::{Color, Point, Rectangle, Size, Vector, keyboard};
 use tessera_core::graph::NodeId;
 use tessera_core::{Edit, NodeKind, ParamValue};
 
@@ -63,7 +60,6 @@ enum Handle {
 enum Drag {
     Pan { last: Point },
     Gizmo { handle: Handle, start_uv: Vector, start_screen: Point, start: Xform },
-    Pick { from: Point, to: Point },
 }
 
 #[derive(Default)]
@@ -103,7 +99,7 @@ impl Overlay<'_> {
     fn gizmo_node(&self) -> Option<NodeId> {
         let id = self.app.ui.preview.node?;
         let node = self.app.graph().node(id)?;
-        (node.kind == NodeKind::TRANSFORM_2D && self.app.ui.preview.pick.is_none()).then_some(id)
+        (node.kind == NodeKind::TRANSFORM_2D).then_some(id)
     }
 
     /// Effective transform (driven values included) and which parts are locked.
@@ -248,10 +244,6 @@ impl canvas::Program<Message> for Overlay<'_> {
                     mouse::Button::Left => {
                         let click = mouse::Click::new(q, mouse::Button::Left, state.last_click);
                         state.last_click = Some(click);
-                        if p.pick.is_some() {
-                            state.drag = Some(Drag::Pick { from: q, to: q });
-                            return Some(canvas::Action::capture());
-                        }
                         if let Some((_, (xf, _))) = &gizmo {
                             let (center, handles, _) = self.handles(xf, rect, aspect);
                             if let Some(h) = self.hit(q, center, &handles) {
@@ -280,10 +272,6 @@ impl canvas::Program<Message> for Overlay<'_> {
                         *last = q;
                         let pan = p.pan + d;
                         Some(canvas::Action::publish(Message::Preview(PreviewMessage::View { zoom: p.zoom, pan, fit: false })))
-                    }
-                    Some(Drag::Pick { to, .. }) => {
-                        *to = q;
-                        Some(canvas::Action::request_redraw())
                     }
                     Some(Drag::Gizmo { handle, start_uv, start_screen, start }) => {
                         let (id, _) = gizmo?;
@@ -326,13 +314,6 @@ impl canvas::Program<Message> for Overlay<'_> {
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(_)) => match state.drag.take() {
-                Some(Drag::Pick { from, to }) => {
-                    if from.distance(to) < 4.0 {
-                        return Some(canvas::Action::request_redraw());
-                    }
-                    let (a, b) = (uv_of(from), uv_of(to));
-                    Some(canvas::Action::publish(Message::Preview(PreviewMessage::PickLine { from: [a.x, a.y], to: [b.x, b.y] })))
-                }
                 Some(Drag::Gizmo { .. }) => Some(canvas::Action::publish(Message::Seal)),
                 Some(Drag::Pan { .. }) => None,
                 None => None,
@@ -341,11 +322,9 @@ impl canvas::Program<Message> for Overlay<'_> {
         }
     }
 
-    fn mouse_interaction(&self, state: &State, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
+    fn mouse_interaction(&self, state: &State, _bounds: Rectangle, _cursor: mouse::Cursor) -> mouse::Interaction {
         match state.drag {
             Some(Drag::Pan { .. }) | Some(Drag::Gizmo { .. }) => mouse::Interaction::Grabbing,
-            Some(Drag::Pick { .. }) => mouse::Interaction::Crosshair,
-            None if cursor.is_over(bounds) && self.app.ui.preview.pick.is_some() => mouse::Interaction::Crosshair,
             None if state.hovered.is_some() => mouse::Interaction::Grab,
             None => mouse::Interaction::default(),
         }
@@ -406,26 +385,6 @@ impl canvas::Program<Message> for Overlay<'_> {
             frame.stroke(&Path::circle(center, 6.0), Stroke::default().with_width(2.0).with_color(col(Handle::Move, locked[0])));
         }
 
-        if let Some(Drag::Pick { from, to }) = state.drag {
-            frame.stroke(&Path::line(from, to), Stroke::default().with_width(3.0).with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.6)));
-            frame.stroke(&Path::line(from, to), Stroke::default().with_width(1.5).with_color(style::ACCENT));
-            frame.fill(&Path::circle(from, 4.0), style::ACCENT);
-            frame.fill(&Path::circle(to, 4.0), Color::WHITE);
-        }
-        if p.pick.is_some() && !matches!(state.drag, Some(Drag::Pick { .. })) {
-            frame.fill_text(Text {
-                content: "Drag a line across the image to pick a gradient  ·  double-click a node to show another image  ·  Esc cancels".into(),
-                position: Point::new(bounds.width / 2.0, 18.0),
-                color: style::ACCENT,
-                size: Pixels(13.0),
-                font: style::ui_font(),
-                align_x: TextAlign::Center,
-                align_y: Vertical::Center,
-                line_height: LineHeight::default(),
-                shaping: Shaping::Auto,
-                max_width: f32::INFINITY,
-            });
-        }
         vec![frame.into_geometry()]
     }
 }

@@ -1,11 +1,14 @@
 //! Editors for values, shared by the Input Values panel and the properties panel.
 
-use iced::widget::{button, column, container, row, space, text, toggler};
+use iced::widget::{button, column, container, row, space, text, toggler, tooltip};
 use iced::{Alignment, Border, Element, Length};
 use tessera_core::Value;
 
-use crate::app::Message;
+use crate::app::{ColorTarget, Message, PickMessage};
+use crate::icons::{Icon, icon};
+use crate::picker::PickTarget;
 use crate::style;
+use crate::view::tip;
 use crate::widget::color::{color_picker, to_hex};
 use crate::widget::number::number;
 
@@ -32,9 +35,11 @@ pub fn swatch<'a>(c: [f32; 4], open: bool, on_press: Message) -> Element<'a, Mes
     .into()
 }
 
-/// The expanded color editor: picker plus numeric RGBA channels.
+/// The expanded color editor: picker, numeric RGBA channels and the eyedropper, which
+/// takes a color from anywhere on the screen for `target`.
 pub fn color_editor<'a>(
     c: [f32; 4],
+    target: ColorTarget,
     on_change: impl Fn([f32; 4]) -> Message + Clone + 'a,
     on_release: Message,
 ) -> Element<'a, Message> {
@@ -53,10 +58,30 @@ pub fn color_editor<'a>(
                 .on_release(on_release.clone()),
         );
     }
-    container(column![color_picker(c, on_change).on_release(on_release), channels].spacing(6))
-    .padding(8)
-    .style(style::card)
-    .into()
+    let footer = row![
+        eyedropper(PickTarget::Color(target), "Pick from screen", "Click anywhere, on any monitor, to take its color (Esc cancels)"),
+        space().width(Length::Fill),
+        text(to_hex(c)).size(style::SMALL).font(style::mono()).color(style::TEXT_DIM),
+    ]
+    .align_y(Alignment::Center);
+    container(column![color_picker(c, on_change).on_release(on_release), channels, footer].spacing(6))
+        .padding(8)
+        .style(style::card)
+        .into()
+}
+
+/// A button that starts picking from the screen.
+pub fn eyedropper<'a>(target: PickTarget, label: &'a str, tooltip: &'a str) -> Element<'a, Message> {
+    let supported = crate::picker::SUPPORTED;
+    let button = button(
+        row![icon(Icon::Pipette, 14.0, if supported { style::TEXT_DIM } else { style::TEXT_FAINT }), text(label).size(style::SMALL)]
+            .spacing(6)
+            .align_y(Alignment::Center),
+    )
+    .padding([3, 8])
+    .style(style::button)
+    .on_press_maybe(supported.then_some(Message::Pick(PickMessage::Start(target))));
+    tip(button, if supported { tooltip } else { "Picking from the screen is not supported on this platform yet" }, tooltip::Position::Top)
 }
 
 /// Editor of a [`Value`] within an optional [min, max] range.

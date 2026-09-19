@@ -45,13 +45,6 @@ pub enum Request {
         node: NodeId,
         pixel: [u32; 2],
     },
-    SampleLine {
-        node: NodeId,
-        from: [f32; 2],
-        to: [f32; 2],
-        count: u32,
-        tag: u64,
-    },
     Export(Vec<ExportJob>),
     ReloadBitmap(String),
     /// Forget every cached image (e.g. after opening another document).
@@ -78,10 +71,6 @@ pub enum Event {
         node: NodeId,
         pixel: [u32; 2],
         rgba: Option<[f32; 4]>,
-    },
-    LineSamples {
-        tag: u64,
-        colors: Vec<[f32; 4]>,
     },
     Exported(Result<PathBuf, String>),
     GpuErrors(Vec<String>),
@@ -131,20 +120,11 @@ impl Drop for EngineService {
     }
 }
 
-struct LineRequest {
-    node: NodeId,
-    from: [f32; 2],
-    to: [f32; 2],
-    count: u32,
-    tag: u64,
-}
-
 #[derive(Default)]
 struct Pending {
     evaluate: Option<(u64, Arc<Graph>, Arc<Evaluation>)>,
     stats: Vec<NodeId>,
     probe: Option<(NodeId, [u32; 2])>,
-    lines: Vec<LineRequest>,
     exports: Vec<ExportJob>,
     preview_changed: bool,
     materials_changed: bool,
@@ -186,9 +166,6 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                     }
                 }
                 Request::Probe { node, pixel } => pending.probe = Some((node, pixel)),
-                Request::SampleLine { node, from, to, count, tag } => {
-                    pending.lines.push(LineRequest { node, from, to, count, tag })
-                }
                 Request::Export(jobs) => pending.exports.extend(jobs),
                 Request::ReloadBitmap(path) => {
                     engine.reload_bitmap(&path);
@@ -235,10 +212,6 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         }
         if let Some((node, pixel)) = pending.probe {
             (emit)(Event::Probe { node, pixel, rgba: engine.probe(node, pixel) });
-        }
-        for l in pending.lines {
-            let colors = engine.sample_line(l.node, l.from, l.to, l.count).unwrap_or_default();
-            (emit)(Event::LineSamples { tag: l.tag, colors });
         }
         for job in pending.exports {
             match engine.read_image(job.node) {

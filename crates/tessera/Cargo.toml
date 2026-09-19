@@ -22,6 +22,23 @@ serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
 env_logger.workspace = true
+# Shares the pixels of screen captures between display and color sampling (iced uses it too).
+bytes = "1"
+
+# Screen capture for the eyedropper. On Linux it would need PipeWire development files, so
+# picking from the screen is limited to Windows and macOS for now.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+xcap = "0.9"
+
+[target.'cfg(windows)'.dependencies]
+# Exact placement of the eyedropper windows, the taskbar icon and console output.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 # Headless user interface for the UI tests (the same version iced uses).

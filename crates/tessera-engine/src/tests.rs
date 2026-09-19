@@ -366,15 +366,11 @@ fn bypass_passes_the_input_through() {
 }
 
 #[test]
-fn readbacks_preview_and_line_sampling() {
+fn readbacks_and_preview() {
     let Some(mut e) = engine() else { return };
     let mut g = graph();
     let ramp = g.add_node(NodeKind::GRADIENT, [0.0, 0.0]);
     evaluate_blocking(&mut e, &g);
-    let samples = e.sample_line(ramp, [0.0, 0.5], [1.0, 0.5], 5).unwrap();
-    assert_eq!(samples.len(), 5);
-    assert!(samples[0][0] < 0.05 && samples[4][0] > 0.95, "{samples:?}");
-    assert!(close(samples[2][0], 0.5, 0.02));
     let p = e.probe(ramp, [RES / 2, 3]).unwrap();
     assert!(close(p[0], 0.5, 0.01));
     let stats = e.stats(ramp).unwrap();
