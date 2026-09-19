@@ -450,3 +450,64 @@ fn window_states_render() {
     w.send(Message::Dialog(Some(Dialog::About)));
     w.snapshot("state_dialog_about");
 }
+
+/// Window position of a node's input socket.
+fn input_socket(w: &Harness, node: tessera_core::graph::NodeId, key: &str) -> Point {
+    let graph = w.app.graph();
+    let view = w.app.ui.graph_view;
+    let t = view::graph::layout::Transform { pan: view.pan, zoom: view.zoom };
+    let l = view::graph::layout::layout(graph, graph.node(node).unwrap(), &t, iced::Vector::ZERO);
+    let (_, p) = l.inputs.iter().find(|(s, _)| s.key == key).expect("socket");
+    *p + iced::Vector::new(view.bounds.x, view.bounds.y)
+}
+
+fn drag(w: &mut Harness, from: Point, to: Point) {
+    w.hover(from);
+    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    w.hover(Point::new((from.x + to.x) / 2.0, (from.y + to.y) / 2.0));
+    w.hover(to);
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+}
+
+/// A link picked up from an input moves to another input in one undo step; dropped on a
+/// socket that cannot take it, or clicked without moving, it stays where it was.
+#[test]
+fn links_are_rerouted_in_one_step() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let levels = w.app.graph().nodes_of(NodeKind::LEVELS).next().unwrap().id;
+    let source = w.app.graph().link_into(levels, "i:input").unwrap().from;
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::INVERT, pos: [1300.0, -200.0] }));
+    let invert = *w.app.ui.selection.iter().next().unwrap();
+    w.send(Message::Seal);
+    w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+    // Everything in view.
+    w.send(Message::Graph(GraphMessage::ClearSelection));
+    w.send(Message::Frame);
+    w.input(&[]);
+    let steps = |w: &Harness| w.app.doc.undo_label().map(str::to_string);
+
+    // Re-route.
+    let before = steps(&w);
+    let (from, to) = (input_socket(&w, levels, "i:input"), input_socket(&w, invert, "i:input"));
+    drag(&mut w, from, to);
+    assert!(w.app.graph().link_into(levels, "i:input").is_none());
+    assert_eq!(w.app.graph().link_into(invert, "i:input").map(|l| l.from), Some(source));
+    w.send(Message::Undo);
+    assert_eq!(w.app.graph().link_into(levels, "i:input").map(|l| l.from), Some(source), "one undo restores it");
+    assert!(w.app.graph().link_into(invert, "i:input").is_none());
+    assert_eq!(steps(&w), before);
+
+    // Dropped on a socket of the wrong type: nothing changes.
+    let tile = w.app.graph().nodes_of(NodeKind::TILE_GENERATOR).next().unwrap().id;
+    let x_amount = tessera_core::graph::param_socket_key("x_amount");
+    let (from, to) = (input_socket(&w, levels, "i:input"), input_socket(&w, tile, &x_amount));
+    drag(&mut w, from, to);
+    assert_eq!(w.app.graph().link_into(levels, "i:input").map(|l| l.from), Some(source));
+    assert_eq!(steps(&w), before);
+
+    // A click on a connected input changes nothing either.
+    let at = input_socket(&w, levels, "i:input");
+    drag(&mut w, at, at);
+    assert_eq!(w.app.graph().link_into(levels, "i:input").map(|l| l.from), Some(source));
+    assert_eq!(steps(&w), before);
+}

@@ -86,7 +86,8 @@ struct Histogram {
 
 #[derive(Default)]
 struct State {
-    drag: Option<usize>,
+    /// The handle being dragged, and where it was grabbed from its center.
+    drag: Option<(usize, f32)>,
 }
 
 impl Histogram {
@@ -125,13 +126,14 @@ impl canvas::Program<Message> for Histogram {
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let p = cursor.position_in(bounds)?;
                 let xs = self.handles(plot);
-                let nearest = (0..3).min_by(|a, b| (xs[*a] - p.x).abs().total_cmp(&(xs[*b] - p.x).abs()))?;
-                state.drag = Some(nearest);
+                // The nearest handle that can move (exposed levels come from their sockets).
+                let nearest = (0..3).filter(|i| !self.locked[*i]).min_by(|a, b| (xs[*a] - p.x).abs().total_cmp(&(xs[*b] - p.x).abs()))?;
+                state.drag = Some((nearest, xs[nearest] - p.x));
                 Some(canvas::Action::capture())
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
-                let h = state.drag?;
-                let x = position.x - bounds.x;
+                let (h, grab) = state.drag?;
+                let x = position.x - bounds.x + grab;
                 let v = ((x - plot.x) / plot.width).clamp(0.0, 1.0);
                 self.edit(h, v).map(|m| canvas::Action::publish(m).and_capture())
             }

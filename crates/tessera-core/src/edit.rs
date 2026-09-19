@@ -112,6 +112,8 @@ pub enum Edit {
         node: NodeId,
         name: String,
     },
+    /// Several edits as one undo step, applied in order: all of them or none.
+    Batch(Vec<Edit>),
 }
 
 /// What an edit did.
@@ -215,6 +217,7 @@ impl Edit {
             | Edit::SetVariableDescription { .. }
             | Edit::ResetVariable(_) => "Change Input Value",
             Edit::RenameVariable { .. } | Edit::BindVariable { .. } => "Rename Input",
+            Edit::Batch(edits) => edits.last().map_or("Edit", Edit::label),
         }
     }
 
@@ -472,6 +475,21 @@ impl Edit {
                 let new = graph.bind_variable(node, &name)?;
                 if old.as_deref() == Some(new.as_str()) { EditResult::unchanged() } else { EditResult::changed() }
             }
+            Edit::Batch(edits) => {
+                // On a copy, so that a failing edit leaves the graph as it was.
+                let mut scratch = graph.clone();
+                let mut result = EditResult::unchanged();
+                for edit in edits {
+                    let r = edit.apply(&mut scratch)?;
+                    result.changed |= r.changed;
+                    result.created.extend(r.created);
+                    result.notice = r.notice.or(result.notice);
+                }
+                if result.changed {
+                    *graph = scratch;
+                }
+                result
+            }
         };
         if result.changed {
             graph.prune_links();
@@ -516,6 +534,36 @@ mod tests {
         let r = Edit::SetParam { node: b, key: "tiling".into(), value: ParamValue::Enum(99) }.apply(&mut g).unwrap();
         assert!(r.changed);
         assert_eq!(g.node(b).unwrap().enum_value("tiling"), 3, "enum clamped into range");
+    }
+
+    #[test]
+    fn batches_are_all_or_nothing() {
+        let mut g = Graph::default();
+        let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+        let blur = g.add_node(NodeKind::BLUR, [0.0, 0.0]);
+        let invert = g.add_node(NodeKind::INVERT, [0.0, 0.0]);
+        g.connect(noise, "o:output", blur, "i:input").unwrap();
+        // Re-route: the link moves from the Blur to the Invert in one edit.
+        let old = g.links[0].clone();
+        let reroute = Edit::Batch(vec![
+            Edit::RemoveLink(old.clone()),
+            Edit::Connect {
+                a: SocketRef { node: noise, key: "o:output".into(), output: true },
+                b: SocketRef { node: invert, key: "i:input".into(), output: false },
+            },
+        ]);
+        assert_eq!(reroute.label(), "Connect");
+        assert!(reroute.apply(&mut g).unwrap().changed);
+        assert!(g.link_into(blur, "i:input").is_none());
+        assert!(g.link_into(invert, "i:input").is_some());
+        // A failing edit undoes the ones before it.
+        let before = g.links.clone();
+        let bad = Edit::Batch(vec![
+            Edit::RemoveLink(g.links[0].clone()),
+            Edit::SetParam { node: blur, key: "nope".into(), value: ParamValue::Float(1.0) },
+        ]);
+        assert!(bad.apply(&mut g).is_err());
+        assert_eq!(g.links, before);
     }
 
     #[test]

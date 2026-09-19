@@ -25,7 +25,14 @@ fn item<'a>(label: &'a str, shortcut: &'a str, message: Option<Message>) -> Elem
 }
 
 fn separator<'a>() -> Element<'a, Message> {
-    container(rule::horizontal(1)).padding([3, 6]).into()
+    container(rule::horizontal(1).style(|_| rule::Style {
+        color: style::LINE,
+        radius: 0.0.into(),
+        fill_mode: rule::FillMode::Full,
+        snap: true,
+    }))
+    .padding([3, 6])
+    .into()
 }
 
 pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
@@ -61,7 +68,7 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
             item("Paste", "Ctrl+V", Some(Message::Paste)),
             separator(),
             item("Select All", "Ctrl+A", Some(Message::SelectAll)),
-            item("Frame All", "F", Some(Message::Frame)),
+            item("Frame All", "", Some(Message::FrameAll)),
         ],
     };
     let height = items.len() as f32 * 27.0 + 12.0;

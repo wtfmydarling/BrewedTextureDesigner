@@ -593,7 +593,7 @@ impl Graph {
             if !seen.insert(n) {
                 continue;
             }
-            stack.extend(self.links.iter().filter(|l| l.to == n).map(|l| l.from));
+            stack.extend(self.live_links().filter(|l| l.to == n).map(|l| l.from));
         }
         false
     }
@@ -689,11 +689,18 @@ impl Graph {
         self.input_socket(link.to, &link.to_socket).is_some()
     }
 
+    /// Links attached to visible sockets. Dormant links (kept for an expression variable
+    /// that is being retyped, or a hidden exposed parameter) carry nothing: they must not
+    /// count as dependencies (cycles, evaluation order).
+    pub fn live_links(&self) -> impl Iterator<Item = &Link> {
+        self.links.iter().filter(|l| self.is_link_live(l))
+    }
+
     /// Topological order (sources first) and the nodes caught in cycles, if any.
     pub fn topo_order(&self) -> (Vec<NodeId>, Vec<NodeId>) {
         let mut indegree: HashMap<NodeId, usize> = self.nodes.iter().map(|n| (n.id, 0)).collect();
         let mut children: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
-        for l in &self.links {
+        for l in self.live_links() {
             if indegree.contains_key(&l.from) && indegree.contains_key(&l.to) {
                 *indegree.get_mut(&l.to).expect("checked") += 1;
                 children.entry(l.from).or_default().push(l.to);
@@ -913,6 +920,27 @@ mod tests {
         assert_eq!(g.links.len(), 1);
         set(&mut g, m, "expression", ParamValue::Text("x + myVar".into()));
         assert!(g.link_into(m, "v:myVar").is_some());
+    }
+
+    #[test]
+    fn dormant_links_are_not_dependencies() {
+        // Math a reads Math b through "x"; then "x" leaves a's expression: the link stays
+        // (dormant, for when "x" is typed again) but a no longer depends on b.
+        let mut g = Graph::default();
+        let a = g.add_node(NodeKind::MATH, [0.0, 0.0]);
+        let b = g.add_node(NodeKind::MATH, [0.0, 0.0]);
+        set(&mut g, a, "expression", ParamValue::Text("x".into()));
+        set(&mut g, b, "expression", ParamValue::Text("y".into()));
+        g.connect(b, "o:result", a, "v:x").unwrap();
+        set(&mut g, a, "expression", ParamValue::Text("1".into()));
+        g.prune_links();
+        assert_eq!(g.links.len(), 1, "kept, dormant");
+        assert!(!g.depends_on(a, b));
+        // So a can feed b without a cycle.
+        g.connect(a, "o:result", b, "v:y").unwrap();
+        let (order, cyclic) = g.topo_order();
+        assert!(cyclic.is_empty(), "{cyclic:?}");
+        assert_eq!(order.len(), 2);
     }
 
     #[test]

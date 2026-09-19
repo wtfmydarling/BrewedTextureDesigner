@@ -301,9 +301,10 @@ pub enum GraphMessage {
     ClearSelection,
     SelectLink(Link),
     Move { ids: Vec<NodeId>, delta: [f32; 2] },
-    Connect(SocketRef, SocketRef),
-    Detach { node: NodeId, socket: String },
-    LinkDropped { from: SocketRef, at: Point, graph_pos: [f32; 2] },
+    /// A link dragged to a socket; `replacing` is the link it was picked up from.
+    Connect { from: SocketRef, to: SocketRef, replacing: Option<Link> },
+    /// A link dropped on empty space (the add menu opens); a picked up link is removed.
+    LinkDropped { from: SocketRef, at: Point, graph_pos: [f32; 2], detached: Option<Link> },
     OpenAddMenu { at: Point, graph_pos: [f32; 2] },
     Preview(NodeId),
     Context { at: Point, target: ContextTarget },
@@ -390,13 +391,17 @@ pub enum Message {
     Duplicate,
     Delete,
     SelectAll,
+    /// Frame the selection, or everything when nothing is selected.
     Frame,
+    FrameAll,
     ToggleBypass(NodeId),
     // layout
     PaneResized(pane_grid::ResizeEvent),
     ResetLayout,
     LockSquare,
     Menu(Option<MenuId>),
+    /// The mouse is over a menu title: switch to it if another menu is open.
+    MenuHover(MenuId),
     /// A menu item was chosen: close the menus, then handle the item's message.
     FromMenu(Box<Message>),
     Context(Option<ContextMenu>),
@@ -695,9 +700,17 @@ impl App {
         }
     }
 
-    fn apply_all(&mut self, edits: Vec<Edit>) {
-        for e in edits {
-            self.apply(e);
+    /// Several edits from one action: one undo step. (A single edit is applied as is, so
+    /// that the steps of a drag still merge.)
+    fn apply_all(&mut self, mut edits: Vec<Edit>) {
+        match edits.len() {
+            0 => {}
+            1 => {
+                self.apply(edits.remove(0));
+            }
+            _ => {
+                self.apply(Edit::Batch(edits));
+            }
         }
     }
 
@@ -837,10 +850,20 @@ impl App {
     }
 
     fn after_document_change(&mut self, preview: Option<NodeId>) {
+        // Node ids start over in the new document: forget everything that points at nodes
+        // or variables of the old one.
+        self.close_popups();
         self.ui.selection.clear();
         self.ui.selected_link = None;
         self.ui.expression = None;
         self.ui.color_picker = None;
+        self.ui.gradient_stop.clear();
+        self.ui.expanded_vars.clear();
+        self.ui.renaming_var = None;
+        self.ui.binding = None;
+        self.ui.plot_var = 0;
+        self.ui.drag = None;
+        self.ui.press = None;
         self.ui.frame_request = true;
         self.ui.preview.node = preview;
         self.ui.preview.fit = true;
@@ -1006,7 +1029,18 @@ impl App {
                 return self.maybe_screenshot();
             }
             Message::Edit(edit) => {
-                self.apply(edit);
+                let large = match &edit {
+                    Edit::SetResolution([w, h]) => (*w as u64 * *h as u64 >= 4096 * 4096).then_some([*w, *h]),
+                    _ => None,
+                };
+                if self.apply(edit)
+                    && let Some([w, h]) = large
+                {
+                    // Every image node keeps an rgba16float image (8 bytes a pixel).
+                    let images = self.graph().nodes.iter().filter(|n| n.def().has_image()).count().max(1) as u64;
+                    let gb = (w as u64 * h as u64 * 8 * images) as f64 / (1u64 << 30) as f64;
+                    self.set_status(format!("{w}×{h}: about {gb:.1} GB of GPU memory for the {images} image nodes"), false);
+                }
             }
             Message::Edits(edits) => self.apply_all(edits),
             Message::Seal => self.doc.seal(),
@@ -1171,6 +1205,10 @@ impl App {
                 let only = !self.ui.selection.is_empty();
                 self.frame(only);
             }
+            Message::FrameAll => {
+                self.close_popups();
+                self.frame(false);
+            }
             Message::ToggleBypass(id) => {
                 self.close_popups();
                 let bypass = self.graph().node(id).is_some_and(|n| !n.bypass);
@@ -1195,6 +1233,11 @@ impl App {
                 self.ui.context = None;
                 self.ui.add_menu = None;
                 self.ui.menu = if self.ui.menu == m { None } else { m };
+            }
+            Message::MenuHover(id) => {
+                if self.ui.menu.is_some() {
+                    self.ui.menu = Some(id);
+                }
             }
             Message::Context(c) => {
                 self.ui.menu = None;
@@ -1348,9 +1391,14 @@ impl App {
         let mn = stats.min[..3].iter().copied().fold(f32::INFINITY, f32::min).clamp(0.0, 1.0);
         let mx = stats.max[..3].iter().copied().fold(f32::NEG_INFINITY, f32::max).clamp(0.0, 1.0);
         if mx > mn {
-            for (k, v) in [("in_low", mn), ("in_high", mx), ("gamma", 1.0)] {
-                self.apply(Edit::SetParam { node, key: k.into(), value: ParamValue::Float(v) });
-            }
+            // One undo step; exposed levels come from their sockets and are left alone.
+            let levels = self.graph().node(node);
+            let edits: Vec<Edit> = [("in_low", mn), ("in_high", mx), ("gamma", 1.0)]
+                .into_iter()
+                .filter(|(k, _)| levels.is_some_and(|n| !n.is_exposed(k)))
+                .map(|(k, v)| Edit::SetParam { node, key: k.into(), value: ParamValue::Float(v) })
+                .collect();
+            self.apply_all(edits);
             self.doc.seal();
         }
     }
@@ -1635,14 +1683,20 @@ impl App {
                 self.apply(Edit::MoveNodes { ids, delta });
                 self.doc.seal();
             }
-            GraphMessage::Connect(a, b) => {
-                self.apply(Edit::Connect { a, b });
+            GraphMessage::Connect { from, to, replacing } => {
+                let connect = Edit::Connect { a: from, b: to };
+                // Re-routing is one step: the old link goes, the new one comes.
+                let edit = match replacing {
+                    Some(old) => Edit::Batch(vec![Edit::RemoveLink(old), connect]),
+                    None => connect,
+                };
+                self.apply(edit);
                 self.doc.seal();
             }
-            GraphMessage::Detach { node, socket } => {
-                self.apply(Edit::Disconnect { node, socket });
-            }
-            GraphMessage::LinkDropped { from, at, graph_pos } => {
+            GraphMessage::LinkDropped { from, at, graph_pos, detached } => {
+                if let Some(old) = detached {
+                    self.apply(Edit::RemoveLink(old));
+                }
                 self.doc.seal();
                 return self.open_add_menu(at, [graph_pos[0] - 20.0, graph_pos[1] - 12.0], Some(from));
             }

@@ -51,10 +51,10 @@ fn menu_body<'a>(items: Vec<Element<'a, Message>>) -> Element<'a, Message> {
 
 fn menu<'a>(app: &'a App, id: MenuId, title: &'a str, items: Vec<Element<'a, Message>>) -> Element<'a, Message> {
     let open = app.ui.menu == Some(id);
-    let title_button = button(text(title).size(style::TEXT_SIZE))
-        .padding([4, 10])
-        .style(style::toggle_button(open))
-        .on_press(Message::Menu(Some(id)));
+    let title_button = iced::widget::mouse_area(
+        button(text(title).size(style::TEXT_SIZE)).padding([4, 10]).style(style::toggle_button(open)).on_press(Message::Menu(Some(id))),
+    )
+    .on_enter(Message::MenuHover(id));
     dropdown(title_button, menu_body(items), open).on_dismiss(Message::Menu(None)).into()
 }
 

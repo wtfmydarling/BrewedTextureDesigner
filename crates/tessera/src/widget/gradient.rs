@@ -53,6 +53,8 @@ impl<Message> GradientEditor<'_, Message> {
 struct Drag {
     index: usize,
     removing: bool,
+    /// Where the handle was grabbed, from its center: the stop does not jump to the cursor.
+    grab: f32,
 }
 
 #[derive(Default)]
@@ -143,13 +145,14 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for GradientEd
                 let Some(p) = cursor.position_over(bounds) else { return };
                 if let Some(i) = self.handle_at(bounds, p) {
                     shell.publish((self.on_select)(i));
-                    state.drag = Some(Drag { index: i, removing: false });
+                    let center = handle_rect(bounds, self.gradient.stops[i].pos).center_x();
+                    state.drag = Some(Drag { index: i, removing: false, grab: center - p.x });
                 } else if bar(bounds).contains(p) {
                     let mut g = self.gradient.clone();
                     let i = g.insert_at(self.position(bounds, p));
                     shell.publish((self.on_change)(g));
                     shell.publish((self.on_select)(i));
-                    state.drag = Some(Drag { index: i, removing: false });
+                    state.drag = Some(Drag { index: i, removing: false, grab: 0.0 });
                 } else {
                     return;
                 }
@@ -166,7 +169,8 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for GradientEd
                     shell.request_redraw();
                 }
                 if !removing {
-                    let (g, j) = self.moved(drag.index, self.position(bounds, *position));
+                    let at = Point::new(position.x + drag.grab, position.y);
+                    let (g, j) = self.moved(drag.index, self.position(bounds, at));
                     if g != self.gradient {
                         shell.publish((self.on_change)(g));
                     }

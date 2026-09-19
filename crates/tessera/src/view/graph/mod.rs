@@ -43,6 +43,9 @@ enum Interaction {
         ty: DataType,
         anchor: Point,
         current: Point,
+        /// The link picked up from a connected input: hidden while dragging, replaced or
+        /// removed on release (one undo step), kept if the drop is not valid.
+        detached: Option<Link>,
     },
     PressedCanvas {
         at: Point,
@@ -302,11 +305,11 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                                 && let Some((s, pos)) = src.outputs.iter().find(|(s, _)| s.key == link.from_socket)
                             {
                                 let from = SocketRef { node: link.from, key: link.from_socket.clone(), output: true };
-                                state.interaction = Interaction::Linking { from, ty: s.ty, anchor: *pos, current: p };
-                                return publish(GraphMessage::Detach { node: hit.node, socket: hit.key });
+                                state.interaction = Interaction::Linking { from, ty: s.ty, anchor: *pos, current: p, detached: Some(link) };
+                                return Some(canvas::Action::request_redraw().and_capture());
                             }
                             let from = SocketRef { node: hit.node, key: hit.key.clone(), output: hit.output };
-                            state.interaction = Interaction::Linking { from, ty: hit.ty, anchor: hit.pos, current: p };
+                            state.interaction = Interaction::Linking { from, ty: hit.ty, anchor: hit.pos, current: p, detached: None };
                             return Some(canvas::Action::request_redraw().and_capture());
                         }
                         if let Some(node) = self.node_at(&layouts, p) {
@@ -352,12 +355,16 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                         let d = current - origin;
                         publish(GraphMessage::Move { ids, delta: [d.x / t.zoom, d.y / t.zoom] })
                     }
-                    (mouse::Button::Left, Interaction::Linking { from, ty, current, .. }) => {
+                    (mouse::Button::Left, Interaction::Linking { from, ty, current, detached, .. }) => {
                         let layouts = self.layouts(None);
                         match self.socket_at(&layouts, current) {
                             Some(target) if self.can_link(&from, ty, &target) => {
+                                // Dropped back where it was: nothing changes.
+                                if detached.as_ref().is_some_and(|l| l.to == target.node && l.to_socket == target.key) {
+                                    return Some(canvas::Action::request_redraw());
+                                }
                                 let to = SocketRef { node: target.node, key: target.key, output: target.output };
-                                publish(GraphMessage::Connect(from, to))
+                                publish(GraphMessage::Connect { from, to, replacing: detached })
                             }
                             Some(target) if target.node != from.node && target.output != from.output => {
                                 let (o, i, on, inn) = if from.output {
@@ -377,6 +384,7 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                                 from,
                                 at: window(current),
                                 graph_pos: t.to_graph(current),
+                                detached,
                             }),
                             None => Some(canvas::Action::request_redraw()),
                         }
@@ -457,8 +465,16 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
         let graph = app.graph();
         let sel = &app.ui.selection;
 
+        // The link picked up from an input is drawn as the dragged one.
+        let detached = match &state.interaction {
+            Interaction::Linking { detached: Some(link), .. } => Some(link.clone()),
+            _ => None,
+        };
         // Links under the nodes.
         for link in &graph.links {
+            if detached.as_ref() == Some(link) {
+                continue;
+            }
             let Some((a, b)) = layout::link_endpoints(&layouts, link) else { continue };
             let ty = graph.output_socket(link.from, &link.from_socket).map_or(DataType::Float, |s| s.ty);
             let mut color = style::type_color(ty);
@@ -494,13 +510,13 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
             }
             let Some(node) = graph.node(l.id) else { continue };
             let mut frame = Frame::new(renderer, bounds.size());
-            self.draw_node(&mut frame, node, l, linking.as_ref());
+            self.draw_node(&mut frame, node, l, linking.as_ref(), detached.as_ref());
             geometries.push(frame.into_geometry());
         }
         let mut frame = Frame::new(renderer, bounds.size());
 
         // The link being dragged.
-        if let Interaction::Linking { from, ty, anchor, current } = &state.interaction {
+        if let Interaction::Linking { from, ty, anchor, current, .. } = &state.interaction {
             let (a, b) = if from.output { (*anchor, *current) } else { (*current, *anchor) };
             let target_ok = self.socket_at(&layouts, *current).is_some_and(|h| self.can_link(from, *ty, &h));
             let color = if target_ok { Color::WHITE } else { style::type_color(*ty) };
@@ -628,9 +644,10 @@ fn diamond(center: Point, r: f32) -> Path {
 }
 
 impl GraphCanvas<'_> {
-    fn draw_node(&self, frame: &mut Frame, node: &Node, l: &NodeLayout, linking: Option<&(SocketRef, DataType)>) {
+    fn draw_node(&self, frame: &mut Frame, node: &Node, l: &NodeLayout, linking: Option<&(SocketRef, DataType)>, detached: Option<&Link>) {
         let app = self.app;
         let graph = app.graph();
+        let input_linked = |key: &str| graph.link_into(node.id, key).is_some_and(|link| Some(link) != detached);
         let z = self.transform().zoom;
         let d = node.def();
         let eval = app.eval.node(node.id);
@@ -707,7 +724,7 @@ impl GraphCanvas<'_> {
         // Socket labels.
         if z > 0.48 {
             for (s, p) in &l.inputs {
-                let linked = graph.link_into(node.id, &s.key).is_some();
+                let linked = input_linked(&s.key);
                 let color = if linked && s.kind == tessera_core::SocketKind::Param {
                     style::type_color(s.ty)
                 } else {
@@ -783,7 +800,7 @@ impl GraphCanvas<'_> {
                 let linked = if output {
                     graph.links.iter().any(|lk| lk.from == node.id && lk.from_socket == s.key)
                 } else {
-                    graph.link_into(node.id, &s.key).is_some()
+                    input_linked(&s.key)
                 };
                 let mut color = style::type_color(s.ty);
                 let mut radius = r;

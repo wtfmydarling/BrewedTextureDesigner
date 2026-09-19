@@ -177,6 +177,8 @@ impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer> for 
             if let Some(m) = &self.on_dismiss {
                 shell.publish(m.clone());
             }
+            // The click only closes the menu (as with the other popups).
+            shell.capture_event();
             return;
         }
         self.menu.as_widget_mut().update(self.tree, event, layout, cursor, renderer, clipboard, shell, &layout.bounds());

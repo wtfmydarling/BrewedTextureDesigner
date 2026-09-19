@@ -39,21 +39,21 @@ pub fn details<'a>(app: &'a App, var: &'a Variable) -> Element<'a, Message> {
         .size(style::TEXT_SIZE)
         .padding([3, 6])
         .style(style::text_input);
-    let mut col = column![
-        field_row("Name", name_input),
-        field_row(
-            "Description",
-            text_input("what this value controls", &var.description)
-                .on_input({
-                    let name = name.clone();
-                    move |t| Message::Edit(Edit::SetVariableDescription { name: name.clone(), text: t })
-                })
-                .size(style::TEXT_SIZE)
-                .padding([3, 6])
-                .style(style::text_input),
-        ),
-    ]
-    .spacing(5);
+    let mut col = column![field_row("Name", name_input)].spacing(5);
+    if renaming.is_some_and(|t| t != var.name) {
+        col = col.push(field_row("", text("Enter renames it everywhere, Esc cancels").size(style::SMALL).color(style::ACCENT_TEXT)));
+    }
+    col = col.push(field_row(
+        "Description",
+        text_input("what this value controls", &var.description)
+            .on_input({
+                let name = name.clone();
+                move |t| Message::Edit(Edit::SetVariableDescription { name: name.clone(), text: t })
+            })
+            .size(style::TEXT_SIZE)
+            .padding([3, 6])
+            .style(style::text_input),
+    ));
 
     let range = var.has_range().then_some((var.min, var.max));
     let default_open = app.ui.color_picker == Some(ColorTarget::Variable(var.name.clone(), VarField::Default));
