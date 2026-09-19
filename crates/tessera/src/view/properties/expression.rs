@@ -19,6 +19,11 @@ use crate::style;
 use crate::view::section;
 use crate::widget::number::number;
 
+/// Id of the expression editor (for focusing it).
+pub fn editor_id() -> iced::widget::Id {
+    iced::widget::Id::new("tessera-expression-editor")
+}
+
 pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
     let id = node.id;
     let source = node.expression();
@@ -30,6 +35,7 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
         // A finite maximum height matters: inside the scrollable panel the editor would
         // otherwise be laid out with an infinite height and draw no lines at all.
         Some((eid, content)) if *eid == id => text_editor(content)
+            .id(editor_id())
             .on_action(move |a| Message::Expression(id, a))
             .highlight_with::<ExpressionHighlighter>(settings, |h, theme| h.to_format(theme))
             .font(style::mono())
@@ -78,13 +84,11 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                     .into()
                 }
                 VarSource::Link(from) => {
-                    let from = app.graph().node(*from).map(crate::view::graph::node_title).unwrap_or_default();
-                    row![
-                        text(Value::Float(v.value as f32).display()).size(style::SMALL),
-                        text(format!("← {from}")).size(style::SMALL).color(style::TEXT_FAINT),
-                    ]
-                    .spacing(8)
-                    .into()
+                    let title = app.graph().node(*from).map(crate::view::graph::node_title).unwrap_or_default();
+                    row![text(Value::Float(v.value as f32).display()).size(style::SMALL), super::source_link(*from, format!("← {title}"))]
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .into()
                 }
                 VarSource::Variable(name) => row![
                     text(Value::Float(v.value as f32).display()).size(style::SMALL),
@@ -94,8 +98,8 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                 .into(),
                 VarSource::Builtin => text("per pixel (built in)").size(style::SMALL).color(style::TEXT_FAINT).into(),
                 VarSource::Image(from) => {
-                    let from = app.graph().node(*from).map(crate::view::graph::node_title).unwrap_or_default();
-                    text(format!("image ← {from}")).size(style::SMALL).color(style::TEXT_FAINT).into()
+                    let title = app.graph().node(*from).map(crate::view::graph::node_title).unwrap_or_default();
+                    super::source_link(*from, format!("image ← {title}"))
                 }
             };
             col = col.push(row![name, detail].spacing(6).align_y(Alignment::Center));

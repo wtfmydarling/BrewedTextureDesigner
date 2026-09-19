@@ -7,11 +7,7 @@ use iced::{Color, Element, Length};
 pub enum Icon {
     ChevronDown,
     ChevronRight,
-    Plus,
-    Close,
-    Search,
     Eye,
-    Lock,
     Pipette,
     Reset,
     Trash,
@@ -25,18 +21,13 @@ pub enum Icon {
     Reverse,
     Distribute,
     Bypass,
-    Link,
 }
 
 fn path(icon: Icon) -> &'static str {
     match icon {
         Icon::ChevronDown => r#"<path d="M6 9l6 6 6-6"/>"#,
         Icon::ChevronRight => r#"<path d="M9 6l6 6-6 6"/>"#,
-        Icon::Plus => r#"<path d="M12 5v14M5 12h14"/>"#,
-        Icon::Close => r#"<path d="M6 6l12 12M18 6L6 18"/>"#,
-        Icon::Search => r#"<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>"#,
         Icon::Eye => r#"<path d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>"#,
-        Icon::Lock => r#"<rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>"#,
         Icon::Pipette => r#"<path d="M14.5 5.5l4 4M17 3.5a2.1 2.1 0 0 1 3 3l-2.5 2.5-3-3zM15 7l-9.5 9.5-1 3.5 3.5-1L17.5 9.5"/>"#,
         Icon::Reset => r#"<path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/>"#,
         Icon::Trash => r#"<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13"/>"#,
@@ -52,7 +43,6 @@ fn path(icon: Icon) -> &'static str {
         Icon::Reverse => r#"<path d="M4 8h14l-3.5-3.5M20 16H6l3.5 3.5"/>"#,
         Icon::Distribute => r#"<path d="M4 4v16M20 4v16M9 8h6v8H9z"/>"#,
         Icon::Bypass => r#"<path d="M3 12h6M15 12h6M9 12c0-5 6-5 6 0"/><path d="M9 12c0 5 6 5 6 0" stroke-dasharray="2 2"/>"#,
-        Icon::Link => r#"<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>"#,
     }
 }
 

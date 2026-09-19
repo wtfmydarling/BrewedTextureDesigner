@@ -51,7 +51,7 @@ impl Highlight {
         }
     }
 
-    pub fn to_format(&self, _theme: &iced::Theme) -> highlighter::Format<Font> {
+    pub fn to_format(self, _theme: &iced::Theme) -> highlighter::Format<Font> {
         highlighter::Format { color: Some(self.color()), font: None }
     }
 }

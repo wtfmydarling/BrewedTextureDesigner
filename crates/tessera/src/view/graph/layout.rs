@@ -20,11 +20,11 @@ pub struct Transform {
 }
 
 impl Transform {
-    pub fn to_screen(&self, p: [f32; 2]) -> Point {
+    pub fn to_screen(self, p: [f32; 2]) -> Point {
         Point::new(self.pan.x + p[0] * self.zoom, self.pan.y + p[1] * self.zoom)
     }
 
-    pub fn to_graph(&self, p: Point) -> [f32; 2] {
+    pub fn to_graph(self, p: Point) -> [f32; 2] {
         [(p.x - self.pan.x) / self.zoom, (p.y - self.pan.y) / self.zoom]
     }
 }

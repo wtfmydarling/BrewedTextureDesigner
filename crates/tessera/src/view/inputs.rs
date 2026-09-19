@@ -175,7 +175,7 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
     if expanded {
         col = col.push(container(details(app, var)).padding(iced::Padding { left: 22.0, ..iced::Padding::ZERO }));
     }
-    container(col).padding([5, 6]).width(Length::Fill).style(style::stripe(index % 2 == 0)).into()
+    container(col).padding([5, 6]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2))).into()
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {

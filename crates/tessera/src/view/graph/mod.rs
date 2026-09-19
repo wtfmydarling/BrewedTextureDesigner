@@ -17,7 +17,7 @@ use tessera_core::{DataType, NodeKind, Value, can_connect};
 
 use crate::app::{App, ContextTarget, GraphMessage, Message, SelectMode};
 use crate::style;
-use layout::{HEADER_H, LINE_H, NodeLayout, SOCKET_R, Transform};
+use layout::{LINE_H, NodeLayout, SOCKET_R, Transform};
 
 #[derive(Clone, Debug, Default)]
 enum Interaction {

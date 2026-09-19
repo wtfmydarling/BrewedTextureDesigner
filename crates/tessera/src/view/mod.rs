@@ -84,15 +84,6 @@ pub fn popup_layer<'a>(
     .into()
 }
 
-/// Plain text with the UI font.
-pub fn label<'a>(s: impl text::IntoFragment<'a>) -> text::Text<'a> {
-    text(s).size(style::TEXT_SIZE)
-}
-
-pub fn dim<'a>(s: impl text::IntoFragment<'a>) -> text::Text<'a> {
-    text(s).size(style::SMALL).color(style::TEXT_DIM)
-}
-
 pub fn heading<'a>(s: impl text::IntoFragment<'a>) -> text::Text<'a> {
     text(s).size(style::TEXT_SIZE + 1.0).font(style::bold())
 }

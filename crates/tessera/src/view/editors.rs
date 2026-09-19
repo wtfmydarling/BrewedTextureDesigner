@@ -2,7 +2,7 @@
 
 use iced::widget::{button, column, container, row, space, text, toggler};
 use iced::{Alignment, Border, Element, Length};
-use tessera_core::{DataType, Value};
+use tessera_core::Value;
 
 use crate::app::Message;
 use crate::style;
@@ -128,24 +128,4 @@ pub fn value_editor<'a>(
             swatch(c, color_open, on_color)
         }
     }
-}
-
-/// Plain display of a value (read-only rows).
-pub fn value_label<'a>(value: &Value) -> Element<'a, Message> {
-    let color = style::type_color(value.data_type());
-    match value {
-        Value::Color(c) => row![
-            container(space().width(Length::Fixed(24.0)).height(Length::Fixed(12.0))).style(style::chip(style::color_of(*c))),
-            text(value.display()).size(style::SMALL).color(color),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into(),
-        _ => text(value.display()).size(style::SMALL).color(color).into(),
-    }
-}
-
-/// Default value range for a type (used where a variable has no range).
-pub fn has_range(ty: DataType) -> bool {
-    matches!(ty, DataType::Float | DataType::Int | DataType::Vec2)
 }

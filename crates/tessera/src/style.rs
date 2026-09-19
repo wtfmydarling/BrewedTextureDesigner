@@ -93,7 +93,6 @@ pub fn mono() -> Font {
 
 pub const TEXT_SIZE: f32 = 13.0;
 pub const SMALL: f32 = 12.0;
-pub const ROW_H: f32 = 24.0;
 
 pub fn theme() -> Theme {
     Theme::custom(

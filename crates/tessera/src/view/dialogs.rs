@@ -47,6 +47,8 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
     ("Ctrl+O / Ctrl+N", "Open / new"),
     ("Ctrl+E", "Export all outputs"),
+    ("Drop a file on the window", "Open a .tessera graph, or add an image as a Bitmap node"),
+    ("Esc", "Close menus, cancel a gradient pick or a rename"),
     ("Number fields", "Drag to change (Shift fine, Ctrl snaps), click to type; expressions like 2*pi work"),
     ("Transform 2D gizmo", "Center moves, ring rotates, handles scale; Shift snaps / keeps proportions"),
     ("3D view", "Left drag orbits, right drag moves the light"),

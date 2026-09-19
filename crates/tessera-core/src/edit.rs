@@ -13,6 +13,12 @@ pub enum Edit {
         kind: NodeKind,
         pos: [f32; 2],
     },
+    /// Add a node with some parameters already set (a Bitmap for a dropped image file).
+    AddNodeWith {
+        kind: NodeKind,
+        pos: [f32; 2],
+        params: Vec<(String, ParamValue)>,
+    },
     /// Add an Input node reading an existing variable.
     AddVariableNode {
         name: String,
@@ -187,7 +193,9 @@ impl Edit {
     /// Short description for the Edit menu ("Undo Move").
     pub fn label(&self) -> &'static str {
         match self {
-            Edit::AddNode { .. } | Edit::AddVariableNode { .. } | Edit::AddNodeConnected { .. } => "Add Node",
+            Edit::AddNode { .. } | Edit::AddNodeWith { .. } | Edit::AddVariableNode { .. } | Edit::AddNodeConnected { .. } => {
+                "Add Node"
+            }
             Edit::RemoveNodes(_) => "Delete",
             Edit::RemoveLink(_) | Edit::Disconnect { .. } | Edit::DisconnectInputs(_) => "Disconnect",
             Edit::MoveNodes { .. } => "Move",
@@ -235,6 +243,20 @@ impl Edit {
     pub fn apply(self, graph: &mut Graph) -> Result<EditResult, String> {
         let result = match self {
             Edit::AddNode { kind, pos } => EditResult::created(vec![graph.add_node(kind, pos)]),
+            Edit::AddNodeWith { kind, pos, params } => {
+                // Validate first so a bad parameter adds nothing.
+                for (key, value) in &params {
+                    let pd = kind.def().param(key).ok_or_else(|| format!("{} has no '{key}'", kind.def().name))?;
+                    if !pd.accepts(value) {
+                        return Err(format!("Wrong value type for '{}'", pd.label));
+                    }
+                }
+                let id = graph.add_node(kind, pos);
+                for (key, value) in params {
+                    set_param(graph, id, &key, value)?;
+                }
+                EditResult::created(vec![id])
+            }
             Edit::AddVariableNode { name, pos } => {
                 let id = graph.add_variable_node(&name, pos).ok_or_else(|| format!("No variable named '{name}'"))?;
                 EditResult::created(vec![id])
@@ -494,6 +516,18 @@ mod tests {
         let r = Edit::SetParam { node: b, key: "tiling".into(), value: ParamValue::Enum(99) }.apply(&mut g).unwrap();
         assert!(r.changed);
         assert_eq!(g.node(b).unwrap().enum_value("tiling"), 3, "enum clamped into range");
+    }
+
+    #[test]
+    fn add_node_with_parameters() {
+        let mut g = Graph::default();
+        let path = ParamValue::Text("bricks.png".into());
+        let r = Edit::AddNodeWith { kind: NodeKind::BITMAP, pos: [0.0, 0.0], params: vec![("path".into(), path)] }.apply(&mut g).unwrap();
+        assert_eq!(g.node(r.created[0]).unwrap().text("path"), "bricks.png");
+        // A bad parameter adds nothing.
+        let bad = Edit::AddNodeWith { kind: NodeKind::BITMAP, pos: [0.0, 0.0], params: vec![("path".into(), ParamValue::Float(1.0))] };
+        assert!(bad.apply(&mut g).is_err());
+        assert_eq!(g.nodes.len(), 1);
     }
 
     #[test]

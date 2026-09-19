@@ -1,6 +1,6 @@
 //! An open document: the graph, its undo history and its save state.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::edit::{Edit, EditResult};
@@ -14,11 +14,13 @@ pub struct Document {
     revision: u64,
     saved_revision: u64,
     path: Option<PathBuf>,
+    /// Where Save proposes to write a document that has no path yet (a converted old file).
+    suggested_path: Option<PathBuf>,
 }
 
 impl Document {
     pub fn new(graph: Graph, path: Option<PathBuf>) -> Document {
-        Document { graph, history: History::default(), revision: 1, saved_revision: 1, path }
+        Document { graph, history: History::default(), revision: 1, saved_revision: 1, path, suggested_path: None }
     }
 
     pub fn graph(&self) -> &Graph {
@@ -33,10 +35,14 @@ impl Document {
         self.path.as_ref()
     }
 
+    /// The path Save As starts from: the document's own, or the suggestion for a converted file.
+    pub fn save_path_hint(&self) -> Option<&PathBuf> {
+        self.path.as_ref().or(self.suggested_path.as_ref())
+    }
+
     /// File name for the title bar.
     pub fn title(&self) -> String {
-        self.path
-            .as_ref()
+        self.save_path_hint()
             .and_then(|p| p.file_name())
             .map_or_else(|| "Untitled".to_string(), |n| n.to_string_lossy().to_string())
     }
@@ -47,6 +53,7 @@ impl Document {
 
     pub fn mark_saved(&mut self, path: PathBuf) {
         self.path = Some(path);
+        self.suggested_path = None;
         self.saved_revision = self.revision;
     }
 
@@ -121,6 +128,15 @@ impl Document {
         self.revision += 1;
         self.saved_revision = self.revision;
         self.path = path;
+        self.suggested_path = None;
+    }
+
+    /// Replace the document with a graph converted from an older file format. It gets no
+    /// path, so saving cannot overwrite the original, and counts as modified.
+    pub fn replace_converted(&mut self, graph: Graph, origin: &Path) {
+        self.replace(graph, None);
+        self.saved_revision = self.revision - 1;
+        self.suggested_path = Some(origin.with_extension(crate::project::FILE_EXTENSION));
     }
 }
 
@@ -166,6 +182,19 @@ mod tests {
         doc.mark_saved("x.tessera".into());
         assert!(!doc.is_dirty());
         assert_eq!(doc.title(), "x.tessera");
+    }
+
+    #[test]
+    fn converted_documents_are_saved_as_new_files() {
+        let mut doc = Document::new(Graph::default(), None);
+        doc.replace_converted(Graph::default(), Path::new("old/bricks.ftx"));
+        assert!(doc.is_dirty());
+        assert_eq!(doc.path(), None);
+        assert_eq!(doc.save_path_hint(), Some(&PathBuf::from("old/bricks.tessera")));
+        assert_eq!(doc.title(), "bricks.tessera");
+        doc.mark_saved("new.tessera".into());
+        assert!(!doc.is_dirty());
+        assert_eq!(doc.save_path_hint(), Some(&PathBuf::from("new.tessera")));
     }
 
     #[test]

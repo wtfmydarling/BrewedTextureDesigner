@@ -104,13 +104,32 @@ pub fn toolbar(app: &App) -> Element<'_, Message> {
     r.into()
 }
 
+/// Material slots, in the order the shader binds them.
+const USAGES: [u32; 7] = [USAGE_BASE_COLOR, USAGE_NORMAL, USAGE_HEIGHT, USAGE_ROUGHNESS, USAGE_METALLIC, USAGE_AO, USAGE_EMISSIVE];
+const SLOT_NAMES: [&str; 7] = ["Base Color", "Normal", "Height", "Roughness", "Metallic", "AO", "Emissive"];
+
+/// Material slot of an engine image, from its Output node's usage.
+fn slot(app: &App, img: &tessera_engine::DisplayImage) -> Option<usize> {
+    let node = app.graph().node(img.node).filter(|n| n.kind == NodeKind::OUTPUT)?;
+    USAGES.iter().position(|u| *u == node.enum_value("usage"))
+}
+
+/// Names of the maps shown on the model.
+pub fn map_names(app: &App) -> Vec<&'static str> {
+    let mut found = [false; 7];
+    for img in &app.res.materials {
+        if let Some(s) = slot(app, img) {
+            found[s] = true;
+        }
+    }
+    SLOT_NAMES.iter().zip(found).filter(|(_, f)| *f).map(|(n, _)| *n).collect()
+}
+
 pub fn view(app: &App) -> Element<'_, Message> {
     let mut maps: [Option<wgpu::TextureView>; 7] = Default::default();
-    let usages = [USAGE_BASE_COLOR, USAGE_NORMAL, USAGE_HEIGHT, USAGE_ROUGHNESS, USAGE_METALLIC, USAGE_AO, USAGE_EMISSIVE];
     for img in &app.res.materials {
-        let Some(node) = app.graph().node(img.node).filter(|n| n.kind == NodeKind::OUTPUT) else { continue };
-        if let Some(slot) = usages.iter().position(|u| *u == node.enum_value("usage")) {
-            maps[slot] = Some(img.view.clone());
+        if let Some(s) = slot(app, img) {
+            maps[s] = Some(img.view.clone());
         }
     }
     let missing = maps.iter().all(Option::is_none);
@@ -586,7 +605,7 @@ fn solid(device: &wgpu::Device, queue: &wgpu::Queue, rgba: [u8; 4]) -> wgpu::Tex
 
 impl shader::Pipeline for Pipeline {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        crate::gpu::publish(device, queue, format);
+        crate::gpu::publish(device, queue);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tessera 3d view"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),

@@ -37,6 +37,15 @@ fn toolbar(app: &App) -> Element<'_, Message> {
             Some(n) => text(n).size(style::TEXT_SIZE).color(style::ACCENT),
             None => text("double-click a node to show it here").size(style::SMALL).color(style::TEXT_DIM),
         });
+        if p.pick.is_some() {
+            bar = bar.push(text("· picking a gradient").size(style::SMALL).color(style::TEXT_DIM));
+            bar = bar.push(
+                button(text("Cancel").size(style::SMALL))
+                    .padding([2, 8])
+                    .style(style::button)
+                    .on_press(Message::Preview(PreviewMessage::CancelPick)),
+            );
+        }
         bar = bar.push(space().width(Length::Fill));
         for (i, name) in CHANNELS.iter().enumerate() {
             let active = p.channel == i as u32;
@@ -76,11 +85,15 @@ fn toolbar(app: &App) -> Element<'_, Message> {
 fn footer(app: &App) -> Element<'_, Message> {
     let p = &app.ui.preview;
     let mut parts = Vec::new();
-    if let Some(img) = &app.res.preview {
+    if p.mode == ViewMode::ThreeD {
+        let maps = crate::view::view3d::map_names(app);
+        parts.push(if maps.is_empty() { "no maps".to_string() } else { maps.join(" · ") });
+        parts.push("left drag orbits, right drag moves the light, the wheel zooms".to_string());
+    } else if let Some(img) = &app.res.preview {
         parts.push(format!("{}×{}", img.size[0], img.size[1]));
         parts.push(format!("{:.0}%", p.zoom * 100.0));
     }
-    if let (Some(px), Some(node)) = (p.probe, p.node) {
+    if let (ViewMode::TwoD, Some(px), Some(node)) = (p.mode, p.probe, p.node) {
         parts.push(format!("x {} y {}", px[0], px[1]));
         if let Some((n, at, c)) = app.res.probe
             && n == node

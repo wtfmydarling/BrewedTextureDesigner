@@ -22,3 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
 env_logger.workspace = true
+
+[dev-dependencies]
+# Headless user interface for the UI tests (the same version iced uses).
+iced_runtime = "0.14"

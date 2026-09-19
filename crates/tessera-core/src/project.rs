@@ -38,6 +38,9 @@ pub struct Loaded {
     pub graph: Graph,
     pub view: ViewState,
     pub notes: Vec<String>,
+    /// The file was in an older format and was converted: it should be saved as a new file
+    /// rather than overwritten.
+    pub converted: bool,
 }
 
 pub fn to_json(graph: &Graph, view: &ViewState) -> Result<String, String> {
@@ -64,7 +67,8 @@ pub fn load(path: &Path) -> Result<Loaded, String> {
 pub fn from_json(text: &str) -> Result<Loaded, String> {
     let json: Json = serde_json::from_str(text).map_err(|e| format!("Not a valid project file: {e}"))?;
     let mut notes = Vec::new();
-    let file: ProjectFile = if json.get("app").and_then(Json::as_str) == Some("ferrotex") {
+    let converted = json.get("app").and_then(Json::as_str) == Some("ferrotex");
+    let file: ProjectFile = if converted {
         notes.push("Converted from the previous file format (.ftx)".into());
         let migrated = migrate_ferrotex_v1(json, &mut notes)?;
         serde_json::from_value(migrated).map_err(|e| format!("Cannot convert the old file: {e}"))?
@@ -87,7 +91,7 @@ pub fn from_json(text: &str) -> Result<Loaded, String> {
     }
     let mut view = file.view;
     view.preview = view.preview.filter(|id| graph.contains(*id));
-    Ok(Loaded { graph, view, notes })
+    Ok(Loaded { graph, view, notes, converted })
 }
 
 // ---------------------------------------------------------------------------- migration

@@ -16,7 +16,7 @@ use iced::{Point, Rectangle, Size, Subscription, Task, Theme, Vector, keyboard, 
 use tessera_core::eval::{self, Evaluation};
 use tessera_core::graph::{Clipboard, Graph, Link, NodeId, SocketRef};
 use tessera_core::project::{self, ViewState};
-use tessera_core::{Category, Document, Edit, NodeKind, ParamValue, Value};
+use tessera_core::{Category, Document, Edit, NodeKind, ParamValue};
 use tessera_engine::{DisplayImage, EngineService, EvalReport, Event, ExportJob, ImageReport, Request};
 use tessera_engine::simd::ImageStats;
 
@@ -65,7 +65,7 @@ pub struct GraphView {
 }
 
 impl GraphView {
-    pub fn to_graph(&self, window: Point) -> [f32; 2] {
+    pub fn to_graph(self, window: Point) -> [f32; 2] {
         let local = window - self.bounds.position();
         [(local.x - self.pan.x) / self.zoom, (local.y - self.pan.y) / self.zoom]
     }
@@ -138,6 +138,8 @@ pub struct AddMenu {
     pub graph_pos: [f32; 2],
     pub query: String,
     pub selected: usize,
+    /// Scroll offset of the list, to keep the keyboard selection visible.
+    pub scroll: f32,
     /// Dropping a link on empty space: the new node gets connected to this socket.
     pub pending: Option<SocketRef>,
 }
@@ -216,6 +218,9 @@ pub struct Ui {
     pub show_functions: bool,
     /// Pending line pick request tag (gradient picking).
     pub pick_tag: u64,
+    /// Files dropped on the window in quick succession (time of the last, count), to
+    /// lay the new nodes out in a column.
+    pub drop_burst: Option<(Instant, u32)>,
 }
 
 /// What the engine told us.
@@ -295,8 +300,10 @@ pub enum PreviewMessage {
 pub enum AddMenuMessage {
     Query(String),
     Choose(NodeKind),
-    Up,
-    Down,
+    /// Move the keyboard selection by this many rows.
+    Move(i32),
+    /// The list was scrolled to this offset.
+    Scrolled(f32),
     Submit,
     Close,
 }
@@ -466,6 +473,7 @@ impl App {
                 binding: None,
                 show_functions: false,
                 pick_tag: 0,
+                drop_burst: None,
             },
             opts: opts.clone(),
             window: None,
@@ -509,14 +517,17 @@ impl App {
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![iced::event::listen_with(|event, status, window| {
             use iced::Event as E;
-            let relevant = match &event {
-                E::Keyboard(_) => true,
-                E::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::ButtonReleased(_)) => true,
-                E::Window(
-                    window::Event::CloseRequested | window::Event::Opened { .. } | window::Event::Resized(_),
-                ) => true,
-                _ => false,
-            };
+            let relevant = matches!(
+                &event,
+                E::Keyboard(_)
+                    | E::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::ButtonReleased(_))
+                    | E::Window(
+                        window::Event::CloseRequested
+                            | window::Event::Opened { .. }
+                            | window::Event::Resized(_)
+                            | window::Event::FileDropped(_),
+                    )
+            );
             relevant.then_some(Message::Runtime(event, status, window))
         })];
         match &self.events {
@@ -628,9 +639,9 @@ impl App {
 
     fn set_preview(&mut self, node: Option<NodeId>) {
         if self.ui.preview.node != node {
+            // A gradient pick stays active: showing the image to pick from is part of it.
             self.ui.preview.node = node;
             self.ui.preview.fit = true;
-            self.ui.preview.pick = None;
             self.res.probe = None;
             self.send(Request::Preview(node));
         }
@@ -669,6 +680,27 @@ impl App {
             Vector::new(canvas.width * 0.5 - center[0] * zoom, canvas.height * 0.5 - center[1] * zoom);
     }
 
+    /// Pan the graph view so that a node is fully visible; the zoom stays.
+    fn reveal(&mut self, id: NodeId) {
+        let graph = self.doc.graph();
+        let Some(node) = graph.node(id) else { return };
+        let size = view::graph::layout::node_size(graph, node);
+        let v = &mut self.ui.graph_view;
+        let canvas = v.bounds;
+        if canvas.width < 10.0 {
+            return;
+        }
+        let x0 = node.pos[0] * v.zoom + v.pan.x;
+        let y0 = node.pos[1] * v.zoom + v.pan.y;
+        let (x1, y1) = (x0 + size[0] * v.zoom, y0 + size[1] * v.zoom);
+        let margin = 24.0;
+        if x0 >= margin && y0 >= margin && x1 <= canvas.width - margin && y1 <= canvas.height - margin {
+            return;
+        }
+        let center = [node.pos[0] + size[0] * 0.5, node.pos[1] + size[1] * 0.5];
+        v.pan = Vector::new(canvas.width * 0.5 - center[0] * v.zoom, canvas.height * 0.5 - center[1] * v.zoom);
+    }
+
     fn graph_pos_for_paste(&self) -> [f32; 2] {
         let v = &self.ui.graph_view;
         if v.contains(self.ui.cursor) { v.to_graph(self.ui.cursor) } else { v.center() }
@@ -705,7 +737,7 @@ impl App {
 
     fn open_add_menu(&mut self, at: Point, graph_pos: [f32; 2], pending: Option<SocketRef>) -> Task<Message> {
         self.close_popups();
-        self.ui.add_menu = Some(AddMenu { at, graph_pos, query: String::new(), selected: 0, pending });
+        self.ui.add_menu = Some(AddMenu { at, graph_pos, query: String::new(), selected: 0, scroll: 0.0, pending });
         operation::focus(view::add_menu::search_id())
     }
 
@@ -715,7 +747,12 @@ impl App {
         match project::load(&path) {
             Ok(loaded) => {
                 let preview = loaded.view.preview.or_else(|| loaded.graph.nodes_of(NodeKind::OUTPUT).next().map(|n| n.id));
-                self.doc.replace(loaded.graph, Some(path.clone()));
+                if loaded.converted {
+                    // Saving writes a new .tessera file next to the old one.
+                    self.doc.replace_converted(loaded.graph, &path);
+                } else {
+                    self.doc.replace(loaded.graph, Some(path.clone()));
+                }
                 self.after_document_change(preview);
                 if let (Some(pan), Some(zoom)) = (loaded.view.graph_pan, loaded.view.graph_zoom) {
                     self.ui.graph_view.pan = Vector::new(pan[0], pan[1]);
@@ -766,15 +803,20 @@ impl App {
     }
 
     fn pick_save_path(&self) -> Task<Message> {
-        let name = self.doc.path().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+        let hint = self.doc.save_path_hint();
+        let name = hint.and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
         let name = name.unwrap_or_else(|| format!("untitled.{}", project::FILE_EXTENSION));
+        let folder = hint.and_then(|p| p.parent()).filter(|d| d.is_dir()).map(PathBuf::from);
         Task::perform(
             blocking(move || {
-                rfd::FileDialog::new()
+                let mut dialog = rfd::FileDialog::new()
                     .set_title("Save Tessera graph")
                     .add_filter("Tessera graph", &[project::FILE_EXTENSION])
-                    .set_file_name(name)
-                    .save_file()
+                    .set_file_name(name);
+                if let Some(folder) = folder {
+                    dialog = dialog.set_directory(folder);
+                }
+                dialog.save_file()
             }),
             Message::SavePicked,
         )
@@ -868,7 +910,12 @@ impl App {
         let text = node.text(pd.key);
         match &self.ui.expression {
             Some((id, content)) if *id == node.id && content.text().trim_end_matches(['\n', '\r']) == text => {}
-            _ => self.ui.expression = Some((node.id, text_editor::Content::with_text(text))),
+            _ => {
+                // Changed elsewhere (another node selected, undo): typing continues at the end.
+                let mut content = text_editor::Content::with_text(text);
+                content.perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
+                self.ui.expression = Some((node.id, content));
+            }
         }
     }
 
@@ -903,19 +950,17 @@ impl App {
             }
             Message::Edits(edits) => self.apply_all(edits),
             Message::Seal => self.doc.seal(),
+            // The expression editor's text follows through `sync_expression`; its buffer is
+            // kept so the editor stays focused.
             Message::Undo => {
                 self.close_popups();
-                if self.doc.undo() {
-                    self.ui.expression = None;
-                } else {
+                if !self.doc.undo() {
                     self.set_status("Nothing to undo", false);
                 }
             }
             Message::Redo => {
                 self.close_popups();
-                if self.doc.redo() {
-                    self.ui.expression = None;
-                } else {
+                if !self.doc.redo() {
                     self.set_status("Nothing to redo", false);
                 }
             }
@@ -1017,9 +1062,12 @@ impl App {
             }
             Message::Graph(msg) => return self.graph_message(msg),
             Message::SelectNode(id) => {
+                self.close_popups();
                 self.ui.selection = [id].into_iter().collect();
                 self.ui.selected_link = None;
                 self.doc.seal();
+                self.reveal(id);
+                self.request_stats();
             }
             Message::Copy => {
                 self.close_popups();
@@ -1147,12 +1195,14 @@ impl App {
                 }
             }
             Message::BrowseFile(node, key) => {
+                let extensions = self.graph().node(node).map_or(&[][..], |n| file_extensions(n.kind, &key));
                 return Task::perform(
-                    blocking(|| {
-                        rfd::FileDialog::new()
-                            .set_title("Choose an image")
-                            .add_filter("Images", &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "exr"])
-                            .pick_file()
+                    blocking(move || {
+                        let mut dialog = rfd::FileDialog::new().set_title("Choose a file");
+                        if !extensions.is_empty() {
+                            dialog = dialog.add_filter("Supported files", extensions);
+                        }
+                        dialog.pick_file()
                     }),
                     move |p| Message::FilePicked(node, key.clone(), p),
                 );
@@ -1281,9 +1331,13 @@ impl App {
                 {
                     let gradient = tessera_core::Gradient::from_samples(&colors, 0.012, tessera_core::Gradient::MAX_STOPS);
                     let stops = gradient.stops.len();
-                    self.apply(tessera_core::edit::gradient_edit(node, &key, gradient));
-                    self.doc.seal();
-                    self.set_status(format!("Picked a gradient with {stops} stops"), false);
+                    if self.apply(tessera_core::edit::gradient_edit(node, &key, gradient)) {
+                        self.doc.seal();
+                        // Show the result in the properties (the image picked from stays in view).
+                        self.ui.selection = [node].into_iter().collect();
+                        self.ui.gradient_stop.remove(&(node, key));
+                        self.set_status(format!("Picked a gradient with {stops} stops"), false);
+                    }
                 }
             }
             Event::Exported(result) => {
@@ -1337,6 +1391,7 @@ impl App {
             E::Window(window::Event::Opened { size, .. } | window::Event::Resized(size)) => {
                 self.ui.window_size = size;
             }
+            E::Window(window::Event::FileDropped(path)) => return self.file_dropped(path),
             E::Window(_) => {}
             E::Mouse(mouse::Event::CursorMoved { position }) => {
                 self.ui.cursor = position;
@@ -1362,6 +1417,31 @@ impl App {
         Task::none()
     }
 
+    /// A file dropped on the window: a graph is opened, an image becomes a Bitmap node.
+    fn file_dropped(&mut self, path: PathBuf) -> Task<Message> {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+        if [project::FILE_EXTENSION, project::LEGACY_EXTENSION].contains(&ext.as_str()) {
+            return self.guarded(PendingAction::OpenPath(path));
+        }
+        if file_extensions(NodeKind::BITMAP, "path").contains(&ext.as_str()) {
+            self.close_popups();
+            // Several files dropped at once arrive one by one: stack their nodes.
+            let burst = self.ui.drop_burst.filter(|(at, _)| at.elapsed() < Duration::from_millis(800)).map_or(0, |(_, n)| n);
+            self.ui.drop_burst = Some((Instant::now(), burst + 1));
+            let [x, y] = self.graph_pos_for_paste();
+            let path = ParamValue::Text(path.display().to_string());
+            let edit = Edit::AddNodeWith { kind: NodeKind::BITMAP, pos: [x, y + burst as f32 * 200.0], params: vec![("path".into(), path)] };
+            if self.apply(edit) {
+                self.doc.seal();
+                let created = self.ui.selection.first().copied();
+                self.set_preview(created);
+            }
+            return Task::none();
+        }
+        self.set_status(format!("Cannot use '{}': drop a Tessera graph or an image", path.display()), true);
+        Task::none()
+    }
+
     fn shortcut(&mut self, key: keyboard::Key, m: keyboard::Modifiers, status: iced::event::Status) -> Task<Message> {
         use keyboard::key::Named;
         use keyboard::Key;
@@ -1375,18 +1455,23 @@ impl App {
                 self.ui.dialog = None;
             } else if self.ui.preview.pick.is_some() {
                 self.ui.preview.pick = None;
+            } else if self.ui.renaming_var.is_some() || self.ui.binding.is_some() {
+                // Typing a variable name: forget the text, the name stays as it was.
+                self.ui.renaming_var = None;
+                self.ui.binding = None;
             } else if self.ui.color_picker.is_some() {
                 self.ui.color_picker = None;
             }
             return Task::none();
         }
-        if let Some(menu) = &mut self.ui.add_menu {
-            match key {
-                Key::Named(Named::ArrowDown) => menu.selected = menu.selected.saturating_add(1),
-                Key::Named(Named::ArrowUp) => menu.selected = menu.selected.saturating_sub(1),
-                _ => {}
-            }
-            return Task::none();
+        if self.ui.add_menu.is_some() {
+            return match key {
+                Key::Named(Named::ArrowDown) => self.add_menu_message(AddMenuMessage::Move(1)),
+                Key::Named(Named::ArrowUp) => self.add_menu_message(AddMenuMessage::Move(-1)),
+                Key::Named(Named::PageDown) => self.add_menu_message(AddMenuMessage::Move(8)),
+                Key::Named(Named::PageUp) => self.add_menu_message(AddMenuMessage::Move(-8)),
+                _ => Task::none(),
+            };
         }
         // Global shortcuts that also work while typing.
         if ctrl && char("s") {
@@ -1524,14 +1609,24 @@ impl App {
     }
 
     fn add_menu_message(&mut self, msg: AddMenuMessage) -> Task<Message> {
+        let count = view::add_menu::items(self).len();
         let Some(menu) = &mut self.ui.add_menu else { return Task::none() };
         match msg {
             AddMenuMessage::Query(q) => {
                 menu.query = q;
                 menu.selected = 0;
+                menu.scroll = 0.0;
+                return operation::scroll_to(view::add_menu::list_id(), operation::AbsoluteOffset { x: None, y: Some(0.0) });
             }
-            AddMenuMessage::Up => menu.selected = menu.selected.saturating_sub(1),
-            AddMenuMessage::Down => menu.selected += 1,
+            AddMenuMessage::Move(delta) => {
+                let last = count.saturating_sub(1) as i64;
+                menu.selected = (menu.selected.min(last as usize) as i64 + delta as i64).clamp(0, last) as usize;
+                if let Some(y) = view::add_menu::scroll_to_row(menu.selected, menu.scroll, count) {
+                    menu.scroll = y;
+                    return operation::scroll_to(view::add_menu::list_id(), operation::AbsoluteOffset { x: None, y: Some(y) });
+                }
+            }
+            AddMenuMessage::Scrolled(y) => menu.scroll = y,
             AddMenuMessage::Close => self.ui.add_menu = None,
             AddMenuMessage::Choose(kind) => self.add_from_menu(kind),
             AddMenuMessage::Submit => {
@@ -1612,6 +1707,7 @@ impl App {
                     graph_pos: [0.0, 0.0],
                     query: "bl".into(),
                     selected: 0,
+                    scroll: 0.0,
                     pending: None,
                 });
             }
@@ -1702,6 +1798,14 @@ impl App {
     }
 }
 
+/// File extensions a node's File parameter accepts.
+pub fn file_extensions(kind: NodeKind, key: &str) -> &'static [&'static str] {
+    match kind.def().param(key).map(|pd| pd.kind) {
+        Some(tessera_core::nodes::ParamKind::File { extensions }) => extensions,
+        _ => &[],
+    }
+}
+
 /// Clamp the add menu's selection to the number of items.
 pub fn menu_index(menu: Option<&AddMenu>, len: usize) -> usize {
     menu.map_or(0, |m| m.selected.min(len.saturating_sub(1)))
@@ -1714,13 +1818,4 @@ pub fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> im
         let _ = tx.send(f());
     });
     async move { rx.await.expect("worker thread") }
-}
-
-/// Current value of a variable (helper for views).
-pub fn variable_value(graph: &Graph, name: &str) -> Option<Value> {
-    graph.variable(name).map(|v| v.value)
-}
-
-pub fn window_size_hint() -> Size {
-    Size::new(1680.0, 1000.0)
 }

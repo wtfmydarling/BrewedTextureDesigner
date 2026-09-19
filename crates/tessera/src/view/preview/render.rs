@@ -141,7 +141,7 @@ pub struct Pipeline {
 impl shader::Pipeline for Pipeline {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         // iced created the device: hand it to the engine.
-        crate::gpu::publish(device, queue, format);
+        crate::gpu::publish(device, queue);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tessera 2d view"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),

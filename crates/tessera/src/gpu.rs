@@ -16,20 +16,19 @@ use tessera_engine::{EngineService, Event, wgpu};
 pub struct GpuHandles {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    pub format: wgpu::TextureFormat,
 }
 
 static SLOT: OnceLock<Mutex<Option<GpuHandles>>> = OnceLock::new();
 static PUBLISHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Called by render pipelines when iced creates them.
-pub fn publish(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) {
+pub fn publish(device: &wgpu::Device, queue: &wgpu::Queue) {
     if PUBLISHED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
     let slot = SLOT.get_or_init(|| Mutex::new(None));
     if let Ok(mut s) = slot.lock() {
-        *s = Some(GpuHandles { device: device.clone(), queue: queue.clone(), format });
+        *s = Some(GpuHandles { device: device.clone(), queue: queue.clone() });
     }
 }
 

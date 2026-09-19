@@ -3930,6 +3930,7 @@ dependencies = [
  "env_logger",
  "futures",
  "iced",
+ "iced_runtime",
  "image",
  "log",
  "rfd",

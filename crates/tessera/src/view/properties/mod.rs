@@ -4,7 +4,7 @@
 //! exposed parameter gets its value from its socket, so its editor is replaced by the
 //! value arriving there (or a note that nothing is connected) and cannot be edited.
 
-mod expression;
+pub mod expression;
 mod levels;
 
 use iced::widget::{button, column, container, pick_list, row, scrollable, space, text, text_input, toggler, tooltip};
@@ -275,6 +275,18 @@ fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
 }
 
 /// The value driving an exposed parameter, or a note that nothing is connected.
+/// "← node" text that selects the node a value comes from.
+fn source_link<'a>(from: NodeId, label: String) -> Element<'a, Message> {
+    tip(
+        button(text(label).size(style::SMALL).color(style::TEXT_FAINT))
+            .padding([0, 3])
+            .style(style::flat_button)
+            .on_press(Message::SelectNode(from)),
+        "Select the node this value comes from",
+        tooltip::Position::Top,
+    )
+}
+
 fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &'a ParamDef, slot_value: &'a ParamValue) -> Element<'a, Message> {
     let eval = app.eval.node(node.id);
     let ty = slot_value.socket_type().unwrap_or(tessera_core::DataType::Float);
@@ -292,7 +304,7 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &'a ParamDef, slot_value:
                 r = r.push(container(space().width(Length::Fixed(22.0)).height(Length::Fixed(12.0))).style(style::chip(style::color_of(*c))));
             }
             r = r.push(text(shown).size(style::SMALL).color(color));
-            r = r.push(text(format!("← {from}")).size(style::SMALL).color(style::TEXT_FAINT));
+            r = r.push(source_link(link.from, format!("← {from}")));
             container(r).padding([4, 6]).width(Length::Fill).style(style::field_box).into()
         }
         _ => {
@@ -346,6 +358,9 @@ fn param_row<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, index: usi
         (pd.can_expose() && !not_applicable)
             .then(|| Message::Edit(Edit::SetExposed { node: id, key: pd.key.to_string(), exposed: !exposed })),
     );
+    // The editor fills the row, so the expose toggles line up whatever the editor's own width
+    // (a toggler, for instance, is narrow).
+    let editor = container(editor).width(Length::Fill);
     let mut col = column![row![label, editor, toggle].spacing(6).align_y(Alignment::Center)].spacing(6);
 
     // Wide editors below the row.
@@ -358,7 +373,7 @@ fn param_row<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, index: usi
             _ => {}
         }
     }
-    container(col).padding([3, 4]).width(Length::Fill).style(style::stripe(index % 2 == 0)).into()
+    container(col).padding([3, 4]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2))).into()
 }
 
 fn editor<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, value: &'a ParamValue) -> Element<'a, Message> {

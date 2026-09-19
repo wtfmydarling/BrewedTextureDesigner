@@ -5,7 +5,7 @@
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Renderer as _};
 use iced::advanced::text::{self, Paragraph as _, Renderer as _};
-use iced::advanced::widget::{self, Tree, Widget, tree};
+use iced::advanced::widget::{Tree, Widget, tree};
 use iced::advanced::{Clipboard, Shell};
 use iced::alignment::Vertical;
 use iced::advanced::mouse;

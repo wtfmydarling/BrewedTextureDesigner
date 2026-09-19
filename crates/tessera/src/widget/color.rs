@@ -234,13 +234,11 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for ColorPicke
                     shell.capture_event();
                 }
             }
-            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                if state.drag.take().is_some() {
-                    if let Some(m) = &self.on_release {
-                        shell.publish(m.clone());
-                    }
-                    shell.capture_event();
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if state.drag.take().is_some() => {
+                if let Some(m) = &self.on_release {
+                    shell.publish(m.clone());
                 }
+                shell.capture_event();
             }
             _ => {}
         }
@@ -338,21 +336,6 @@ pub fn to_hex(c: [f32; 4]) -> String {
     }
 }
 
-/// Parse "#RGB", "#RRGGBB" or "#RRGGBBAA" (the # is optional).
-pub fn from_hex(s: &str) -> Option<[f32; 4]> {
-    let s = s.trim().trim_start_matches('#');
-    let byte = |i: usize| u8::from_str_radix(s.get(i..i + 2)?, 16).ok().map(|v| v as f32 / 255.0);
-    match s.len() {
-        3 => {
-            let d = |i: usize| u8::from_str_radix(s.get(i..i + 1)?, 16).ok().map(|v| (v * 17) as f32 / 255.0);
-            Some([d(0)?, d(1)?, d(2)?, 1.0])
-        }
-        6 => Some([byte(0)?, byte(2)?, byte(4)?, 1.0]),
-        8 => Some([byte(0)?, byte(2)?, byte(4)?, byte(6)?]),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,9 +353,5 @@ mod tests {
     #[test]
     fn hex() {
         assert_eq!(to_hex([1.0, 0.5, 0.0, 1.0]), "#FF8000");
-        assert_eq!(from_hex("#ff8000"), Some([1.0, 128.0 / 255.0, 0.0, 1.0]));
-        assert_eq!(from_hex("f00"), Some([1.0, 0.0, 0.0, 1.0]));
-        assert_eq!(from_hex("#00000080").map(|c| c[3]), Some(128.0 / 255.0));
-        assert_eq!(from_hex("xyz"), None);
     }
 }

@@ -150,6 +150,7 @@ impl Overlay<'_> {
         ((p.distance(center) - RING).abs() < 6.0).then_some(Handle::Rotate)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gizmo_edits(&self, id: NodeId, drag: (Handle, Vector, Point, Xform), uv: Vector, p: Point, rect: Rectangle, aspect: f32, shift: bool) -> Vec<Edit> {
         let (handle, start_uv, start_screen, start) = drag;
         let Some((_, locked)) = self.xform(id) else { return Vec::new() };
@@ -413,7 +414,7 @@ impl canvas::Program<Message> for Overlay<'_> {
         }
         if p.pick.is_some() && !matches!(state.drag, Some(Drag::Pick { .. })) {
             frame.fill_text(Text {
-                content: "Drag a line across the image to pick a gradient  ·  Esc cancels".into(),
+                content: "Drag a line across the image to pick a gradient  ·  double-click a node to show another image  ·  Esc cancels".into(),
                 position: Point::new(bounds.width / 2.0, 18.0),
                 color: style::ACCENT,
                 size: Pixels(13.0),
