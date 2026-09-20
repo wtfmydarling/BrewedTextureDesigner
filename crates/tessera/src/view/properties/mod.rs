@@ -7,7 +7,7 @@
 pub mod expression;
 mod levels;
 
-use iced::widget::{button, column, container, pick_list, row, scrollable, space, text, text_input, toggler, tooltip};
+use iced::widget::{button, column, container, mouse_area, pick_list, row, scrollable, space, text, text_input, toggler, tooltip};
 use iced::{Alignment, Element, Length};
 use tessera_core::graph::{Node, NodeId, param_socket_key};
 use tessera_core::nodes::{NodeKind, ParamDef, ParamKind, Role};
@@ -383,19 +383,48 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &'a ParamDef, slot_value:
     }
 }
 
+/// A parameter value as a few words, for the hint that offers to put it back.
+fn shown(pd: &ParamDef, value: &ParamValue) -> String {
+    match value {
+        ParamValue::Enum(i) => pd.enum_options().get(*i as usize).map_or_else(|| i.to_string(), |s| s.to_string()),
+        ParamValue::Color(c) => tessera_core::Value::Color(*c).display(),
+        ParamValue::Text(t) if t.is_empty() => "nothing".to_string(),
+        ParamValue::Text(t) => format!("'{}'", crate::view::graph::truncate(t, 24)),
+        ParamValue::Gradient(_) => "the gradient it came with".to_string(),
+        other => other.as_value().map_or_else(|| "its default".to_string(), |v| v.display()),
+    }
+}
+
 fn param_row<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, index: usize) -> Element<'a, Message> {
     let id = node.id;
     let Some(slot) = node.param(pd.key) else { return space().into() };
     let d = node.def();
     // Value nodes produce numbers, not images: tiling is shown but does not apply.
     let not_applicable = pd.key == "tiling" && !d.has_image();
-    let label_color = if not_applicable { style::TEXT_FAINT } else { style::TEXT };
-    let label = tip(
-        text(pd.label).size(style::TEXT_SIZE).color(label_color).width(Length::Fixed(LABEL_W)),
-        if not_applicable { "Value nodes produce numbers, not images: tiling does not apply to them" } else { pd.tooltip },
-        tooltip::Position::Top,
-    );
     let exposed = slot.exposed;
+    // A value the user set reads differently from the one the node came with, and the
+    // middle button puts the original back.
+    let default = pd.default_value();
+    let changed = !exposed && !not_applicable && slot.value != default;
+    let label_color = match (not_applicable, changed) {
+        (true, _) => style::TEXT_FAINT,
+        (false, true) => style::ACCENT,
+        (false, false) => style::TEXT,
+    };
+    let mut caption = text(pd.label).size(style::TEXT_SIZE).color(label_color).width(Length::Fixed(LABEL_W));
+    if changed {
+        caption = caption.font(style::bold());
+    }
+    let hint = if not_applicable {
+        "Value nodes produce numbers, not images: tiling does not apply to them".to_string()
+    } else if changed {
+        format!("{}
+
+Changed — middle-click the row to put {} back", pd.tooltip, shown(pd, &default))
+    } else {
+        pd.tooltip.to_string()
+    };
+    let label = tip(caption, hint, tooltip::Position::Top);
     let editor: Element<'a, Message> = if exposed {
         locked_editor(app, node, pd, &slot.value)
     } else if not_applicable {
@@ -434,20 +463,30 @@ fn param_row<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, index: usi
             _ => {}
         }
     }
-    container(col).padding([3, 4]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2))).into()
+    let row = container(col).padding([3, 4]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2)));
+    if !changed {
+        return row.into();
+    }
+    mouse_area(row).on_middle_press(Message::Edits(vec![Edit::SetParam { node: id, key: pd.key.to_string(), value: default }])).into()
 }
 
 fn editor<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, value: &'a ParamValue) -> Element<'a, Message> {
     let id = node.id;
     let key = pd.key;
+    // Most parameters may be dragged past their slider; the few that would mean nothing
+    // outside it stop there.
+    let held = |field: crate::widget::number::NumberField<'a, Message>| match pd.limits {
+        Some((lo, hi)) => field.limits(lo as f64, hi as f64),
+        None => field,
+    };
     match (pd.kind, value) {
-        (ParamKind::Float { min, max, log, suffix, .. }, ParamValue::Float(v)) => number(*v as f64, min as f64, max as f64)
+        (ParamKind::Float { min, max, log, suffix, .. }, ParamValue::Float(v)) => held(number(*v as f64, min as f64, max as f64))
             .logarithmic(log)
             .suffix(suffix)
             .on_change(move |x| set(id, key, ParamValue::Float(x as f32)))
             .on_release(Message::Seal)
             .into(),
-        (ParamKind::Int { min, max, .. }, ParamValue::Int(v)) => number(*v as f64, min as f64, max as f64)
+        (ParamKind::Int { min, max, .. }, ParamValue::Int(v)) => held(number(*v as f64, min as f64, max as f64))
             .integer(true)
             .on_change(move |x| set(id, key, ParamValue::Int(x as i32)))
             .on_release(Message::Seal)
@@ -455,11 +494,11 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, value: &'a Pa
         (ParamKind::Vec2 { min, max, .. }, ParamValue::Vec2(v)) => {
             let v = *v;
             row![
-                number(v[0] as f64, min as f64, max as f64)
+                held(number(v[0] as f64, min as f64, max as f64))
                     .prefix("x ")
                     .on_change(move |x| set(id, key, ParamValue::Vec2([x as f32, v[1]])))
                     .on_release(Message::Seal),
-                number(v[1] as f64, min as f64, max as f64)
+                held(number(v[1] as f64, min as f64, max as f64))
                     .prefix("y ")
                     .on_change(move |y| set(id, key, ParamValue::Vec2([v[0], y as f32])))
                     .on_release(Message::Seal),

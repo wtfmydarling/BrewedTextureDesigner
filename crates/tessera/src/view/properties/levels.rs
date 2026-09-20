@@ -101,6 +101,12 @@ impl Histogram {
         [self.lo, mid, self.hi].map(|v| plot.x + v.clamp(0.0, 1.0) * plot.width)
     }
 
+    /// What the gamma parameter is held to: the handle reaches wherever gamma can take it,
+    /// which is from one end of the histogram to the other.
+    fn gamma_limits() -> (f32, f32) {
+        tessera_core::NodeKind::LEVELS.def().param("gamma").and_then(|p| p.limits).unwrap_or((0.01, 100.0))
+    }
+
     fn edit(&self, handle: usize, v: f32) -> Option<Message> {
         let set = |k: &str, v: f32| Edit::SetParam { node: self.node, key: k.into(), value: ParamValue::Float(v) };
         if self.locked[handle] {
@@ -110,8 +116,12 @@ impl Histogram {
             0 => set("in_low", v.min(self.hi - 0.01)),
             2 => set("in_high", v.max(self.lo + 0.01)),
             _ => {
-                let t = ((v - self.lo) / (self.hi - self.lo)).clamp(0.01, 0.99);
-                set("gamma", (t.ln() / 0.5f32.ln()).clamp(0.1, 10.0))
+                // Where the handle is, as the share of the way from black to white that
+                // mid gray lands on; the gamma that puts it there is 0.5 to that power.
+                let span = self.hi - self.lo;
+                let t = if span.abs() > 1e-6 { (v - self.lo) / span } else { 0.5 };
+                let (lo, hi) = Self::gamma_limits();
+                set("gamma", (t.ln() / 0.5f32.ln()).clamp(lo, hi))
             }
         }))
     }
@@ -214,5 +224,82 @@ impl canvas::Program<Message> for Histogram {
             frame.fill_rectangle(Point::ORIGIN, bounds.size(), Color::from_rgba(0.0, 0.0, 0.0, 0.15));
         }
         vec![frame.into_geometry()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::advanced::mouse::Cursor;
+    use iced::widget::canvas::Program;
+
+    fn histogram(lo: f32, hi: f32, gamma: f32) -> Histogram {
+        Histogram {
+            node: NodeId(1),
+            stats: Arc::new(ImageStats {
+                width: 4,
+                height: 4,
+                hist: Box::new([[0; 256]; 5]),
+                min: [0.0; 4],
+                max: [1.0; 4],
+                mean: [0.5; 4],
+            }),
+            lo,
+            hi,
+            gamma,
+            locked: [false; 3],
+            fresh: true,
+        }
+    }
+
+    /// Drag a handle to `x` (in the canvas) and read the parameter it sets.
+    fn drag_to(h: &Histogram, grab: f32, to: f32) -> Option<(String, f32)> {
+        let bounds = Rectangle::new(Point::new(0.0, 0.0), Size::new(200.0, 110.0));
+        let mut state = State::default();
+        let at = |x: f32| Cursor::Available(Point::new(bounds.x + x, bounds.y + 60.0));
+        let press = iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        h.update(&mut state, &press, bounds, at(grab))?;
+        let moved = iced::Event::Mouse(mouse::Event::CursorMoved { position: Point::new(bounds.x + to, bounds.y + 60.0) });
+        let (message, _, _) = h.update(&mut state, &moved, bounds, at(to))?.into_inner();
+        match message? {
+            Message::Edit(Edit::SetParam { key, value: ParamValue::Float(v), .. }) => Some((key, v)),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Every handle reaches both ends of the histogram: the black and white points the
+    /// whole way, and the gamma handle as close to each as a gamma can put mid gray.
+    #[test]
+    fn the_handles_reach_the_ends() {
+        let plot = Histogram::plot(Rectangle::new(Point::new(0.0, 0.0), Size::new(200.0, 110.0)));
+        let (left, right) = (plot.x, plot.x + plot.width);
+        let h = histogram(0.0, 1.0, 1.0);
+
+        // The white point, dragged from its place to the far left and back out to the right.
+        assert_eq!(drag_to(&h, right, left - 50.0), Some(("in_high".into(), 0.01)));
+        assert_eq!(drag_to(&h, right, right + 50.0), Some(("in_high".into(), 1.0)));
+        // The black point, the same way.
+        assert_eq!(drag_to(&h, left, right + 50.0), Some(("in_low".into(), 0.99)));
+        assert_eq!(drag_to(&h, left, left - 50.0), Some(("in_low".into(), 0.0)));
+
+        // The gamma handle: pushed to white it is a gamma that makes everything light, and
+        // pushed to black one that makes everything dark. Both ends, not 93% of the way.
+        let middle = plot.x + plot.width * 0.5;
+        let gamma = |to: f32| drag_to(&h, middle, to).expect("a gamma").1;
+        let (dark, light) = (gamma(left), gamma(right));
+        let (lo, hi) = Histogram::gamma_limits();
+        assert!((lo..=hi).contains(&dark) && (lo..=hi).contains(&light), "{dark} {light}");
+        // Which puts mid gray at each end, not a tenth of the way short of it.
+        assert!(0.5f32.powf(dark) < 0.01, "mid gray at {}", 0.5f32.powf(dark));
+        assert!(0.5f32.powf(light) > 0.99, "mid gray at {}", 0.5f32.powf(light));
+        // A hair inside the ends is a strong gamma, not the end of its range.
+        assert!((6.0..hi).contains(&gamma(left + 1.0)) && (lo..0.05).contains(&gamma(right - 1.0)));
+
+        // A black point and a white point in the same place are not a division by zero.
+        let flat = histogram(0.5, 0.5, 1.0);
+        match flat.edit(1, 0.9) {
+            Some(Message::Edit(Edit::SetParam { value: ParamValue::Float(v), .. })) => assert!(v.is_finite(), "{v}"),
+            other => panic!("{other:?}"),
+        }
     }
 }

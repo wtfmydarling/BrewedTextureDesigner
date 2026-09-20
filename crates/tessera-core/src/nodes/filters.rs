@@ -53,7 +53,7 @@ pub static BLEND: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         choice("mode", "Blending Mode", 0, BLEND_MODES),
-        float("opacity", "Opacity", 1.0, 0.0, 1.0),
+        float("opacity", "Opacity", 1.0, 0.0, 1.0).bounded(),
         choice("alpha", "Alpha Blending", 0, &["Use Foreground Alpha", "Ignore Alpha"]),
         boolean("clamp", "Clamp Result", true),
     ],
@@ -68,7 +68,7 @@ pub static BLUR: NodeDef = NodeDef {
     keywords: "gaussian soften smooth",
     inputs: IMAGE_IN,
     outputs: IMAGE_OUT,
-    params: &[pixels("radius", "Radius", 8.0, 0.0, 128.0)
+    params: &[pixels("radius", "Radius", 8.0, 0.0, 128.0).at_least(0.0)
         .tip("Blur radius in pixels of a 1024 px image, so the look is the same at every resolution.")],
     role: Role::Image,
 };
@@ -83,7 +83,7 @@ pub static DIRECTIONAL_BLUR: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         angle("angle", "Angle", 0.0, -180.0, 180.0),
-        pixels("length", "Length", 24.0, 0.0, 256.0).tip("Length of the streak in pixels of a 1024 px image."),
+        pixels("length", "Length", 24.0, 0.0, 256.0).at_least(0.0).tip("Length of the streak in pixels of a 1024 px image."),
         boolean("symmetric", "Symmetric", true).tip("Blur in both directions instead of trailing behind."),
     ],
     role: Role::Image,
@@ -100,7 +100,7 @@ pub static SLOPE_BLUR: NodeDef = NodeDef {
     params: &[
         pixels("intensity", "Intensity", 16.0, -128.0, 128.0)
             .tip("Distance travelled along the slope, in pixels of a 1024 px image. Negative flows uphill."),
-        int("samples", "Samples", 16, 2, 64),
+        int("samples", "Samples", 16, 2, 64).bounded(),
         choice("mode", "Mode", 0, &["Blur", "Min", "Max"]),
     ],
     role: Role::Image,
@@ -116,7 +116,7 @@ pub static SHARPEN: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         float("intensity", "Intensity", 1.0, 0.0, 10.0),
-        pixels("radius", "Radius", 1.5, 0.1, 16.0).tip("Detail radius in pixels of a 1024 px image."),
+        pixels("radius", "Radius", 1.5, 0.1, 16.0).at_least(0.0).tip("Detail radius in pixels of a 1024 px image."),
     ],
     role: Role::Image,
 };

@@ -66,17 +66,24 @@ pub fn prepare_overlay(window: &dyn iced::window::Window) {
     }
 }
 
+/// A function of the system frameworks the app links, by name: they belong to versions
+/// of macOS the app also runs without.
+pub fn symbol<F: Copy>(name: &CStr) -> Option<F> {
+    assert_eq!(size_of::<F>(), size_of::<*mut c_void>(), "a function pointer");
+    // SAFETY: looking up a function of the system frameworks the app links.
+    let f = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
+    // SAFETY: the caller names the function and gives its signature; a pointer to it is
+    // the size of the pointer dlsym returns.
+    (!f.is_null()).then(|| unsafe { std::mem::transmute_copy::<*mut c_void, F>(&f) })
+}
+
 /// Screen captures need the user's permission (macOS 10.15 and later); without it they
 /// only show the desktop picture.
 pub fn screen_capture_allowed() -> Result<(), String> {
     type Check = unsafe extern "C" fn() -> bool;
-    let symbol = |name: &CStr| -> Option<Check> {
-        // SAFETY: looking up a function of the system frameworks the app links.
-        let f = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
-        // SAFETY: both functions take nothing and return a bool.
-        (!f.is_null()).then(|| unsafe { std::mem::transmute::<*mut c_void, Check>(f) })
-    };
-    let (Some(preflight), Some(request)) = (symbol(c"CGPreflightScreenCaptureAccess"), symbol(c"CGRequestScreenCaptureAccess")) else {
+    let (Some(preflight), Some(request)): (Option<Check>, Option<Check>) =
+        (symbol(c"CGPreflightScreenCaptureAccess"), symbol(c"CGRequestScreenCaptureAccess"))
+    else {
         // Older systems ask for no permission.
         return Ok(());
     };

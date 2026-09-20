@@ -26,7 +26,7 @@ pub static AMBIENT_OCCLUSION: NodeDef = NodeDef {
     inputs: IMAGE_IN,
     outputs: IMAGE_OUT,
     params: &[
-        pixels("radius", "Radius", 48.0, 1.0, 256.0).tip("Search distance in pixels of a 1024 px image."),
+        pixels("radius", "Radius", 48.0, 1.0, 256.0).at_least(0.0).tip("Search distance in pixels of a 1024 px image."),
         float("height", "Height Depth", 0.03, 0.0, 0.5)
             .tip("Height of white relative to the image width: larger values make everything deeper."),
         float("intensity", "Intensity", 1.0, 0.0, 4.0),
@@ -43,7 +43,7 @@ pub static CURVATURE: NodeDef = NodeDef {
     inputs: IMAGE_IN,
     outputs: IMAGE_OUT,
     params: &[
-        pixels("radius", "Radius", 2.0, 0.5, 32.0).tip("Scale of the detected features, in pixels of a 1024 px image."),
+        pixels("radius", "Radius", 2.0, 0.5, 32.0).at_least(0.0).tip("Scale of the detected features, in pixels of a 1024 px image."),
         float("intensity", "Intensity", 16.0, 0.0, 64.0),
     ],
     role: Role::Image,
@@ -58,7 +58,7 @@ pub static EDGE_DETECT: NodeDef = NodeDef {
     inputs: IMAGE_IN,
     outputs: IMAGE_OUT,
     params: &[
-        pixels("width", "Width", 1.0, 0.5, 16.0).tip("Edge width in pixels of a 1024 px image."),
+        pixels("width", "Width", 1.0, 0.5, 16.0).at_least(0.0).tip("Edge width in pixels of a 1024 px image."),
         float("intensity", "Intensity", 2.0, 0.0, 16.0),
         boolean("invert", "Invert", false),
     ],

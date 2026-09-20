@@ -9,6 +9,7 @@ mod gpu;
 mod highlight;
 mod icons;
 mod picker;
+mod scrub;
 mod style;
 mod view;
 mod widget;

@@ -728,3 +728,70 @@ fn comments_group_nodes_and_travel_with_them() {
     w.send(Message::Undo);
     assert_eq!(w.app.graph().comment(id).map(|c| c.text.clone()), Some("Roughness".into()));
 }
+
+/// A value can be dragged as far as the user likes: the pointer is put back where the drag
+/// started after every move, so the edge of the screen never ends it. Parameters that would
+/// mean nothing outside their range still stop there.
+#[test]
+fn a_value_is_dragged_as_far_as_the_pointer_can_be_pushed() {
+    use crate::scrub::fake;
+    use crate::widget::number::number;
+
+    // A window barely wider than the field: a plain drag would run out of room at once.
+    fn radius(app: &App) -> f32 {
+        match app.graph().nodes_of(NodeKind::BLUR).next().and_then(|n| n.value("radius")) {
+            Some(ParamValue::Float(v)) => *v,
+            _ => 0.0,
+        }
+    }
+    let mut w = harness!(
+        |app: &App| {
+            let node = app.graph().nodes_of(NodeKind::BLUR).next().expect("the demo Blur").id;
+            number(radius(app) as f64, 0.0, 128.0)
+                .on_change(move |v| Message::Edit(Edit::SetParam { node, key: "radius".into(), value: ParamValue::Float(v as f32) }))
+                .into()
+        },
+        400.0,
+        30.0
+    );
+    let start = radius(&w.app);
+    let (origin, edge) = (Point::new(200.0, 15.0), Point::new(380.0, 15.0));
+
+    // With no pointer to hold, the drag is what it always was: it stops at the edge.
+    fake::forget();
+    drag(&mut w, origin, edge);
+    let plain = radius(&w.app);
+    assert!(plain > start, "the drag changed nothing");
+
+    // Holding the pointer, the same room is crossed again and again.
+    let blur = w.app.graph().nodes_of(NodeKind::BLUR).next().expect("the demo Blur").id;
+    w.send(Message::Edit(Edit::SetParam { node: blur, key: "radius".into(), value: ParamValue::Float(start) }));
+    fake::place((640.0, 400.0));
+    // Away from the first drag, so that this press is a press and not a double click.
+    let start_at = Point::new(60.0, 15.0);
+    w.hover(start_at);
+    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    for _ in 0..4 {
+        w.hover(Point::new(start_at.x + 180.0, start_at.y));
+        // The pointer is put back where the drag started, and the window says so.
+        w.hover(start_at);
+    }
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    let held = radius(&w.app);
+    assert_eq!(fake::recentered(), 4, "the pointer is put back after every move");
+    assert!(held > start + (plain - start) * 3.5, "{held} is not four screens' worth of dragging from {start}");
+    fake::forget();
+
+    // A parameter that means nothing outside its range stops at it, however far the drag
+    // goes: a gamma of zero is no curve at all.
+    let levels = w.app.graph().nodes_of(NodeKind::LEVELS).next().expect("the demo Levels").id;
+    let gamma = tessera_core::NodeKind::LEVELS.def().param("gamma").expect("gamma");
+    let (lo, hi) = gamma.limits.expect("gamma is held to a range");
+    for value in [-1000.0, 1000.0] {
+        w.send(Message::Edit(Edit::SetParam { node: levels, key: "gamma".into(), value: ParamValue::Float(value) }));
+        let set = w.app.graph().node(levels).and_then(|n| n.value("gamma")).cloned();
+        assert_eq!(set, Some(ParamValue::Float(value.clamp(lo, hi))), "gamma {value}");
+    }
+    // Most parameters are free: unusual values are how unusual textures are found.
+    assert!(tessera_core::NodeKind::TRANSFORM_2D.def().param("rotation").expect("rotation").limits.is_none());
+}

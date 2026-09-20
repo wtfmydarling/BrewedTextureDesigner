@@ -91,7 +91,8 @@ pub fn popup_layer<'a>(
 }
 
 /// Wrap an element in a tooltip with the app's style.
-pub fn tip<'a>(content: impl Into<Element<'a, Message>>, tip: &'a str, position: tooltip::Position) -> Element<'a, Message> {
+pub fn tip<'a>(content: impl Into<Element<'a, Message>>, tip: impl Into<String>, position: tooltip::Position) -> Element<'a, Message> {
+    let tip: String = tip.into();
     if tip.is_empty() {
         return content.into();
     }

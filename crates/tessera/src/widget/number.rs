@@ -171,9 +171,17 @@ pub fn parse_number(text: &str) -> Option<f64> {
 }
 
 struct Drag {
+    /// Where the drag started, in the window.
     origin: f32,
+    /// Where the pointer was at the last move (only used when it is left where it lands).
+    last: f32,
+    /// How far it has travelled in total, in pixels: with the pointer put back after every
+    /// move this keeps growing however wide the screen is.
+    travelled: f32,
     start: f64,
     moved: bool,
+    /// Where the pointer is put back after every move, when this system allows it.
+    anchor: Option<crate::scrub::Anchor>,
 }
 
 struct Editing {
@@ -364,14 +372,38 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
                     state.drag = None;
                     state.edit = Some(self.start_edit());
                 } else {
-                    state.drag = Some(Drag { origin: p.x, start: self.value, moved: false });
+                    // The pointer goes back where it started after every move, so the drag
+                    // can go on past the edge of the screen.
+                    let anchor = crate::scrub::Anchor::hold();
+                    state.drag = Some(Drag { origin: p.x, last: p.x, travelled: 0.0, start: self.value, moved: false, anchor });
                 }
                 shell.capture_event();
                 shell.request_redraw();
             }
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 if let Some(drag) = &mut state.drag {
-                    let dx = position.x - drag.origin;
+                    match &drag.anchor {
+                        // The pointer is put back where the drag started after every move, so
+                        // each move is a step away from there — including the move that puts
+                        // it back, which is a step of nothing.
+                        Some(anchor) => {
+                            let step = position.x - drag.origin;
+                            if step.abs() < 0.5 {
+                                shell.capture_event();
+                                return;
+                            }
+                            drag.travelled += step;
+                            if !anchor.recenter() {
+                                drag.anchor = None;
+                                drag.last = position.x;
+                            }
+                        }
+                        None => {
+                            drag.travelled += position.x - drag.last;
+                            drag.last = position.x;
+                        }
+                    }
+                    let dx = drag.travelled;
                     if drag.moved || dx.abs() > 3.0 {
                         drag.moved = true;
                         let fine = state.modifiers.shift();
@@ -415,11 +447,15 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
             return mouse::Interaction::default();
         }
         if state.edit.is_some() {
-            if cursor.is_over(layout.bounds()) { mouse::Interaction::Text } else { mouse::Interaction::default() }
-        } else if state.drag.as_ref().is_some_and(|d| d.moved) || cursor.is_over(layout.bounds()) {
-            mouse::Interaction::ResizingHorizontally
-        } else {
-            mouse::Interaction::default()
+            return if cursor.is_over(layout.bounds()) { mouse::Interaction::Text } else { mouse::Interaction::default() };
+        }
+        match &state.drag {
+            // Held in place, the pointer points at nothing: it is out of the way until the
+            // button comes up, right where the drag started.
+            Some(d) if d.moved && d.anchor.is_some() => mouse::Interaction::Hidden,
+            Some(d) if d.moved => mouse::Interaction::ResizingHorizontally,
+            _ if cursor.is_over(layout.bounds()) => mouse::Interaction::ResizingHorizontally,
+            _ => mouse::Interaction::default(),
         }
     }
 

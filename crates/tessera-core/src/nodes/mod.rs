@@ -152,6 +152,10 @@ pub struct ParamDef {
     /// Whether the parameter can get an input socket. Structural settings (tiling, output
     /// format, file paths, expressions, gradients) cannot.
     pub exposable: bool,
+    /// Values the parameter is held to, whatever is typed or dragged. Most parameters have
+    /// none: a slider covers the useful range and going past it is how unusual textures are
+    /// found. Only what would mean nothing (a gamma of zero, a third of a tile) is bounded.
+    pub limits: Option<(f32, f32)>,
 }
 
 impl ParamDef {
@@ -165,8 +169,28 @@ impl ParamDef {
                 | ParamKind::Color { .. }
                 | ParamKind::Enum { .. }
         );
-        Self { key, label, kind, tooltip: "", visible_if: None, exposed_by_default: false, exposable }
+        Self { key, label, kind, tooltip: "", visible_if: None, exposed_by_default: false, exposable, limits: None }
     }
+    /// Hold the value to the range of the slider: outside it the parameter means nothing.
+    pub(crate) const fn bounded(mut self) -> Self {
+        self.limits = match self.kind {
+            ParamKind::Float { min, max, .. } | ParamKind::Vec2 { min, max, .. } => Some((min, max)),
+            ParamKind::Int { min, max, .. } => Some((min as f32, max as f32)),
+            _ => None,
+        };
+        self
+    }
+    /// Hold the value to `min` and above, leaving the top open.
+    pub(crate) const fn at_least(mut self, min: f32) -> Self {
+        self.limits = Some((min, f32::INFINITY));
+        self
+    }
+    /// Hold the value to a range of its own, wider than the slider.
+    pub(crate) const fn clamped(mut self, min: f32, max: f32) -> Self {
+        self.limits = Some((min, max));
+        self
+    }
+
     pub(crate) const fn tip(mut self, tooltip: &'static str) -> Self {
         self.tooltip = tooltip;
         self
@@ -233,9 +257,16 @@ impl ParamDef {
         if !self.accepts(&value) {
             return self.default_value();
         }
-        let fin = |v: f32, d: f32| if v.is_finite() { v } else { d };
+        let bound = |v: f32| match self.limits {
+            Some((lo, hi)) => v.clamp(lo, hi),
+            None => v,
+        };
+        let fin = |v: f32, d: f32| bound(if v.is_finite() { v } else { d });
         match (self.kind, value) {
             (ParamKind::Float { default, .. }, ParamValue::Float(v)) => ParamValue::Float(fin(v, default)),
+            (ParamKind::Int { default, .. }, ParamValue::Int(v)) => {
+                ParamValue::Int(fin(v as f32, default as f32).round() as i32)
+            }
             (ParamKind::Vec2 { default, .. }, ParamValue::Vec2(v)) => {
                 ParamValue::Vec2([fin(v[0], default[0]), fin(v[1], default[1])])
             }

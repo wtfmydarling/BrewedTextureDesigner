@@ -14,11 +14,13 @@ pub static LEVELS: NodeDef = NodeDef {
     inputs: IMAGE_IN,
     outputs: IMAGE_OUT,
     params: &[
-        float("in_low", "Input Low", 0.0, 0.0, 1.0),
-        float("in_high", "Input High", 1.0, 0.0, 1.0),
-        float_log("gamma", "Gamma", 1.0, 0.1, 10.0),
-        float("out_low", "Output Low", 0.0, 0.0, 1.0),
-        float("out_high", "Output High", 1.0, 0.0, 1.0),
+        float("in_low", "Input Low", 0.0, 0.0, 1.0).bounded(),
+        float("in_high", "Input High", 1.0, 0.0, 1.0).bounded(),
+        // The slider covers the useful gammas; the handle on the histogram reaches further,
+        // right up to black and white, and a gamma of zero or less is no curve at all.
+        float_log("gamma", "Gamma", 1.0, 0.1, 10.0).clamped(0.01, 100.0),
+        float("out_low", "Output Low", 0.0, 0.0, 1.0).bounded(),
+        float("out_high", "Output High", 1.0, 0.0, 1.0).bounded(),
         choice("channels", "Channels", 0, &["RGB", "RGBA", "R", "G", "B", "A"]),
         boolean("clamp", "Clamp", true),
     ],
@@ -35,8 +37,8 @@ pub static HISTOGRAM_SCAN: NodeDef = NodeDef {
     inputs: IMAGE_IN,
     outputs: IMAGE_OUT,
     params: &[
-        float("position", "Position", 0.5, 0.0, 1.0).tip("Input level that becomes mid gray; higher keeps less."),
-        float("contrast", "Contrast", 0.5, 0.0, 1.0).tip("0 keeps the input as a ramp, 1 is a hard threshold."),
+        float("position", "Position", 0.5, 0.0, 1.0).bounded().tip("Input level that becomes mid gray; higher keeps less."),
+        float("contrast", "Contrast", 0.5, 0.0, 1.0).bounded().tip("0 keeps the input as a ramp, 1 is a hard threshold."),
         boolean("invert", "Invert", false),
     ],
     role: Role::Image,
@@ -76,8 +78,8 @@ pub static HSL: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         angle("hue", "Hue", 0.0, -180.0, 180.0),
-        float("saturation", "Saturation", 0.0, -1.0, 1.0),
-        float("lightness", "Lightness", 0.0, -1.0, 1.0),
+        float("saturation", "Saturation", 0.0, -1.0, 1.0).bounded(),
+        float("lightness", "Lightness", 0.0, -1.0, 1.0).bounded(),
     ],
     role: Role::Image,
 };
@@ -130,6 +132,6 @@ pub static POSTERIZE: NodeDef = NodeDef {
     keywords: "quantize steps bands",
     inputs: IMAGE_IN,
     outputs: IMAGE_OUT,
-    params: &[int("steps", "Steps", 8, 2, 64)],
+    params: &[int("steps", "Steps", 8, 2, 64).bounded()],
     role: Role::Image,
 };

@@ -737,7 +737,7 @@ fn draw_grid(frame: &mut Frame, t: &Transform, size: Size) {
     }
 }
 
-fn truncate(s: &str, max_chars: usize) -> String {
+pub fn truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() > max_chars {
         s.chars().take(max_chars.saturating_sub(1)).collect::<String>() + "…"
     } else {

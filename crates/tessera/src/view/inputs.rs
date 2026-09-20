@@ -150,14 +150,24 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
         "Drag onto the graph to add another Input node with this value",
         tooltip::Position::Right,
     );
-    let name = row![socket_icon(var.ty, true, 12.0, style::type_color(var.ty)), text(&var.name).size(style::TEXT_SIZE).font(style::bold())]
-        .spacing(5)
-        .align_y(Alignment::Center);
-    let name: Element<'a, Message> = if var.description.is_empty() {
-        name.into()
-    } else {
-        crate::view::tip(name, &var.description, tooltip::Position::Bottom)
+    // A value that is no longer the one the input came with says so, and the middle button
+    // puts that one back.
+    let changed = var.value != var.default;
+    let name = row![
+        socket_icon(var.ty, true, 12.0, style::type_color(var.ty)),
+        text(&var.name).size(style::TEXT_SIZE).font(style::bold()).color(if changed { style::ACCENT } else { style::TEXT }),
+    ]
+    .spacing(5)
+    .align_y(Alignment::Center);
+    let hint = match (var.description.is_empty(), changed) {
+        (true, false) => String::new(),
+        (false, false) => var.description.clone(),
+        (true, true) => format!("Changed — middle-click the row to put {} back", var.default.display()),
+        (false, true) => format!("{}
+
+Changed — middle-click the row to put {} back", var.description, var.default.display()),
     };
+    let name: Element<'a, Message> = crate::view::tip(name, hint, tooltip::Position::Bottom);
     let header = row![
         grip,
         container(name).width(Length::FillPortion(2)),
@@ -183,7 +193,11 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
     if expanded {
         col = col.push(container(details(app, var, true)).padding(iced::Padding { left: 22.0, ..iced::Padding::ZERO }));
     }
-    container(col).padding([5, 6]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2))).into()
+    let row = container(col).padding([5, 6]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2)));
+    if !changed {
+        return row.into();
+    }
+    iced::widget::mouse_area(row).on_middle_press(Message::Edit(Edit::ResetVariable(var.name.clone()))).into()
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
