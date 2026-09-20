@@ -14,6 +14,41 @@ use crate::types::{DataType, ParamValue, Tiling, Value, can_connect};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct NodeId(pub u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct CommentId(pub u64);
+
+/// A titled frame around a group of nodes, to say what they are for. It is moved with
+/// the nodes it holds, and it is only ever decoration: nothing in the graph depends on it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Comment {
+    pub id: CommentId,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    pub pos: [f32; 2],
+    pub size: [f32; 2],
+    /// Which of the [`Comment::COLORS`] colors it is drawn in.
+    #[serde(default)]
+    pub color: u8,
+}
+
+impl Comment {
+    /// How many colors a comment can be given; the colors themselves belong to the
+    /// interface.
+    pub const COLORS: u8 = 8;
+    /// Smallest a comment can be dragged to, in graph units: still large enough to grab
+    /// its title bar and its corner.
+    pub const MIN_SIZE: [f32; 2] = [120.0, 80.0];
+
+    /// Does this comment hold a node of size `size` at `pos`? True when the whole node is
+    /// inside, so that moving the comment never tears a node away from its neighbours.
+    pub fn holds(&self, pos: [f32; 2], size: [f32; 2]) -> bool {
+        pos[0] >= self.pos[0]
+            && pos[1] >= self.pos[1]
+            && pos[0] + size[0] <= self.pos[0] + self.size[0]
+            && pos[1] + size[1] <= self.pos[1] + self.size[1]
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ParamSlot {
     pub key: String,
@@ -305,13 +340,23 @@ pub struct Graph {
     pub links: Vec<Link>,
     #[serde(default)]
     pub variables: Vec<Variable>,
+    /// Frames grouping nodes, drawn behind them (see [`Comment`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<Comment>,
     pub resolution: [u32; 2],
     pub next_id: u64,
 }
 
 impl Default for Graph {
     fn default() -> Self {
-        Graph { nodes: Vec::new(), links: Vec::new(), variables: Vec::new(), resolution: [2048, 2048], next_id: 1 }
+        Graph {
+            nodes: Vec::new(),
+            links: Vec::new(),
+            variables: Vec::new(),
+            comments: Vec::new(),
+            resolution: [2048, 2048],
+            next_id: 1,
+        }
     }
 }
 
@@ -373,6 +418,22 @@ impl Graph {
 
     pub fn contains(&self, id: NodeId) -> bool {
         self.nodes.iter().any(|n| n.id == id)
+    }
+
+    pub fn comment(&self, id: CommentId) -> Option<&Comment> {
+        self.comments.iter().find(|c| c.id == id)
+    }
+
+    pub fn comment_mut(&mut self, id: CommentId) -> Option<&mut Comment> {
+        self.comments.iter_mut().find(|c| c.id == id)
+    }
+
+    /// Add a comment frame; it is drawn behind the nodes it covers.
+    pub fn add_comment(&mut self, text: String, pos: [f32; 2], size: [f32; 2]) -> CommentId {
+        let id = CommentId(self.alloc_id());
+        let size = [size[0].max(Comment::MIN_SIZE[0]), size[1].max(Comment::MIN_SIZE[1])];
+        self.comments.push(Comment { id, text, pos, size, color: 0 });
+        id
     }
 
     /// Add a node with default parameters. Output nodes get a unique name, Input nodes

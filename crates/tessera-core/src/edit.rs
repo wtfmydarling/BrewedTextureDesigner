@@ -3,7 +3,7 @@
 //! [`crate::Document`] records edits for undo / redo.
 
 use crate::gradient::Gradient;
-use crate::graph::{Clipboard, Graph, Link, MAX_RESOLUTION, MIN_RESOLUTION, NodeId, SocketRef};
+use crate::graph::{Clipboard, Comment, CommentId, Graph, Link, MAX_RESOLUTION, MIN_RESOLUTION, NodeId, SocketRef};
 use crate::nodes::{NodeKind, Role};
 use crate::types::{DataType, ParamValue, Value, can_connect};
 
@@ -112,6 +112,35 @@ pub enum Edit {
         node: NodeId,
         name: String,
     },
+    // ------------------------------------------------------------------- comments
+    /// A comment frame around a group of nodes.
+    AddComment {
+        text: String,
+        pos: [f32; 2],
+        size: [f32; 2],
+    },
+    RemoveComments(Vec<CommentId>),
+    /// Move a comment, and with it the nodes it holds (the front end knows which, since
+    /// it knows how large the nodes are drawn).
+    MoveComment {
+        id: CommentId,
+        delta: [f32; 2],
+        nodes: Vec<NodeId>,
+    },
+    /// Drag a corner of a comment: both its position and its size can change.
+    ResizeComment {
+        id: CommentId,
+        pos: [f32; 2],
+        size: [f32; 2],
+    },
+    SetCommentText {
+        id: CommentId,
+        text: String,
+    },
+    SetCommentColor {
+        id: CommentId,
+        color: u8,
+    },
     /// Several edits as one undo step, applied in order: all of them or none.
     Batch(Vec<Edit>),
 }
@@ -149,6 +178,7 @@ pub enum MergeKey {
     Label(NodeId),
     LocalVar(NodeId, String),
     Variable(String, u8),
+    Comment(CommentId, u8),
 }
 
 /// Would a node of type `kind` accept a link from (`from_output`) or to a socket of
@@ -217,6 +247,12 @@ impl Edit {
             | Edit::SetVariableDescription { .. }
             | Edit::ResetVariable(_) => "Change Input Value",
             Edit::RenameVariable { .. } | Edit::BindVariable { .. } => "Rename Input",
+            Edit::AddComment { .. } => "Add Comment",
+            Edit::RemoveComments(_) => "Delete Comment",
+            Edit::MoveComment { .. } => "Move",
+            Edit::ResizeComment { .. } => "Resize Comment",
+            Edit::SetCommentText { .. } => "Edit Comment",
+            Edit::SetCommentColor { .. } => "Color Comment",
             Edit::Batch(edits) => edits.last().map_or("Edit", Edit::label),
         }
     }
@@ -238,6 +274,9 @@ impl Edit {
             Edit::SetVariableRange { name, .. } => MergeKey::Variable(name.clone(), 1),
             Edit::SetVariableDescription { name, .. } => MergeKey::Variable(name.clone(), 2),
             Edit::SetVariableDefault { name, .. } => MergeKey::Variable(name.clone(), 3),
+            Edit::MoveComment { id, .. } => MergeKey::Comment(*id, 0),
+            Edit::ResizeComment { id, .. } => MergeKey::Comment(*id, 1),
+            Edit::SetCommentText { id, .. } => MergeKey::Comment(*id, 2),
             _ => return None,
         })
     }
@@ -474,6 +513,64 @@ impl Edit {
                 let old = graph.node(node).and_then(|n| n.variable.clone());
                 let new = graph.bind_variable(node, &name)?;
                 if old.as_deref() == Some(new.as_str()) { EditResult::unchanged() } else { EditResult::changed() }
+            }
+            Edit::AddComment { text, pos, size } => {
+                if !pos.iter().chain(size.iter()).all(|v| v.is_finite()) {
+                    return Err("A comment needs a position and a size".into());
+                }
+                graph.add_comment(text, pos, size);
+                EditResult::changed()
+            }
+            Edit::RemoveComments(ids) => {
+                let before = graph.comments.len();
+                graph.comments.retain(|c| !ids.contains(&c.id));
+                if graph.comments.len() == before {
+                    return Ok(EditResult::unchanged());
+                }
+                EditResult::changed()
+            }
+            Edit::MoveComment { id, delta, nodes } => {
+                if !delta.iter().all(|d| d.is_finite()) || delta == [0.0, 0.0] {
+                    return Ok(EditResult::unchanged());
+                }
+                let comment = graph.comment_mut(id).ok_or("The comment no longer exists")?;
+                comment.pos = [comment.pos[0] + delta[0], comment.pos[1] + delta[1]];
+                for n in graph.nodes.iter_mut().filter(|n| nodes.contains(&n.id)) {
+                    n.pos = [n.pos[0] + delta[0], n.pos[1] + delta[1]];
+                }
+                EditResult::changed()
+            }
+            Edit::ResizeComment { id, pos, size } => {
+                if !pos.iter().chain(size.iter()).all(|v| v.is_finite()) {
+                    return Err("A comment needs a position and a size".into());
+                }
+                let comment = graph.comment_mut(id).ok_or("The comment no longer exists")?;
+                let size = [size[0].max(Comment::MIN_SIZE[0]), size[1].max(Comment::MIN_SIZE[1])];
+                if comment.pos == pos && comment.size == size {
+                    return Ok(EditResult::unchanged());
+                }
+                comment.pos = pos;
+                comment.size = size;
+                EditResult::changed()
+            }
+            Edit::SetCommentText { id, text } => {
+                let comment = graph.comment_mut(id).ok_or("The comment no longer exists")?;
+                if comment.text == text {
+                    return Ok(EditResult::unchanged());
+                }
+                comment.text = text;
+                EditResult::changed()
+            }
+            Edit::SetCommentColor { id, color } => {
+                if color >= Comment::COLORS {
+                    return Err("There is no such comment color".into());
+                }
+                let comment = graph.comment_mut(id).ok_or("The comment no longer exists")?;
+                if comment.color == color {
+                    return Ok(EditResult::unchanged());
+                }
+                comment.color = color;
+                EditResult::changed()
             }
             Edit::Batch(edits) => {
                 // On a copy, so that a failing edit leaves the graph as it was.

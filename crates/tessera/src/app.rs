@@ -14,7 +14,7 @@ use iced::widget::{image, operation, pane_grid, text_editor};
 use iced::{Point, Rectangle, Size, Subscription, Task, Theme, Vector, keyboard, mouse, window};
 
 use tessera_core::eval::{self, Evaluation};
-use tessera_core::graph::{Clipboard, Graph, Link, NodeId, SocketRef};
+use tessera_core::graph::{Clipboard, CommentId, Graph, Link, NodeId, SocketRef};
 use tessera_core::project::{self, ViewState};
 use tessera_core::{Category, Document, Edit, NodeKind, ParamValue, Value};
 use tessera_engine::{DisplayImage, EngineService, EvalReport, Event, ExportJob, ImageReport, Request};
@@ -123,6 +123,7 @@ pub enum MenuId {
 pub enum ContextTarget {
     Node(NodeId),
     Link(Link),
+    Comment(CommentId),
     Canvas { graph_pos: [f32; 2] },
 }
 
@@ -213,6 +214,8 @@ impl ScreenPick {
 pub struct Ui {
     pub selection: BTreeSet<NodeId>,
     pub selected_link: Option<Link>,
+    /// The comment frame being worked on: it shows its text and color in the properties.
+    pub selected_comment: Option<CommentId>,
     pub graph_view: GraphView,
     pub frame_request: bool,
     pub preview: PreviewState,
@@ -299,7 +302,14 @@ pub enum GraphMessage {
     SelectBox { ids: Vec<NodeId>, additive: bool },
     ClearSelection,
     SelectLink(Link),
+    SelectComment(CommentId),
+    /// Select a comment and put the cursor in its text field (double-click on its title).
+    EditComment(CommentId),
     Move { ids: Vec<NodeId>, delta: [f32; 2] },
+    /// A comment dragged by its title bar, with the nodes it holds.
+    MoveComment { id: CommentId, delta: [f32; 2], nodes: Vec<NodeId> },
+    /// A comment resized by its corner.
+    ResizeComment { id: CommentId, size: [f32; 2] },
     /// A link dragged to a socket; `replacing` is the link it was picked up from.
     Connect { from: SocketRef, to: SocketRef, replacing: Option<Link> },
     /// A link dropped on empty space (the add menu opens); a picked up link is removed.
@@ -392,6 +402,8 @@ pub enum Message {
     ClipboardText(Option<String>),
     Duplicate,
     Delete,
+    /// Frame the selected nodes in a comment (or add an empty one at the cursor).
+    AddComment,
     SelectAll,
     /// Frame the selection, or everything when nothing is selected.
     Frame,
@@ -495,6 +507,7 @@ impl App {
             ui: Ui {
                 selection: BTreeSet::new(),
                 selected_link: None,
+                selected_comment: None,
                 graph_view: GraphView { pan: Vector::ZERO, zoom: 1.0, bounds: Rectangle::default() },
                 frame_request: true,
                 preview: PreviewState {
@@ -818,12 +831,50 @@ impl App {
         if let Some(link) = self.ui.selected_link.take() {
             self.apply(Edit::RemoveLink(link));
         }
+        // A comment goes away on its own: the nodes it framed stay where they are.
+        if let Some(id) = self.ui.selected_comment.take() {
+            self.apply(Edit::RemoveComments(vec![id]));
+        }
         let ids = self.selected_ids();
         if !ids.is_empty() {
             self.apply(Edit::RemoveNodes(ids));
             self.ui.selection.clear();
         }
         self.doc.seal();
+    }
+
+    /// Frame the selected nodes in a comment, or add an empty one where the cursor is.
+    fn add_comment(&mut self) {
+        let graph = self.graph();
+        let mut bounds: Option<[f32; 4]> = None;
+        for node in graph.nodes.iter().filter(|n| self.ui.selection.contains(&n.id)) {
+            let size = view::graph::layout::node_size(graph, node);
+            let r = [node.pos[0], node.pos[1], node.pos[0] + size[0], node.pos[1] + size[1]];
+            bounds = Some(match bounds {
+                Some(b) => [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])],
+                None => r,
+            });
+        }
+        // Room for the title bar above the nodes, and a margin all around them.
+        const MARGIN: f32 = 26.0;
+        use view::graph::layout;
+        let (pos, size) = match bounds {
+            Some(b) => (
+                [b[0] - MARGIN, b[1] - MARGIN - layout::COMMENT_HEADER_H],
+                [b[2] - b[0] + 2.0 * MARGIN, b[3] - b[1] + 2.0 * MARGIN + layout::COMMENT_HEADER_H],
+            ),
+            None => {
+                let at = self.ui.graph_view.to_graph(self.ui.cursor);
+                ([at[0] - 20.0, at[1] - 20.0], [340.0, 260.0])
+            }
+        };
+        self.close_popups();
+        if self.apply(Edit::AddComment { text: String::new(), pos, size }) {
+            self.doc.seal();
+            self.ui.selected_comment = self.graph().comments.last().map(|c| c.id);
+            self.ui.selection.clear();
+            self.ui.selected_link = None;
+        }
     }
 
     fn open_add_menu(&mut self, at: Point, graph_pos: [f32; 2], pending: Option<SocketRef>) -> Task<Message> {
@@ -1207,6 +1258,7 @@ impl App {
                 self.close_popups();
                 self.delete_selection();
             }
+            Message::AddComment => self.add_comment(),
             Message::SelectAll => {
                 self.close_popups();
                 self.ui.selection = self.graph().nodes.iter().map(|n| n.id).collect();
@@ -1624,6 +1676,7 @@ impl App {
             Key::Named(Named::Delete | Named::Backspace) => Message::Delete,
             Key::Named(Named::F1) => Message::Dialog(Some(Dialog::Shortcuts)),
             _ if !ctrl && char('f') => Message::Frame,
+            _ if !ctrl && char('c') && over_graph => Message::AddComment,
             Key::Named(Named::Space) if over_graph => {
                 let at = self.ui.cursor;
                 let pos = self.ui.graph_view.to_graph(at);
@@ -1656,6 +1709,7 @@ impl App {
                     }
                 }
                 self.ui.selected_link = None;
+                self.ui.selected_comment = None;
                 self.doc.seal();
                 self.request_stats();
             }
@@ -1666,16 +1720,42 @@ impl App {
                 }
                 self.ui.selection.extend(ids);
                 self.ui.selected_link = None;
+                self.ui.selected_comment = None;
             }
             GraphMessage::ClearSelection => {
                 self.close_popups();
                 self.ui.selection.clear();
                 self.ui.selected_link = None;
+                self.ui.selected_comment = None;
             }
             GraphMessage::SelectLink(link) => {
                 self.close_popups();
                 self.ui.selection.clear();
+                self.ui.selected_comment = None;
                 self.ui.selected_link = Some(link);
+            }
+            GraphMessage::SelectComment(id) => {
+                self.close_popups();
+                self.ui.selection.clear();
+                self.ui.selected_link = None;
+                self.ui.selected_comment = Some(id);
+            }
+            GraphMessage::EditComment(id) => {
+                self.close_popups();
+                self.ui.selection.clear();
+                self.ui.selected_link = None;
+                self.ui.selected_comment = Some(id);
+                return operation::focus(view::properties::comment_text_id());
+            }
+            GraphMessage::MoveComment { id, delta, nodes } => {
+                self.apply(Edit::MoveComment { id, delta, nodes });
+                self.doc.seal();
+            }
+            GraphMessage::ResizeComment { id, size } => {
+                if let Some(pos) = self.graph().comment(id).map(|c| c.pos) {
+                    self.apply(Edit::ResizeComment { id, pos, size });
+                    self.doc.seal();
+                }
             }
             GraphMessage::Move { ids, delta } => {
                 self.apply(Edit::MoveNodes { ids, delta });

@@ -642,3 +642,89 @@ fn shortcuts_work_on_every_keyboard_layout() {
     key(&mut w, "ж", Physical::Unidentified(keyboard::key::NativeCode::Unidentified), ctrl);
     assert_eq!(count(&w), nodes);
 }
+
+/// Where a comment is on the screen, in window coordinates.
+fn comment_rect(w: &Harness, id: tessera_core::CommentId) -> iced::Rectangle {
+    let view = w.app.ui.graph_view;
+    let t = view::graph::layout::Transform { pan: view.pan, zoom: view.zoom };
+    let comment = w.app.graph().comment(id).expect("the comment");
+    let l = view::graph::layout::comment_layout(comment, &t, iced::Vector::ZERO, None);
+    l.rect + iced::Vector::new(view.bounds.x, view.bounds.y)
+}
+
+/// A comment frames the selected nodes, is dragged around with them, resized by its
+/// corner, recolored, written in and deleted — and its body never steals the mouse from
+/// the canvas underneath.
+#[test]
+fn comments_group_nodes_and_travel_with_them() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    // The canvas reports where it is on the first frame, and the graph is framed in it.
+    w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+    w.send(Message::Frame);
+    w.input(&[]);
+    let levels = w.app.graph().nodes_of(NodeKind::LEVELS).next().expect("a Levels node").id;
+    let start = w.app.graph().node(levels).expect("the node").pos;
+
+    // A comment around the selection, and the node it holds is inside it.
+    w.send(Message::Graph(GraphMessage::Select { node: levels, mode: SelectMode::Replace }));
+    w.send(Message::AddComment);
+    let id = w.app.ui.selected_comment.expect("the new comment is selected");
+    let comment = w.app.graph().comment(id).expect("the comment").clone();
+    let size = view::graph::layout::node_size(w.app.graph(), w.app.graph().node(levels).unwrap());
+    assert!(comment.holds(start, size), "{comment:?} does not hold the node at {start:?}");
+
+    // Dragging the title bar moves the comment and the node in it, by as much of the graph
+    // as the mouse crossed on the screen.
+    let zoom = w.app.ui.graph_view.zoom;
+    let (dx, dy) = (60.0 / zoom, 30.0 / zoom);
+    let rect = comment_rect(&w, id);
+    let title = Point::new(rect.x + 40.0, rect.y + 8.0);
+    drag(&mut w, title, Point::new(title.x + 60.0, title.y + 30.0));
+    let moved = w.app.graph().comment(id).expect("the comment").pos;
+    assert!((moved[0] - comment.pos[0] - dx).abs() < 2.0 && (moved[1] - comment.pos[1] - dy).abs() < 2.0, "{moved:?}");
+    let node_now = w.app.graph().node(levels).expect("the node").pos;
+    assert!((node_now[0] - start[0] - dx).abs() < 2.0 && (node_now[1] - start[1] - dy).abs() < 2.0, "{node_now:?}");
+
+    // One undo puts both back.
+    w.send(Message::Undo);
+    assert_eq!(w.app.graph().node(levels).expect("the node").pos, start);
+    assert_eq!(w.app.graph().comment(id).expect("the comment").pos, comment.pos);
+
+    // The corner resizes it, and nothing can make it smaller than its minimum.
+    let rect = comment_rect(&w, id);
+    let corner = Point::new(rect.x + rect.width - 4.0, rect.y + rect.height - 4.0);
+    drag(&mut w, corner, Point::new(corner.x + 80.0, corner.y + 50.0));
+    let grown = w.app.graph().comment(id).expect("the comment").size;
+    let (gx, gy) = (80.0 / zoom, 50.0 / zoom);
+    assert!((grown[0] - comment.size[0] - gx).abs() < 3.0 && (grown[1] - comment.size[1] - gy).abs() < 3.0, "{grown:?}");
+    let rect = comment_rect(&w, id);
+    let corner = Point::new(rect.x + rect.width - 4.0, rect.y + rect.height - 4.0);
+    drag(&mut w, corner, Point::new(rect.x - 400.0, rect.y - 400.0));
+    let small = w.app.graph().comment(id).expect("the comment").size;
+    assert_eq!(small, tessera_core::Comment::MIN_SIZE);
+
+    // Its text and color are the comment's own, and the properties panel edits them.
+    w.send(Message::Edit(Edit::SetCommentText { id, text: "Roughness".into() }));
+    w.send(Message::Edit(Edit::SetCommentColor { id, color: 3 }));
+    let comment = w.app.graph().comment(id).expect("the comment").clone();
+    assert_eq!((comment.text.as_str(), comment.color), ("Roughness", 3));
+    // There is no fourth-hundredth color.
+    w.send(Message::Edit(Edit::SetCommentColor { id, color: 200 }));
+    assert_eq!(w.app.graph().comment(id).expect("the comment").color, 3);
+
+    // A press in the middle of a comment goes to the canvas: it box-selects instead.
+    let rect = comment_rect(&w, id);
+    let inside = Point::new(rect.x + rect.width - 30.0, rect.y + rect.height / 2.0);
+    drag(&mut w, inside, Point::new(inside.x - 10.0, inside.y + 10.0));
+    assert_eq!(w.app.ui.selected_comment, None, "the body of a comment is not a handle");
+
+    // Selected again by its title bar, Delete removes the frame and keeps the nodes.
+    let title = Point::new(rect.x + 40.0, rect.y + 8.0);
+    drag(&mut w, title, title);
+    assert_eq!(w.app.ui.selected_comment, Some(id));
+    w.send(Message::Delete);
+    assert!(w.app.graph().comment(id).is_none());
+    assert!(w.app.graph().node(levels).is_some(), "deleting a comment keeps its nodes");
+    w.send(Message::Undo);
+    assert_eq!(w.app.graph().comment(id).map(|c| c.text.clone()), Some("Roughness".into()));
+}

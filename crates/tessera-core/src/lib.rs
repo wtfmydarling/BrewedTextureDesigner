@@ -23,7 +23,7 @@ pub mod types;
 pub use document::Document;
 pub use edit::{Edit, EditResult};
 pub use gradient::{Gradient, GradientStop, Interpolation};
-pub use graph::{Clipboard, Graph, Link, Node, NodeId, SocketInfo, SocketKind, SocketRef, Variable};
+pub use graph::{Clipboard, Comment, CommentId, Graph, Link, Node, NodeId, SocketInfo, SocketKind, SocketRef, Variable};
 pub use nodes::{Category, NodeDef, NodeKind, ParamDef, ParamKind, Role};
 pub use types::{DataType, ParamValue, Tiling, Value, can_connect};
 

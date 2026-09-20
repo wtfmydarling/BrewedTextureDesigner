@@ -11,13 +11,13 @@ use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
 use iced::widget::text::{Alignment as TextAlign, LineHeight, Shaping};
 use iced::advanced::mouse;
 use iced::{Color, Element, Pixels, Point, Rectangle, Size, Vector, keyboard};
-use tessera_core::graph::{Link, Node, NodeId, SocketRef};
+use tessera_core::graph::{Comment, CommentId, Link, Node, NodeId, SocketRef};
 use tessera_core::nodes::{OUTPUT_FORMATS, Role};
 use tessera_core::{DataType, NodeKind, Value, can_connect};
 
 use crate::app::{App, ContextTarget, GraphMessage, Message, SelectMode};
 use crate::style;
-use layout::{LINE_H, NodeLayout, SOCKET_R, Transform};
+use layout::{CommentLayout, LINE_H, NodeLayout, SOCKET_R, Transform};
 
 #[derive(Clone, Debug, Default)]
 enum Interaction {
@@ -54,6 +54,25 @@ enum Interaction {
         start: Point,
         current: Point,
         additive: bool,
+    },
+    /// The title bar of a comment was pressed; it becomes a move once the cursor travels.
+    PressedComment {
+        id: CommentId,
+        at: Point,
+    },
+    MovingComment {
+        id: CommentId,
+        /// The nodes the comment held when the move started; they travel with it.
+        nodes: Vec<NodeId>,
+        origin: Point,
+        current: Point,
+    },
+    ResizingComment {
+        id: CommentId,
+        /// The size it had when the corner was grabbed, in graph units.
+        from: [f32; 2],
+        origin: Point,
+        current: Point,
     },
 }
 
@@ -147,6 +166,50 @@ impl GraphCanvas<'_> {
         best.1
     }
 
+    /// Where the comments are, with the one being dragged or resized where the mouse has
+    /// put it. In drawing order (bottom first).
+    fn comment_layouts(&self, state: &State) -> Vec<CommentLayout> {
+        let t = self.transform();
+        let z = t.zoom;
+        self.app
+            .graph()
+            .comments
+            .iter()
+            .map(|c| match &state.interaction {
+                Interaction::MovingComment { id, origin, current, .. } if *id == c.id => {
+                    layout::comment_layout(c, &t, Vector::new((current.x - origin.x) / z, (current.y - origin.y) / z), None)
+                }
+                Interaction::ResizingComment { id, from, origin, current } if *id == c.id => {
+                    let size = resized(*from, *origin, *current, z);
+                    layout::comment_layout(c, &t, Vector::ZERO, Some(size))
+                }
+                _ => layout::comment_layout(c, &t, Vector::ZERO, None),
+            })
+            .collect()
+    }
+
+    /// The comment whose corner is under `p` (the topmost one).
+    fn comment_grip_at(&self, comments: &[CommentLayout], p: Point) -> Option<CommentId> {
+        comments.iter().rev().find(|c| c.grip.contains(p)).map(|c| c.id)
+    }
+
+    /// The comment whose title bar is under `p` (the topmost one). The rest of a comment
+    /// is not a hit: the canvas below it stays usable.
+    fn comment_header_at(&self, comments: &[CommentLayout], p: Point) -> Option<CommentId> {
+        comments.iter().rev().find(|c| c.header.contains(p)).map(|c| c.id)
+    }
+
+    /// The nodes a comment frames, as they are now: they move with it.
+    fn nodes_in_comment(&self, id: CommentId) -> Vec<NodeId> {
+        let graph = self.app.graph();
+        let Some(comment) = graph.comment(id) else { return Vec::new() };
+        graph
+            .nodes
+            .iter()
+            .filter(|n| comment.holds(n.pos, layout::node_size(graph, n)))
+            .map(|n| n.id)
+            .collect()
+    }
     fn can_link(&self, from: &SocketRef, ty: DataType, to: &Hit) -> bool {
         if from.output == to.output || from.node == to.node {
             return false;
@@ -225,6 +288,20 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                         }
                     }
                     Interaction::Moving { current, .. } | Interaction::Linking { current, .. } => {
+                        *current = p?;
+                        return Some(canvas::Action::request_redraw());
+                    }
+                    Interaction::PressedComment { id, at } => {
+                        let p = p?;
+                        if p.distance(*at) > 3.0 {
+                            let id = *id;
+                            let origin = *at;
+                            let nodes = self.nodes_in_comment(id);
+                            state.interaction = Interaction::MovingComment { id, nodes, origin, current: p };
+                            return Some(canvas::Action::request_redraw());
+                        }
+                    }
+                    Interaction::MovingComment { current, .. } | Interaction::ResizingComment { current, .. } => {
                         *current = p?;
                         return Some(canvas::Action::request_redraw());
                     }
@@ -320,6 +397,22 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                             state.interaction = Interaction::PressedNode { node, at: p };
                             return Some(canvas::Action::capture());
                         }
+                        // Comments are behind the nodes: their corner resizes, their title bar moves
+                        // them, and the rest of them lets the canvas through.
+                        let comments = self.comment_layouts(state);
+                        if let Some(id) = self.comment_grip_at(&comments, p) {
+                            let from = graph.comment(id).map_or(Comment::MIN_SIZE, |c| c.size);
+                            state.interaction = Interaction::ResizingComment { id, from, origin: p, current: p };
+                            return Some(canvas::Action::request_redraw().and_capture());
+                        }
+                        if let Some(id) = self.comment_header_at(&comments, p) {
+                            if double {
+                                state.interaction = Interaction::None;
+                                return publish(GraphMessage::EditComment(id));
+                            }
+                            state.interaction = Interaction::PressedComment { id, at: p };
+                            return Some(canvas::Action::capture());
+                        }
                         if let Some(link) = self.link_at(&layouts, p) {
                             return publish(GraphMessage::SelectLink(link));
                         }
@@ -339,10 +432,13 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                     (_, Interaction::Panning { .. }) => Some(canvas::Action::request_redraw()),
                     (mouse::Button::Right, Interaction::PressedRight { at }) => {
                         let layouts = self.layouts(None);
+                        let comments = self.comment_layouts(state);
                         let target = if let Some(node) = self.node_at(&layouts, at) {
                             ContextTarget::Node(node)
                         } else if let Some(link) = self.link_at(&layouts, at) {
                             ContextTarget::Link(link)
+                        } else if let Some(id) = self.comment_header_at(&comments, at).or_else(|| self.comment_grip_at(&comments, at)) {
+                            ContextTarget::Comment(id)
                         } else {
                             ContextTarget::Canvas { graph_pos: t.to_graph(at) }
                         };
@@ -404,6 +500,14 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                         let ids = self.layouts(None).iter().filter(|l| l.rect.intersects(&r)).map(|l| l.id).collect();
                         publish(GraphMessage::SelectBox { ids, additive })
                     }
+                    (mouse::Button::Left, Interaction::PressedComment { id, .. }) => publish(GraphMessage::SelectComment(id)),
+                    (mouse::Button::Left, Interaction::MovingComment { id, nodes, origin, current }) => {
+                        let d = current - origin;
+                        publish(GraphMessage::MoveComment { id, delta: [d.x / t.zoom, d.y / t.zoom], nodes })
+                    }
+                    (mouse::Button::Left, Interaction::ResizingComment { id, from, origin, current }) => {
+                        publish(GraphMessage::ResizeComment { id, size: resized(from, origin, current, t.zoom) })
+                    }
                     (mouse::Button::Left, Interaction::None) => {
                         // Dropping something dragged from a panel.
                         let payload = self.app.ui.drag.clone()?;
@@ -422,7 +526,8 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
 
     fn mouse_interaction(&self, state: &State, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
         match state.interaction {
-            Interaction::Panning { .. } | Interaction::Moving { .. } => mouse::Interaction::Grabbing,
+            Interaction::Panning { .. } | Interaction::Moving { .. } | Interaction::MovingComment { .. } => mouse::Interaction::Grabbing,
+            Interaction::ResizingComment { .. } => mouse::Interaction::ResizingDiagonallyDown,
             Interaction::Linking { .. } => mouse::Interaction::Crosshair,
             _ => {
                 let Some(p) = cursor.position_in(bounds) else { return mouse::Interaction::default() };
@@ -431,7 +536,16 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                 }
                 let layouts = self.layouts(None);
                 if self.socket_at(&layouts, p).is_some() || state.hovered_link.is_some() {
-                    mouse::Interaction::Pointer
+                    return mouse::Interaction::Pointer;
+                }
+                if self.node_at(&layouts, p).is_some() {
+                    return mouse::Interaction::default();
+                }
+                let comments = self.comment_layouts(state);
+                if self.comment_grip_at(&comments, p).is_some() {
+                    mouse::Interaction::ResizingDiagonallyDown
+                } else if self.comment_header_at(&comments, p).is_some() {
+                    mouse::Interaction::Grab
                 } else {
                     mouse::Interaction::default()
                 }
@@ -453,6 +567,18 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
         let z = t.zoom;
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), style::CANVAS);
         draw_grid(&mut frame, &t, bounds.size());
+
+        // Comments are the background of the nodes they frame.
+        let visible_area = Rectangle::with_size(bounds.size());
+        let comments = self.comment_layouts(state);
+        let under_cursor = state.cursor.and_then(|p| comments.iter().rev().find(|c| c.rect.contains(p)).map(|c| c.id));
+        for l in &comments {
+            if !l.rect.intersects(&visible_area) {
+                continue;
+            }
+            let Some(comment) = self.app.graph().comment(l.id) else { continue };
+            self.draw_comment(&mut frame, comment, l, under_cursor == Some(l.id));
+        }
 
         let moving = match &state.interaction {
             Interaction::Moving { ids, origin, current } => {
@@ -501,11 +627,10 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
             _ => None,
         };
         let mut geometries = vec![frame.into_geometry()];
-        let visible = Rectangle::with_size(bounds.size());
         // Selected nodes on top.
         let order = layouts.iter().filter(|l| !sel.contains(&l.id)).chain(layouts.iter().filter(|l| sel.contains(&l.id)));
         for l in order {
-            if !l.rect.intersects(&visible) {
+            if !l.rect.intersects(&visible_area) {
                 continue;
             }
             let Some(node) = graph.node(l.id) else { continue };
@@ -620,17 +745,24 @@ fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// Title shown on a node: its label, the variable of an Input node, the name of an
-/// Output node, or the node type.
-pub fn node_title(node: &Node) -> String {
-    if !node.label.is_empty() {
-        return node.label.clone();
-    }
+/// What the node is: the variable an Input node reads, the name of an Output node, or
+/// the node type. This is what the graph shows in the header of a node, so that a label
+/// never hides which node it is.
+pub fn node_kind_title(node: &Node) -> String {
     match node.def().role {
         Role::Variable(_) => node.variable.clone().unwrap_or_else(|| node.def().name.to_string()),
         Role::Output => node.text("name").to_string(),
         _ => node.def().name.to_string(),
     }
+}
+
+/// Name of a node for the panels and the preview: the label the user gave it, else what
+/// the node is.
+pub fn node_title(node: &Node) -> String {
+    if !node.label.is_empty() {
+        return node.label.clone();
+    }
+    node_kind_title(node)
 }
 
 /// The top `h` pixels of a rectangle with rounded top corners (radius `r`): the band follows
@@ -667,6 +799,53 @@ fn diamond(center: Point, r: f32) -> Path {
 }
 
 impl GraphCanvas<'_> {
+    /// A comment frame: a colored box behind the nodes, with its text in the title bar and
+    /// a corner to resize it by.
+    fn draw_comment(&self, frame: &mut Frame, comment: &Comment, l: &CommentLayout, hovered: bool) {
+        let z = self.transform().zoom;
+        let color = style::comment_color(comment.color);
+        let selected = self.app.ui.selected_comment == Some(comment.id);
+        let radius = (6.0 * z).clamp(1.0, 10.0);
+        let body = Path::rounded_rectangle(l.rect.position(), l.rect.size(), radius.into());
+        frame.fill(&body, style::alpha(color, 0.13));
+        // The title bar is the part that can be grabbed, so it is the solid one.
+        let top = iced::border::Radius { top_left: radius, top_right: radius, bottom_right: 0.0, bottom_left: 0.0 };
+        let header = Path::rounded_rectangle(l.header.position(), l.header.size(), top);
+        frame.fill(&header, style::alpha(color, if hovered || selected { 0.5 } else { 0.34 }));
+        let (width, outline) = if selected { (2.0, style::ACCENT) } else { (1.4, style::alpha(color, 0.8)) };
+        frame.stroke(&body, Stroke::default().with_width(width).with_color(outline));
+
+        let size = scaled(13.5, z);
+        if size >= 5.0 {
+            let content = if comment.text.is_empty() { "Comment".to_string() } else { comment.text.clone() };
+            let max_chars = ((l.rect.width - 14.0 * z) / (7.2 * z)).max(3.0) as usize;
+            let faint = comment.text.is_empty();
+            let text_color = if faint { style::alpha(Color::WHITE, 0.5) } else { style::mix(color, Color::WHITE, 0.78) };
+            frame.fill_text(Text {
+                content: truncate(&content, max_chars),
+                position: Point::new(l.header.x + 8.0 * z, l.header.center_y()),
+                color: text_color,
+                size: Pixels(size),
+                font: style::bold(),
+                align_x: TextAlign::Left,
+                align_y: Vertical::Center,
+                line_height: LineHeight::default(),
+                shaping: Shaping::Auto,
+                max_width: f32::INFINITY,
+            });
+        }
+        // The corner: three lines, brighter when the mouse is on the comment.
+        let grip = style::alpha(color, if hovered || selected { 0.95 } else { 0.6 });
+        let (x1, y1) = (l.grip.x + l.grip.width, l.grip.y + l.grip.height);
+        for i in 1..=3 {
+            let d = l.grip.width * i as f32 / 3.5;
+            let path = Path::new(|b| {
+                b.move_to(Point::new(x1 - d, y1 - 2.0));
+                b.line_to(Point::new(x1 - 2.0, y1 - d));
+            });
+            frame.stroke(&path, Stroke::default().with_width(1.6).with_color(grip));
+        }
+    }
     fn draw_node(&self, frame: &mut Frame, node: &Node, l: &NodeLayout, linking: Option<&(SocketRef, DataType)>, detached: Option<&Link>) {
         let app = self.app;
         let graph = app.graph();
@@ -689,28 +868,50 @@ impl GraphCanvas<'_> {
             radius.into(),
         );
         frame.fill(&shadow, Color::from_rgba(0.0, 0.0, 0.0, 0.28));
+        let category = style::category_color(d.category);
+        // Where the graph ends: an output node is tinted with its category all over, so the
+        // result stands out among the nodes that make it.
+        let is_output = matches!(d.role, Role::Output);
         let body = Path::rounded_rectangle(l.rect.position(), l.rect.size(), radius.into());
-        frame.fill(&body, if node.bypass { style::NODE_BYPASSED } else { style::NODE_BODY });
-        // A neutral header; the category shows as a thin strip along its top.
+        let body_color = match (node.bypass, is_output) {
+            (true, _) => style::NODE_BYPASSED,
+            (false, true) => style::mix(style::NODE_BODY, category, 0.16),
+            (false, false) => style::NODE_BODY,
+        };
+        frame.fill(&body, body_color);
+        // A neutral header; the category shows as a strip along its top.
         let top = iced::border::Radius { top_left: radius, top_right: radius, bottom_right: 0.0, bottom_left: 0.0 };
         let header = Path::rounded_rectangle(l.header.position(), l.header.size(), top);
-        frame.fill(&header, if node.bypass { style::NODE_BYPASSED } else { style::NODE_HEADER });
-        let strip_h = (3.0 * z).clamp(1.5, 4.0);
-        let strip_color = if node.bypass { style::BORDER_LIGHT } else { style::category_color(d.category) };
+        let header_color = match (node.bypass, is_output) {
+            (true, _) => style::NODE_BYPASSED,
+            (false, true) => style::mix(style::NODE_HEADER, category, 0.5),
+            (false, false) => style::NODE_HEADER,
+        };
+        frame.fill(&header, header_color);
+        let strip_h = (6.0 * z).clamp(2.5, 8.0);
+        let strip_color = if node.bypass { style::BORDER_LIGHT } else { category };
         frame.fill(&top_band(l.header, radius, strip_h), strip_color);
+        // The title sits in what the strip leaves of the header.
+        let cy = l.header.center_y() + strip_h * 0.5;
 
         let show_text = z > 0.32;
         let font_size = scaled(12.5, z);
         let small = scaled(11.0, z);
         if show_text {
             let max_chars = ((l.rect.width - 44.0 * z) / (7.0 * z)).max(3.0) as usize;
-            let mut title = truncate(&node_title(node), max_chars);
+            // The header says what the node is; a label the user gave it goes above the node,
+            // where it names it without hiding it.
+            let mut title = truncate(&node_kind_title(node), max_chars);
             if node.bypass {
                 title = truncate(&format!("{title} (bypassed)"), max_chars);
             }
+            if !node.label.is_empty() {
+                let caption = truncate(&node.label, ((l.rect.width / (6.2 * z)).max(3.0) as usize).max(max_chars));
+                text_at(frame, caption, Point::new(l.rect.x + 2.0 * z, l.rect.y - 7.0 * z), small, style::TEXT, TextAlign::Left);
+            }
             frame.fill_text(Text {
                 content: title,
-                position: Point::new(l.header.x + 8.0 * z, l.header.center_y()),
+                position: Point::new(l.header.x + 8.0 * z, cy),
                 color: Color::WHITE,
                 size: Pixels(font_size),
                 font: style::bold(),
@@ -724,7 +925,6 @@ impl GraphCanvas<'_> {
 
         // Header badges: error / warning, preview marker, output format.
         let mut badge_x = l.header.x + l.header.width - 10.0 * z;
-        let cy = l.header.center_y();
         if error.is_some() || warning.is_some() {
             let c = if error.is_some() { style::ERROR } else { style::WARNING };
             frame.fill(&Path::circle(Point::new(badge_x, cy), 6.0 * z), c);
@@ -811,6 +1011,8 @@ impl GraphCanvas<'_> {
             (2.0, style::ACCENT)
         } else if error.is_some() {
             (1.5, style::ERROR)
+        } else if is_output {
+            (1.8, category)
         } else {
             (1.0, style::NODE_OUTLINE)
         };
@@ -843,4 +1045,14 @@ impl GraphCanvas<'_> {
             }
         }
     }
+}
+
+/// The size a comment gets while its corner is dragged from `origin` to `current`, in
+/// graph units.
+fn resized(from: [f32; 2], origin: Point, current: Point, zoom: f32) -> [f32; 2] {
+    let d = current - origin;
+    [
+        (from[0] + d.x / zoom).max(Comment::MIN_SIZE[0]),
+        (from[1] + d.y / zoom).max(Comment::MIN_SIZE[1]),
+    ]
 }

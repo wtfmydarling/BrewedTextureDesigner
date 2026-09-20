@@ -46,6 +46,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let header = crate::view::pane_header("Properties", space());
     let ids: Vec<NodeId> = app.ui.selection.iter().copied().filter(|id| app.graph().contains(*id)).collect();
     let body: Element<'_, Message> = match ids.len() {
+        0 if app.ui.selected_comment.is_some_and(|id| app.graph().comment(id).is_some()) => {
+            comment_view(app, app.ui.selected_comment.expect("a selected comment"))
+        }
         0 => {
             let g = app.graph();
             container(
@@ -74,6 +77,51 @@ pub fn view(app: &App) -> Element<'_, Message> {
         n => multi_view(app, &ids, n),
     };
     column![header, body].into()
+}
+
+/// Id of the text field of a comment (for focusing it from the graph).
+pub fn comment_text_id() -> iced::widget::Id {
+    iced::widget::Id::new("tessera-comment-text")
+}
+
+/// The comment frame being worked on: what it says, and what color it is.
+fn comment_view(app: &App, id: tessera_core::CommentId) -> Element<'_, Message> {
+    let Some(comment) = app.graph().comment(id) else { return space().into() };
+    let swatches = (0..style::COMMENT_COLORS.len() as u8).map(|i| {
+        button(space().width(20).height(20))
+            .style(style::swatch_button(style::comment_color(i), i == comment.color))
+            .on_press(Message::Edit(Edit::SetCommentColor { id, color: i }))
+            .into()
+    });
+    container(
+        column![
+            row![
+                container(space().width(12).height(12)).style(style::chip(style::comment_color(comment.color))),
+                text("Comment").size(16).font(style::bold()),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+            text("A frame around a group of nodes; drag its title bar to move them together.")
+                .size(style::SMALL)
+                .color(style::TEXT_DIM),
+            text_input("What are these nodes for?", &comment.text)
+                .id(comment_text_id())
+                .on_input(move |t| Message::Edit(Edit::SetCommentText { id, text: t }))
+                .size(style::TEXT_SIZE)
+                .padding([4, 6])
+                .style(style::text_input),
+            row(swatches).spacing(6),
+            row![
+                button(text("Delete Comment").size(style::SMALL))
+                    .padding([3, 8])
+                    .style(style::button)
+                    .on_press(Message::Edit(Edit::RemoveComments(vec![id]))),
+            ],
+        ]
+        .spacing(10),
+    )
+    .padding(10)
+    .into()
 }
 
 fn multi_view<'a>(app: &'a App, ids: &[NodeId], n: usize) -> Element<'a, Message> {

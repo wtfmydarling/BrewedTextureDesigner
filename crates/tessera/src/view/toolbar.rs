@@ -93,6 +93,7 @@ fn edit_menu(app: &App) -> Vec<Element<'_, Message>> {
         separator(),
         item("Select All", "Ctrl+A", Some(Message::SelectAll)),
         item("Bypass Node", "Ctrl+B", bypass.map(Message::ToggleBypass)),
+        item(if has_selection { "Frame Selection in a Comment" } else { "Add Comment" }, "C", Some(Message::AddComment)),
     ]
 }
 

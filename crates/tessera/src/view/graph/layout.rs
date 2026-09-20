@@ -1,7 +1,7 @@
 //! Geometry of nodes on the canvas: sizes, socket positions, hit testing.
 
 use iced::{Point, Rectangle, Size, Vector};
-use tessera_core::graph::{Graph, Link, Node, NodeId, SocketInfo};
+use tessera_core::graph::{Comment, CommentId, Graph, Link, Node, NodeId, SocketInfo};
 use tessera_core::nodes::Role;
 
 pub const NODE_W: f32 = 168.0;
@@ -137,4 +137,36 @@ pub fn bezier_distance(points: &[Point; 4], p: Point) -> f32 {
         prev = q;
     }
     best
+}
+
+// ------------------------------------------------------------------------- comments
+
+/// Height of the title bar of a comment, in graph units: the part that can be grabbed to
+/// move it. The rest of a comment lets the mouse through to the nodes and the canvas.
+pub const COMMENT_HEADER_H: f32 = 30.0;
+/// Side of the corner that resizes a comment, in graph units.
+pub const COMMENT_GRIP: f32 = 18.0;
+
+pub struct CommentLayout {
+    pub id: CommentId,
+    pub rect: Rectangle,
+    pub header: Rectangle,
+    /// Bottom-right corner, dragged to resize.
+    pub grip: Rectangle,
+}
+
+/// Where a comment is on the screen. `offset` moves it while it is dragged, `resize`
+/// replaces its size while a corner is dragged.
+pub fn comment_layout(comment: &Comment, t: &Transform, offset: Vector, resize: Option<[f32; 2]>) -> CommentLayout {
+    let size = resize.unwrap_or(comment.size);
+    let z = t.zoom;
+    let min = t.to_screen([comment.pos[0] + offset.x, comment.pos[1] + offset.y]);
+    let rect = Rectangle::new(min, Size::new(size[0] * z, size[1] * z));
+    let header = Rectangle::new(min, Size::new(rect.width, (COMMENT_HEADER_H * z).min(rect.height)));
+    let side = (COMMENT_GRIP * z).min(rect.width).min(rect.height);
+    let grip = Rectangle::new(
+        Point::new(rect.x + rect.width - side, rect.y + rect.height - side),
+        Size::new(side, side),
+    );
+    CommentLayout { id: comment.id, rect, header, grip }
 }

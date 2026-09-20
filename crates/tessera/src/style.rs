@@ -86,15 +86,36 @@ pub fn type_color(ty: DataType) -> Color {
     }
 }
 
+/// The one color in the interface: the strip along the top of a node, and the chip next
+/// to its name in the lists. Bright enough to tell the categories apart at a glance on
+/// the gray nodes.
 pub fn category_color(c: Category) -> Color {
     match c {
-        Category::Values => rgb(132, 102, 46),
-        Category::Generators => rgb(52, 110, 80),
-        Category::Filters => rgb(50, 88, 138),
-        Category::Effects => rgb(36, 106, 114),
-        Category::Adjustments => rgb(100, 74, 138),
-        Category::Output => rgb(136, 60, 60),
+        Category::Values => rgb(198, 152, 62),
+        Category::Generators => rgb(74, 164, 112),
+        Category::Filters => rgb(72, 132, 204),
+        Category::Effects => rgb(56, 160, 170),
+        Category::Adjustments => rgb(148, 110, 198),
+        Category::Output => rgb(200, 86, 86),
     }
+}
+
+/// Colors a comment frame can be given, the plain gray one first. They are muted: a
+/// comment is a background, never the loudest thing on the canvas.
+pub const COMMENT_COLORS: [Color; 8] = [
+    gray(126),
+    rgb(176, 138, 62),
+    rgb(74, 150, 104),
+    rgb(70, 124, 186),
+    rgb(58, 148, 156),
+    rgb(140, 106, 184),
+    rgb(186, 96, 96),
+    rgb(178, 118, 68),
+];
+
+/// The color of a comment frame, whatever number it holds.
+pub fn comment_color(i: u8) -> Color {
+    COMMENT_COLORS[i as usize % COMMENT_COLORS.len()]
 }
 
 pub fn alpha(c: Color, a: f32) -> Color {
@@ -288,6 +309,25 @@ pub fn toggle_button(on: bool) -> impl Fn(&Theme, button_w::Status) -> button_w:
             button_base(Some(bg), ACCENT_TEXT, alpha(ACCENT, 0.45))
         } else {
             flat_button(theme, status)
+        }
+    }
+}
+
+/// One color to pick from a row of them (comment colors): the color itself, outlined when
+/// it is the current one.
+pub fn swatch_button(color: Color, current: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
+    move |_, status| {
+        let bg = match status {
+            button_w::Status::Hovered | button_w::Status::Pressed => mix(color, Color::WHITE, 0.2),
+            _ => color,
+        };
+        let border = if current { ACCENT } else { gray(24) };
+        button_w::Style {
+            background: Some(Background::Color(bg)),
+            text_color: TEXT,
+            border: Border { color: border, width: if current { 2.0 } else { 1.0 }, radius: 3.0.into() },
+            shadow: Shadow::default(),
+            snap: true,
         }
     }
 }

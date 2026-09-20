@@ -35,6 +35,18 @@ fn separator<'a>() -> Element<'a, Message> {
     .into()
 }
 
+/// The colors a comment can be given, as a row of swatches.
+fn colors<'a>(app: &App, id: tessera_core::CommentId) -> Element<'a, Message> {
+    let current = app.graph().comment(id).map_or(0, |c| c.color);
+    let swatches = (0..style::COMMENT_COLORS.len() as u8).map(|i| {
+        button(space().width(18).height(18))
+            .style(style::swatch_button(style::comment_color(i), i == current))
+            .on_press(Message::FromMenu(Box::new(Message::Edit(Edit::SetCommentColor { id, color: i }))))
+            .into()
+    });
+    container(row(swatches).spacing(4)).padding([4, 10]).into()
+}
+
 pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
     let items: Vec<Element<'a, Message>> = match &menu.target {
         ContextTarget::Node(id) => {
@@ -49,6 +61,7 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
                 item("Copy", "Ctrl+C", Some(Message::Copy)),
                 item("Cut", "Ctrl+X", Some(Message::Cut)),
                 item("Disconnect Inputs", "", Some(Message::Edit(Edit::DisconnectInputs(*id)))),
+                item("Frame in a Comment", "C", Some(Message::AddComment)),
                 item(
                     "Export Output…",
                     "",
@@ -59,6 +72,12 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
             ]
         }
         ContextTarget::Link(link) => vec![item("Delete Link", "Del", Some(Message::Edit(Edit::RemoveLink(link.clone()))))],
+        ContextTarget::Comment(id) => vec![
+            item("Edit Text", "double-click", Some(Message::Graph(GraphMessage::EditComment(*id)))),
+            colors(app, *id),
+            separator(),
+            item("Delete Comment", "Del", Some(Message::Edit(Edit::RemoveComments(vec![*id])))),
+        ],
         ContextTarget::Canvas { graph_pos } => vec![
             item(
                 "Add Node…",
@@ -69,9 +88,12 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
             separator(),
             item("Select All", "Ctrl+A", Some(Message::SelectAll)),
             item("Frame All", "", Some(Message::FrameAll)),
+            item("Add Comment", "C", Some(Message::AddComment)),
         ],
     };
-    let height = items.len() as f32 * 27.0 + 12.0;
+    // The row of comment colors is taller than a menu entry.
+    let extra = if matches!(menu.target, ContextTarget::Comment(_)) { 14.0 } else { 0.0 };
+    let height = items.len() as f32 * 27.0 + 12.0 + extra;
     let size = Size::new(230.0, height);
     crate::view::popup_layer(
         container(column(items).spacing(1)).padding(4).style(style::popup),
