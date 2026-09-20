@@ -2122,6 +2122,7 @@ impl App {
                 if let Some(id) = first(NodeKind::TRANSFORM_2D) {
                     self.ui.selection = [id].into_iter().collect();
                     self.ui.preview.node = Some(id);
+                    let _ = self.doc.apply(Edit::SetLabel { node: id, label: "dirt rotation".into() });
                 }
             }
             "tiling" => {
