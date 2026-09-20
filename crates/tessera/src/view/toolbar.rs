@@ -89,7 +89,11 @@ fn edit_menu(app: &App) -> Vec<Element<'_, Message>> {
         item("Cut", "Ctrl+X", sel(Message::Cut)),
         item("Paste", "Ctrl+V", Some(Message::Paste)),
         item("Duplicate", "Ctrl+D", sel(Message::Duplicate)),
-        item("Delete", "Del", (has_selection || app.ui.selected_link.is_some()).then_some(Message::Delete)),
+        item(
+            "Delete",
+            "Del",
+            (has_selection || app.ui.selected_link.is_some() || app.ui.selected_comment.is_some()).then_some(Message::Delete),
+        ),
         separator(),
         item("Select All", "Ctrl+A", Some(Message::SelectAll)),
         item("Bypass Node", "Ctrl+B", bypass.map(Message::ToggleBypass)),

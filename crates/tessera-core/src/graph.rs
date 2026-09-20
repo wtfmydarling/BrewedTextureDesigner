@@ -875,16 +875,24 @@ impl Graph {
     /// Graph-space bounding box of the given nodes, from their positions and `size`.
     pub fn bounds(&self, ids: Option<&[NodeId]>, size: impl Fn(&Node) -> [f32; 2]) -> Option<[f32; 4]> {
         let mut out: Option<[f32; 4]> = None;
+        let mut grow = |r: [f32; 4]| {
+            out = Some(match out {
+                None => r,
+                Some(b) => [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])],
+            });
+        };
         for n in &self.nodes {
             if ids.is_some_and(|ids| !ids.contains(&n.id)) {
                 continue;
             }
             let s = size(n);
-            let r = [n.pos[0], n.pos[1], n.pos[0] + s[0], n.pos[1] + s[1]];
-            out = Some(match out {
-                None => r,
-                Some(b) => [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])],
-            });
+            grow([n.pos[0], n.pos[1], n.pos[0] + s[0], n.pos[1] + s[1]]);
+        }
+        // Comments belong to the graph too: framing everything shows them whole.
+        if ids.is_none() {
+            for c in &self.comments {
+                grow([c.pos[0], c.pos[1], c.pos[0] + c.size[0], c.pos[1] + c.size[1]]);
+            }
         }
         out
     }
