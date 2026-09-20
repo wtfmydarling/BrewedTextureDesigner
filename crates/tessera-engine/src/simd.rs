@@ -46,16 +46,16 @@ pub fn quantize_u8(src: &[f32], dst: &mut [u8]) {
         let one = f32x8::splat(1.0);
         let scale = f32x8::splat(255.0);
         let half = f32x8::splat(0.5);
-        let mut s_chunks = s.chunks_exact(8);
-        let mut d_chunks = d.chunks_exact_mut(8);
-        for (sc, dc) in (&mut s_chunks).zip(&mut d_chunks) {
+        let (s_chunks, s_rest) = s.as_chunks::<8>();
+        let (d_chunks, d_rest) = d.as_chunks_mut::<8>();
+        for (sc, dc) in s_chunks.iter().zip(d_chunks) {
             let v = load8(sc).max(zero).min(one).mul_add(scale, half);
             let q = v.trunc_int().to_array();
             for (o, q) in dc.iter_mut().zip(q) {
                 *o = q as u8;
             }
         }
-        for (o, v) in d_chunks.into_remainder().iter_mut().zip(s_chunks.remainder()) {
+        for (o, v) in d_rest.iter_mut().zip(s_rest) {
             *o = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
         }
     });
@@ -69,16 +69,16 @@ pub fn quantize_u16(src: &[f32], dst: &mut [u16]) {
         let one = f32x8::splat(1.0);
         let scale = f32x8::splat(65535.0);
         let half = f32x8::splat(0.5);
-        let mut s_chunks = s.chunks_exact(8);
-        let mut d_chunks = d.chunks_exact_mut(8);
-        for (sc, dc) in (&mut s_chunks).zip(&mut d_chunks) {
+        let (s_chunks, s_rest) = s.as_chunks::<8>();
+        let (d_chunks, d_rest) = d.as_chunks_mut::<8>();
+        for (sc, dc) in s_chunks.iter().zip(d_chunks) {
             let v = load8(sc).max(zero).min(one).mul_add(scale, half);
             let q = v.trunc_int().to_array();
             for (o, q) in dc.iter_mut().zip(q) {
                 *o = q as u16;
             }
         }
-        for (o, v) in d_chunks.into_remainder().iter_mut().zip(s_chunks.remainder()) {
+        for (o, v) in d_rest.iter_mut().zip(s_rest) {
             *o = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
         }
     });
@@ -89,9 +89,9 @@ pub fn u8_to_f32(src: &[u8], dst: &mut [f32]) {
     assert_eq!(src.len(), dst.len());
     dst.par_chunks_mut(TASK).zip(src.par_chunks(TASK)).for_each(|(d, s)| {
         let inv = f32x8::splat(1.0 / 255.0);
-        let mut s_chunks = s.chunks_exact(8);
-        let mut d_chunks = d.chunks_exact_mut(8);
-        for (sc, dc) in (&mut s_chunks).zip(&mut d_chunks) {
+        let (s_chunks, s_rest) = s.as_chunks::<8>();
+        let (d_chunks, d_rest) = d.as_chunks_mut::<8>();
+        for (sc, dc) in s_chunks.iter().zip(d_chunks) {
             let i = i32x8::new([
                 sc[0] as i32,
                 sc[1] as i32,
@@ -104,7 +104,7 @@ pub fn u8_to_f32(src: &[u8], dst: &mut [f32]) {
             ]);
             dc.copy_from_slice(&(f32x8::from_i32x8(i) * inv).to_array());
         }
-        for (o, v) in d_chunks.into_remainder().iter_mut().zip(s_chunks.remainder()) {
+        for (o, v) in d_rest.iter_mut().zip(s_rest) {
             *o = *v as f32 / 255.0;
         }
     });
@@ -115,9 +115,9 @@ pub fn u16_to_f32(src: &[u16], dst: &mut [f32]) {
     assert_eq!(src.len(), dst.len());
     dst.par_chunks_mut(TASK).zip(src.par_chunks(TASK)).for_each(|(d, s)| {
         let inv = f32x8::splat(1.0 / 65535.0);
-        let mut s_chunks = s.chunks_exact(8);
-        let mut d_chunks = d.chunks_exact_mut(8);
-        for (sc, dc) in (&mut s_chunks).zip(&mut d_chunks) {
+        let (s_chunks, s_rest) = s.as_chunks::<8>();
+        let (d_chunks, d_rest) = d.as_chunks_mut::<8>();
+        for (sc, dc) in s_chunks.iter().zip(d_chunks) {
             let i = i32x8::new([
                 sc[0] as i32,
                 sc[1] as i32,
@@ -130,7 +130,7 @@ pub fn u16_to_f32(src: &[u16], dst: &mut [f32]) {
             ]);
             dc.copy_from_slice(&(f32x8::from_i32x8(i) * inv).to_array());
         }
-        for (o, v) in d_chunks.into_remainder().iter_mut().zip(s_chunks.remainder()) {
+        for (o, v) in d_rest.iter_mut().zip(s_rest) {
             *o = *v as f32 / 65535.0;
         }
     });

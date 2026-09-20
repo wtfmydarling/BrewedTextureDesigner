@@ -10,6 +10,7 @@
 //!   river, niri...), a small region at a time: nothing stops. The loupe is the cursor;
 //!   the path is drawn on the surfaces, and what it is about to cover is read first.
 
+mod pipewire;
 mod screencopy;
 
 use std::collections::HashMap;
@@ -46,6 +47,7 @@ use wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_manager_v1::Z
 
 use self::screencopy::Capture;
 use super::loupe;
+use super::portal::ScreenCast;
 use super::path::{Pixel, Trace};
 use super::stroke::{self, Area, Stroke};
 use super::{Cancel, Mode, Outcome, color, portal};
@@ -99,11 +101,25 @@ fn run(mode: Mode, display: Option<Display>, cancel: &Cancel) -> Result<Outcome,
     let compositor = CompositorState::bind(&globals, &qh).map_err(|_| bind_error("compositor"))?;
     let shm = Shm::bind(&globals, &qh).map_err(|_| bind_error("shared memory"))?;
     let pool = SlotPool::new(64 * 1024, &shm).map_err(|e| format!("Cannot allocate memory to draw: {e}"))?;
-    let screencopy: Option<ZwlrScreencopyManagerV1> = globals.bind(&qh, 1..=3, ()).ok();
-    let Some(screencopy) = screencopy else {
-        return Ok(Outcome::Failed(
-            "This desktop does not let programs read the screen: pick the colors one by one with the color's eyedropper".into(),
-        ));
+    let screen = match globals.bind::<ZwlrScreencopyManagerV1, _, _>(&qh, 1..=3, ()) {
+        // The desktop lets programs read the screen themselves (the wlroots ones).
+        Ok(manager) if !cast_only() => Screen::Copy(manager),
+        // Elsewhere the desktop streams it, once the user allows it (GNOME, KDE).
+        _ => match portal::screen_cast(cancel) {
+            Ok(Some(cast)) => {
+                let nodes: Vec<u32> = cast.streams.iter().map(|s| s.node).collect();
+                match pipewire::Streams::open(cast.socket.try_clone().map_err(|e| e.to_string())?, &nodes) {
+                    Ok(streams) => Screen::Cast(Box::new(streams), cast, Vec::new()),
+                    Err(e) => return Ok(Outcome::Failed(e)),
+                }
+            }
+            Ok(None) => return Ok(Outcome::Cancelled),
+            Err(portal::Error::Unavailable(why)) => {
+                log::info!("no screen cast portal ({why})");
+                return Ok(Outcome::Failed("This desktop does not let programs read the screen".into()));
+            }
+            Err(portal::Error::Failed(e)) => return Ok(Outcome::Failed(format!("The desktop did not share the screen: {e}"))),
+        },
     };
     let cursor_surface = compositor.create_surface(&qh);
     let mut state = State {
@@ -116,7 +132,7 @@ fn run(mode: Mode, display: Option<Display>, cancel: &Cancel) -> Result<Outcome,
         compositor,
         shm,
         pool,
-        screencopy,
+        screen,
         qh: qh.clone(),
         mode,
         overlays: Vec::new(),
@@ -134,6 +150,7 @@ fn run(mode: Mode, display: Option<Display>, cancel: &Cancel) -> Result<Outcome,
         batch: None,
         finishing: false,
         captures: HashMap::new(),
+        finished: Vec::new(),
         next_capture: 0,
         loupe_read: None,
         refreshed: None,
@@ -181,6 +198,41 @@ fn run(mode: Mode, display: Option<Display>, cancel: &Cancel) -> Result<Outcome,
     state.close();
     let _ = queue.roundtrip(&mut state);
     Ok(outcome)
+}
+
+/// Whether to cover the screen with plain windows even where layers are offered (the
+/// tests use it to take the way GNOME takes).
+fn windowed() -> bool {
+    #[cfg(test)]
+    {
+        live_tests::WINDOWED.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
+/// Whether to ask the desktop to stream the screen even when it could be read directly
+/// (the tests use it to take the way GNOME and KDE take).
+fn cast_only() -> bool {
+    #[cfg(test)]
+    {
+        live_tests::CAST_ONLY.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
+/// Where the pixels of the screen come from.
+enum Screen {
+    /// The desktop lets programs read regions of it themselves (wlr-screencopy).
+    Copy(ZwlrScreencopyManagerV1),
+    /// The desktop streams it through PipeWire (the screen cast portal); the cast is kept
+    /// alive with the streams, and each overlay knows which stream shows it.
+    Cast(Box<pipewire::Streams>, ScreenCast, Vec<Option<usize>>),
 }
 
 /// An output as the pick sees it.
@@ -336,7 +388,7 @@ pub struct State {
     compositor: CompositorState,
     shm: Shm,
     pool: SlotPool,
-    screencopy: ZwlrScreencopyManagerV1,
+    screen: Screen,
     qh: QueueHandle<State>,
     mode: Mode,
     overlays: Vec<Overlay>,
@@ -359,6 +411,8 @@ pub struct State {
     /// The button is up: the path ends once its last pixels are read.
     finishing: bool,
     captures: HashMap<usize, Capture>,
+    /// Reads that are done already (the stream always has a frame at hand).
+    finished: Vec<(usize, usize, Option<Pixels>)>,
     next_capture: usize,
     /// The region read for the loupe (capture id, pointer position) or the click.
     loupe_read: Option<(usize, [f32; 2], bool)>,
@@ -374,7 +428,7 @@ impl State {
             let Some(geometry) = self.outputs.info(&output).as_ref().and_then(Geometry::of) else { continue };
             let surface = self.compositor.create_surface(&self.qh);
             let viewport = self.viewporter.as_ref().map(|v| v.get_viewport(&surface, &self.qh, ()));
-            let shell = if let Some(layer_shell) = &self.layer_shell {
+            let shell = if let Some(layer_shell) = self.layer_shell.as_ref().filter(|_| !windowed()) {
                 let layer = layer_shell.create_layer_surface(&self.qh, surface, Layer::Overlay, Some("tessera-eyedropper"), Some(&output));
                 layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
                 layer.set_exclusive_zone(-1);
@@ -415,6 +469,8 @@ impl State {
             size
         };
         overlay.size = Some((w, h));
+        #[cfg(test)]
+        live_tests::COVERED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if overlay.canvas.is_some() {
             return;
         }
@@ -494,7 +550,28 @@ impl State {
         true
     }
 
-    /// Ask for the pixels of an area of an output.
+    /// Make the screen change a little, so that a desktop that streams it only when it
+    /// changes sends a frame.
+    fn nudge(&mut self) {
+        for overlay in &self.overlays {
+            if overlay.size.is_some() {
+                let surface = overlay.surface();
+                surface.damage_buffer(0, 0, 1, 1);
+                surface.commit();
+            }
+        }
+    }
+
+    /// Whether the screen can be read yet (a stream needs its first frame).
+    fn screen_ready(&self) -> bool {
+        match &self.screen {
+            Screen::Copy(_) => true,
+            Screen::Cast(streams, ..) => streams.ready(),
+        }
+    }
+
+    /// Ask for the pixels of an area of an output. The answer comes to
+    /// [`capture_done`](State::capture_done), right away from a stream.
     fn read(&mut self, output: usize, area: Area) -> usize {
         let id = self.next_capture;
         self.next_capture += 1;
@@ -502,16 +579,66 @@ impl State {
         let (x0, y0, x1, y1) = area;
         let (w, h) = overlay.geometry.pixels;
         let area = (x0.clamp(0, w), y0.clamp(0, h), x1.clamp(0, w), y1.clamp(0, h));
-        let capture = Capture::start(&self.screencopy, &self.qh, id, output, &overlay.output, overlay.geometry, area);
-        self.captures.insert(id, capture);
+        match &self.screen {
+            Screen::Copy(manager) => {
+                let capture = Capture::start(manager, &self.qh, id, output, &overlay.output, overlay.geometry, area);
+                self.captures.insert(id, capture);
+            }
+            Screen::Cast(streams, _, of_output) => {
+                let pixels = of_output.get(output).copied().flatten().and_then(|stream| streams.read(stream, area));
+                self.finished.push((id, output, pixels));
+            }
+        }
         id
     }
 
-    /// A read is done (`None`: it failed).
+    /// Hand over the reads a stream answered right away.
+    fn take_finished(&mut self) {
+        for (id, output, pixels) in std::mem::take(&mut self.finished) {
+            self.read_done(id, output, pixels);
+        }
+    }
+
+    /// Follow the streams of a screen cast: which monitor each shows, and its pixels.
+    fn follow_streams(&mut self) {
+        let Screen::Cast(streams, cast, of_output) = &mut self.screen else { return };
+        if of_output.len() != self.overlays.len() {
+            // Each monitor takes the stream the desktop placed on it, or the one in its
+            // order when the desktop says nothing.
+            *of_output = self
+                .overlays
+                .iter()
+                .enumerate()
+                .map(|(i, overlay)| {
+                    let at = |s: &super::portal::CastStream| {
+                        s.position.is_some_and(|(x, y)| (x as f32 - overlay.geometry.x).abs() < 1.0 && (y as f32 - overlay.geometry.y).abs() < 1.0)
+                    };
+                    cast.streams.iter().position(at).or_else(|| (i < cast.streams.len()).then_some(i))
+                })
+                .collect();
+        }
+        for (i, overlay) in self.overlays.iter_mut().enumerate() {
+            // The stream says how many pixels the monitor really has.
+            if overlay.canvas.is_none()
+                && let Some(stream) = of_output.get(i).copied().flatten()
+                && let Some(size) = streams.size(stream)
+                && size != overlay.geometry.pixels
+            {
+                overlay.geometry.pixels = size;
+            }
+        }
+    }
+
+    /// A read by the screen copy is done (`None`: it failed).
     fn capture_done(&mut self, id: usize, pixels: Option<Pixels>) {
         let Some(capture) = self.captures.remove(&id) else { return };
         let output = capture.output();
         drop(capture);
+        self.read_done(id, output, pixels);
+    }
+
+    /// The pixels of a read are there (`None`: they could not be read).
+    fn read_done(&mut self, id: usize, output: usize, pixels: Option<Pixels>) {
         if let Some((loupe, at, click)) = self.loupe_read
             && loupe == id
         {
@@ -537,6 +664,14 @@ impl State {
     }
 
     fn tick(&mut self) {
+        self.follow_streams();
+        self.take_finished();
+        // A stream that has not sent a frame yet has nothing to read: the pointer's way
+        // is remembered until it does.
+        if !self.screen_ready() {
+            self.nudge();
+            return;
+        }
         for i in 0..self.overlays.len() {
             self.present(i);
         }
@@ -549,6 +684,8 @@ impl State {
                 }
             }
         }
+        // A stream answers at once: no need to wait for the next round.
+        self.take_finished();
     }
 
     // ---------------------------------------------------------------- one color
@@ -981,6 +1118,12 @@ mod live_tests {
     use crate::eyedropper::{self, Host};
 
     static SERIAL: Mutex<()> = Mutex::new(());
+    /// Pick through the desktop's stream, as GNOME and KDE make Tessera do.
+    pub static CAST_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    /// Cover the screen with plain windows, as GNOME makes Tessera do.
+    pub static WINDOWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    /// How many surfaces of the eyedropper the desktop has shown.
+    pub static COVERED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     /// Where the reference image is (logical units of the first output), and its size:
     /// within the smallest output the tests use (400 wide, portrait at 200%).
     const REFERENCE: (i32, i32, i32, i32) = (40, 160, 301, 80);
@@ -1037,6 +1180,7 @@ mod live_tests {
     delegate_layer!(Test);
     delegate_registry!(Test);
     delegate_noop!(Test: ignore WlSeat);
+    delegate_noop!(Test: ignore wayland_client::protocol::wl_region::WlRegion);
     delegate_noop!(Test: ZwlrVirtualPointerManagerV1);
     delegate_noop!(Test: ZwlrVirtualPointerV1);
 
@@ -1054,6 +1198,14 @@ mod live_tests {
 
     impl Session {
         fn open() -> Option<Session> {
+            // Under the eyedropper's layers, as a window of the desktop would be.
+            Session::open_at(Layer::Bottom)
+        }
+
+        /// `layer`: where the reference image goes (over everything, when the eyedropper
+        /// covers the screen with fullscreen windows: Sway does not draw what is behind
+        /// those, unlike GNOME).
+        fn open_at(layer: Layer) -> Option<Session> {
             let conn = Connection::connect_to_env().ok()?;
             let (globals, mut queue) = registry_queue_init::<Test>(&conn).ok()?;
             let qh = queue.handle();
@@ -1068,7 +1220,12 @@ mod live_tests {
             let output = state.outputs.outputs().next()?;
             let extent = state.outputs.info(&output)?.logical_size.map(|(w, h)| (w as u32, h as u32))?;
             let (x, y, w, h) = REFERENCE;
-            let layer = layers.create_layer_surface(&qh, compositor.create_surface(&qh), Layer::Bottom, Some("reference"), Some(&output));
+            let surface = compositor.create_surface(&qh);
+            // The reference image never takes the mouse: the eyedropper does.
+            let region = compositor.wl_compositor().create_region(&qh, ());
+            surface.set_input_region(Some(&region));
+            region.destroy();
+            let layer = layers.create_layer_surface(&qh, surface, layer, Some("reference"), Some(&output));
             layer.set_anchor(Anchor::TOP | Anchor::LEFT);
             layer.set_margin(y, 0, 0, x);
             layer.set_size(w as u32, h as u32);
@@ -1104,6 +1261,14 @@ mod live_tests {
             self.flush();
         }
 
+        /// Draw the reference image again, so that the screen changes.
+        fn redraw(&mut self) {
+            let (_, _, w, h) = REFERENCE;
+            self._layer.wl_surface().damage_buffer(0, 0, w, h);
+            self._layer.commit();
+            self.flush();
+        }
+
         fn button(&mut self, button: u32, pressed: bool) {
             self.time += 5;
             self.pointer.button(self.time, button, if pressed { ButtonState::Pressed } else { ButtonState::Released });
@@ -1123,17 +1288,50 @@ mod live_tests {
         let _ = std::process::Command::new("grim").arg("-g").arg(area).arg(path).status();
     }
 
+    /// Whether the path reached the white end of the reference image (which the desktop
+    /// resamples at fractional scales, so its last column is a shade off).
+    fn reached_the_end(colors: &[[f32; 4]]) -> bool {
+        colors.iter().any(|c| c[1] > 0.97 && c[2] > 0.97)
+    }
+
     fn near(a: [f32; 4], b: [u8; 3]) -> bool {
         (0..3).all(|i| ((a[i] * 255.0).round() as i32 - b[i] as i32).abs() <= 1)
     }
 
-    /// Start a pick and give it time to cover the screen.
+    /// Start a pick and wait until it covers the screen.
     fn start(s: &mut Session, mode: Mode) -> impl Future<Output = Outcome> + use<> {
+        COVERED.store(0, std::sync::atomic::Ordering::SeqCst);
         let pick = eyedropper::pick(mode, Host::default());
-        std::thread::sleep(Duration::from_millis(500));
+        let started = Instant::now();
+        while COVERED.load(std::sync::atomic::Ordering::SeqCst) == 0 && started.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(100));
         // The pointer enters the new surfaces when it moves.
         s.move_to((REFERENCE.0 - 20, REFERENCE.1 - 20));
         pick
+    }
+
+    /// Drag across the reference image in a wave, then a little back over the path drawn
+    /// already, and let the eyedropper make a gradient of it.
+    fn drag_across_the_image(s: &mut Session) -> Outcome {
+        let pick = start(s, Mode::Gradient);
+        let (x0, y0) = (REFERENCE.0, REFERENCE.1 + 40);
+        s.move_to((x0, y0));
+        s.button(BUTTON_LEFT, true);
+        let (mut x, mut y) = (x0, y0);
+        while x < x0 + REFERENCE.2 - 1 {
+            x = (x + 3).min(x0 + REFERENCE.2 - 1);
+            y = y0 + (((x - x0) as f32 / 20.0).sin() * 25.0) as i32;
+            s.move_to((x, y));
+        }
+        for _ in 0..10 {
+            x -= 3;
+            s.move_to((x, y));
+        }
+        snapshot("eyedropper_wayland_path");
+        s.button(BUTTON_LEFT, false);
+        futures::executor::block_on(pick)
     }
 
     #[test]
@@ -1144,28 +1342,11 @@ mod live_tests {
             eprintln!("no test compositor (with layer shell and virtual pointers)");
             return;
         };
-        let pick = start(&mut s, Mode::Gradient);
-        let (x0, y0) = (REFERENCE.0, REFERENCE.1 + 40);
-        s.move_to((x0, y0));
-        s.button(BUTTON_LEFT, true);
-        let (mut x, mut y) = (x0, y0);
-        while x < x0 + REFERENCE.2 - 1 {
-            x = (x + 3).min(x0 + REFERENCE.2 - 1);
-            y = y0 + (((x - x0) as f32 / 20.0).sin() * 25.0) as i32;
-            s.move_to((x, y));
-        }
-        // And back a little, over the path already drawn.
-        for _ in 0..10 {
-            x -= 3;
-            s.move_to((x, y));
-        }
-        snapshot("eyedropper_wayland_path");
-        s.button(BUTTON_LEFT, false);
-        let Outcome::Path(colors) = futures::executor::block_on(pick) else { panic!("no path") };
+        let Outcome::Path(colors) = drag_across_the_image(&mut s) else { panic!("no path") };
         // One color per pixel: more on denser outputs.
         assert!(colors.len() >= 330, "{} colors", colors.len());
         assert!(near(colors[0], ramp(0)), "{:?}", colors[0]);
-        assert!(colors.iter().any(|c| near(*c, ramp(300))), "the path went to the end of the image");
+        assert!(reached_the_end(&colors), "the path went to the end of the image");
         // Every color is the image's (scaled images mix neighbors): nothing of the drawn
         // path is picked up.
         for c in &colors {
@@ -1188,6 +1369,98 @@ mod live_tests {
         // At fractional scales the image is resampled: a neighbor's color may be under it.
         let Outcome::Color(c) = futures::executor::block_on(pick) else { panic!("no color") };
         assert!((73..=77).any(|x| near(c, ramp(x))), "{c:?}");
+    }
+
+    /// The way GNOME covers the screen: plain fullscreen windows instead of layers.
+    #[test]
+    #[ignore = "needs a compositor of its own"]
+    fn a_gradient_is_picked_on_windows_covering_the_screen() {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut s) = Session::open_at(Layer::Overlay) else { return };
+        WINDOWED.store(true, std::sync::atomic::Ordering::SeqCst);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drag_across_the_image(&mut s)));
+        WINDOWED.store(false, std::sync::atomic::Ordering::SeqCst);
+        match result.expect("the pick") {
+            Outcome::Path(colors) => {
+                assert!(colors.len() >= 300, "{} colors", colors.len());
+                assert!(near(colors[0], ramp(0)), "{:?}", colors[0]);
+                assert!(reached_the_end(&colors), "the path went to the end of the image");
+            }
+            Outcome::Failed(e) => panic!("{e}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The way GNOME and KDE pick a gradient: the same drag, but the pixels come from the
+    /// desktop's stream (the cast portal) instead of the screen itself.
+    #[test]
+    #[ignore = "needs a desktop with a screen cast portal"]
+    fn a_gradient_is_picked_through_the_portal() {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut s) = Session::open() else { return };
+        // Only where the desktop has that portal (GNOME, KDE and the like).
+        match portal::screen_cast(&Cancel::default()) {
+            Ok(Some(cast)) => drop(cast),
+            _ => {
+                eprintln!("no screen cast portal: test skipped");
+                return;
+            }
+        }
+        CAST_ONLY.store(true, std::sync::atomic::Ordering::SeqCst);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drag_across_the_image(&mut s)));
+        CAST_ONLY.store(false, std::sync::atomic::Ordering::SeqCst);
+        match result.expect("the pick") {
+            Outcome::Path(colors) => {
+                assert!(colors.len() >= 300, "{} colors", colors.len());
+                assert!(near(colors[0], ramp(0)), "{:?}", colors[0]);
+                assert!(reached_the_end(&colors), "the path went to the end of the image");
+                for c in &colors {
+                    assert!((0..301).any(|x| near(*c, ramp(x))), "{c:?} is not in the image");
+                }
+            }
+            Outcome::Failed(e) => panic!("{e}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The whole way GNOME and KDE give the screen: the cast portal hands over a live
+    /// PipeWire stream of the monitors, and the pixels of the reference image are in it.
+    #[test]
+    #[ignore = "needs a desktop with a screen cast portal"]
+    fn the_screen_is_read_through_the_portal() {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut s) = Session::open() else { return };
+        let cancel = Cancel::default();
+        let cast = match portal::screen_cast(&cancel) {
+            Ok(Some(cast)) => cast,
+            Ok(None) => {
+                eprintln!("the screen cast was refused: test skipped");
+                return;
+            }
+            Err(e) => {
+                eprintln!("no screen cast portal ({e:?}): test skipped");
+                return;
+            }
+        };
+        let nodes: Vec<u32> = cast.streams.iter().map(|s| s.node).collect();
+        let socket = cast.socket.try_clone().expect("the portal's socket");
+        let streams = pipewire::Streams::open(socket, &nodes).expect("streams");
+        // The desktop sends frames when the screen changes, as the eyedropper's own
+        // surfaces make it.
+        let started = Instant::now();
+        while !streams.ready() && started.elapsed() < Duration::from_secs(10) {
+            s.redraw();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let size = streams.size(0).unwrap_or_else(|| panic!("no frame of the screen; the stream is {:?}", streams.status(0)));
+        assert!(size.0 >= 1280 && size.1 >= 800, "the whole monitor: {size:?}");
+        // The reference image, read from the stream (the test compositor is at 100%).
+        let (x, y, w, _) = REFERENCE;
+        let row = streams.read(0, (x, y + 10, x + w, y + 11)).expect("pixels");
+        for i in [0, 100, 300] {
+            let read = row.get((x + i, y + 10)).map(color).expect("a pixel of the image");
+            assert!(near(read, ramp(i)), "at {i}: {read:?} instead of {:?}", ramp(i));
+        }
     }
 
     #[test]

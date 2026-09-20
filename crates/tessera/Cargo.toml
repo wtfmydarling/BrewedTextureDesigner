@@ -46,6 +46,7 @@ windows-sys = { version = "0.61", features = [
 # build.
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 x11rb = { version = "0.13", features = ["render", "shape"] }
+libc = "0.2"
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
