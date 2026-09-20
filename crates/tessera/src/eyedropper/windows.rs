@@ -940,6 +940,30 @@ pub(super) mod tests {
         unsafe { SendMessageW(window, msg, buttons, 0) };
     }
 
+    /// Save what the screen shows around the reference image (only what this test put
+    /// there), when snapshots are asked for.
+    fn snapshot(name: &str) {
+        if std::env::var_os("TESSERA_UI_SNAPSHOTS").is_none() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let r = REFERENCE;
+        // SAFETY: reading the screen into a bitmap of this test.
+        unsafe {
+            let Some(mut screen) = Screen::new() else { return };
+            let Some(read) = screen.read(r) else { return };
+            let (w, h) = ((r.right - r.left) as u32, (r.bottom - r.top) as u32);
+            let rgba: Vec<u8> = (r.top..r.bottom)
+                .flat_map(|y| (r.left..r.right).map(move |x| (x, y)))
+                .flat_map(|(x, y)| {
+                    let [red, green, blue] = read.pixel(x, y);
+                    [red, green, blue, 255]
+                })
+                .collect();
+            crate::eyedropper::save_snapshot(name, w, h, &rgba, false);
+        }
+    }
+
     fn finish(pick: impl Future<Output = Outcome>) -> Outcome {
         let outcome = futures::executor::block_on(pick);
         *CURSOR.lock().unwrap() = None;
@@ -1018,6 +1042,7 @@ pub(super) mod tests {
         for back in 1..=10 {
             mouse(WM_MOUSEMOVE, x - back * 3, y);
         }
+        snapshot("eyedropper_windows_path");
         mouse(WM_LBUTTONUP, x - 30, y);
         let Outcome::Path(colors) = finish(pick) else { panic!("no path") };
         assert!(colors.len() >= 330, "{} colors", colors.len());

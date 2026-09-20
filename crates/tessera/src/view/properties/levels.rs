@@ -160,22 +160,29 @@ impl canvas::Program<Message> for Histogram {
         let max = (0..5).filter(|c| *c != 3).map(|c| self.stats.channel_max_count(c)).max().unwrap_or(1).max(1) as f32;
         let bar_w = plot.width / 256.0;
         let scale = |count: u32| ((count as f32 + 1.0).ln() / (max + 1.0).ln()) * plot.height;
-        let colors = [
-            Color::from_rgba8(230, 80, 80, 0.42),
-            Color::from_rgba8(80, 210, 110, 0.42),
-            Color::from_rgba8(90, 140, 240, 0.42),
-        ];
-        for (c, color) in colors.iter().enumerate() {
-            for (i, count) in self.stats.hist[c].iter().enumerate() {
+        // The tones of the image in gray; the channels are drawn over it, as lines, only
+        // when they differ (a grayscale image is one shape, not three tinted ones).
+        let bars = Path::new(|b| {
+            for (i, count) in self.stats.hist[4].iter().enumerate() {
                 if *count == 0 {
                     continue;
                 }
                 let h = scale(*count);
-                frame.fill_rectangle(
-                    Point::new(plot.x + i as f32 * bar_w, plot.y + plot.height - h),
-                    Size::new(bar_w.max(1.0), h),
-                    *color,
-                );
+                b.rectangle(Point::new(plot.x + i as f32 * bar_w, plot.y + plot.height - h), Size::new(bar_w.max(1.0), h));
+            }
+        });
+        frame.fill(&bars, style::gray(104));
+        let colored = self.stats.hist[0] != self.stats.hist[1] || self.stats.hist[1] != self.stats.hist[2];
+        if colored {
+            let colors = [style::rgb(226, 96, 96), style::rgb(96, 206, 122), style::rgb(104, 150, 236)];
+            for (c, color) in colors.iter().enumerate() {
+                let curve = Path::new(|b| {
+                    for (i, count) in self.stats.hist[c].iter().enumerate() {
+                        let p = Point::new(plot.x + (i as f32 + 0.5) * bar_w, plot.y + plot.height - scale(*count));
+                        if i == 0 { b.move_to(p) } else { b.line_to(p) }
+                    }
+                });
+                frame.stroke(&curve, Stroke::default().with_width(1.0).with_color(*color));
             }
         }
         let lum = Path::new(|b| {
@@ -185,6 +192,7 @@ impl canvas::Program<Message> for Histogram {
             }
         });
         frame.stroke(&lum, Stroke::default().with_width(1.2).with_color(style::gray(230)));
+
         let fill = [Color::BLACK, style::rgb(128, 128, 128), Color::WHITE];
         for (i, x) in self.handles(plot).iter().enumerate() {
             frame.stroke(
