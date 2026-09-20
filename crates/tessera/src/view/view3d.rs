@@ -5,7 +5,7 @@
 //! Left drag orbits, right drag moves the light, the wheel zooms.
 
 use iced::widget::shader::{self, Viewport};
-use iced::widget::{button, container, row, shader as shader_widget, text};
+use iced::widget::{button, container, pick_list, row, shader as shader_widget, text};
 use iced::{Alignment, Element, Length, Rectangle, mouse};
 use tessera_core::NodeKind;
 use tessera_core::nodes::{USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL, USAGE_ROUGHNESS};
@@ -18,6 +18,9 @@ use crate::widget::number::number;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
+    /// A cube with rounded edges: flat faces to judge the texture on, and curves to
+    /// catch the light. What a material is usually looked at on.
+    RoundedCube,
     Sphere,
     Cube,
     Plane,
@@ -25,15 +28,22 @@ pub enum Shape {
 }
 
 impl Shape {
-    const ALL: [Shape; 4] = [Shape::Sphere, Shape::Cube, Shape::Plane, Shape::Cylinder];
+    pub const ALL: [Shape; 5] = [Shape::RoundedCube, Shape::Sphere, Shape::Cube, Shape::Plane, Shape::Cylinder];
 
     fn label(self) -> &'static str {
         match self {
+            Shape::RoundedCube => "Rounded Cube",
             Shape::Sphere => "Sphere",
             Shape::Cube => "Cube",
             Shape::Plane => "Plane",
             Shape::Cylinder => "Cylinder",
         }
+    }
+}
+
+impl std::fmt::Display for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
     }
 }
 
@@ -59,7 +69,7 @@ impl Default for Camera {
             distance: 3.6,
             light_yaw: -0.7,
             light_pitch: 0.6,
-            shape: Shape::Sphere,
+            shape: Shape::RoundedCube,
             displacement: 0.04,
             tiling: 1.0,
         }
@@ -68,15 +78,15 @@ impl Default for Camera {
 
 pub fn toolbar(app: &App) -> Element<'_, Message> {
     let cam = app.ui.preview.view3d;
-    let mut r = row![].spacing(3).align_y(Alignment::Center);
-    for shape in Shape::ALL {
-        r = r.push(
-            button(text(shape.label()).size(style::SMALL))
-                .padding([3, 7])
-                .style(style::toggle_button(cam.shape == shape))
-                .on_press(Message::Preview(PreviewMessage::Camera(Camera { shape, ..cam }))),
-        );
-    }
+    // A list rather than a button each: the view next to it is the one that needs the room.
+    let mut r = row![
+        pick_list(Shape::ALL, Some(cam.shape), move |shape| Message::Preview(PreviewMessage::Camera(Camera { shape, ..cam })))
+            .text_size(style::SMALL)
+            .padding([2, 6])
+            .style(style::pick_list)
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center);
     r = r.push(text("Height").size(style::SMALL).color(style::TEXT_DIM));
     r = r.push(
         container(
@@ -95,12 +105,14 @@ pub fn toolbar(app: &App) -> Element<'_, Message> {
         )
         .width(Length::Fixed(60.0)),
     );
-    r = r.push(
-        button(text("Reset").size(style::SMALL))
-            .padding([3, 7])
+    r = r.push(crate::view::tip(
+        button(crate::icons::icon(crate::icons::Icon::Reset, 14.0, style::TEXT_DIM))
+            .padding(4)
             .style(style::flat_button)
             .on_press(Message::Preview(PreviewMessage::Camera(Camera { shape: cam.shape, ..Camera::default() }))),
-    );
+        "Put the camera, the light and the height back where they started",
+        iced::widget::tooltip::Position::Bottom,
+    ));
     r.into()
 }
 
@@ -347,10 +359,50 @@ fn grid(n: u32, uv_scale: [f32; 2], f: impl Fn(f32, f32) -> ([f32; 3], [f32; 3],
     }
 }
 
+/// The six faces of a cube as (normal, u axis, v axis); v runs downwards in the texture.
+const CUBE_FACES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
+    ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
+    ([0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
+    ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, -1.0, 0.0]),
+    ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]),
+    ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+    ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+];
+
 fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
     use std::f32::consts::{PI, TAU};
     let mut out = (Vec::new(), Vec::new());
     match shape {
+        Shape::RoundedCube => {
+            // The surface of a box of half-size `H - R` grown by a ball of radius `R`:
+            // every point of a face is pushed out from the nearest point of that box, which
+            // leaves the middle of a face flat and rounds the edges and corners.
+            const H: f32 = 0.8;
+            const R: f32 = 0.22;
+            for (n, a, b) in CUBE_FACES {
+                grid(
+                    96,
+                    [1.0, 1.0],
+                    |u, v| {
+                        let (s, t) = (u * 2.0 - 1.0, v * 2.0 - 1.0);
+                        let q = [
+                            (n[0] + a[0] * s + b[0] * t) * H,
+                            (n[1] + a[1] * s + b[1] * t) * H,
+                            (n[2] + a[2] * s + b[2] * t) * H,
+                        ];
+                        let core = q.map(|c| c.clamp(-(H - R), H - R));
+                        let out = [q[0] - core[0], q[1] - core[1], q[2] - core[2]];
+                        let normal = normalize(out);
+                        let p = [core[0] + normal[0] * R, core[1] + normal[1] * R, core[2] + normal[2] * R];
+                        // The face's own u axis, along the surface: it turns with the edges.
+                        let along = dot(a, normal);
+                        let tangent = normalize([a[0] - normal[0] * along, a[1] - normal[1] * along, a[2] - normal[2] * along]);
+                        (p, normal, tangent)
+                    },
+                    &mut out,
+                );
+            }
+        }
         Shape::Sphere => grid(
             160,
             [2.0, 1.0],
@@ -369,16 +421,7 @@ fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
             &mut out,
         ),
         Shape::Cube => {
-            // (normal, u axis, v axis) per face; v runs downwards in the texture.
-            let faces: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
-                ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
-                ([0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
-                ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, -1.0, 0.0]),
-                ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]),
-                ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
-                ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
-            ];
-            for (n, a, b) in faces {
+            for (n, a, b) in CUBE_FACES {
                 grid(
                     64,
                     [1.0, 1.0],

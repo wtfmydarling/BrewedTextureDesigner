@@ -25,7 +25,8 @@ pub fn root(app: &App) -> Element<'_, Message> {
         let body: Element<'_, Message> = match pane {
             Pane::Library => library::view(app),
             Pane::Graph => column![toolbar::graph_header(app), graph::view(app)].into(),
-            Pane::Preview => preview::view(app),
+            Pane::View3D => preview::view_3d(app),
+            Pane::View2D => preview::view_2d(app),
             Pane::Inputs => inputs::view(app),
             Pane::Properties => properties::view(app),
         };

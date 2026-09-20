@@ -1,4 +1,4 @@
-//! The 2D / 3D view pane.
+//! The two views of the result: the model on the left, the image on the right.
 
 pub mod overlay;
 pub mod render;
@@ -7,7 +7,7 @@ use iced::widget::{button, center, column, container, row, shader, space, stack,
 use iced::{Alignment, Element, Length};
 use tessera_core::nodes::Role;
 
-use crate::app::{App, Message, PreviewMessage, ViewMode};
+use crate::app::{App, Message, PreviewMessage};
 use crate::icons::{Icon, icon};
 use crate::style;
 use crate::view::tip;
@@ -15,79 +15,77 @@ use iced::widget::tooltip::Position;
 
 const CHANNELS: [&str; 6] = ["RGBA", "RGB", "R", "G", "B", "A"];
 
-fn tab<'a>(label: &'a str, ic: Icon, active: bool, message: Message) -> Element<'a, Message> {
-    button(row![icon(ic, 14.0, if active { style::ACCENT_TEXT } else { style::TEXT_DIM }), text(label).size(style::TEXT_SIZE)].spacing(5).align_y(Alignment::Center))
-        .padding([3, 8])
-        .style(style::toggle_button(active))
-        .on_press(message)
-        .into()
-}
-
-fn toolbar(app: &App) -> Element<'_, Message> {
+/// The header of the 2D view: which node is shown, the channels, tiling and zoom.
+fn toolbar_2d(app: &App) -> Element<'_, Message> {
     let p = &app.ui.preview;
     let node_name = p.node.and_then(|id| app.graph().node(id)).map(crate::view::graph::node_title);
     let mut bar = row![
-        tab("2D", Icon::Image, p.mode == ViewMode::TwoD, Message::Preview(PreviewMessage::Mode(ViewMode::TwoD))),
-        tab("3D", Icon::Cube, p.mode == ViewMode::ThreeD, Message::Preview(PreviewMessage::Mode(ViewMode::ThreeD))),
-    ]
-    .spacing(4)
-    .align_y(Alignment::Center);
-    if p.mode == ViewMode::TwoD {
-        bar = bar.push(match node_name {
+        icon(Icon::Image, 14.0, style::TEXT_DIM),
+        match node_name {
             Some(n) => text(n).size(style::TEXT_SIZE).color(style::TEXT),
             None => text("double-click a node to show it here").size(style::SMALL).color(style::TEXT_DIM),
-        });
-        bar = bar.push(space().width(Length::Fill));
-        for (i, name) in CHANNELS.iter().enumerate() {
-            let active = p.channel == i as u32;
-            bar = bar.push(
-                button(text(*name).size(style::SMALL))
-                    .padding([3, 7])
-                    .style(style::toggle_button(active))
-                    .on_press(Message::Preview(PreviewMessage::Channel(i as u32))),
-            );
-        }
-        bar = bar.push(tip(
-            button(icon(Icon::Grid, 15.0, if p.show_tiling { style::ACCENT_TEXT } else { style::TEXT_DIM }))
-                .padding(4)
-                .style(style::toggle_button(p.show_tiling))
-                .on_press(Message::Preview(PreviewMessage::ToggleTiling)),
-            "Repeat the image around itself the way the node tiles",
-            Position::Bottom,
-        ));
-        bar = bar.push(tip(
-            button(icon(Icon::Fit, 15.0, style::TEXT_DIM)).padding(4).style(style::flat_button).on_press(Message::Preview(PreviewMessage::Fit)),
-            "Fit the image in the view (double-click the view)",
-            Position::Bottom,
-        ));
-        bar = bar.push(tip(
-            button(text("1:1").size(style::SMALL)).padding([3, 6]).style(style::flat_button).on_press(Message::Preview(PreviewMessage::OneToOne)),
-            "One image pixel per screen pixel",
-            Position::Bottom,
-        ));
-    } else {
-        bar = bar.push(text("Outputs with a Usage are shown on the model").size(style::SMALL).color(style::TEXT_DIM));
-        bar = bar.push(space().width(Length::Fill));
-        bar = bar.push(crate::view::view3d::toolbar(app));
+        },
+        space().width(Length::Fill),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    for (i, name) in CHANNELS.iter().enumerate() {
+        let active = p.channel == i as u32;
+        bar = bar.push(
+            button(text(*name).size(style::SMALL))
+                .padding([3, 6])
+                .style(style::toggle_button(active))
+                .on_press(Message::Preview(PreviewMessage::Channel(i as u32))),
+        );
     }
-    container(bar.align_y(Alignment::Center).height(Length::Fixed(crate::view::HEADER_H))).padding([0, 8]).width(Length::Fill).style(style::header_bar).into()
+    bar = bar.push(tip(
+        button(icon(Icon::Grid, 15.0, if p.show_tiling { style::ACCENT_TEXT } else { style::TEXT_DIM }))
+            .padding(4)
+            .style(style::toggle_button(p.show_tiling))
+            .on_press(Message::Preview(PreviewMessage::ToggleTiling)),
+        "Repeat the image around itself the way the node tiles",
+        Position::Bottom,
+    ));
+    bar = bar.push(tip(
+        button(icon(Icon::Fit, 15.0, style::TEXT_DIM)).padding(4).style(style::flat_button).on_press(Message::Preview(PreviewMessage::Fit)),
+        "Fit the image in the view (double-click the view)",
+        Position::Bottom,
+    ));
+    bar = bar.push(tip(
+        button(text("1:1").size(style::SMALL)).padding([3, 6]).style(style::flat_button).on_press(Message::Preview(PreviewMessage::OneToOne)),
+        "One image pixel per screen pixel",
+        Position::Bottom,
+    ));
+    header(bar)
 }
 
-fn footer(app: &App) -> Element<'_, Message> {
+/// The header of the 3D view: the shape and the light.
+fn toolbar_3d(app: &App) -> Element<'_, Message> {
+    let bar = row![icon(Icon::Cube, 14.0, style::TEXT_DIM), space().width(Length::Fill), crate::view::view3d::toolbar(app)]
+        .spacing(6)
+        .align_y(Alignment::Center);
+    header(bar)
+}
+
+fn header<'a>(bar: iced::widget::Row<'a, Message>) -> Element<'a, Message> {
+    container(bar.align_y(Alignment::Center).height(Length::Fixed(crate::view::HEADER_H)))
+        .padding([0, 8])
+        .width(Length::Fill)
+        .style(style::header_bar)
+        .into()
+}
+
+/// The line under the 2D view: the size of the image, the zoom, and the pixel under the
+/// cursor. Words in the interface font, numbers in the monospaced one: they change under
+/// the cursor and should not make the line jump.
+fn footer_2d(app: &App) -> Element<'_, Message> {
     let p = &app.ui.preview;
-    // Words in the interface font, numbers in the monospaced one: they change under the
-    // cursor and should not make the line jump.
-    let mut words = Vec::new();
     let mut numbers = Vec::new();
-    if p.mode == ViewMode::ThreeD {
-        let maps = crate::view::view3d::map_names(app);
-        words.push(if maps.is_empty() { "no maps".to_string() } else { maps.join(" · ") });
-        words.push("left drag orbits, right drag moves the light, the wheel zooms".to_string());
-    } else if let Some(img) = &app.res.preview {
+    if let Some(img) = &app.res.preview {
         numbers.push(format!("{}×{}", img.size[0], img.size[1]));
         numbers.push(format!("{:.0}%", p.zoom * 100.0));
     }
-    if let (ViewMode::TwoD, Some(px), Some(node)) = (p.mode, p.probe, p.node) {
+    if let (Some(px), Some(node)) = (p.probe, p.node) {
         numbers.push(format!("x {} y {}", px[0], px[1]));
         if let Some((n, at, c)) = app.res.probe
             && n == node
@@ -96,6 +94,20 @@ fn footer(app: &App) -> Element<'_, Message> {
             numbers.push(format!("R {:.3}  G {:.3}  B {:.3}  A {:.3}", c[0], c[1], c[2], c[3]));
         }
     }
+    footer(numbers, Vec::new())
+}
+
+/// The line under the 3D view: the maps on the model, and how to move it.
+fn footer_3d(app: &App) -> Element<'_, Message> {
+    let maps = crate::view::view3d::map_names(app);
+    let words = vec![
+        if maps.is_empty() { "no maps: give an Output a Usage".to_string() } else { maps.join(" · ") },
+        "left drag orbits, right drag moves the light, the wheel zooms".to_string(),
+    ];
+    footer(Vec::new(), words)
+}
+
+fn footer<'a>(numbers: Vec<String>, words: Vec<String>) -> Element<'a, Message> {
     let line = row![
         text(numbers.join("   ·   ")).size(style::SMALL).font(style::mono()).color(style::TEXT_DIM),
         text(words.join("   ·   ")).size(style::SMALL).color(style::TEXT_FAINT),
@@ -161,10 +173,12 @@ fn content_2d(app: &App) -> Element<'_, Message> {
     container(stack(layers)).style(style::canvas_frame).width(Length::Fill).height(Length::Fill).into()
 }
 
-pub fn view(app: &App) -> Element<'_, Message> {
-    let content = match app.ui.preview.mode {
-        ViewMode::TwoD => content_2d(app),
-        ViewMode::ThreeD => crate::view::view3d::view(app),
-    };
-    column![toolbar(app), content, footer(app)].into()
+/// The 2D view: the image the shown node computes.
+pub fn view_2d(app: &App) -> Element<'_, Message> {
+    column![toolbar_2d(app), content_2d(app), footer_2d(app)].into()
+}
+
+/// The 3D view: the model wearing the maps the graph outputs.
+pub fn view_3d(app: &App) -> Element<'_, Message> {
+    column![toolbar_3d(app), crate::view::view3d::view(app), footer_3d(app)].into()
 }

@@ -5,7 +5,7 @@ use iced::widget::{button, column, container, image, pick_list, row, rule, space
 use iced::{Alignment, Element, Length};
 use tessera_core::Edit;
 
-use crate::app::{App, Dialog, MenuId, Message, PreviewMessage, ViewMode};
+use crate::app::{App, Dialog, MenuId, Message, PreviewMessage};
 use crate::icons::{Icon, icon};
 use crate::style;
 use crate::view::tip;
@@ -101,8 +101,6 @@ fn view_menu(app: &App) -> Vec<Element<'_, Message>> {
     let p = &app.ui.preview;
     let check = |on: bool, label: &str| format!("{}  {label}", if on { "●" } else { "○" });
     vec![
-        item(check(p.mode == ViewMode::TwoD, "2D View"), "", Some(Message::Preview(PreviewMessage::Mode(ViewMode::TwoD)))),
-        item(check(p.mode == ViewMode::ThreeD, "3D View"), "", Some(Message::Preview(PreviewMessage::Mode(ViewMode::ThreeD)))),
         item(check(p.show_tiling, "Show Tiling in 2D View"), "", Some(Message::Preview(PreviewMessage::ToggleTiling))),
         separator(),
         item("Frame Selection / All", "F", Some(Message::Frame)),

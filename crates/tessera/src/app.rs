@@ -81,12 +81,6 @@ impl GraphView {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ViewMode {
-    TwoD,
-    ThreeD,
-}
-
 #[derive(Clone, Debug)]
 pub struct PreviewState {
     pub node: Option<NodeId>,
@@ -97,7 +91,6 @@ pub struct PreviewState {
     pub pan: Vector,
     pub fit: bool,
     pub bounds: Rectangle,
-    pub mode: ViewMode,
     pub probe: Option<[u32; 2]>,
     pub view3d: view::view3d::Camera,
 }
@@ -106,7 +99,9 @@ pub struct PreviewState {
 pub enum Pane {
     Library,
     Graph,
-    Preview,
+    /// The model, on the left of the 2D view, as in the programs this one follows.
+    View3D,
+    View2D,
     Inputs,
     Properties,
 }
@@ -329,7 +324,6 @@ pub enum PreviewMessage {
     ToggleTiling,
     Fit,
     OneToOne,
-    Mode(ViewMode),
     View { zoom: f32, pan: Vector, fit: bool },
     Bounds(Rectangle),
     Probe(Option<[u32; 2]>),
@@ -477,7 +471,12 @@ fn default_panes() -> pane_grid::State<Pane> {
         split(
             Axis::Vertical,
             0.765,
-            split(Axis::Horizontal, 0.6, C::Pane(Pane::Graph), C::Pane(Pane::Preview)),
+            split(
+                Axis::Horizontal,
+                0.6,
+                C::Pane(Pane::Graph),
+                split(Axis::Vertical, 0.42, C::Pane(Pane::View3D), C::Pane(Pane::View2D)),
+            ),
             split(Axis::Horizontal, 0.34, C::Pane(Pane::Inputs), C::Pane(Pane::Properties)),
         ),
     ))
@@ -518,7 +517,6 @@ impl App {
                     pan: Vector::ZERO,
                     fit: true,
                     bounds: Rectangle::default(),
-                    mode: ViewMode::TwoD,
                     probe: None,
                     view3d: view::view3d::Camera::default(),
                 },
@@ -692,11 +690,9 @@ impl App {
         self.send(Request::Materials(self.material_nodes()));
     }
 
-    /// Output nodes the 3D view uses (one per usage).
+    /// Output nodes the 3D view uses (one per usage). The 3D view is always on screen, so
+    /// the maps it shows are always kept up to date.
     pub fn material_nodes(&self) -> Vec<NodeId> {
-        if self.ui.preview.mode != ViewMode::ThreeD {
-            return Vec::new();
-        }
         let mut seen = HashSet::new();
         self.graph()
             .nodes_of(NodeKind::OUTPUT)
@@ -1869,11 +1865,6 @@ impl App {
                 p.pan = Vector::ZERO;
                 p.fit = false;
             }
-            PreviewMessage::Mode(mode) => {
-                p.mode = mode;
-                let nodes = self.material_nodes();
-                self.send(Request::Materials(nodes));
-            }
             PreviewMessage::View { zoom, pan, fit } => {
                 p.zoom = zoom;
                 p.pan = pan;
@@ -2119,7 +2110,6 @@ impl App {
                     self.ui.preview.node = Some(id);
                 }
             }
-            "3d" => self.ui.preview.mode = ViewMode::ThreeD,
             "dialog" => {
                 let _ = self.doc.apply(Edit::SetResolution([1024, 1024]));
                 self.ui.dialog = Some(Dialog::Unsaved(PendingAction::Quit));
