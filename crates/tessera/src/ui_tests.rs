@@ -334,6 +334,61 @@ fn a_color_is_picked_with_a_click_and_keeps_its_alpha() {
     assert_eq!(got[3], 0.5, "alpha kept");
 }
 
+/// What the eyedropper brings back goes where it was started from, and the app never
+/// stays stuck on a pick: a second click changes nothing, cancelling ends it, and a
+/// failure is told in the status bar.
+#[test]
+fn a_pick_ends_up_where_the_eyedropper_was_clicked() {
+    use crate::app::PickMessage;
+    use crate::eyedropper::Outcome as Picked;
+
+    let mut w = harness!(|app: &App| view::root(app), 1680.0, 1000.0);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::UNIFORM_COLOR, pos: [0.0, 0.0] }));
+    let uniform = w.app.ui.selection.first().copied().expect("the new node is selected");
+    w.send(Message::Edit(Edit::SetParam { node: uniform, key: "color".into(), value: ParamValue::Color([0.1, 0.1, 0.1, 0.5]) }));
+    let color_target = PickTarget::Color(ColorTarget::Param(uniform, "color".into()));
+
+    // The button starts a pick, and a second click on another one changes nothing.
+    w.send(Message::Pick(PickMessage::Start(color_target.clone())));
+    assert_eq!(w.app.picking(), Some(&color_target));
+    let gradient_map = w.app.graph().nodes_of(NodeKind::GRADIENT_MAP).next().map(|n| n.id).expect("a Gradient Map");
+    let gradient_target = PickTarget::Gradient(gradient_map, "gradient".into());
+    w.send(Message::Pick(PickMessage::Start(gradient_target.clone())));
+    assert_eq!(w.app.picking(), Some(&color_target), "one pick at a time");
+
+    // A color keeps the alpha of the parameter it lands in.
+    w.send(Message::Pick(PickMessage::Picked(Picked::Color([0.2, 0.4, 0.6, 1.0]))));
+    assert_eq!(w.app.picking(), None);
+    let color = match w.app.graph().node(uniform).and_then(|n| n.value("color")) {
+        Some(ParamValue::Color(c)) => *c,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(color, [0.2, 0.4, 0.6, 0.5]);
+
+    // The colors along a path become the gradient.
+    w.send(Message::Pick(PickMessage::Start(gradient_target.clone())));
+    let path: Vec<[f32; 4]> = (0..64).map(|i| [i as f32 / 63.0, 0.0, 0.0, 1.0]).collect();
+    w.send(Message::Pick(PickMessage::Picked(Picked::Path(path))));
+    assert_eq!(w.app.picking(), None);
+    let gradient = gradient_of(&w.app, gradient_map);
+    assert!(gradient.stops.len() <= 4, "{} stops", gradient.stops.len());
+    assert!(gradient.sample(0.0)[0] < 0.05 && gradient.sample(1.0)[0] > 0.95, "{gradient:?}");
+
+    // Cancelling ends the pick at once, and what comes late is ignored.
+    w.send(Message::Pick(PickMessage::Start(color_target.clone())));
+    w.send(Message::Pick(PickMessage::Cancel));
+    assert_eq!(w.app.picking(), None);
+    w.send(Message::Pick(PickMessage::Picked(Picked::Color([1.0, 1.0, 1.0, 1.0]))));
+    assert_eq!(w.app.graph().node(uniform).and_then(|n| n.value("color")), Some(&ParamValue::Color([0.2, 0.4, 0.6, 0.5])));
+
+    // A pick that cannot be done says why.
+    w.send(Message::Pick(PickMessage::Start(color_target)));
+    w.send(Message::Pick(PickMessage::Picked(Picked::Failed("no screen here".into()))));
+    assert_eq!(w.app.picking(), None);
+    let status = w.app.ui.status.as_ref().expect("a status");
+    assert!(status.error && status.text.contains("no screen here"), "{status:?}");
+}
+
 /// Esc (or a right click) ends the pick without changing anything.
 #[test]
 fn escape_cancels_a_pick() {
