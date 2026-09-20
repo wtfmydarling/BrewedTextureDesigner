@@ -146,7 +146,8 @@ pub fn select_channels<T: Copy + Send + Sync + Default>(rgba: &[T], channels: &[
     let mut out = vec![T::default(); pixels * n];
     const PIX: usize = 1 << 14;
     out.par_chunks_mut(PIX * n).zip(rgba.par_chunks(PIX * 4)).for_each(|(o, s)| {
-        for (op, sp) in o.chunks_exact_mut(n).zip(s.chunks_exact(4)) {
+        let (pixels, _) = s.as_chunks::<4>();
+        for (op, sp) in o.chunks_exact_mut(n).zip(pixels) {
             for (dst, &c) in op.iter_mut().zip(channels) {
                 *dst = sp[c];
             }
@@ -225,8 +226,8 @@ pub fn image_stats(rgba: &[f32], width: u32, height: u32) -> ImageStats {
             let mut vsum = f32x8::splat(0.0);
             let mut vmin = p.min;
             let mut vmax = p.max;
-            let mut chunks = chunk.chunks_exact(8);
-            for c in &mut chunks {
+            let (eights, tail) = chunk.as_chunks::<8>();
+            for c in eights {
                 let v = load8(c);
                 vmin = v.min(vmin);
                 vmax = v.max(vmax);
@@ -246,7 +247,8 @@ pub fn image_stats(rgba: &[f32], width: u32, height: u32) -> ImageStats {
                 hist[4][bin_of(l[4] + l[5] + l[6])] += 1;
             }
             let mut tail_sum = [0.0f64; 8];
-            for px in chunks.remainder().chunks_exact(4) {
+            let (tail_pixels, _) = tail.as_chunks::<4>();
+            for px in tail_pixels {
                 for c in 0..4 {
                     p.hist[c][bin_of(px[c])] += 1;
                     if !px[c].is_nan() {
@@ -370,7 +372,8 @@ mod tests {
         let mut mn = [f32::INFINITY; 4];
         let mut mx = [f32::NEG_INFINITY; 4];
         let mut sum = [0.0f64; 4];
-        for px in src.chunks_exact(4) {
+        let (pixels, _) = src.as_chunks::<4>();
+        for px in pixels {
             for c in 0..4 {
                 hist[c][bin_of(px[c])] += 1;
                 mn[c] = mn[c].min(px[c]);

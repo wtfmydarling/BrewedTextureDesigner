@@ -183,7 +183,7 @@ pub fn bench() -> Result<(), String> {
     let scalar_s = time_ms(3, || {
         let mut hist = [[0u32; 256]; 5];
         let (mut mn, mut mx, mut sum) = ([f32::MAX; 4], [f32::MIN; 4], [0f64; 4]);
-        for px in src.chunks_exact(4) {
+        for px in src.as_chunks::<4>().0 {
             for c in 0..4 {
                 hist[c][((px[c] * 256.0) as usize).min(255)] += 1;
                 mn[c] = mn[c].min(px[c]);

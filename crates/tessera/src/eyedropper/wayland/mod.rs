@@ -279,7 +279,7 @@ impl Geometry {
     }
 
     /// A desktop point in this output's pixels.
-    fn to_pixels(&self, p: [f32; 2]) -> (f32, f32) {
+    fn to_pixels(self, p: [f32; 2]) -> (f32, f32) {
         let (sx, sy) = self.scale();
         ((p[0] - self.x) * sx, (p[1] - self.y) * sy)
     }
@@ -1257,7 +1257,7 @@ mod live_tests {
             }
             let mut pool = SlotPool::new((w * h * 4) as usize, &state.shm).ok()?;
             let (buffer, canvas) = pool.create_buffer(w, h, w * 4, Format::Xrgb8888).ok()?;
-            for (i, px) in canvas.chunks_exact_mut(4).enumerate() {
+            for (i, px) in canvas.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let [r, g, b] = ramp(i as i32 % w);
                 px.copy_from_slice(&[b, g, r, 255]);
             }

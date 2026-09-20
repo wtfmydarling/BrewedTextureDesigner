@@ -10,6 +10,7 @@ pub type Pixel = (i32, i32);
 const MAX_SAMPLES: usize = 4096;
 /// Colors kept while a path is dragged: about a kilometre of screen, then it stops
 /// growing (the gradient is made of far fewer anyway).
+#[cfg_attr(target_os = "macos", allow(dead_code, reason = "only the live picks walk a path themselves"))]
 pub const MAX_COLORS: usize = 1 << 20;
 /// How far (0..1 per channel) the gradient may stray from the colors along the path.
 const TOLERANCE: f32 = 0.012;
@@ -68,10 +69,12 @@ fn pixel(p: (f32, f32)) -> Pixel {
 
 /// Longest jump of the mouse handled in one go: a fast mouse can cross the screen between
 /// two of its events, and the eyedropper would read all of it at once.
+#[cfg_attr(target_os = "macos", allow(dead_code, reason = "only the live picks walk a path themselves"))]
 pub const MAX_JUMP: f32 = 128.0;
 
 /// Split the way from `from` to `to` into steps of at most [`MAX_JUMP`], so that no step
 /// reads too much of the screen. The last one is `to` itself.
+#[cfg_attr(target_os = "macos", allow(dead_code, reason = "only the live picks walk a path themselves"))]
 pub fn steps(from: (f32, f32), to: (f32, f32)) -> Vec<(f32, f32)> {
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
     if !(dx.is_finite() && dy.is_finite()) {

@@ -373,7 +373,9 @@ impl Picker {
         // ARGB32, premultiplied, in the server's byte order.
         let data: Vec<u8> = loupe
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| if self.format.msb_first { [p[3], p[0], p[1], p[2]] } else { [p[2], p[1], p[0], p[3]] })
             .collect();
         conn.put_image(ImageFormat::Z_PIXMAP, pixmap, gc, size, size, 0, 0, 0, 32, &data)?;
@@ -724,7 +726,7 @@ mod live_tests {
         fn snapshot(&self, name: &str) {
             let (x, y, w, h) = (REFERENCE.0 - 40, REFERENCE.1 - 40, REFERENCE.2 + 80, REFERENCE.3 + 80);
             let reply = self.conn.get_image(ImageFormat::Z_PIXMAP, self.root, x as i16, y as i16, w as u16, h as u16, !0).unwrap().reply().unwrap();
-            let rgba: Vec<u8> = reply.data.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], 255]).collect();
+            let rgba: Vec<u8> = reply.data.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], 255]).collect();
             crate::eyedropper::save_snapshot(name, w as u32, h as u32, &rgba, false);
         }
 

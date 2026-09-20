@@ -77,7 +77,7 @@ impl Loupe {
     /// The image with straight (not premultiplied) alpha.
     pub fn straight_rgba(&self) -> Vec<u8> {
         let mut out = self.rgba.clone();
-        for p in out.chunks_exact_mut(4) {
+        for p in out.as_chunks_mut::<4>().0 {
             let a = p[3] as f32 / 255.0;
             if a > 0.0 && a < 1.0 {
                 for c in &mut p[..3] {

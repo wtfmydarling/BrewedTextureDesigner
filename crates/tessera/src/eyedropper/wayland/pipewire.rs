@@ -174,16 +174,22 @@ const PW_STREAM_FLAG_DONT_RECONNECT: u32 = 1 << 7;
 
 // ---------------------------------------------------------------- the frames
 
-/// The video formats the eyedropper takes, as (SPA video format, the RGB of a pixel).
-const FORMATS: [(u32, fn(&[u8]) -> [u8; 3]); 8] = [
-    (8, |p| [p[2], p[1], p[0]]),  // BGRx
-    (12, |p| [p[2], p[1], p[0]]), // BGRA
-    (7, |p| [p[0], p[1], p[2]]),  // RGBx
-    (11, |p| [p[0], p[1], p[2]]), // RGBA
-    (9, |p| [p[1], p[2], p[3]]),  // xRGB
-    (13, |p| [p[1], p[2], p[3]]), // ARGB
-    (10, |p| [p[3], p[2], p[1]]), // xBGR
-    (14, |p| [p[3], p[2], p[1]]), // ABGR
+/// A video format the eyedropper takes: what PipeWire calls it, and the color of one of
+/// its pixels.
+struct VideoFormat {
+    spa: u32,
+    rgb: fn(&[u8]) -> [u8; 3],
+}
+
+const FORMATS: [VideoFormat; 8] = [
+    VideoFormat { spa: 8, rgb: |p| [p[2], p[1], p[0]] },  // BGRx
+    VideoFormat { spa: 12, rgb: |p| [p[2], p[1], p[0]] }, // BGRA
+    VideoFormat { spa: 7, rgb: |p| [p[0], p[1], p[2]] },  // RGBx
+    VideoFormat { spa: 11, rgb: |p| [p[0], p[1], p[2]] }, // RGBA
+    VideoFormat { spa: 9, rgb: |p| [p[1], p[2], p[3]] },  // xRGB
+    VideoFormat { spa: 13, rgb: |p| [p[1], p[2], p[3]] }, // ARGB
+    VideoFormat { spa: 10, rgb: |p| [p[3], p[2], p[1]] }, // xBGR
+    VideoFormat { spa: 14, rgb: |p| [p[3], p[2], p[1]] }, // ABGR
 ];
 
 /// The frame a monitor's stream is showing, held until the next one arrives.
@@ -286,7 +292,7 @@ impl Streams {
     /// The pixels of an area of a monitor, from its latest frame.
     pub fn read(&self, index: usize, area: Area) -> Option<Pixels> {
         let frame = self.streams.get(index)?.data.frame.lock().ok()?;
-        let decode = FORMATS.get(frame.format?)?.1;
+        let decode = FORMATS.get(frame.format?)?.rgb;
         if frame.pixels.is_null() {
             return None;
         }
@@ -420,7 +426,7 @@ unsafe extern "C" fn on_param_changed(data: *mut c_void, id: u32, param: *const 
     // SAFETY: PipeWire passes a pod whose header says how long it is.
     let Some(pod) = (unsafe { Pod::read(param) }) else { return };
     let (Some(format), Some(size)) = (pod.property(0x20001).and_then(Pod::id), pod.property(0x20003).and_then(Pod::rectangle)) else { return };
-    let format = FORMATS.iter().position(|(f, _)| *f == format);
+    let format = FORMATS.iter().position(|f| f.spa == format);
     {
         let mut frame = data.frame.lock().unwrap_or_else(|e| e.into_inner());
         frame.format = format;
@@ -507,7 +513,7 @@ impl PodWriter {
         self.raw(body.len() as u32);
         self.raw(kind);
         self.bytes.extend(body);
-        while self.bytes.len() % 8 != 0 {
+        while !self.bytes.len().is_multiple_of(8) {
             self.bytes.push(0);
         }
     }
@@ -577,9 +583,9 @@ fn enum_formats() -> Vec<u8> {
         // The first value is the preferred one, and it is among the choices as well.
         let formats: Vec<[u8; 8]> = std::iter::once(&FORMATS[0])
             .chain(FORMATS.iter())
-            .map(|(f, _)| {
+            .map(|format| {
                 let mut v = [0u8; 8];
-                v[..4].copy_from_slice(&f.to_ne_bytes());
+                v[..4].copy_from_slice(&format.spa.to_ne_bytes());
                 v
             })
             .collect();
@@ -713,7 +719,7 @@ mod tests {
         let read = unsafe { Pod::read(pod.as_ptr()) }.expect("pod");
         assert_eq!(read.property(1).and_then(Pod::id), Some(2), "video");
         assert_eq!(read.property(2).and_then(Pod::id), Some(1), "raw");
-        assert_eq!(read.property(0x20001).and_then(Pod::id), Some(FORMATS[0].0), "the first format");
+        assert_eq!(read.property(0x20001).and_then(Pod::id), Some(FORMATS[0].spa), "the first format");
         assert_eq!(read.property(0x20003).and_then(Pod::rectangle), Some((1920, 1080)), "the preferred size");
         assert_eq!(read.property(0x30001).map(|p| p.kind), None, "no such property");
     }

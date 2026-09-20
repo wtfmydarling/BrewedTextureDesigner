@@ -8,8 +8,9 @@
 //!   are read from the screen as it moves, the loupe is the mouse cursor, and the path is
 //!   drawn by a window that lets the clicks through.
 //! - Wayland: colors are picked with the desktop's own color picker (the XDG desktop
-//!   portal). Gradients are picked on transparent surfaces covering the screen, reading
-//!   it as the mouse moves where the desktop allows that (wlr-screencopy).
+//!   portal). Gradients are picked on transparent surfaces covering the screen; the
+//!   pixels are read as the mouse moves, either directly (wlr-screencopy) or from the
+//!   live stream the desktop gives through its screen cast portal (GNOME, KDE).
 //! - macOS: the system color sampler picks colors; gradients are picked on a capture of
 //!   the screen ([`crate::picker`]).
 
@@ -231,7 +232,7 @@ pub(crate) fn save_snapshot(name: &str, width: u32, height: u32, rgba: &[u8], pr
     let Some(dir) = std::env::var_os("TESSERA_UI_SNAPSHOTS") else { return };
     let mut rgba = rgba.to_vec();
     if premultiplied {
-        for p in rgba.chunks_exact_mut(4) {
+        for p in rgba.as_chunks_mut::<4>().0 {
             let a = p[3] as f32 / 255.0;
             if a > 0.0 {
                 for c in &mut p[..3] {
