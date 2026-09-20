@@ -180,8 +180,15 @@ struct Drag {
     travelled: f32,
     start: f64,
     moved: bool,
-    /// Where the pointer is put back after every move, when this system allows it.
-    anchor: Option<crate::scrub::Anchor>,
+    /// How the pointer is kept away from the edge of the screen, if it can be.
+    grip: Option<crate::scrub::Grip>,
+}
+
+impl Drag {
+    /// The value the drag has reached, once the field knows how wide it is.
+    fn value(&self, field: &NumberField<'_, impl Sized>, width: f32, modifiers: keyboard::Modifiers) -> f64 {
+        field.scrub(self.start, self.travelled, width, modifiers.shift(), modifiers.command())
+    }
 }
 
 struct Editing {
@@ -372,21 +379,39 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
                     state.drag = None;
                     state.edit = Some(self.start_edit());
                 } else {
-                    // The pointer goes back where it started after every move, so the drag
-                    // can go on past the edge of the screen.
-                    let anchor = crate::scrub::Anchor::hold();
-                    state.drag = Some(Drag { origin: p.x, last: p.x, travelled: 0.0, start: self.value, moved: false, anchor });
+                    // The pointer is held where the drag started, so the drag can go on past
+                    // the edge of the screen.
+                    let grip = crate::scrub::Grip::take();
+                    state.drag = Some(Drag { origin: p.x, last: p.x, travelled: 0.0, start: self.value, moved: false, grip });
                 }
                 shell.capture_event();
                 shell.request_redraw();
             }
+            // While the pointer is locked it sends no moves of its own: what the mouse did
+            // is read once a frame, for as long as the button is down.
+            Event::Window(iced::window::Event::RedrawRequested(_)) => {
+                let Some(drag) = &mut state.drag else { return };
+                let _ = &drag;
+                #[cfg(free_unix)]
+                if let Some(crate::scrub::Grip::Locked(locked)) = &mut drag.grip {
+                    drag.travelled += locked.travelled();
+                    if drag.moved || drag.travelled.abs() > 3.0 {
+                        drag.moved = true;
+                        let v = drag.value(self, bounds.width, state.modifiers);
+                        if v != self.value {
+                            shell.publish(on_change(v));
+                        }
+                    }
+                    shell.request_redraw();
+                }
+            }
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 if let Some(drag) = &mut state.drag {
-                    match &drag.anchor {
+                    match &mut drag.grip {
                         // The pointer is put back where the drag started after every move, so
                         // each move is a step away from there — including the move that puts
                         // it back, which is a step of nothing.
-                        Some(anchor) => {
+                        Some(crate::scrub::Grip::Anchored(anchor)) => {
                             let step = position.x - drag.origin;
                             if step.abs() < 0.5 {
                                 shell.capture_event();
@@ -394,21 +419,25 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
                             }
                             drag.travelled += step;
                             if !anchor.recenter() {
-                                drag.anchor = None;
+                                drag.grip = None;
                                 drag.last = position.x;
                             }
+                        }
+                        // Locked: the pointer does not move, and the frames do the counting.
+                        #[cfg(free_unix)]
+                        Some(crate::scrub::Grip::Locked(_)) => {
+                            shell.capture_event();
+                            shell.request_redraw();
+                            return;
                         }
                         None => {
                             drag.travelled += position.x - drag.last;
                             drag.last = position.x;
                         }
                     }
-                    let dx = drag.travelled;
-                    if drag.moved || dx.abs() > 3.0 {
+                    if drag.moved || drag.travelled.abs() > 3.0 {
                         drag.moved = true;
-                        let fine = state.modifiers.shift();
-                        let snap = state.modifiers.command();
-                        let v = self.scrub(drag.start, dx, bounds.width, fine, snap);
+                        let v = drag.value(self, bounds.width, state.modifiers);
                         if v != self.value {
                             shell.publish(on_change(v));
                         }
@@ -452,7 +481,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
         match &state.drag {
             // Held in place, the pointer points at nothing: it is out of the way until the
             // button comes up, right where the drag started.
-            Some(d) if d.moved && d.anchor.is_some() => mouse::Interaction::Hidden,
+            Some(d) if d.moved && d.grip.is_some() => mouse::Interaction::Hidden,
             Some(d) if d.moved => mouse::Interaction::ResizingHorizontally,
             _ if cursor.is_over(layout.bounds()) => mouse::Interaction::ResizingHorizontally,
             _ => mouse::Interaction::default(),

@@ -6,8 +6,50 @@
 //! travelled counts. The pointer never reaches an edge, the cursor is hidden meanwhile,
 //! and it is right where the user left it when the button comes up.
 //!
-//! Windows, X11 and macOS let a program move the pointer. Wayland does not: there the
-//! drag stays what it was, bounded by the screen.
+//! Windows, X11 and macOS let a program move the pointer. Wayland does not, and asks the
+//! compositor to lock it in place instead ([`wayland`]), which comes to the same thing.
+
+#[cfg(free_unix)]
+mod wayland;
+
+/// How the pointer is kept away from the edge of the screen while a value is dragged.
+pub enum Grip {
+    /// Put back where the drag started after every move (Windows, X11, macOS).
+    Anchored(Anchor),
+    /// Locked in place by the compositor, which says how far the mouse travelled instead
+    /// (Wayland, where a program may not move the pointer).
+    #[cfg(free_unix)]
+    Locked(Box<wayland::Locked>),
+}
+
+impl Grip {
+    /// Hold the pointer for a drag. `None` where neither can be done, and the drag is then
+    /// the plain one, bounded by the screen.
+    pub fn take() -> Option<Grip> {
+        if let Some(anchor) = Anchor::hold() {
+            return Some(Grip::Anchored(anchor));
+        }
+        #[cfg(free_unix)]
+        if let Some(locked) = wayland::Locked::hold() {
+            return Some(Grip::Locked(Box::new(locked)));
+        }
+        None
+    }
+}
+
+/// Remember the app's window: on Wayland the pointer is locked over it.
+pub fn remember(window: &dyn iced::window::Window) {
+    #[cfg(free_unix)]
+    {
+        use iced::window::raw_window_handle::{RawDisplayHandle, RawWindowHandle};
+        if let (Ok(w), Ok(d)) = (window.window_handle(), window.display_handle())
+            && let (RawWindowHandle::Wayland(w), RawDisplayHandle::Wayland(d)) = (w.as_raw(), d.as_raw())
+        {
+            wayland::remember(d.display, w.surface);
+        }
+    }
+    let _ = window;
+}
 
 /// Where the pointer was when a drag started, in the screen's own coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -134,7 +176,7 @@ mod platform {
     pub fn position() -> Option<(f64, f64)> {
         with(|conn, root| {
             let p = conn.query_pointer(root).ok()?.reply().ok()?;
-            p.same_screen.then(|| (p.root_x as f64, p.root_y as f64))
+            p.same_screen.then_some((p.root_x as f64, p.root_y as f64))
         })
     }
 

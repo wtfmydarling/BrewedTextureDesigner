@@ -582,7 +582,13 @@ impl App {
             let icon = window::run(id, crate::brand::use_embedded_icon).discard();
             #[cfg(not(windows))]
             let icon = Task::none();
-            Task::batch([icon, window::run(id, eyedropper::Host::of).map(Message::Host)])
+            let host = window::run(id, |window: &dyn iced::window::Window| {
+                // Where the pointer is locked while a value is dragged, and what the
+                // eyedropper needs to cover the screen.
+                crate::scrub::remember(window);
+                eyedropper::Host::of(window)
+            });
+            Task::batch([icon, host.map(Message::Host)])
         });
         (app, Task::batch([setup, scenario]))
     }
@@ -2147,7 +2153,9 @@ impl App {
         }
         let settled = self.res.evaluated_revision == self.doc.revision()
             && self.started.elapsed() > Duration::from_millis(2500)
-            && (self.ui.preview.node.is_none() || self.res.preview.is_some());
+            && (self.ui.preview.node.is_none() || self.res.preview.is_some())
+            // The model wears the maps in every screenshot: they take longest to arrive.
+            && self.res.materials.len() >= self.material_nodes().len();
         if !settled || self.started.elapsed() < Duration::from_secs(3) {
             if self.started.elapsed() > Duration::from_secs(30) {
                 log::error!("screenshot: gave up waiting for the engine");
