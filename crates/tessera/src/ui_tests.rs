@@ -568,3 +568,77 @@ fn links_are_rerouted_in_one_step() {
     assert_eq!(w.app.graph().link_into(levels, "i:input").map(|l| l.from), Some(source));
     assert_eq!(steps(&w), before);
 }
+
+/// Presses a key as the window reports it: `typed` is what it types on the layout in use,
+/// `physical` is which key it is on the keyboard.
+fn key(w: &mut Harness, typed: &str, physical: keyboard::key::Physical, modifiers: keyboard::Modifiers) {
+    let key = Key::Character(typed.into());
+    let window = w.app.main_window().expect("the main window");
+    let event = iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key: key.clone(),
+        modified_key: key,
+        physical_key: physical,
+        location: keyboard::Location::Standard,
+        modifiers,
+        text: None,
+        repeat: false,
+    });
+    w.send(Message::Runtime(event, iced::event::Status::Ignored, window));
+}
+
+/// Shortcuts are on the same keys whatever the keyboard layout is: a key that types no
+/// Latin letter (Cyrillic, Greek, Arabic…) counts as the Latin letter in its place, and a
+/// layout that moves the Latin letters around (AZERTY, QWERTZ) keeps them where they are
+/// printed on the keys.
+#[test]
+fn shortcuts_work_on_every_keyboard_layout() {
+    use keyboard::key::{Code, Physical};
+
+    let mut w = harness!(|app: &App| view::root(app), 1680.0, 1000.0);
+    let ctrl = keyboard::Modifiers::CTRL;
+    let count = |w: &Harness| w.app.graph().nodes.len();
+    let before = count(&w);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
+    let added = count(&w);
+    assert_eq!(added, before + 1);
+
+    // Russian: the key printed "Z" types "я", and still undoes.
+    key(&mut w, "я", Physical::Code(Code::KeyZ), ctrl);
+    assert_eq!(count(&w), before, "Ctrl+Z on a Cyrillic layout undoes");
+    // Ctrl+Shift+Z redoes, in the capitals the layout types.
+    key(&mut w, "Я", Physical::Code(Code::KeyZ), ctrl | keyboard::Modifiers::SHIFT);
+    assert_eq!(count(&w), added, "Ctrl+Shift+Z on a Cyrillic layout redoes");
+    // Greek "ω" sits on the "Z" key, "ψ" on the "Y" key: Ctrl+Y redoes as well.
+    key(&mut w, "ω", Physical::Code(Code::KeyZ), ctrl);
+    assert_eq!(count(&w), before);
+    key(&mut w, "ψ", Physical::Code(Code::KeyY), ctrl);
+    assert_eq!(count(&w), added);
+
+    // AZERTY types "z" where QWERTY has "w": the shortcut follows the letter, so it stays
+    // under the key that has "Z" printed on it.
+    key(&mut w, "z", Physical::Code(Code::KeyW), ctrl);
+    assert_eq!(count(&w), before, "Ctrl+Z on AZERTY undoes");
+    key(&mut w, "w", Physical::Code(Code::KeyZ), ctrl);
+    assert_eq!(count(&w), before, "the key that types 'w' does not undo");
+    key(&mut w, "y", Physical::Code(Code::KeyZ), ctrl);
+    assert_eq!(count(&w), added, "Ctrl+Y on QWERTZ redoes");
+
+    // The others too: a Cyrillic "ф" on the "A" key selects everything, "в" on the "D"
+    // key duplicates it, and "и" on the "B" key bypasses a node.
+    w.send(Message::Graph(GraphMessage::ClearSelection));
+    let blur = w.app.graph().nodes_of(NodeKind::BLUR).next().expect("the added node").id;
+    w.send(Message::Graph(GraphMessage::Select { node: blur, mode: SelectMode::Replace }));
+    key(&mut w, "в", Physical::Code(Code::KeyD), ctrl);
+    assert_eq!(count(&w), added + 1, "Ctrl+D duplicates");
+    key(&mut w, "ф", Physical::Code(Code::KeyA), ctrl);
+    assert_eq!(w.app.ui.selection.len(), added + 1, "Ctrl+A selects every node");
+    w.send(Message::Graph(GraphMessage::Select { node: blur, mode: SelectMode::Replace }));
+    key(&mut w, "и", Physical::Code(Code::KeyB), ctrl);
+    assert!(w.app.graph().node(blur).is_some_and(|n| n.bypass), "Ctrl+B bypasses");
+
+    // A key the window cannot place on the keyboard and that types nothing Latin does
+    // nothing at all, rather than the wrong thing.
+    let nodes = count(&w);
+    key(&mut w, "ж", Physical::Unidentified(keyboard::key::NativeCode::Unidentified), ctrl);
+    assert_eq!(count(&w), nodes);
+}

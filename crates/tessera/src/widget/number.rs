@@ -270,8 +270,10 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
                     shell.capture_event();
                     shell.request_redraw();
                 }
-                Event::Keyboard(keyboard::Event::KeyPressed { key, text, modifiers, .. }) => {
+                Event::Keyboard(keyboard::Event::KeyPressed { key, physical_key, text, modifiers, .. }) => {
                     use keyboard::key::Named;
+                    // `to_latin` keeps the shortcuts on the same keys on every layout.
+                    let latin = key.to_latin(*physical_key).map(|c| c.to_ascii_lowercase());
                     match key {
                         keyboard::Key::Named(Named::Enter) => match parse_number(&edit.text) {
                             Some(v) => {
@@ -324,10 +326,10 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
                             edit.cursor = edit.text.len();
                             edit.select_all = false;
                         }
-                        keyboard::Key::Character(c) if modifiers.command() => match c.as_str() {
-                            "a" | "A" => edit.select_all = true,
-                            "c" | "C" => clipboard.write(iced::advanced::clipboard::Kind::Standard, edit.text.clone()),
-                            "v" | "V" => {
+                        keyboard::Key::Character(_) if modifiers.command() => match latin {
+                            Some('a') => edit.select_all = true,
+                            Some('c') => clipboard.write(iced::advanced::clipboard::Kind::Standard, edit.text.clone()),
+                            Some('v') => {
                                 if let Some(t) = clipboard.read(iced::advanced::clipboard::Kind::Standard) {
                                     let clean: String = t.chars().filter(|c| !c.is_control()).collect();
                                     edit.insert(&clean);

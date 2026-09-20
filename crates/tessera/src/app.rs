@@ -1521,8 +1521,8 @@ impl App {
             }
             E::Mouse(_) => {}
             E::Keyboard(keyboard::Event::ModifiersChanged(m)) => self.ui.modifiers = m,
-            E::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
-                return self.shortcut(key, modifiers, status);
+            E::Keyboard(keyboard::Event::KeyPressed { key, physical_key, modifiers, .. }) => {
+                return self.shortcut(key, physical_key, modifiers, status);
             }
             _ => {}
         }
@@ -1554,11 +1554,14 @@ impl App {
         Task::none()
     }
 
-    fn shortcut(&mut self, key: keyboard::Key, m: keyboard::Modifiers, status: iced::event::Status) -> Task<Message> {
-        use keyboard::key::Named;
+    /// `physical` makes the shortcuts the same on every keyboard layout: a key that types
+    /// no Latin letter (Cyrillic, Greek…) counts as the Latin one in its place.
+    fn shortcut(&mut self, key: keyboard::Key, physical: keyboard::key::Physical, m: keyboard::Modifiers, status: iced::event::Status) -> Task<Message> {
         use keyboard::Key;
+        use keyboard::key::Named;
         let ctrl = m.command();
-        let char = |c: &str| matches!(&key, Key::Character(s) if s.as_str().eq_ignore_ascii_case(c));
+        let latin = key.to_latin(physical).map(|c| c.to_ascii_lowercase());
+        let char = |c: char| latin == Some(c);
         // Escape closes whatever is open, even when a text field has focus.
         if key == Key::Named(Named::Escape) {
             if self.ui.screen_pick.is_some() {
@@ -1592,13 +1595,13 @@ impl App {
             };
         }
         // Global shortcuts that also work while typing.
-        if ctrl && char("s") {
+        if ctrl && char('s') {
             return self.update_nested(if m.shift() { Message::SaveAs } else { Message::Save });
         }
-        if ctrl && char("o") {
+        if ctrl && char('o') {
             return self.update_nested(Message::Open);
         }
-        if ctrl && char("e") {
+        if ctrl && char('e') {
             return self.update_nested(Message::ExportAll);
         }
         if status == iced::event::Status::Captured || self.ui.dialog.is_some() {
@@ -1606,21 +1609,21 @@ impl App {
         }
         let over_graph = self.ui.graph_view.contains(self.ui.cursor);
         let message = match key.as_ref() {
-            _ if ctrl && (char("y") || (m.shift() && char("z"))) => Message::Redo,
-            _ if ctrl && char("z") => Message::Undo,
-            _ if ctrl && char("n") => Message::New,
-            _ if ctrl && char("c") => Message::Copy,
-            _ if ctrl && char("x") => Message::Cut,
-            _ if ctrl && char("v") => Message::Paste,
-            _ if ctrl && char("d") => Message::Duplicate,
-            _ if ctrl && char("a") => Message::SelectAll,
-            _ if ctrl && char("b") => match self.ui.selection.iter().next() {
+            _ if ctrl && (char('y') || (m.shift() && char('z'))) => Message::Redo,
+            _ if ctrl && char('z') => Message::Undo,
+            _ if ctrl && char('n') => Message::New,
+            _ if ctrl && char('c') => Message::Copy,
+            _ if ctrl && char('x') => Message::Cut,
+            _ if ctrl && char('v') => Message::Paste,
+            _ if ctrl && char('d') => Message::Duplicate,
+            _ if ctrl && char('a') => Message::SelectAll,
+            _ if ctrl && char('b') => match self.ui.selection.iter().next() {
                 Some(id) => Message::ToggleBypass(*id),
                 None => return Task::none(),
             },
             Key::Named(Named::Delete | Named::Backspace) => Message::Delete,
             Key::Named(Named::F1) => Message::Dialog(Some(Dialog::Shortcuts)),
-            _ if !ctrl && char("f") => Message::Frame,
+            _ if !ctrl && char('f') => Message::Frame,
             Key::Named(Named::Space) if over_graph => {
                 let at = self.ui.cursor;
                 let pos = self.ui.graph_view.to_graph(at);
