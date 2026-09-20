@@ -11,13 +11,13 @@ use iced::widget::{button, column, container, mouse_area, pick_list, row, scroll
 use iced::{Alignment, Element, Length};
 use tessera_core::graph::{Node, NodeId, param_socket_key};
 use tessera_core::nodes::{NodeKind, ParamDef, ParamKind, Role};
-use tessera_core::{Edit, Gradient, Interpolation, ParamValue, Tiling, Value};
+use tessera_core::{Edit, Gradient, Interpolation, ParamValue, Tiling};
 
 use crate::app::{App, ColorTarget, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
 use crate::picker::PickTarget;
-use crate::view::editors::{color_editor, eyedropper, swatch};
+use crate::view::editors::{eyedropper, swatch};
 use crate::view::{tip, section};
 use crate::widget::gradient::gradient_editor;
 use crate::widget::number::number;
@@ -314,16 +314,6 @@ fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
             Message::ColorPicker(Some(ColorTarget::Variable(var.name.clone(), crate::app::VarField::Value))),
         );
         col = col.push(row![text("Value").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W)), editor].align_y(Alignment::Center));
-        if color_open && let Value::Color(c) = var.value {
-            let name = var.name.clone();
-            col = col.push(color_editor(
-                c,
-                ColorTarget::Variable(var.name.clone(), crate::app::VarField::Value),
-                move |c| Message::Edit(Edit::SetVariable { name: name.clone(), value: Value::Color(c) }),
-                Message::Seal,
-                app.picking(),
-            ));
-        }
         col = col.push(crate::view::inputs::details(app, var, false));
     }
     col.into()
@@ -447,21 +437,10 @@ Changed — middle-click the row to put {} back", pd.tooltip, shown(pd, &default
     let editor = container(editor).width(Length::Fill);
     let mut col = column![row![label, editor, toggle].spacing(6).align_y(Alignment::Center)].spacing(6);
 
-    // Wide editors below the row.
-    if !exposed {
-        match (&slot.value, pd.kind) {
-            (ParamValue::Color(c), _) if app.ui.color_picker == Some(ColorTarget::Param(id, pd.key.to_string())) => {
-                col = col.push(color_editor(
-                    *c,
-                    ColorTarget::Param(id, pd.key.to_string()),
-                    move |c| set(id, pd.key, ParamValue::Color(c)),
-                    Message::Seal,
-                    app.picking(),
-                ));
-            }
-            (ParamValue::Gradient(g), _) => col = col.push(gradient_block(app, node, pd.key, g)),
-            _ => {}
-        }
+    // A gradient is wide enough to need the room under the row; the color picker floats
+    // over the interface instead, so that opening it moves nothing.
+    if !exposed && let ParamValue::Gradient(g) = &slot.value {
+        col = col.push(gradient_block(app, node, pd.key, g));
     }
     let row = container(col).padding([3, 4]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2)));
     if !changed {
@@ -642,18 +621,6 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'static str, g: &'a Gr
             .spacing(6)
             .align_y(Alignment::Center),
         );
-        let base = g.clone();
-        col = col.push(color_editor(
-            stop.color,
-            ColorTarget::GradientStop(id, key.to_string()),
-            move |c| {
-                let mut n = base.clone();
-                n.stops[i].color = c;
-                set(id, key, ParamValue::Gradient(n))
-            },
-            Message::Seal,
-            app.picking(),
-        ));
     } else {
         col = col.push(text("Click the ramp to add a stop, click a handle to edit its color.").size(style::SMALL).color(style::TEXT_FAINT));
     }

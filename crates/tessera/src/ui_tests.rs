@@ -795,3 +795,40 @@ fn a_value_is_dragged_as_far_as_the_pointer_can_be_pushed() {
     // Most parameters are free: unusual values are how unusual textures are found.
     assert!(tessera_core::NodeKind::TRANSFORM_2D.def().param("rotation").expect("rotation").limits.is_none());
 }
+
+/// The color picker floats where it was opened instead of unfolding inside a panel, so
+/// nothing under it moves; a click anywhere else puts it away.
+#[test]
+fn the_color_picker_floats_over_the_interface() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let window = w.app.main_window().expect("the main window");
+    // A node of its own: the demo's Uniform Color takes its color from an input socket.
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::UNIFORM_COLOR, pos: [0.0, 0.0] }));
+    let uniform = w.app.ui.selection.iter().next().copied().expect("the new node");
+    let color = |w: &Harness| match w.app.graph().node(uniform).and_then(|n| n.value("color")) {
+        Some(ParamValue::Color(c)) => *c,
+        _ => panic!("no color"),
+    };
+    w.send(Message::Graph(GraphMessage::Select { node: uniform, mode: SelectMode::Replace }));
+    w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+
+    // Opened from the swatch: the picker appears under the cursor, over everything.
+    let at = Point::new(1500.0, 400.0);
+    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: at }));
+    w.send(Message::ColorPicker(Some(ColorTarget::Param(uniform, "color".into()))));
+    w.input(&[]);
+    assert!(w.app.ui.color_picker.is_some());
+
+    // The saturation square of the floating picker takes the mouse: dragging in it changes
+    // the color, which means the picker really is there and not in the panel.
+    let before = color(&w);
+    let square = w.app.ui.color_picker_at + iced::Vector::new(118.0, 70.0);
+    drag(&mut w, square, square + iced::Vector::new(-40.0, 20.0));
+    assert_ne!(color(&w), before, "the picker is not under the cursor");
+
+    // A click anywhere else puts it away, and the color it set stays.
+    let changed = color(&w);
+    drag(&mut w, Point::new(500.0, 900.0), Point::new(500.0, 900.0));
+    assert_eq!(w.app.ui.color_picker, None, "a click elsewhere closes the picker");
+    assert_eq!(color(&w), changed);
+}

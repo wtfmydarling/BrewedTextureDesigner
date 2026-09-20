@@ -63,6 +63,9 @@ pub fn root(app: &App) -> Element<'_, Message> {
         let at = app.ui.cursor + iced::Vector::new(14.0, 10.0);
         layers.push(pin(ghost).position(at).into());
     }
+    if let Some(picker) = editors::color_popup(app) {
+        layers.push(picker);
+    }
     if let Some(dialog) = &app.ui.dialog {
         layers.push(dialogs::view(app, dialog));
     }

@@ -232,6 +232,8 @@ pub struct Ui {
     pub status: Option<Status>,
     pub clipboard: Option<Clipboard>,
     pub color_picker: Option<ColorTarget>,
+    /// Where the color picker floats: where it was opened from.
+    pub color_picker_at: Point,
     /// Selected stop of each gradient editor.
     pub gradient_stop: HashMap<(NodeId, String), usize>,
     /// The expression editor's text buffer (node, content).
@@ -537,6 +539,7 @@ impl App {
                 status: None,
                 clipboard: None,
                 color_picker: None,
+                color_picker_at: Point::ORIGIN,
                 gradient_stop: HashMap::new(),
                 expression: None,
                 plot_var: 0,
@@ -1322,6 +1325,8 @@ impl App {
             }
             Message::Expression(node, action) => self.expression_action(node, action),
             Message::ColorPicker(target) => {
+                // The picker floats where it was opened, so nothing in the panels moves.
+                self.ui.color_picker_at = self.ui.cursor + Vector::new(-120.0, 18.0);
                 self.ui.color_picker = if self.ui.color_picker == target { None } else { target };
                 self.doc.seal();
             }
@@ -2102,6 +2107,9 @@ impl App {
             "inputs" => {
                 self.ui.expanded_vars.insert("mortar".into());
                 self.ui.expanded_vars.insert("tint".into());
+                // The picker floats where it was opened from: the swatch of the tint value.
+                self.ui.cursor = Point::new(1840.0, 330.0);
+                self.ui.color_picker_at = self.ui.cursor + Vector::new(-120.0, 18.0);
                 self.ui.color_picker = Some(ColorTarget::Variable("tint".into(), VarField::Value));
             }
             "transform" => {

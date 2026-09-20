@@ -10,7 +10,7 @@ use tessera_core::graph::Variable;
 use crate::app::{App, ColorTarget, DragPayload, Message, VarField};
 use crate::icons::{Icon, icon};
 use crate::style;
-use crate::view::editors::{color_editor, value_editor};
+use crate::view::editors::value_editor;
 use crate::widget::pressable::pressable;
 use crate::widget::socket_icon;
 
@@ -73,16 +73,6 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
         Message::ColorPicker(Some(ColorTarget::Variable(var.name.clone(), VarField::Default))),
     );
     col = col.push(field_row("Default", default_editor));
-    if default_open && let tessera_core::Value::Color(c) = var.default {
-        let name = name.clone();
-        col = col.push(color_editor(
-            c,
-            ColorTarget::Variable(var.name.clone(), VarField::Default),
-            move |c| Message::Edit(Edit::SetVariableDefault { name: name.clone(), value: tessera_core::Value::Color(c) }),
-            Message::Seal,
-            app.picking(),
-        ));
-    }
     if var.has_range() {
         let min_name = name.clone();
         let max = var.max;
@@ -180,16 +170,6 @@ Changed — middle-click the row to put {} back", var.description, var.default.d
     .spacing(6)
     .align_y(Alignment::Center);
     let mut col = column![header].spacing(6);
-    if color_open && let tessera_core::Value::Color(c) = var.value {
-        let name = var.name.clone();
-        col = col.push(color_editor(
-            c,
-            ColorTarget::Variable(var.name.clone(), VarField::Value),
-            move |c| Message::Edit(Edit::SetVariable { name: name.clone(), value: tessera_core::Value::Color(c) }),
-            Message::Seal,
-            app.picking(),
-        ));
-    }
     if expanded {
         col = col.push(container(details(app, var, true)).padding(iced::Padding { left: 22.0, ..iced::Padding::ZERO }));
     }

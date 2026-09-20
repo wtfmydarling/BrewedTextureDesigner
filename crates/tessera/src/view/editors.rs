@@ -2,9 +2,9 @@
 
 use iced::widget::{button, column, container, row, space, text, toggler, tooltip};
 use iced::{Alignment, Border, Element, Length};
-use tessera_core::Value;
+use tessera_core::{Edit, ParamValue, Value};
 
-use crate::app::{ColorTarget, Message, PickMessage};
+use crate::app::{App, ColorTarget, Message, PickMessage, VarField};
 use crate::icons::{Icon, icon};
 use crate::picker::PickTarget;
 use crate::style;
@@ -156,4 +156,73 @@ pub fn value_editor<'a>(
             swatch(c, color_open, on_color)
         }
     }
+}
+
+/// The color picker, floating where it was opened. It is a layer of its own so that
+/// opening it moves nothing in the panels, and a click anywhere else closes it.
+pub fn color_popup(app: &App) -> Option<Element<'_, Message>> {
+    let target = app.ui.color_picker.clone()?;
+    let graph = app.graph();
+    let picking = app.picking();
+    let content: Element<'_, Message> = match &target {
+        ColorTarget::Param(node, key) => {
+            let (node, key) = (*node, key.clone());
+            let c = match graph.node(node).and_then(|n| n.value(&key)) {
+                Some(ParamValue::Color(c)) => *c,
+                _ => return None,
+            };
+            let set = key.clone();
+            color_editor(
+                c,
+                target.clone(),
+                move |c| Message::Edit(Edit::SetParam { node, key: set.clone(), value: ParamValue::Color(c) }),
+                Message::Seal,
+                picking,
+            )
+        }
+        ColorTarget::Variable(name, field) => {
+            let var = graph.variable(name)?;
+            let current = if *field == VarField::Value { var.value } else { var.default };
+            let Value::Color(c) = current else { return None };
+            let (name, field) = (name.clone(), *field);
+            color_editor(
+                c,
+                target.clone(),
+                move |c| {
+                    let value = Value::Color(c);
+                    Message::Edit(match field {
+                        VarField::Value => Edit::SetVariable { name: name.clone(), value },
+                        VarField::Default => Edit::SetVariableDefault { name: name.clone(), value },
+                    })
+                },
+                Message::Seal,
+                picking,
+            )
+        }
+        ColorTarget::GradientStop(node, key) => {
+            let (node, key) = (*node, key.clone());
+            let gradient = graph.node(node).and_then(|n| n.value(&key)).and_then(ParamValue::as_gradient)?.clone();
+            let index = *app.ui.gradient_stop.get(&(node, key.clone()))?;
+            let stop = gradient.stops.get(index)?;
+            let (base, set) = (gradient.clone(), key.clone());
+            color_editor(
+                stop.color,
+                target.clone(),
+                move |c| {
+                    let mut n = base.clone();
+                    n.stops[index].color = c;
+                    Message::Edit(tessera_core::edit::gradient_edit(node, &set, n))
+                },
+                Message::Seal,
+                picking,
+            )
+        }
+    };
+    Some(crate::view::popup_layer(
+        content,
+        app.ui.color_picker_at,
+        iced::Size::new(236.0, 252.0),
+        crate::view::window_size(app),
+        Message::ColorPicker(None),
+    ))
 }
