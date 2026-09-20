@@ -273,6 +273,7 @@ fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                 ColorTarget::Variable(var.name.clone(), crate::app::VarField::Value),
                 move |c| Message::Edit(Edit::SetVariable { name: name.clone(), value: Value::Color(c) }),
                 Message::Seal,
+                app.picking(),
             ));
         }
         col = col.push(crate::view::inputs::details(app, var, false));
@@ -378,6 +379,7 @@ fn param_row<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, index: usi
                     ColorTarget::Param(id, pd.key.to_string()),
                     move |c| set(id, pd.key, ParamValue::Color(c)),
                     Message::Seal,
+                    app.picking(),
                 ));
             }
             (ParamValue::Gradient(g), _) => col = col.push(gradient_block(app, node, pd.key, g)),
@@ -492,8 +494,9 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'static str, g: &'a Gr
     let tools = row![
         eyedropper(
             PickTarget::Gradient(id, key.to_string()),
+            app.picking(),
             "Pick from screen",
-            "Drag a line across any image on any monitor: the colors along it become the gradient (Esc cancels)",
+            "Drag across any image on any monitor: the colors along the path become the gradient. Esc or a right click cancels.",
         ),
         space().width(Length::Fill),
         tip(
@@ -562,6 +565,7 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'static str, g: &'a Gr
                 set(id, key, ParamValue::Gradient(n))
             },
             Message::Seal,
+            app.picking(),
         ));
     } else {
         col = col.push(text("Click the ramp to add a stop, click a handle to edit its color.").size(style::SMALL).color(style::TEXT_FAINT));

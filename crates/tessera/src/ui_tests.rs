@@ -262,7 +262,7 @@ fn fake_screen() -> Shot {
 fn picker_window(target: PickTarget) -> Option<(Harness, window::Id)> {
     let overlay = window::Id::unique();
     let mut h = Harness::new(Box::new(move |app: &App| view::picker::view(app, overlay)), Size::new(SCREEN[0] as f32, SCREEN[1] as f32))?;
-    h.app.ui.screen_pick = Some(ScreenPick { target, shots: vec![fake_screen()], windows: vec![overlay], done: false, closed: Vec::new() });
+    h.app.ui.screen_pick = Some(ScreenPick { live: false, shots: vec![fake_screen()], windows: vec![overlay], ..ScreenPick::new(target) });
     Some((h, overlay))
 }
 
@@ -323,6 +323,8 @@ fn a_color_is_picked_with_a_click_and_keeps_its_alpha() {
     w.hover(Point::new(600.0, 120.0));
     w.snapshot("eyedropper_color_loupe");
     w.mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    assert!(w.app.graph().node(uniform).is_some_and(|n| n.value("color") == Some(&ParamValue::Color([0.1, 0.1, 0.1, 0.5]))), "picked on release");
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
     let expected = fake_screen().pixel(600, 120);
     let got = match w.app.graph().node(uniform).and_then(|n| n.value("color")) {
         Some(ParamValue::Color(c)) => *c,

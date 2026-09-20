@@ -299,7 +299,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for GradientEd
                 fill = style::alpha(fill, 0.3);
             }
             let border = Border {
-                color: if selected { style::ACCENT } else { style::rgb(20, 20, 22) },
+                color: if selected { style::ACCENT } else { style::gray(20) },
                 width: if selected { 2.0 } else { 1.0 },
                 radius: 3.0.into(),
             };

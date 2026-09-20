@@ -1,8 +1,8 @@
 //! Colors, fonts and widget styles of the dark theme.
 //!
-//! Neutral, slightly cool grays in a few steps (window, panel, raised, hover), hairline
-//! borders, small radii. The amber accent marks what is active or selected and is used
-//! sparingly: outlines, text and thin fills rather than large blocks.
+//! Neutral grays only (R = G = B) in a few steps: window, panel, raised, hover. Hairline
+//! borders, small radii. What is active or selected is lighter, not colored; color is left
+//! to what carries meaning (data types, node categories, errors) and to the images.
 
 use iced::border::{self, Border};
 use iced::theme::Palette;
@@ -21,49 +21,59 @@ pub const fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::from_rgb8(r, g, b)
 }
 
+/// A neutral gray: every surface and text color of the interface is one (R = G = B).
+pub const fn gray(v: u8) -> Color {
+    rgb(v, v, v)
+}
+
 // Surfaces, darkest to lightest.
 /// Behind the panels: the gaps between them, the menu and status bars.
-pub const WINDOW: Color = rgb(17, 18, 20);
+pub const WINDOW: Color = gray(18);
 /// The graph and the 2D view.
-pub const CANVAS: Color = rgb(22, 23, 26);
-pub const GRID_MINOR: Color = rgb(28, 29, 33);
-pub const GRID_MAJOR: Color = rgb(36, 38, 42);
-pub const FIELD: Color = rgb(20, 21, 24);
-pub const PANEL_DARK: Color = rgb(24, 25, 28);
-pub const PANEL: Color = rgb(29, 30, 34);
+pub const CANVAS: Color = gray(23);
+pub const GRID_MINOR: Color = gray(29);
+pub const GRID_MAJOR: Color = gray(37);
+pub const FIELD: Color = gray(21);
+pub const PANEL_DARK: Color = gray(26);
+pub const PANEL: Color = gray(31);
 /// Pane headers and cards.
-pub const HEADER: Color = rgb(34, 35, 40);
-pub const RAISED: Color = rgb(42, 44, 50);
-pub const HOVER: Color = rgb(52, 55, 62);
-pub const BORDER: Color = rgb(12, 12, 14);
-pub const BORDER_LIGHT: Color = rgb(56, 59, 66);
+pub const HEADER: Color = gray(37);
+pub const RAISED: Color = gray(47);
+pub const HOVER: Color = gray(58);
+pub const BORDER: Color = gray(12);
+pub const BORDER_LIGHT: Color = gray(68);
 /// Hairlines between rows and sections.
-pub const LINE: Color = rgb(40, 42, 47);
+pub const LINE: Color = gray(43);
 
-pub const TEXT: Color = rgb(216, 218, 222);
-pub const TEXT_DIM: Color = rgb(145, 149, 157);
-pub const TEXT_FAINT: Color = rgb(98, 102, 110);
+pub const TEXT: Color = gray(222);
+pub const TEXT_DIM: Color = gray(150);
+pub const TEXT_FAINT: Color = gray(102);
 
-pub const ACCENT: Color = rgb(230, 160, 62);
-pub const ACCENT_DIM: Color = rgb(128, 90, 40);
-/// Accent for text on dark surfaces.
-pub const ACCENT_TEXT: Color = rgb(240, 186, 110);
+/// What is selected, focused or active. Neutral like the rest: white on the dark grays.
+pub const ACCENT: Color = gray(236);
+pub const ACCENT_DIM: Color = gray(120);
+/// Active text (tabs, toggles).
+pub const ACCENT_TEXT: Color = gray(255);
+/// The border of a focused field.
+pub const FOCUS: Color = gray(150);
 pub const ERROR: Color = rgb(232, 88, 76);
 pub const WARNING: Color = rgb(228, 186, 72);
 pub const SUCCESS: Color = rgb(120, 196, 134);
 
 /// Filled part of number fields (how far the value is in its range).
-pub const VALUE_FILL: Color = rgb(52, 56, 64);
-pub const VALUE_FILL_HOT: Color = rgb(64, 69, 79);
+pub const VALUE_FILL: Color = gray(62);
+pub const VALUE_FILL_HOT: Color = gray(76);
 
-pub const NODE_BODY: Color = rgb(40, 42, 47);
-pub const NODE_BYPASSED: Color = rgb(34, 35, 39);
-pub const NODE_OUTLINE: Color = rgb(14, 14, 16);
-pub const THUMB_BACKGROUND: Color = rgb(18, 18, 20);
-pub const SOCKET_EMPTY: Color = rgb(28, 29, 33);
+pub const NODE_BODY: Color = gray(46);
+pub const NODE_HEADER: Color = gray(58);
+pub const NODE_BYPASSED: Color = gray(36);
+pub const NODE_OUTLINE: Color = gray(14);
+pub const THUMB_BACKGROUND: Color = gray(19);
+pub const SOCKET_EMPTY: Color = gray(30);
 /// Text on nodes (socket names, values).
-pub const NODE_TEXT: Color = rgb(206, 208, 212);
-pub const EXPRESSION: Color = rgb(226, 206, 156);
+pub const NODE_TEXT: Color = gray(212);
+/// Expressions shown on nodes.
+pub const EXPRESSION: Color = gray(190);
 
 pub fn type_color(ty: DataType) -> Color {
     match ty {
@@ -182,7 +192,7 @@ pub fn field_box(_: &Theme) -> container::Style {
 
 pub fn popup(_: &Theme) -> container::Style {
     container::Style {
-        background: Some(rgb(33, 34, 39).into()),
+        background: Some(gray(36).into()),
         border: Border { color: BORDER_LIGHT, width: 1.0, radius: 4.0.into() },
         shadow: Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.5), offset: Vector::new(0.0, 6.0), blur_radius: 16.0 },
         text_color: Some(TEXT),
@@ -218,7 +228,7 @@ pub fn chip(color: Color) -> impl Fn(&Theme) -> container::Style {
 
 pub fn tooltip(_: &Theme) -> container::Style {
     container::Style {
-        background: Some(rgb(20, 21, 24).into()),
+        background: Some(gray(22).into()),
         border: Border { color: BORDER_LIGHT, width: 1.0, radius: 3.0.into() },
         text_color: Some(TEXT),
         shadow: Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.45), offset: Vector::new(0.0, 3.0), blur_radius: 8.0 },
@@ -241,9 +251,9 @@ fn button_base(bg: Option<Color>, text: Color, border: Color) -> button_w::Style
 /// Regular push button.
 pub fn button(_: &Theme, status: button_w::Status) -> button_w::Style {
     match status {
-        button_w::Status::Active => button_base(Some(RAISED), TEXT, rgb(50, 53, 60)),
+        button_w::Status::Active => button_base(Some(RAISED), TEXT, gray(56)),
         button_w::Status::Hovered => button_base(Some(HOVER), TEXT, BORDER_LIGHT),
-        button_w::Status::Pressed => button_base(Some(rgb(46, 48, 54)), ACCENT_TEXT, ACCENT_DIM),
+        button_w::Status::Pressed => button_base(Some(gray(52)), ACCENT_TEXT, ACCENT_DIM),
         button_w::Status::Disabled => button_base(Some(PANEL), TEXT_FAINT, LINE),
     }
 }
@@ -251,9 +261,9 @@ pub fn button(_: &Theme, status: button_w::Status) -> button_w::Style {
 /// The default action of a dialog.
 pub fn primary_button(_: &Theme, status: button_w::Status) -> button_w::Style {
     match status {
-        button_w::Status::Active => button_base(Some(ACCENT), rgb(26, 20, 12), ACCENT),
-        button_w::Status::Hovered => button_base(Some(rgb(242, 176, 84)), rgb(26, 20, 12), rgb(242, 176, 84)),
-        button_w::Status::Pressed => button_base(Some(rgb(206, 140, 50)), rgb(26, 20, 12), rgb(206, 140, 50)),
+        button_w::Status::Active => button_base(Some(ACCENT), gray(18), ACCENT),
+        button_w::Status::Hovered => button_base(Some(gray(250)), gray(18), gray(250)),
+        button_w::Status::Pressed => button_base(Some(gray(205)), gray(18), gray(205)),
         button_w::Status::Disabled => button_base(Some(PANEL), TEXT_FAINT, LINE),
     }
 }
@@ -300,7 +310,7 @@ pub fn row_button(selected: bool) -> impl Fn(&Theme, button_w::Status) -> button
 
 pub fn text_input(_: &Theme, status: text_input_w::Status) -> text_input_w::Style {
     let border = match status {
-        text_input_w::Status::Focused { .. } => ACCENT,
+        text_input_w::Status::Focused { .. } => FOCUS,
         text_input_w::Status::Hovered => BORDER_LIGHT,
         _ => LINE,
     };
@@ -310,13 +320,13 @@ pub fn text_input(_: &Theme, status: text_input_w::Status) -> text_input_w::Styl
         icon: TEXT_DIM,
         placeholder: TEXT_FAINT,
         value: if status == text_input_w::Status::Disabled { TEXT_DIM } else { TEXT },
-        selection: alpha(ACCENT, 0.4),
+        selection: alpha(ACCENT, 0.3),
     }
 }
 
 pub fn text_editor(_: &Theme, status: text_editor_w::Status) -> text_editor_w::Style {
     let border = match status {
-        text_editor_w::Status::Focused { .. } => ACCENT,
+        text_editor_w::Status::Focused { .. } => FOCUS,
         text_editor_w::Status::Hovered => BORDER_LIGHT,
         _ => LINE,
     };
@@ -325,14 +335,14 @@ pub fn text_editor(_: &Theme, status: text_editor_w::Status) -> text_editor_w::S
         border: Border { color: border, width: 1.0, radius: 3.0.into() },
         placeholder: TEXT_FAINT,
         value: TEXT,
-        selection: alpha(ACCENT, 0.4),
+        selection: alpha(ACCENT, 0.3),
     }
 }
 
 pub fn pick_list(_: &Theme, status: pick_list_w::Status) -> pick_list_w::Style {
     let (bg, border) = match status {
         pick_list_w::Status::Hovered => (RAISED, BORDER_LIGHT),
-        pick_list_w::Status::Opened { .. } => (RAISED, ACCENT),
+        pick_list_w::Status::Opened { .. } => (RAISED, FOCUS),
         _ => (FIELD, LINE),
     };
     pick_list_w::Style {
@@ -352,14 +362,14 @@ pub fn toggler(_: &Theme, status: toggler_w::Status) -> toggler_w::Style {
     };
     let track = match (on, disabled) {
         (_, true) => PANEL,
-        (true, _) => if hovered { rgb(242, 176, 84) } else { ACCENT },
+        (true, _) => if hovered { gray(250) } else { gray(215) },
         (false, _) => FIELD,
     };
     toggler_w::Style {
         background: track.into(),
         background_border_width: 1.0,
         background_border_color: if on { track } else if hovered { BORDER_LIGHT } else { LINE },
-        foreground: if on { rgb(30, 24, 16) } else if hovered { TEXT } else { TEXT_DIM }.into(),
+        foreground: if on { gray(30) } else if hovered { TEXT } else { TEXT_DIM }.into(),
         foreground_border_width: 0.0,
         foreground_border_color: Color::TRANSPARENT,
         text_color: Some(TEXT),
@@ -374,7 +384,7 @@ pub fn scrollable(_: &Theme, status: scrollable_w::Status) -> scrollable_w::Styl
         background: None,
         border: border::rounded(3),
         scroller: scrollable_w::Scroller {
-            background: if hovered { rgb(84, 88, 96) } else { rgb(58, 61, 68) }.into(),
+            background: if hovered { gray(92) } else { gray(64) }.into(),
             border: border::rounded(3),
         },
     };

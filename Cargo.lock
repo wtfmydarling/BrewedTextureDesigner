@@ -4528,6 +4528,7 @@ dependencies = [
 name = "tessera"
 version = "0.2.0"
 dependencies = [
+ "block2 0.6.2",
  "bytemuck",
  "bytes",
  "env_logger",
@@ -4535,14 +4536,25 @@ dependencies = [
  "iced",
  "iced_runtime",
  "image",
+ "libc",
  "log",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "rfd",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
+ "smithay-client-toolkit 0.19.2",
  "tessera-core",
  "tessera-engine",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
  "windows-sys 0.61.2",
+ "x11rb",
  "xcap",
+ "zbus",
 ]
 
 [[package]]

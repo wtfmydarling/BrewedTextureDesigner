@@ -335,7 +335,7 @@ impl canvas::Program<Message> for Overlay<'_> {
         let p = &self.app.ui.preview;
         let Some(image) = self.image else { return vec![frame.into_geometry()] };
         let rect = image_rect(bounds.size(), image, p.zoom, p.pan);
-        frame.stroke_rectangle(rect.position(), rect.size(), Stroke::default().with_width(1.0).with_color(style::rgb(70, 70, 76)));
+        frame.stroke_rectangle(rect.position(), rect.size(), Stroke::default().with_width(1.0).with_color(style::gray(72)));
 
         if let Some(id) = self.gizmo_node()
             && let Some((xf, locked)) = self.xform(id)
@@ -348,7 +348,7 @@ impl canvas::Program<Message> for Overlay<'_> {
             };
             let col = |h: Handle, locked: bool| {
                 if locked {
-                    style::rgb(110, 110, 116)
+                    style::gray(112)
                 } else if active == Some(h) {
                     Color::WHITE
                 } else {

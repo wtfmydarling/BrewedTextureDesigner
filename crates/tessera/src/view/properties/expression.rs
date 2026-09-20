@@ -233,7 +233,7 @@ impl canvas::Program<Message> for Plot {
         let to = |x: f64, y: f64| {
             Point::new(((x - lo) / (hi - lo)) as f32 * w, h - 6.0 - ((y - ymin) / (ymax - ymin)) as f32 * (h - 12.0))
         };
-        let axis = Stroke::default().with_width(1.0).with_color(style::rgb(60, 62, 68));
+        let axis = Stroke::default().with_width(1.0).with_color(style::gray(64));
         if ymin < 0.0 && ymax > 0.0 {
             let y = to(0.0, 0.0).y;
             frame.stroke(&Path::line(Point::new(0.0, y), Point::new(w, y)), axis);
@@ -271,7 +271,7 @@ impl canvas::Program<Message> for Plot {
         flush(&mut frame, &mut segment);
         if current >= lo && current <= hi {
             let x = to(current, 0.0).x;
-            frame.stroke(&Path::line(Point::new(x, 0.0), Point::new(x, h)), Stroke::default().with_width(1.0).with_color(style::rgb(90, 180, 255)));
+            frame.stroke(&Path::line(Point::new(x, 0.0), Point::new(x, h)), Stroke::default().with_width(1.0).with_color(style::gray(170)));
         }
         let label = |frame: &mut Frame, s: String, p: Point, v: Vertical| {
             frame.fill_text(Text {

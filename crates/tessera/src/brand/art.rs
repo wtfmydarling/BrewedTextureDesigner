@@ -7,7 +7,7 @@
 pub const ICON_SIZES: [u32; 8] = [16, 20, 24, 32, 40, 48, 64, 256];
 
 const BRIGHT: [[u8; 3]; 5] = [[244, 184, 96], [236, 166, 66], [226, 148, 46], [230, 156, 56], [216, 136, 38]];
-const DIM: [[u8; 3]; 4] = [[62, 67, 79], [55, 59, 70], [59, 64, 76], [51, 55, 65]];
+const DIM: [[u8; 3]; 4] = [[68, 68, 68], [60, 60, 60], [64, 64, 64], [56, 56, 56]];
 
 /// RGBA pixels (straight alpha) of the icon at `size`×`size`.
 pub fn icon_rgba(size: u32) -> Vec<u8> {
@@ -71,8 +71,8 @@ fn shade(x: f32, y: f32, small: bool) -> [f32; 4] {
             return [r, g, b, 1.0];
         }
     }
-    let top = rgb([44, 47, 56]);
-    let bottom = rgb([26, 28, 33]);
+    let top = rgb([46, 46, 46]);
+    let bottom = rgb([26, 26, 26]);
     let t = y.clamp(0.0, 1.0);
     let mut c = [0.0; 3];
     for i in 0..3 {
@@ -81,7 +81,7 @@ fn shade(x: f32, y: f32, small: bool) -> [f32; 4] {
     // A light rim along the edge.
     let rim = if small { 0.0 } else { 0.014 };
     if rim > 0.0 && !in_rounded_rect(x, y, inset + rim, inset + rim, 1.0 - inset - rim, 1.0 - inset - rim, radius - rim) {
-        let edge = rgb([78, 84, 98]);
+        let edge = rgb([84, 84, 84]);
         for i in 0..3 {
             c[i] = c[i] * 0.4 + edge[i] * 0.6;
         }

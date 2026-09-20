@@ -184,7 +184,7 @@ impl canvas::Program<Message> for Histogram {
                 if i == 0 { b.move_to(p) } else { b.line_to(p) }
             }
         });
-        frame.stroke(&lum, Stroke::default().with_width(1.2).with_color(style::rgb(230, 230, 232)));
+        frame.stroke(&lum, Stroke::default().with_width(1.2).with_color(style::gray(230)));
         let fill = [Color::BLACK, style::rgb(128, 128, 128), Color::WHITE];
         for (i, x) in self.handles(plot).iter().enumerate() {
             frame.stroke(

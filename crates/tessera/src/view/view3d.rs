@@ -152,8 +152,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .style(|_| container::Style {
             background: Some(iced::Background::Gradient(iced::Gradient::Linear(
                 iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI))
-                    .add_stop(0.0, style::rgb(46, 49, 56))
-                    .add_stop(1.0, style::rgb(18, 19, 22)),
+                    .add_stop(0.0, style::gray(48))
+                    .add_stop(1.0, style::gray(18)),
             ))),
             ..Default::default()
         })

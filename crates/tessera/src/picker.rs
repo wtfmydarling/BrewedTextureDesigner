@@ -1,42 +1,41 @@
-//! Picking colors anywhere on the screen.
+//! Picking on a capture of the screen, where it cannot be done live (gradients on macOS,
+//! see [`crate::eyedropper`]).
 //!
-//! Every monitor is captured, then covered by a borderless window that shows the frozen
-//! capture ([`crate::view::picker`]): a click picks a color, a dragged line picks a
-//! gradient. What gets picked is exactly what was on screen, so a reference on another
-//! monitor, in a browser or in Tessera itself can be used.
+//! Every monitor is captured, then covered by a borderless window showing its capture
+//! pixel for pixel ([`crate::view::picker`]), so nothing seems to change on the screen.
+//! A click picks a color; dragging picks a gradient along the path of the mouse.
 
 use std::fmt;
 
 use bytes::Bytes;
 use iced::widget::image;
-use tessera_core::Gradient;
 use tessera_core::graph::NodeId;
 
 use crate::app::ColorTarget;
-
-/// Whether this platform can capture the screen.
-pub const SUPPORTED: bool = cfg!(any(windows, target_os = "macos"));
+use crate::eyedropper::Mode;
 
 /// What a screen pick fills in.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PickTarget {
     /// One color: a parameter, an input value or the selected stop of a gradient.
     Color(ColorTarget),
-    /// A whole gradient, from the colors along a line.
+    /// A whole gradient, from the colors along a path.
     Gradient(NodeId, String),
 }
 
 impl PickTarget {
-    pub fn is_gradient(&self) -> bool {
-        matches!(self, PickTarget::Gradient(..))
+    pub fn mode(&self) -> Mode {
+        match self {
+            PickTarget::Color(_) => Mode::Color,
+            PickTarget::Gradient(..) => Mode::Gradient,
+        }
     }
 }
 
 /// One captured monitor.
 #[derive(Clone)]
 pub struct Shot {
-    /// Position of the monitor on the desktop, as the platform reports it (physical
-    /// pixels on Windows).
+    /// Position of the monitor on the desktop, in the platform's window coordinates.
     pub x: i32,
     pub y: i32,
     /// Size of the monitor on the desktop (same units as the position).
@@ -65,69 +64,66 @@ impl fmt::Debug for Shot {
 }
 
 impl Shot {
-    /// `rgba` holds `pixel_size[0] * pixel_size[1]` RGBA8 pixels.
-    pub fn new(x: i32, y: i32, width: u32, height: u32, scale: f32, pixel_size: [u32; 2], rgba: Vec<u8>) -> Shot {
-        assert_eq!(rgba.len(), pixel_size[0] as usize * pixel_size[1] as usize * 4, "pixel buffer size");
+    /// A shot of `pixel_size` RGBA8 pixels; `None` if `rgba` does not hold them all.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code, reason = "only macOS captures the screen"))]
+    pub fn new(x: i32, y: i32, width: u32, height: u32, scale: f32, pixel_size: [u32; 2], rgba: Vec<u8>) -> Option<Shot> {
+        let expected = (pixel_size[0] as usize).checked_mul(pixel_size[1] as usize)?.checked_mul(4)?;
+        if expected == 0 || rgba.len() != expected {
+            return None;
+        }
         let pixels = Bytes::from(rgba);
         let handle = image::Handle::from_rgba(pixel_size[0], pixel_size[1], pixels.clone());
         let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
-        Shot { x, y, width, height, scale, pixel_size, pixels, handle }
+        Some(Shot { x, y, width, height, scale, pixel_size, pixels, handle })
     }
 
     /// A shot of an image that is not on any monitor.
     #[cfg(test)]
     pub fn from_image(pixel_size: [u32; 2], rgba: Vec<u8>) -> Shot {
-        Shot::new(0, 0, pixel_size[0], pixel_size[1], 1.0, pixel_size, rgba)
+        Shot::new(0, 0, pixel_size[0], pixel_size[1], 1.0, pixel_size, rgba).expect("image size")
     }
 
-    /// The color of a pixel (clamped to the image), in the 0..1 range color parameters use.
-    pub fn pixel(&self, x: i64, y: i64) -> [f32; 4] {
+    /// A pixel (clamped to the image), RGB.
+    pub fn rgb(&self, x: i64, y: i64) -> [u8; 3] {
         let [w, h] = self.pixel_size;
         let x = x.clamp(0, w as i64 - 1) as usize;
         let y = y.clamp(0, h as i64 - 1) as usize;
         let i = (y * w as usize + x) * 4;
-        let p = &self.pixels[i..i + 4];
-        [p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0, 1.0]
+        [self.pixels[i], self.pixels[i + 1], self.pixels[i + 2]]
     }
 
-    /// Average of the (2·radius+1)² pixels around a point: evens out dithering and noise.
-    pub fn average(&self, x: f32, y: f32, radius: i64) -> [f32; 4] {
-        let (cx, cy) = (x.floor() as i64, y.floor() as i64);
-        let mut sum = [0.0f32; 3];
-        let mut n = 0.0;
-        for dy in -radius..=radius {
-            for dx in -radius..=radius {
-                let p = self.pixel(cx + dx, cy + dy);
-                for c in 0..3 {
-                    sum[c] += p[c];
-                }
-                n += 1.0;
-            }
-        }
-        [sum[0] / n, sum[1] / n, sum[2] / n, 1.0]
+    /// The color of a pixel (clamped to the image), in the 0..1 range color parameters use.
+    pub fn pixel(&self, x: i64, y: i64) -> [f32; 4] {
+        crate::eyedropper::color(self.rgb(x, y))
     }
 
-    /// Colors along a line between two pixel positions: about one sample per pixel of
-    /// length (at most 512), each the average of a 3×3 neighborhood.
-    pub fn line(&self, from: [f32; 2], to: [f32; 2]) -> Vec<[f32; 4]> {
-        let length = (to[0] - from[0]).hypot(to[1] - from[1]);
-        let n = (length.round() as usize + 1).clamp(2, 512);
-        (0..n)
-            .map(|i| {
-                let t = i as f32 / (n - 1) as f32;
-                self.average(from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, 1)
-            })
-            .collect()
-    }
-
-    /// The gradient along a line: as few stops as reproduce the colors closely.
-    pub fn gradient(&self, from: [f32; 2], to: [f32; 2]) -> Gradient {
-        Gradient::from_samples(&self.line(from, to), GRADIENT_TOLERANCE, Gradient::MAX_STOPS)
+    /// A point in the coordinates of this shot's window, in pixels of the capture.
+    fn to_pixels(&self, p: [f32; 2]) -> (f32, f32) {
+        let sx = self.pixel_size[0] as f32 / self.width.max(1) as f32;
+        let sy = self.pixel_size[1] as f32 / self.height.max(1) as f32;
+        (p[0] * sx, p[1] * sy)
     }
 }
 
-/// How far (0..1 per channel) a simplified gradient may stray from the picked colors.
-const GRADIENT_TOLERANCE: f32 = 0.012;
+/// The colors along a path dragged over the overlay windows, one per pixel it crosses.
+/// `points` are in the coordinates of the window of `shots[from]` and may go on to other
+/// monitors; points off every monitor are skipped.
+pub fn path_colors(shots: &[Shot], from: usize, points: &[[f32; 2]]) -> Vec<[f32; 4]> {
+    let Some(origin) = shots.get(from) else { return Vec::new() };
+    // Steps small enough to find the edges of the densest capture.
+    let density = shots.iter().map(|s| s.pixel_size[0] as f32 / s.width.max(1) as f32).fold(1.0, f32::max).min(8.0);
+    let locate = |d: [f32; 2]| {
+        let index = shot_at(shots, (d[0].floor() as i32, d[1].floor() as i32))?;
+        let shot = &shots[index];
+        Some((index, shot.to_pixels([d[0] - shot.x as f32, d[1] - shot.y as f32])))
+    };
+    let mut trace = crate::eyedropper::Trace::default();
+    points
+        .iter()
+        .flat_map(|p| trace.advance([origin.x as f32 + p[0], origin.y as f32 + p[1]], 0.5 / density, locate))
+        .map(|(shot, (x, y))| shots[shot].pixel(x as i64, y as i64))
+        .collect()
+}
 
 /// "#RRGGBB" of a picked color.
 pub fn hex(c: [f32; 4]) -> String {
@@ -136,8 +132,9 @@ pub fn hex(c: [f32; 4]) -> String {
 }
 
 /// Capture every monitor (blocking; call it off the UI thread).
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(target_os = "macos")]
 pub fn capture() -> Result<Vec<Shot>, String> {
+    crate::eyedropper::macos::screen_capture_allowed()?;
     let monitors = xcap::Monitor::all().map_err(|e| format!("Cannot list the monitors: {e}"))?;
     let mut shots = Vec::new();
     for monitor in monitors {
@@ -147,10 +144,7 @@ pub fn capture() -> Result<Vec<Shot>, String> {
         let (x, y, width, height, scale) = geometry.map_err(|e| format!("Cannot read the monitor layout: {e}"))?;
         let image = monitor.capture_image().map_err(|e| format!("Cannot capture the screen: {e}"))?;
         let pixel_size = [image.width(), image.height()];
-        if pixel_size[0] == 0 || pixel_size[1] == 0 {
-            continue;
-        }
-        shots.push(Shot::new(x, y, width, height, scale, pixel_size, image.into_raw()));
+        shots.extend(Shot::new(x, y, width, height, scale, pixel_size, image.into_raw()));
     }
     if shots.is_empty() {
         return Err("No monitor could be captured".into());
@@ -158,123 +152,33 @@ pub fn capture() -> Result<Vec<Shot>, String> {
     Ok(shots)
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+/// Everywhere else the eyedropper picks live and never needs a capture.
+#[cfg(not(target_os = "macos"))]
 pub fn capture() -> Result<Vec<Shot>, String> {
-    Err("Picking colors from the screen is not supported on this platform yet".into())
+    Err("The screen cannot be captured on this system".into())
 }
 
 /// Window settings for the overlay covering a monitor.
 pub fn overlay_settings(shot: &Shot, icon: Option<iced::window::Icon>) -> iced::window::Settings {
     use iced::window;
-    let s = shot.scale;
     window::Settings {
-        size: iced::Size::new(shot.width as f32 / s, shot.height as f32 / s),
-        position: window::Position::Specific(iced::Point::new(shot.x as f32 / s, shot.y as f32 / s)),
-        // Windows places the window exactly (see `cover`) and then shows it.
-        visible: !cfg!(windows),
-        fullscreen: !cfg!(windows),
+        // Positions and sizes are in the same (logical) units as the monitor layout.
+        size: iced::Size::new(shot.width as f32, shot.height as f32),
+        position: window::Position::Specific(iced::Point::new(shot.x as f32, shot.y as f32)),
+        min_size: None,
+        // Covering the monitor, not a fullscreen space: that would animate.
+        fullscreen: false,
         decorations: false,
+        // Until the capture is drawn the window shows what is under it, the same screen:
+        // no blank flash.
+        transparent: true,
         resizable: false,
         minimizable: false,
         level: window::Level::AlwaysOnTop,
         exit_on_close_request: false,
         icon,
-        #[cfg(windows)]
-        platform_specific: window::settings::PlatformSpecific {
-            skip_taskbar: true,
-            drag_and_drop: false,
-            undecorated_shadow: false,
-            corner_preference: window::settings::platform::CornerPreference::DoNotRound,
-        },
         ..Default::default()
     }
-}
-
-/// Put an overlay window exactly over its monitor and bring it to the front.
-///
-/// Windows positions windows in physical pixels, which is exact whatever the scale
-/// factors of the monitors. The window is moved onto the monitor first (so its scale
-/// factor applies), then given the monitor's rectangle.
-#[cfg(windows)]
-pub fn cover(window: &dyn iced::window::Window, shot: &Shot, focus: bool) {
-    use iced::window::raw_window_handle::RawWindowHandle;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos};
-
-    let Ok(handle) = window.window_handle() else { return };
-    let RawWindowHandle::Win32(win32) = handle.as_raw() else { return };
-    let hwnd = win32.hwnd.get() as windows_sys::Win32::Foundation::HWND;
-    // SAFETY: the handle belongs to a live window of this thread's event loop.
-    unsafe {
-        SetWindowPos(hwnd, HWND_TOPMOST, shot.x, shot.y, 64, 64, SWP_NOACTIVATE);
-        SetWindowPos(hwnd, HWND_TOPMOST, shot.x, shot.y, shot.width as i32, shot.height as i32, SWP_SHOWWINDOW);
-        if focus {
-            SetForegroundWindow(hwnd);
-        }
-    }
-}
-
-/// Where the mouse is on the desktop, in the units the shots use.
-#[cfg(windows)]
-pub fn cursor_position() -> Option<(i32, i32)> {
-    use windows_sys::Win32::Foundation::POINT;
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
-    let mut p = POINT { x: 0, y: 0 };
-    // SAFETY: `p` is a valid out pointer.
-    (unsafe { GetCursorPos(&mut p) } != 0).then_some((p.x, p.y))
-}
-
-#[cfg(not(windows))]
-pub fn cursor_position() -> Option<(i32, i32)> {
-    None
-}
-
-/// Shots laid out like the real monitors but showing a test pattern instead of the
-/// screen (the `--scenario eyedropper` self-check; nothing on the screen is captured).
-#[cfg(any(windows, target_os = "macos"))]
-pub fn test_pattern() -> Result<Vec<Shot>, String> {
-    let monitors = xcap::Monitor::all().map_err(|e| format!("Cannot list the monitors: {e}"))?;
-    let mut shots = Vec::new();
-    for m in monitors {
-        let layout = (|| -> xcap::XCapResult<_> { Ok((m.x()?, m.y()?, m.width()?, m.height()?, m.scale_factor().unwrap_or(1.0))) })();
-        let (x, y, width, height, scale) = layout.map_err(|e| format!("Cannot read the monitor layout: {e}"))?;
-        let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
-        for py in 0..height {
-            for px in 0..width {
-                // Hue across, brightness down, a grid every 64 pixels.
-                let grid = px % 64 == 0 || py % 64 == 0;
-                let h = px as f32 / width as f32 * 6.0;
-                let v = 1.0 - 0.6 * py as f32 / height as f32;
-                let channel = |center: f32| (2.0 - (h - center).abs().min(6.0 - (h - center).abs())).clamp(0.0, 1.0) * v;
-                let [r, g, b] = if grid { [0.9, 0.9, 0.9] } else { [channel(0.0), channel(2.0), channel(4.0)] };
-                rgba.extend([(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255]);
-            }
-        }
-        shots.push(Shot::new(x, y, width, height, scale, [width, height], rgba));
-    }
-    Ok(shots)
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-pub fn test_pattern() -> Result<Vec<Shot>, String> {
-    Err("Picking colors from the screen is not supported on this platform yet".into())
-}
-
-/// A window's rectangle on the desktop (left, top, right, bottom), for checks.
-#[cfg(windows)]
-pub fn window_rect(window: &dyn iced::window::Window) -> Option<[i32; 4]> {
-    use iced::window::raw_window_handle::RawWindowHandle;
-    use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
-    let handle = window.window_handle().ok()?;
-    let RawWindowHandle::Win32(win32) = handle.as_raw() else { return None };
-    let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-    // SAFETY: a live window handle and a valid out pointer.
-    (unsafe { GetWindowRect(win32.hwnd.get() as windows_sys::Win32::Foundation::HWND, &mut r) } != 0).then_some([r.left, r.top, r.right, r.bottom])
-}
-
-#[cfg(not(windows))]
-pub fn window_rect(_window: &dyn iced::window::Window) -> Option<[i32; 4]> {
-    None
 }
 
 /// Index of the shot whose monitor contains a desktop point.
@@ -308,55 +212,39 @@ mod tests {
     }
 
     #[test]
-    fn averaging_evens_out_noise() {
-        // A checkerboard of black and white averages to gray.
-        let mut rgba = Vec::new();
-        for y in 0..9u32 {
-            for x in 0..9u32 {
-                let v = if (x + y) % 2 == 0 { 255 } else { 0 };
-                rgba.extend([v, v, v, 255]);
-            }
-        }
-        let shot = Shot::from_image([9, 9], rgba);
-        let avg = shot.average(4.5, 4.5, 1);
-        assert!((avg[0] - 5.0 / 9.0).abs() < 1e-5, "{avg:?}");
+    fn a_path_gives_one_color_per_pixel_in_order() {
+        let shots = [ramp(400, 50)];
+        // Along the ramp and back a little: a freehand path, not a line.
+        let colors = path_colors(&shots, 0, &[[0.5, 10.5], [399.5, 30.5], [300.5, 40.5]]);
+        assert!(colors.len() >= 400 && colors.len() < 520, "{}", colors.len());
+        assert_eq!(colors[0], [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(colors[399], [1.0, 1.0, 1.0, 1.0]);
+        let g = crate::eyedropper::gradient_from_path(&colors);
+        assert!(g.sample(0.0)[0] < 0.05);
+        // Garbage points are skipped; off the monitors the path ends at the edge.
+        assert_eq!(path_colors(&shots, 0, &[[f32::NAN, 0.0], [1.5, 1.5], [-20.0, 1.5]]).len(), 2);
+        assert!(path_colors(&shots, 7, &[[1.5, 1.5]]).is_empty());
     }
 
     #[test]
-    fn a_line_becomes_a_gradient_with_few_stops() {
-        let shot = ramp(400, 5);
-        let samples = shot.line([0.0, 2.0], [399.0, 2.0]);
-        assert_eq!(samples.len(), 400);
-        let g = shot.gradient([0.0, 2.0], [399.0, 2.0]);
-        // Two linear segments: black → red → white.
-        assert!(g.stops.len() <= 4, "{} stops", g.stops.len());
-        let mid = g.sample(0.5);
-        assert!(mid[0] > 0.95 && mid[1] < 0.05, "{mid:?}");
-        let end = g.sample(1.0);
-        assert!(end[1] > 0.95, "{end:?}");
-        // Reversed line, reversed gradient.
-        let back = shot.gradient([399.0, 2.0], [0.0, 2.0]);
-        assert!(back.sample(0.0)[1] > 0.95 && back.sample(1.0)[0] < 0.05);
+    fn a_path_goes_on_to_the_next_monitor() {
+        // Two monitors side by side, the right one at twice the pixel density.
+        let left = Shot::new(0, 0, 100, 10, 1.0, [100, 10], [[255, 0, 0, 255]; 1000].concat()).unwrap();
+        let right = Shot::new(100, 0, 100, 10, 2.0, [200, 20], [[0, 0, 255, 255]; 4000].concat()).unwrap();
+        let colors = path_colors(&[left, right], 0, &[[50.5, 5.5], [150.5, 5.5]]);
+        let reds = colors.iter().filter(|c| c[0] == 1.0).count();
+        let blues = colors.iter().filter(|c| c[2] == 1.0).count();
+        assert_eq!(reds, 50);
+        // One color per pixel of the capture: twice as many on the denser monitor.
+        assert!((100..=102).contains(&blues), "{blues}");
+        assert_eq!(colors.last(), Some(&[0.0, 0.0, 1.0, 1.0]));
     }
 
     #[test]
-    fn short_lines_still_give_two_samples() {
-        let shot = ramp(10, 10);
-        assert_eq!(shot.line([3.0, 3.0], [3.0, 3.0]).len(), 2);
-    }
-
-    /// Captures the real screen: run by hand (`cargo test -- --ignored capturing`).
-    /// Only the sizes are checked; nothing is saved.
-    #[test]
-    #[ignore]
-    fn capturing_every_monitor() {
-        let started = std::time::Instant::now();
-        let shots = capture().expect("capture");
-        for s in &shots {
-            println!("monitor at {},{} {}x{} (scale {}): image {:?}", s.x, s.y, s.width, s.height, s.scale, s.pixel_size);
-            assert!(s.pixel_size[0] > 0 && s.pixel_size[1] > 0);
-        }
-        println!("{} monitors captured in {:?}", shots.len(), started.elapsed());
+    fn shots_need_all_their_pixels() {
+        assert!(Shot::new(0, 0, 2, 2, 1.0, [2, 2], vec![0; 15]).is_none());
+        assert!(Shot::new(0, 0, 0, 0, 1.0, [0, 0], vec![]).is_none());
+        assert!(Shot::new(0, 0, 2, 2, f32::NAN, [2, 2], vec![0; 16]).is_some_and(|s| s.scale == 1.0));
     }
 
     #[test]

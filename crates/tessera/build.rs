@@ -13,6 +13,11 @@ fn main() {
     println!("cargo:rerun-if-changed=src/brand/art.rs");
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    // `free_unix`: the systems where windows are X11 or Wayland ones (as in winit).
+    println!("cargo::rustc-check-cfg=cfg(free_unix)");
+    if ["linux", "dragonfly", "freebsd", "netbsd", "openbsd"].contains(&os.as_str()) {
+        println!("cargo::rustc-cfg=free_unix");
+    }
     // link.exe takes .res files directly; other linkers would need a converted object.
     if os != "windows" || env != "msvc" {
         return;

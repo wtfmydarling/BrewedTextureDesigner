@@ -42,6 +42,7 @@ pub fn color_editor<'a>(
     target: ColorTarget,
     on_change: impl Fn([f32; 4]) -> Message + Clone + 'a,
     on_release: Message,
+    picking: Option<&PickTarget>,
 ) -> Element<'a, Message> {
     let mut channels = row![].spacing(4);
     for (i, label) in ["R ", "G ", "B ", "A "].iter().enumerate() {
@@ -59,7 +60,7 @@ pub fn color_editor<'a>(
         );
     }
     let footer = row![
-        eyedropper(PickTarget::Color(target), "Pick from screen", "Click anywhere, on any monitor, to take its color (Esc cancels)"),
+        eyedropper(PickTarget::Color(target), picking, "Pick from screen", "Click anywhere on any monitor to take its color. Esc or a right click cancels."),
         space().width(Length::Fill),
         text(to_hex(c)).size(style::SMALL).font(style::mono()).color(style::TEXT_DIM),
     ]
@@ -70,18 +71,20 @@ pub fn color_editor<'a>(
         .into()
 }
 
-/// A button that starts picking from the screen.
-pub fn eyedropper<'a>(target: PickTarget, label: &'a str, tooltip: &'a str) -> Element<'a, Message> {
-    let supported = crate::picker::SUPPORTED;
+/// A button that starts picking from the screen. While its pick is in progress it stays
+/// down, and a click on it cancels.
+pub fn eyedropper<'a>(target: PickTarget, picking: Option<&PickTarget>, label: &'a str, tooltip: &'a str) -> Element<'a, Message> {
+    let active = picking == Some(&target);
+    let message = if active { PickMessage::Cancel } else { PickMessage::Start(target) };
     let button = button(
-        row![icon(Icon::Pipette, 14.0, if supported { style::TEXT_DIM } else { style::TEXT_FAINT }), text(label).size(style::SMALL)]
+        row![icon(Icon::Pipette, 14.0, if active { style::TEXT } else { style::TEXT_DIM }), text(label).size(style::SMALL)]
             .spacing(6)
             .align_y(Alignment::Center),
     )
     .padding([3, 8])
-    .style(style::button)
-    .on_press_maybe(supported.then_some(Message::Pick(PickMessage::Start(target))));
-    tip(button, if supported { tooltip } else { "Picking from the screen is not supported on this platform yet" }, tooltip::Position::Top)
+    .style(move |theme, status| if active { style::toggle_button(true)(theme, status) } else { style::button(theme, status) })
+    .on_press(Message::Pick(message));
+    tip(button, tooltip, tooltip::Position::Top)
 }
 
 /// Editor of a [`Value`] within an optional [min, max] range.

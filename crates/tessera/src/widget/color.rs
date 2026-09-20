@@ -150,7 +150,7 @@ fn outline(renderer: &mut iced::Renderer, bounds: Rectangle, color: Color, width
 
 /// Checkerboard behind transparent colors.
 pub fn checker(renderer: &mut iced::Renderer, bounds: Rectangle, cell: f32) {
-    quad(renderer, bounds, style::rgb(90, 90, 94), 0.0);
+    quad(renderer, bounds, style::gray(92), 0.0);
     let cols = (bounds.width / cell).ceil() as i32;
     let rows = (bounds.height / cell).ceil() as i32;
     for y in 0..rows {
@@ -164,7 +164,7 @@ pub fn checker(renderer: &mut iced::Renderer, bounds: Rectangle, cell: f32) {
                 width: cell.min(bounds.x + bounds.width - (bounds.x + x as f32 * cell)),
                 height: cell.min(bounds.y + bounds.height - (bounds.y + y as f32 * cell)),
             };
-            quad(renderer, r, style::rgb(150, 150, 154), 0.0);
+            quad(renderer, r, style::gray(152), 0.0);
         }
     }
 }

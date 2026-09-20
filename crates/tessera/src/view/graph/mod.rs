@@ -633,6 +633,29 @@ pub fn node_title(node: &Node) -> String {
     }
 }
 
+/// The top `h` pixels of a rectangle with rounded top corners (radius `r`): the band follows
+/// the corner arcs and ends in a straight line.
+fn top_band(rect: Rectangle, r: f32, h: f32) -> Path {
+    let r = r.min(rect.width / 2.0).max(0.0);
+    let h = h.min(rect.height);
+    // Horizontal inset of the corner arc at depth `t` below the top.
+    let inset = |t: f32| if t >= r { 0.0 } else { r - (r * r - (r - t) * (r - t)).max(0.0).sqrt() };
+    const STEPS: usize = 6;
+    Path::new(|b| {
+        let (x0, x1, y) = (rect.x, rect.x + rect.width, rect.y);
+        b.move_to(Point::new(x0 + inset(h), y + h));
+        for i in (0..STEPS).rev() {
+            let t = h * i as f32 / STEPS as f32;
+            b.line_to(Point::new(x0 + inset(t), y + t));
+        }
+        for i in 0..=STEPS {
+            let t = h * i as f32 / STEPS as f32;
+            b.line_to(Point::new(x1 - inset(t), y + t));
+        }
+        b.close();
+    })
+}
+
 fn diamond(center: Point, r: f32) -> Path {
     Path::new(|b| {
         b.move_to(Point::new(center.x, center.y - r));
@@ -668,13 +691,13 @@ impl GraphCanvas<'_> {
         frame.fill(&shadow, Color::from_rgba(0.0, 0.0, 0.0, 0.28));
         let body = Path::rounded_rectangle(l.rect.position(), l.rect.size(), radius.into());
         frame.fill(&body, if node.bypass { style::NODE_BYPASSED } else { style::NODE_BODY });
-        let header_color = if node.bypass { style::HOVER } else { style::category_color(d.category) };
-        let header = Path::rounded_rectangle(
-            l.header.position(),
-            l.header.size(),
-            iced::border::Radius { top_left: radius, top_right: radius, bottom_right: 0.0, bottom_left: 0.0 },
-        );
-        frame.fill(&header, header_color);
+        // A neutral header; the category shows as a thin strip along its top.
+        let top = iced::border::Radius { top_left: radius, top_right: radius, bottom_right: 0.0, bottom_left: 0.0 };
+        let header = Path::rounded_rectangle(l.header.position(), l.header.size(), top);
+        frame.fill(&header, if node.bypass { style::NODE_BYPASSED } else { style::NODE_HEADER });
+        let strip_h = (3.0 * z).clamp(1.5, 4.0);
+        let strip_color = if node.bypass { style::BORDER_LIGHT } else { style::category_color(d.category) };
+        frame.fill(&top_band(l.header, radius, strip_h), strip_color);
 
         let show_text = z > 0.32;
         let font_size = scaled(12.5, z);
