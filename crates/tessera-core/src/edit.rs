@@ -61,10 +61,6 @@ pub enum Edit {
         key: String,
         exposed: bool,
     },
-    SetLabel {
-        node: NodeId,
-        label: String,
-    },
     SetBypass {
         node: NodeId,
         bypass: bool,
@@ -139,7 +135,7 @@ pub enum Edit {
     },
     SetCommentColor {
         id: CommentId,
-        color: u8,
+        color: [f32; 4],
     },
     /// Several edits as one undo step, applied in order: all of them or none.
     Batch(Vec<Edit>),
@@ -175,7 +171,6 @@ pub enum MergeKey {
     Param(NodeId, String),
     ParamMany(Vec<NodeId>, String),
     Move(Vec<NodeId>),
-    Label(NodeId),
     LocalVar(NodeId, String),
     Variable(String, u8),
     Comment(CommentId, u8),
@@ -235,7 +230,6 @@ impl Edit {
             Edit::SetParam { .. } | Edit::SetParamMany { .. } => "Change Parameter",
             Edit::SetExposed { exposed: true, .. } => "Expose",
             Edit::SetExposed { exposed: false, .. } => "Unexpose",
-            Edit::SetLabel { .. } => "Rename Node",
             Edit::SetBypass { .. } => "Bypass",
             Edit::SetLocalVar { .. } => "Change Variable",
             Edit::SetResolution(_) => "Change Size",
@@ -268,7 +262,6 @@ impl Edit {
             }
             Edit::SetParamMany { nodes, key, .. } => MergeKey::ParamMany(nodes.clone(), key.clone()),
             Edit::MoveNodes { ids, .. } => MergeKey::Move(ids.clone()),
-            Edit::SetLabel { node, .. } => MergeKey::Label(*node),
             Edit::SetLocalVar { node, name, .. } => MergeKey::LocalVar(*node, name.clone()),
             Edit::SetVariable { name, .. } => MergeKey::Variable(name.clone(), 0),
             Edit::SetVariableRange { name, .. } => MergeKey::Variable(name.clone(), 1),
@@ -397,15 +390,6 @@ impl Edit {
                     return Ok(EditResult::unchanged());
                 }
                 graph.set_exposed(node, &key, exposed)?;
-                EditResult::changed()
-            }
-            Edit::SetLabel { node, label } => {
-                let n = graph.node_mut(node).ok_or("The node no longer exists")?;
-                let label = label.trim_start().to_string();
-                if n.label == label {
-                    return Ok(EditResult::unchanged());
-                }
-                n.label = label;
                 EditResult::changed()
             }
             Edit::SetBypass { node, bypass } => {
@@ -562,9 +546,10 @@ impl Edit {
                 EditResult::changed()
             }
             Edit::SetCommentColor { id, color } => {
-                if color >= Comment::COLORS {
-                    return Err("There is no such comment color".into());
+                if !color.iter().all(|c| c.is_finite()) {
+                    return Err("That is not a color".into());
                 }
+                let color = color.map(|c| c.clamp(0.0, 1.0));
                 let comment = graph.comment_mut(id).ok_or("The comment no longer exists")?;
                 if comment.color == color {
                     return Ok(EditResult::unchanged());

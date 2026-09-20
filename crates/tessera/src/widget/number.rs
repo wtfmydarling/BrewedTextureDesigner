@@ -15,6 +15,9 @@ use crate::style;
 
 pub struct NumberField<'a, Message> {
     value: f64,
+    /// What the value would be if it had never been touched: a field showing anything else
+    /// says so, in every panel.
+    default: Option<f64>,
     min: f64,
     max: f64,
     limits: Option<(f64, f64)>,
@@ -35,6 +38,7 @@ pub struct NumberField<'a, Message> {
 pub fn number<'a, Message>(value: f64, min: f64, max: f64) -> NumberField<'a, Message> {
     NumberField {
         value,
+        default: None,
         min,
         max,
         limits: None,
@@ -68,6 +72,17 @@ impl<'a, Message> NumberField<'a, Message> {
         self.log = log && self.min > 0.0 && self.max > self.min;
         self
     }
+    /// The value the field came with. It is then drawn heavier when it differs.
+    pub fn default_value(mut self, default: f64) -> Self {
+        self.default = Some(default);
+        self
+    }
+
+    /// Is the value no longer the one the field came with?
+    fn changed(&self) -> bool {
+        self.default.is_some_and(|d| (self.value - d).abs() > 1e-9 * d.abs().max(1.0))
+    }
+
     /// Values are clamped to this range, whatever is typed.
     pub fn limits(mut self, min: f64, max: f64) -> Self {
         self.limits = Some((min.min(max), max.max(min)));
@@ -532,25 +547,36 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
                                 border: Border { radius: 2.0.into(), ..Border::default() },
                                 ..renderer::Quad::default()
                             },
-                            Background::Color(if hovered || state.drag.is_some() { style::VALUE_FILL_HOT } else { style::VALUE_FILL }),
+                            Background::Color(match (self.changed(), hovered || state.drag.is_some()) {
+                                (true, true) => style::VALUE_FILL_CHANGED_HOT,
+                                (true, false) => style::VALUE_FILL_CHANGED,
+                                (false, true) => style::VALUE_FILL_HOT,
+                                (false, false) => style::VALUE_FILL,
+                            }),
                         );
                     }
                 }
                 let label = format!("{}{}{}", self.prefix, self.format(self.value), self.suffix);
+                // A value that is no longer the one it came with is written in heavy type.
+                let changed = self.changed();
                 renderer.fill_text(
                     text::Text {
                         content: label,
                         bounds: bounds.size(),
                         size,
                         line_height: text::LineHeight::default(),
-                        font,
+                        font: if changed { style::heavy() } else { font },
                         align_x: text::Alignment::Center,
                         align_y: Vertical::Center,
                         shaping: text::Shaping::Auto,
                         wrapping: text::Wrapping::None,
                     },
                     center,
-                    if enabled { style::TEXT } else { style::TEXT_DIM },
+                    match (enabled, changed) {
+                        (false, _) => style::TEXT_DIM,
+                        (true, true) => style::ACCENT_TEXT,
+                        (true, false) => style::TEXT,
+                    },
                     bounds,
                 );
             }

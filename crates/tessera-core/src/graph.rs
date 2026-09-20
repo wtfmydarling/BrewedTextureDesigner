@@ -26,15 +26,16 @@ pub struct Comment {
     pub text: String,
     pub pos: [f32; 2],
     pub size: [f32; 2],
-    /// Which of the [`Comment::COLORS`] colors it is drawn in.
-    #[serde(default)]
-    pub color: u8,
+    /// The color it is drawn in, like any other color in the graph.
+    #[serde(default = "Comment::gray")]
+    pub color: [f32; 4],
 }
 
 impl Comment {
-    /// How many colors a comment can be given; the colors themselves belong to the
-    /// interface.
-    pub const COLORS: u8 = 8;
+    /// The color a comment starts with: a plain gray, until it is given another.
+    pub fn gray() -> [f32; 4] {
+        [0.49, 0.49, 0.49, 1.0]
+    }
     /// Smallest a comment can be dragged to, in graph units: still large enough to grab
     /// its title bar and its corner.
     pub const MIN_SIZE: [f32; 2] = [120.0, 80.0];
@@ -66,8 +67,6 @@ pub struct Node {
     pub id: NodeId,
     pub kind: NodeKind,
     pub pos: [f32; 2],
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub label: String,
     #[serde(default)]
     pub params: Vec<ParamSlot>,
     /// Input nodes: name of the graph variable they read.
@@ -88,7 +87,7 @@ impl Node {
             .all_params()
             .map(|p| ParamSlot { key: p.key.to_string(), value: p.default_value(), exposed: p.exposed_by_default })
             .collect();
-        Node { id, kind, pos, label: String::new(), params, variable: None, var_values: BTreeMap::new(), bypass: false }
+        Node { id, kind, pos, params, variable: None, var_values: BTreeMap::new(), bypass: false }
     }
 
     pub fn def(&self) -> &'static NodeDef {
@@ -432,7 +431,7 @@ impl Graph {
     pub fn add_comment(&mut self, text: String, pos: [f32; 2], size: [f32; 2]) -> CommentId {
         let id = CommentId(self.alloc_id());
         let size = [size[0].max(Comment::MIN_SIZE[0]), size[1].max(Comment::MIN_SIZE[1])];
-        self.comments.push(Comment { id, text, pos, size, color: 0 });
+        self.comments.push(Comment { id, text, pos, size, color: Comment::gray() });
         id
     }
 

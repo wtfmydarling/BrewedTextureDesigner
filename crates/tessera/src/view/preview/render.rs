@@ -14,8 +14,6 @@ struct U {
     size: vec2<f32>,      // widget size in physical pixels
     checker: f32,         // checker cell size in physical pixels
     channel: u32,         // 0 RGBA, 1 RGB, 2 R, 3 G, 4 B, 5 A
-    lattice: vec4<f32>,   // the two vectors the image repeats along, in image widths
-    inverse: vec4<f32>,   // their inverse, row major: how many steps a point is away
     background: vec4<f32>,// what is behind the image
     flags: u32,           // 1 tile x, 2 tile y, 4 sRGB target, 8 nearest
     pad0: u32, pad1: u32, pad2: u32,
@@ -73,37 +71,13 @@ fn fs(in: V) -> @location(0) vec4<f32> {
     let texels = uv * vec2<f32>(textureDimensions(tex, 0));
     let lod = max(0.0, log2(max(length(dpdx(texels)), length(dpdy(texels))) + 1e-6));
 
+    // The image repeats along its own sides, on the axes the node tiles on.
     let tiled_x = (u.flags & 1u) != 0u;
     let tiled_y = (u.flags & 2u) != 0u;
-    // Steps along the two lattice vectors from the image to this point. For most nodes
-    // the lattice is the image itself; a Transform 2D repeats along its own axes, so the
-    // copies follow the gizmo and the texture keeps matching along its edges.
-    let steps = vec2<f32>(
-        u.inverse.x * uv.x + u.inverse.y * uv.y,
-        u.inverse.z * uv.x + u.inverse.w * uv.y,
-    );
-    let base = vec2<f32>(select(0.0, floor(steps.x), tiled_x), select(0.0, floor(steps.y), tiled_y));
-    // The nearest copies first: with the lattice larger than the image, the copy holding
-    // this point can be a step or two further.
-    var order = array<i32, 5>(0, -1, 1, -2, 2);
     var q = uv;
-    var found = false;
-    for (var i = 0; i < 5; i++) {
-        if (!tiled_x && i > 0) { break; }
-        for (var j = 0; j < 5; j++) {
-            if (!tiled_y && j > 0) { break; }
-            let m = base.x + f32(order[i]);
-            let n = base.y + f32(order[j]);
-            let c = uv - (m * u.lattice.xy + n * u.lattice.zw);
-            if (all(c >= vec2<f32>(0.0)) && all(c <= vec2<f32>(1.0))) {
-                q = c;
-                found = true;
-                break;
-            }
-        }
-        if (found) { break; }
-    }
-    if (!found) {
+    if (tiled_x) { q.x = fract(q.x); }
+    if (tiled_y) { q.y = fract(q.y); }
+    if (any(q < vec2<f32>(0.0)) || any(q > vec2<f32>(1.0))) {
         return shown(u.background.rgb);
     }
 
@@ -142,8 +116,6 @@ struct Uniforms {
     size: [f32; 2],
     checker: f32,
     channel: u32,
-    lattice: [f32; 4],
-    inverse: [f32; 4],
     background: [f32; 4],
     flags: u32,
     pad: [u32; 3],
@@ -156,9 +128,6 @@ pub struct Scene {
     pub rect: Rectangle,
     pub channel: u32,
     pub tile: [bool; 2],
-    /// The two vectors the image repeats along, in image widths and heights: the sides of
-    /// the image for most nodes, the transformed ones for a Transform 2D.
-    pub lattice: [[f32; 2]; 2],
 }
 
 #[derive(Debug)]
@@ -167,7 +136,6 @@ pub struct Primitive {
     rect: Rectangle,
     channel: u32,
     tile: [bool; 2],
-    lattice: [[f32; 2]; 2],
     nearest: bool,
 }
 
@@ -183,7 +151,6 @@ impl shader::Program<Message> for Scene {
             rect: self.rect,
             channel: self.channel,
             tile: self.tile,
-            lattice: self.lattice,
             nearest,
         }
     }
@@ -354,22 +321,12 @@ impl shader::Primitive for Primitive {
         if self.nearest {
             flags |= 8;
         }
-        // A lattice that cannot be inverted (a transform scaled to nothing) repeats nothing.
-        let [a, b] = self.lattice;
-        let det = a[0] * b[1] - a[1] * b[0];
-        let (lattice, inverse) = if det.abs() > 1e-6 && [a[0], a[1], b[0], b[1]].iter().all(|v| v.is_finite()) {
-            ([a[0], a[1], b[0], b[1]], [b[1] / det, -b[0] / det, -a[1] / det, a[0] / det])
-        } else {
-            ([1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0])
-        };
         let bg = crate::style::CANVAS;
         let u = Uniforms {
             rect: [r.x / w, r.y / h, (r.x + r.width) / w, (r.y + r.height) / h],
             size: [w * scale, h * scale],
             checker: 8.0 * scale,
             channel: self.channel,
-            lattice,
-            inverse,
             background: [bg.r, bg.g, bg.b, 1.0],
             flags,
             pad: [0; 3],

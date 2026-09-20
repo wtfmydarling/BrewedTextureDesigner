@@ -63,6 +63,9 @@ pub const SUCCESS: Color = rgb(120, 196, 134);
 /// Filled part of number fields (how far the value is in its range).
 pub const VALUE_FILL: Color = gray(62);
 pub const VALUE_FILL_HOT: Color = gray(76);
+/// The bar of a field whose value is no longer the one it came with.
+pub const VALUE_FILL_CHANGED: Color = gray(104);
+pub const VALUE_FILL_CHANGED_HOT: Color = gray(120);
 
 pub const NODE_BODY: Color = gray(46);
 pub const NODE_HEADER: Color = gray(58);
@@ -100,24 +103,6 @@ pub fn category_color(c: Category) -> Color {
     }
 }
 
-/// Colors a comment frame can be given, the plain gray one first. They are muted: a
-/// comment is a background, never the loudest thing on the canvas.
-pub const COMMENT_COLORS: [Color; 8] = [
-    gray(126),
-    rgb(176, 138, 62),
-    rgb(74, 150, 104),
-    rgb(70, 124, 186),
-    rgb(58, 148, 156),
-    rgb(140, 106, 184),
-    rgb(186, 96, 96),
-    rgb(178, 118, 68),
-];
-
-/// The color of a comment frame, whatever number it holds.
-pub fn comment_color(i: u8) -> Color {
-    COMMENT_COLORS[i as usize % COMMENT_COLORS.len()]
-}
-
 pub fn alpha(c: Color, a: f32) -> Color {
     Color { a: c.a * a, ..c }
 }
@@ -143,6 +128,16 @@ pub fn ui_font() -> Font {
 
 pub fn bold() -> Font {
     Font { weight: iced::font::Weight::Semibold, ..ui_font() }
+}
+
+/// For a value that is no longer the one it came with: heavy enough to see at a glance.
+pub fn heavy() -> Font {
+    Font { weight: iced::font::Weight::Bold, ..ui_font() }
+}
+
+/// The name of a field whose value was changed.
+pub fn italic() -> Font {
+    Font { style: iced::font::Style::Italic, ..ui_font() }
 }
 
 pub fn mono() -> Font {
@@ -309,25 +304,6 @@ pub fn toggle_button(on: bool) -> impl Fn(&Theme, button_w::Status) -> button_w:
             button_base(Some(bg), ACCENT_TEXT, alpha(ACCENT, 0.45))
         } else {
             flat_button(theme, status)
-        }
-    }
-}
-
-/// One color to pick from a row of them (comment colors): the color itself, outlined when
-/// it is the current one.
-pub fn swatch_button(color: Color, current: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
-    move |_, status| {
-        let bg = match status {
-            button_w::Status::Hovered | button_w::Status::Pressed => mix(color, Color::WHITE, 0.2),
-            _ => color,
-        };
-        let border = if current { ACCENT } else { gray(24) };
-        button_w::Style {
-            background: Some(Background::Color(bg)),
-            text_color: TEXT,
-            border: Border { color: border, width: if current { 2.0 } else { 1.0 }, radius: 3.0.into() },
-            shadow: Shadow::default(),
-            snap: true,
         }
     }
 }

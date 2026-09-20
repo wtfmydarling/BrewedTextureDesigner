@@ -207,11 +207,11 @@ pub fn brick_wall() -> (Graph, NodeId) {
     // comment is.
     let shape = g.add_comment("The shape of the bricks".into(), [-580.0, -180.0], [1250.0, 1000.0]);
     if let Some(c) = g.comment_mut(shape) {
-        c.color = 3;
+        c.color = [0.28, 0.51, 0.80, 1.0];
     }
     let maps = g.add_comment("Maps for the 3D view".into(), [700.0, -180.0], [680.0, 1180.0]);
     if let Some(c) = g.comment_mut(maps) {
-        c.color = 2;
+        c.color = [0.29, 0.64, 0.44, 1.0];
     }
 
     g.normalize();

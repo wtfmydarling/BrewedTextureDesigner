@@ -705,12 +705,13 @@ fn comments_group_nodes_and_travel_with_them() {
 
     // Its text and color are the comment's own, and the properties panel edits them.
     w.send(Message::Edit(Edit::SetCommentText { id, text: "Roughness".into() }));
-    w.send(Message::Edit(Edit::SetCommentColor { id, color: 3 }));
+    let blue = [0.28, 0.51, 0.80, 1.0];
+    w.send(Message::Edit(Edit::SetCommentColor { id, color: blue }));
     let comment = w.app.graph().comment(id).expect("the comment").clone();
-    assert_eq!((comment.text.as_str(), comment.color), ("Roughness", 3));
-    // There is no fourth-hundredth color.
-    w.send(Message::Edit(Edit::SetCommentColor { id, color: 200 }));
-    assert_eq!(w.app.graph().comment(id).expect("the comment").color, 3);
+    assert_eq!((comment.text.as_str(), comment.color), ("Roughness", blue));
+    // A color it cannot be given leaves it as it was.
+    w.send(Message::Edit(Edit::SetCommentColor { id, color: [f32::NAN, 0.0, 0.0, 1.0] }));
+    assert_eq!(w.app.graph().comment(id).expect("the comment").color, blue);
 
     // A press in the middle of a comment goes to the canvas: it box-selects instead.
     let rect = comment_rect(&w, id);

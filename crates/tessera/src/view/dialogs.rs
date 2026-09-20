@@ -43,6 +43,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+B", "Bypass the selected node"),
     ("Ctrl+A", "Select all"),
     ("F", "Frame the selection or everything"),
+    ("Space over the 2D view", "Show the image repeated around itself"),
     ("C", "Comment: a frame around the selected nodes, moved with them"),
     ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
     ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),

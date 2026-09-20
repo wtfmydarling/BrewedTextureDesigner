@@ -63,6 +63,7 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
     let default_open = app.ui.color_picker == Some(ColorTarget::Variable(var.name.clone(), VarField::Default));
     let default_editor = value_editor(
         var.default,
+        None,
         range,
         {
             let name = name.clone();
@@ -79,6 +80,7 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
         let min_editor = value_editor(
             var.min,
             None,
+            None,
             move |v| Message::Edit(Edit::SetVariableRange { name: min_name.clone(), min: v, max }),
             Message::Seal,
             false,
@@ -88,6 +90,7 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
         let min = var.min;
         let max_editor = value_editor(
             var.max,
+            None,
             None,
             move |v| Message::Edit(Edit::SetVariableRange { name: max_name.clone(), min, max: v }),
             Message::Seal,
@@ -125,8 +128,11 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
     let expanded = app.ui.expanded_vars.contains(&var.name);
     let color_open = app.ui.color_picker == Some(ColorTarget::Variable(var.name.clone(), VarField::Value));
     let range = var.has_range().then_some((var.min, var.max));
+    // The value of a variable is compared with its own default, so a changed input says so
+    // in the same way a changed parameter does.
     let editor = value_editor(
         var.value,
+        Some(var.default),
         range,
         set_value(&var.name),
         Message::Seal,
@@ -143,9 +149,13 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
     // A value that is no longer the one the input came with says so, and the middle button
     // puts that one back.
     let changed = var.value != var.default;
+    let title = if changed { format!("{}*", var.name) } else { var.name.clone() };
     let name = row![
         socket_icon(var.ty, true, 12.0, style::type_color(var.ty)),
-        text(&var.name).size(style::TEXT_SIZE).font(style::bold()).color(if changed { style::ACCENT } else { style::TEXT }),
+        text(title)
+            .size(style::TEXT_SIZE)
+            .font(if changed { style::italic() } else { style::bold() })
+            .color(if changed { style::ACCENT } else { style::TEXT }),
     ]
     .spacing(5)
     .align_y(Alignment::Center);
@@ -173,10 +183,9 @@ Changed — middle-click the row to put {} back", var.description, var.default.d
     if expanded {
         col = col.push(container(details(app, var, true)).padding(iced::Padding { left: 22.0, ..iced::Padding::ZERO }));
     }
+    // The same widget around the row either way, so that a field being dragged is not
+    // rebuilt under the mouse; resetting a value that is already the default does nothing.
     let row = container(col).padding([5, 6]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2)));
-    if !changed {
-        return row.into();
-    }
     iced::widget::mouse_area(row).on_middle_press(Message::Edit(Edit::ResetVariable(var.name.clone()))).into()
 }
 

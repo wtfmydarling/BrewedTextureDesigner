@@ -169,6 +169,7 @@ pub enum ColorTarget {
     Param(NodeId, String),
     Variable(String, VarField),
     GradientStop(NodeId, String),
+    Comment(CommentId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1689,6 +1690,10 @@ impl App {
                 let pos = self.ui.graph_view.to_graph(at);
                 return self.open_add_menu(at, pos, None);
             }
+            // Over the 2D view, Space is the tiling: it is what one keeps looking at.
+            Key::Named(Named::Space) if self.ui.preview.bounds.contains(self.ui.cursor) => {
+                Message::Preview(PreviewMessage::ToggleTiling)
+            }
             _ => return Task::none(),
         };
         self.update_nested(message)
@@ -2045,6 +2050,7 @@ impl App {
                     VarField::Default => Edit::SetVariableDefault { name: name.clone(), value },
                 }
             }),
+            ColorTarget::Comment(id) => graph.comment(*id).map(|c| Edit::SetCommentColor { id: *id, color: with_alpha(c.color[3]) }),
             ColorTarget::GradientStop(node, key) => {
                 let gradient = graph.node(*node).and_then(|n| n.value(key)).and_then(ParamValue::as_gradient).cloned();
                 let stop = self.ui.gradient_stop.get(&(*node, key.clone())).copied();
@@ -2122,7 +2128,6 @@ impl App {
                 if let Some(id) = first(NodeKind::TRANSFORM_2D) {
                     self.ui.selection = [id].into_iter().collect();
                     self.ui.preview.node = Some(id);
-                    let _ = self.doc.apply(Edit::SetLabel { node: id, label: "dirt rotation".into() });
                 }
             }
             "tiling" => {

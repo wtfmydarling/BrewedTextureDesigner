@@ -10,7 +10,7 @@ use crate::picker::PickTarget;
 use crate::style;
 use crate::view::tip;
 use crate::widget::color::{color_picker, to_hex};
-use crate::widget::number::number;
+use crate::widget::number::{NumberField, number};
 
 /// A small color swatch that toggles a color picker.
 pub fn swatch<'a>(c: [f32; 4], open: bool, on_press: Message) -> Element<'a, Message> {
@@ -90,6 +90,8 @@ pub fn eyedropper<'a>(target: PickTarget, picking: Option<&PickTarget>, label: &
 /// Editor of a [`Value`] within an optional [min, max] range.
 pub fn value_editor<'a>(
     value: Value,
+    // What the value would be untouched, when there is such a thing: the field says so.
+    default: Option<Value>,
     range: Option<(Value, Value)>,
     on_change: impl Fn(Value) -> Message + Clone + 'a,
     on_release: Message,
@@ -104,10 +106,21 @@ pub fn value_editor<'a>(
             _ => (0.0, 1.0, false),
         }
     };
+    // The default of the same shape as the value; anything else is no default at all.
+    let default_at = |i: usize| match default {
+        Some(Value::Float(d)) => Some(d as f64),
+        Some(Value::Int(d)) => Some(d as f64),
+        Some(Value::Vec2(d)) => Some(d[i] as f64),
+        _ => None,
+    };
+    let held = |field: NumberField<'a, Message>, i: usize| match default_at(i) {
+        Some(d) => field.default_value(d),
+        None => field,
+    };
     match value {
         Value::Float(v) => {
             let (lo, hi, limited) = bounds(0);
-            let mut n = number(v as f64, lo, hi).on_change(move |x| on_change(Value::Float(x as f32))).on_release(on_release);
+            let mut n = held(number(v as f64, lo, hi), 0).on_change(move |x| on_change(Value::Float(x as f32))).on_release(on_release);
             if limited {
                 n = n.limits(lo, hi);
             }
@@ -116,7 +129,7 @@ pub fn value_editor<'a>(
         Value::Int(v) => {
             let (lo, hi, limited) = bounds(0);
             let (lo, hi) = if limited { (lo, hi) } else { (0.0, 16.0) };
-            let mut n = number(v as f64, lo, hi).integer(true).on_change(move |x| on_change(Value::Int(x as i32))).on_release(on_release);
+            let mut n = held(number(v as f64, lo, hi), 0).integer(true).on_change(move |x| on_change(Value::Int(x as i32))).on_release(on_release);
             if limited {
                 n = n.limits(lo, hi);
             }
@@ -135,7 +148,7 @@ pub fn value_editor<'a>(
                 let (lo, hi, limited) = bounds(i);
                 let (lo, hi) = if limited { (lo, hi) } else { (-1.0, 1.0) };
                 let f = on_change.clone();
-                let mut n = number(v[i] as f64, lo, hi)
+                let mut n = held(number(v[i] as f64, lo, hi), i)
                     .prefix(*prefix)
                     .on_change(move |x| {
                         let mut n = v;
@@ -198,6 +211,11 @@ pub fn color_popup(app: &App) -> Option<Element<'_, Message>> {
                 Message::Seal,
                 picking,
             )
+        }
+        ColorTarget::Comment(id) => {
+            let id = *id;
+            let c = graph.comment(id)?.color;
+            color_editor(c, target.clone(), move |c| Message::Edit(Edit::SetCommentColor { id, color: c }), Message::Seal, picking)
         }
         ColorTarget::GradientStop(node, key) => {
             let (node, key) = (*node, key.clone());

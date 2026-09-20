@@ -756,12 +756,8 @@ pub fn node_kind_title(node: &Node) -> String {
     }
 }
 
-/// Name of a node for the panels and the preview: the label the user gave it, else what
-/// the node is.
+/// Name of a node for the panels and the preview.
 pub fn node_title(node: &Node) -> String {
-    if !node.label.is_empty() {
-        return node.label.clone();
-    }
     node_kind_title(node)
 }
 
@@ -803,7 +799,7 @@ impl GraphCanvas<'_> {
     /// a corner to resize it by.
     fn draw_comment(&self, frame: &mut Frame, comment: &Comment, l: &CommentLayout, hovered: bool) {
         let z = self.transform().zoom;
-        let color = style::comment_color(comment.color);
+        let color = style::color_of(comment.color);
         let selected = self.app.ui.selected_comment == Some(comment.id);
         let radius = (6.0 * z).clamp(1.0, 10.0);
         let body = Path::rounded_rectangle(l.rect.position(), l.rect.size(), radius.into());
@@ -899,15 +895,9 @@ impl GraphCanvas<'_> {
         let small = scaled(11.0, z);
         if show_text {
             let max_chars = ((l.rect.width - 44.0 * z) / (7.0 * z)).max(3.0) as usize;
-            // The header says what the node is; a label the user gave it goes above the node,
-            // where it names it without hiding it.
             let mut title = truncate(&node_kind_title(node), max_chars);
             if node.bypass {
                 title = truncate(&format!("{title} (bypassed)"), max_chars);
-            }
-            if !node.label.is_empty() {
-                let caption = truncate(&node.label, ((l.rect.width / (6.2 * z)).max(3.0) as usize).max(max_chars));
-                text_at(frame, caption, Point::new(l.rect.x + 2.0 * z, l.rect.y - 7.0 * z), small, style::TEXT, TextAlign::Left);
             }
             frame.fill_text(Text {
                 content: title,

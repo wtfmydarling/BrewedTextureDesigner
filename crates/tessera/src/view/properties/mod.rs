@@ -87,16 +87,11 @@ pub fn comment_text_id() -> iced::widget::Id {
 /// The comment frame being worked on: what it says, and what color it is.
 fn comment_view(app: &App, id: tessera_core::CommentId) -> Element<'_, Message> {
     let Some(comment) = app.graph().comment(id) else { return space().into() };
-    let swatches = (0..style::COMMENT_COLORS.len() as u8).map(|i| {
-        button(space().width(20).height(20))
-            .style(style::swatch_button(style::comment_color(i), i == comment.color))
-            .on_press(Message::Edit(Edit::SetCommentColor { id, color: i }))
-            .into()
-    });
+    let open = app.ui.color_picker == Some(ColorTarget::Comment(id));
     container(
         column![
             row![
-                container(space().width(12).height(12)).style(style::chip(style::comment_color(comment.color))),
+                container(space().width(12).height(12)).style(style::chip(style::color_of(comment.color))),
                 text("Comment").size(16).font(style::bold()),
             ]
             .spacing(8)
@@ -110,7 +105,11 @@ fn comment_view(app: &App, id: tessera_core::CommentId) -> Element<'_, Message> 
                 .size(style::TEXT_SIZE)
                 .padding([4, 6])
                 .style(style::text_input),
-            row(swatches).spacing(6),
+            row![
+                text("Color").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W)),
+                swatch(comment.color, open, Message::ColorPicker(Some(ColorTarget::Comment(id)))),
+            ]
+            .align_y(Alignment::Center),
             row![
                 button(text("Delete Comment").size(style::SMALL))
                     .padding([3, 8])
@@ -207,15 +206,6 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
         head,
         text(format!("{} · {}", d.name, d.category.name())).size(style::SMALL).color(style::TEXT_FAINT),
         text(d.description).size(style::SMALL).color(style::TEXT_DIM),
-        row![
-            text("Label").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W)),
-            text_input(d.name, &node.label)
-                .on_input(move |l| Message::Edit(Edit::SetLabel { node: id, label: l }))
-                .size(style::TEXT_SIZE)
-                .padding([3, 6])
-                .style(style::text_input),
-        ]
-        .align_y(Alignment::Center),
         messages(app, node),
     ]
     .spacing(6);
@@ -307,6 +297,7 @@ fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
         let name = var.name.clone();
         let editor = crate::view::editors::value_editor(
             var.value,
+            Some(var.default),
             var.has_range().then_some((var.min, var.max)),
             move |value| Message::Edit(Edit::SetVariable { name: name.clone(), value }),
             Message::Seal,
@@ -401,9 +392,12 @@ fn param_row<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, index: usi
         (false, true) => style::ACCENT,
         (false, false) => style::TEXT,
     };
-    let mut caption = text(pd.label).size(style::TEXT_SIZE).color(label_color).width(Length::Fixed(LABEL_W));
+    // Italics and a star: the name says the value is no longer the one it came with, and
+    // so does the field itself.
+    let name = if changed { format!("{}*", pd.label) } else { pd.label.to_string() };
+    let mut caption = text(name).size(style::TEXT_SIZE).color(label_color).width(Length::Fixed(LABEL_W));
     if changed {
-        caption = caption.font(style::bold());
+        caption = caption.font(style::italic());
     }
     let hint = if not_applicable {
         "Value nodes produce numbers, not images: tiling does not apply to them".to_string()
@@ -442,11 +436,12 @@ Changed — middle-click the row to put {} back", pd.tooltip, shown(pd, &default
     if !exposed && let ParamValue::Gradient(g) = &slot.value {
         col = col.push(gradient_block(app, node, pd.key, g));
     }
+    // Always the same widget around the row, whether the value was changed or not: a row
+    // that changed shape under the mouse would lose what the field was doing. Putting back
+    // a value that is already there changes nothing.
     let row = container(col).padding([3, 4]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2)));
-    if !changed {
-        return row.into();
-    }
-    mouse_area(row).on_middle_press(Message::Edits(vec![Edit::SetParam { node: id, key: pd.key.to_string(), value: default }])).into()
+    let back = Edit::SetParam { node: id, key: pd.key.to_string(), value: default };
+    mouse_area(row).on_middle_press(Message::Edits(vec![back])).into()
 }
 
 fn editor<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, value: &'a ParamValue) -> Element<'a, Message> {
@@ -454,18 +449,27 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, value: &'a Pa
     let key = pd.key;
     // Most parameters may be dragged past their slider; the few that would mean nothing
     // outside it stop there.
-    let held = |field: crate::widget::number::NumberField<'a, Message>| match pd.limits {
-        Some((lo, hi)) => field.limits(lo as f64, hi as f64),
-        None => field,
+    let default = pd.default_value();
+    let held = |field: crate::widget::number::NumberField<'a, Message>, at: usize| {
+        let field = match &default {
+            ParamValue::Float(d) => field.default_value(*d as f64),
+            ParamValue::Int(d) => field.default_value(*d as f64),
+            ParamValue::Vec2(d) => field.default_value(d[at] as f64),
+            _ => field,
+        };
+        match pd.limits {
+            Some((lo, hi)) => field.limits(lo as f64, hi as f64),
+            None => field,
+        }
     };
     match (pd.kind, value) {
-        (ParamKind::Float { min, max, log, suffix, .. }, ParamValue::Float(v)) => held(number(*v as f64, min as f64, max as f64))
+        (ParamKind::Float { min, max, log, suffix, .. }, ParamValue::Float(v)) => held(number(*v as f64, min as f64, max as f64), 0)
             .logarithmic(log)
             .suffix(suffix)
             .on_change(move |x| set(id, key, ParamValue::Float(x as f32)))
             .on_release(Message::Seal)
             .into(),
-        (ParamKind::Int { min, max, .. }, ParamValue::Int(v)) => held(number(*v as f64, min as f64, max as f64))
+        (ParamKind::Int { min, max, .. }, ParamValue::Int(v)) => held(number(*v as f64, min as f64, max as f64), 0)
             .integer(true)
             .on_change(move |x| set(id, key, ParamValue::Int(x as i32)))
             .on_release(Message::Seal)
@@ -473,11 +477,11 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, value: &'a Pa
         (ParamKind::Vec2 { min, max, .. }, ParamValue::Vec2(v)) => {
             let v = *v;
             row![
-                held(number(v[0] as f64, min as f64, max as f64))
+                held(number(v[0] as f64, min as f64, max as f64), 0)
                     .prefix("x ")
                     .on_change(move |x| set(id, key, ParamValue::Vec2([x as f32, v[1]])))
                     .on_release(Message::Seal),
-                held(number(v[1] as f64, min as f64, max as f64))
+                held(number(v[1] as f64, min as f64, max as f64), 1)
                     .prefix("y ")
                     .on_change(move |y| set(id, key, ParamValue::Vec2([v[0], y as f32])))
                     .on_release(Message::Seal),
