@@ -148,6 +148,7 @@ fn content_2d(app: &App) -> Element<'_, Message> {
         rect,
         channel: p.channel,
         tile: [p.show_tiling && tiling & 1 != 0, p.show_tiling && tiling & 2 != 0],
+        lattice: overlay::tiling_lattice(app, p.node, size.unwrap_or([1, 1])),
     };
     let mut layers: Vec<Element<'_, Message>> = vec![
         shader(scene).width(Length::Fill).height(Length::Fill).into(),

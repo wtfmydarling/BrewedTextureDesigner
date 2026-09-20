@@ -96,6 +96,12 @@ pub fn fit(bounds: Size, image: [u32; 2]) -> (f32, Vector) {
 }
 
 impl Overlay<'_> {
+    /// Is the view showing the repetitions of the image around itself?
+    fn tiling(&self) -> bool {
+        let Some(id) = self.app.ui.preview.node else { return false };
+        self.app.ui.preview.show_tiling && self.app.eval.params(id).map_or(0, |x| x.tiling()) != 0
+    }
+
     fn gizmo_node(&self) -> Option<NodeId> {
         let id = self.app.ui.preview.node?;
         let node = self.app.graph().node(id)?;
@@ -293,17 +299,13 @@ impl canvas::Program<Message> for Overlay<'_> {
                         };
                         let redraw = hovered != state.hovered;
                         state.hovered = hovered;
+                        // The pixel under the cursor, in whichever copy of the image it is over.
                         let px = local.and_then(|q| {
-                            let mut uv = uv_of(q);
                             let tiling = self.app.eval.params(p.node?).map_or(3, |x| x.tiling());
-                            if p.show_tiling && tiling & 1 != 0 {
-                                uv.x = uv.x.rem_euclid(1.0);
-                            }
-                            if p.show_tiling && tiling & 2 != 0 {
-                                uv.y = uv.y.rem_euclid(1.0);
-                            }
-                            ((0.0..1.0).contains(&uv.x) && (0.0..1.0).contains(&uv.y))
-                                .then(|| [(uv.x * image[0] as f32) as u32, (uv.y * image[1] as f32) as u32])
+                            let tile = [p.show_tiling && tiling & 1 != 0, p.show_tiling && tiling & 2 != 0];
+                            let uv = tile_uv(uv_of(q), tiling_lattice(self.app, p.node, image), tile)?;
+                            let px = |v: f32, n: u32| ((v * n as f32) as u32).min(n.saturating_sub(1));
+                            Some([px(uv.x, image[0]), px(uv.y, image[1])])
                         });
                         if px != state.last_probe {
                             state.last_probe = px;
@@ -330,12 +332,21 @@ impl canvas::Program<Message> for Overlay<'_> {
         }
     }
 
-    fn draw(&self, state: &State, renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<Geometry> {
+    fn draw(&self, state: &State, renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, cursor: mouse::Cursor) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let p = &self.app.ui.preview;
         let Some(image) = self.image else { return vec![frame.into_geometry()] };
         let rect = image_rect(bounds.size(), image, p.zoom, p.pan);
-        frame.stroke_rectangle(rect.position(), rect.size(), Stroke::default().with_width(1.0).with_color(style::gray(72)));
+        // Where the texture itself is: a quiet line around it, or — when its repetitions
+        // fill the view and every one of them looks the same — a red frame around the one
+        // that is the texture, while the cursor is on it.
+        if self.tiling() {
+            if cursor.position_in(bounds).is_some_and(|q| rect.contains(q)) {
+                frame.stroke_rectangle(rect.position(), rect.size(), Stroke::default().with_width(2.0).with_color(style::ERROR));
+            }
+        } else {
+            frame.stroke_rectangle(rect.position(), rect.size(), Stroke::default().with_width(1.0).with_color(style::gray(72)));
+        }
 
         if let Some(id) = self.gizmo_node()
             && let Some((xf, locked)) = self.xform(id)
@@ -386,5 +397,114 @@ impl canvas::Program<Message> for Overlay<'_> {
         }
 
         vec![frame.into_geometry()]
+    }
+}
+
+/// The two vectors the content of a node repeats along, in image widths and heights.
+///
+/// For nearly every node that is the image itself. A Transform 2D with tiling on wraps its
+/// *source*, so what it draws repeats along its own transformed axes — the sides of the
+/// gizmo's quad. Repeating the image instead would show seams that the texture does not
+/// have.
+pub fn tiling_lattice(app: &App, node: Option<NodeId>, image: [u32; 2]) -> [[f32; 2]; 2] {
+    let square = [[1.0, 0.0], [0.0, 1.0]];
+    let Some(id) = node else { return square };
+    if app.graph().node(id).map(|n| n.kind) != Some(NodeKind::TRANSFORM_2D) {
+        return square;
+    }
+    let Some(params) = app.eval.params(id) else { return square };
+    let xf = Xform {
+        offset: params.v2("offset"),
+        rotation: params.f("rotation"),
+        scale: params.v2("scale"),
+        pivot: params.v2("pivot"),
+    };
+    let aspect = image[0].max(1) as f32 / image[1].max(1) as f32;
+    let origin = xf.forward(Vector::ZERO, aspect);
+    let side = |v: Vector| {
+        let d = xf.forward(v, aspect) - origin;
+        [d.x, d.y]
+    };
+    let (a, b) = (side(Vector::new(1.0, 0.0)), side(Vector::new(0.0, 1.0)));
+    // Only when one whole repetition fits in the image: otherwise the image holds less
+    // than the pattern repeats by, no copy of it can fill the gaps between the copies, and
+    // what the view has to show is what the texture really does — the image side by side
+    // with itself, seams and all.
+    let fits = a[0].abs() + b[0].abs() <= 1.0 && a[1].abs() + b[1].abs() <= 1.0;
+    if fits { [a, b] } else { square }
+}
+
+/// Where a point of the view falls in the image, following the repetitions the view draws:
+/// `uv` is in image widths from its top-left corner, `lattice` is what the image repeats
+/// along, and `tile` says along which of the two. `None` when the point shows no copy of
+/// the image.
+pub fn tile_uv(uv: Vector, lattice: [[f32; 2]; 2], tile: [bool; 2]) -> Option<Vector> {
+    let [a, b] = lattice;
+    let det = a[0] * b[1] - a[1] * b[0];
+    // A lattice with no area (a transform scaled to nothing) repeats nothing.
+    let ([a, b], det) =
+        if det.abs() > 1e-6 && [a[0], a[1], b[0], b[1]].iter().all(|v| v.is_finite()) { ([a, b], det) } else { ([[1.0, 0.0], [0.0, 1.0]], 1.0) };
+    let steps = [
+        (b[1] * uv.x - b[0] * uv.y) / det,
+        (a[0] * uv.y - a[1] * uv.x) / det,
+    ];
+    let base = [
+        if tile[0] { steps[0].floor() } else { 0.0 },
+        if tile[1] { steps[1].floor() } else { 0.0 },
+    ];
+    // The nearest copy first: a lattice larger than the image puts it a step or two away.
+    const ORDER: [f32; 5] = [0.0, -1.0, 1.0, -2.0, 2.0];
+    let steps_x = if tile[0] { &ORDER[..] } else { &ORDER[..1] };
+    let steps_y = if tile[1] { &ORDER[..] } else { &ORDER[..1] };
+    for i in steps_x {
+        for j in steps_y {
+            let (m, n) = (base[0] + i, base[1] + j);
+            let q = Vector::new(uv.x - m * a[0] - n * b[0], uv.y - m * a[1] - n * b[1]);
+            if (0.0..=1.0).contains(&q.x) && (0.0..=1.0).contains(&q.y) {
+                return Some(q);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Without a transform the image simply repeats along its own sides, and only along the
+    /// axes it tiles on.
+    #[test]
+    fn the_image_repeats_along_its_own_sides() {
+        let square = [[1.0, 0.0], [0.0, 1.0]];
+        let uv = Vector::new(2.25, -1.75);
+        assert_eq!(tile_uv(uv, square, [true, true]), Some(Vector::new(0.25, 0.25)));
+        // Only horizontally: above and below the image there is nothing.
+        assert_eq!(tile_uv(Vector::new(2.25, 0.5), square, [true, false]), Some(Vector::new(0.25, 0.5)));
+        assert_eq!(tile_uv(uv, square, [true, false]), None);
+        assert_eq!(tile_uv(uv, square, [false, false]), None);
+        assert_eq!(tile_uv(Vector::new(0.5, 0.5), square, [false, false]), Some(Vector::new(0.5, 0.5)));
+    }
+
+    /// A rotated and scaled Transform 2D repeats along its own axes: a point one step away
+    /// along them shows exactly the same pixel of the image, which is what makes the copies
+    /// meet.
+    #[test]
+    fn a_transform_repeats_along_its_gizmo() {
+        // Half size, turned by 30°, as the gizmo would show it on a square image.
+        let (s, angle) = (0.5f32, 30.0f32.to_radians());
+        let (sin, cos) = angle.sin_cos();
+        let a = [s * cos, -s * sin];
+        let b = [s * sin, s * cos];
+        let lattice = [a, b];
+        let inside = Vector::new(0.3, 0.4);
+        for (m, n) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 2.0), (2.0, -1.0)] {
+            let away = Vector::new(inside.x + m * a[0] + n * b[0], inside.y + m * a[1] + n * b[1]);
+            let back = tile_uv(away, lattice, [true, true]).expect("a copy of the image");
+            assert!((back.x - inside.x).abs() < 1e-4 && (back.y - inside.y).abs() < 1e-4, "{back:?} from {away:?}");
+        }
+        // The lattice of a transform that scales to nothing is ignored, not divided by.
+        assert_eq!(tile_uv(Vector::new(1.5, 0.5), [[0.0, 0.0], [0.0, 0.0]], [true, true]), Some(Vector::new(0.5, 0.5)));
+        assert_eq!(tile_uv(Vector::new(1.5, 0.5), [[f32::NAN, 0.0], [0.0, 1.0]], [true, true]), Some(Vector::new(0.5, 0.5)));
     }
 }

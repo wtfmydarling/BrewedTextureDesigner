@@ -14,6 +14,9 @@ struct U {
     size: vec2<f32>,      // widget size in physical pixels
     checker: f32,         // checker cell size in physical pixels
     channel: u32,         // 0 RGBA, 1 RGB, 2 R, 3 G, 4 B, 5 A
+    lattice: vec4<f32>,   // the two vectors the image repeats along, in image widths
+    inverse: vec4<f32>,   // their inverse, row major: how many steps a point is away
+    background: vec4<f32>,// what is behind the image
     flags: u32,           // 1 tile x, 2 tile y, 4 sRGB target, 8 nearest
     pad0: u32, pad1: u32, pad2: u32,
 };
@@ -22,30 +25,27 @@ struct U {
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var smooth_sampler: sampler;
 @group(0) @binding(3) var nearest_sampler: sampler;
+@group(0) @binding(4) var smooth_tiled: sampler;
+@group(0) @binding(5) var nearest_tiled: sampler;
 
 struct V {
     @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) dim: f32,
+    // Where in the widget this pixel is, from 0 to 1.
+    @location(0) wp: vec2<f32>,
 };
 
+// One quad over the whole view: the image and its repetitions are found per pixel, so
+// nothing is drawn twice and there is no edge between copies.
 @vertex
-fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> V {
+fn vs(@builtin(vertex_index) vi: u32) -> V {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
         vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
     );
     let c = corners[vi];
-    let dx = f32(i32(ii % 3u) - 1);
-    let dy = f32(i32(ii / 3u) - 1);
     var out: V;
-    let hidden = (dx != 0.0 && (u.flags & 1u) == 0u) || (dy != 0.0 && (u.flags & 2u) == 0u);
-    let w = u.rect.z - u.rect.x;
-    let h = u.rect.w - u.rect.y;
-    let p = vec2<f32>(u.rect.x + (c.x + dx) * w, u.rect.y + (c.y + dy) * h);
-    out.pos = vec4<f32>(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, select(1.0, 0.0, hidden));
-    out.uv = c;
-    out.dim = select(0.72, 1.0, dx == 0.0 && dy == 0.0);
+    out.pos = vec4<f32>(c.x * 2.0 - 1.0, 1.0 - c.y * 2.0, 0.0, 1.0);
+    out.wp = c;
     return out;
 }
 
@@ -55,15 +55,72 @@ fn to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.04045));
 }
 
+fn shown(rgb: vec3<f32>) -> vec4<f32> {
+    var c = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    if ((u.flags & 4u) != 0u) {
+        c = to_linear(c);
+    }
+    return vec4<f32>(c, 1.0);
+}
+
 @fragment
 fn fs(in: V) -> @location(0) vec4<f32> {
+    let span = max(u.rect.zw - u.rect.xy, vec2<f32>(1e-6));
+    let uv = (in.wp - u.rect.xy) / span;
+    // How much of the image one pixel covers: the mip level has to be worked out here,
+    // because the coordinate jumps from one repetition to the next and the hardware
+    // would read that jump as an enormous step.
+    let texels = uv * vec2<f32>(textureDimensions(tex, 0));
+    let lod = max(0.0, log2(max(length(dpdx(texels)), length(dpdy(texels))) + 1e-6));
+
+    let tiled_x = (u.flags & 1u) != 0u;
+    let tiled_y = (u.flags & 2u) != 0u;
+    // Steps along the two lattice vectors from the image to this point. For most nodes
+    // the lattice is the image itself; a Transform 2D repeats along its own axes, so the
+    // copies follow the gizmo and the texture keeps matching along its edges.
+    let steps = vec2<f32>(
+        u.inverse.x * uv.x + u.inverse.y * uv.y,
+        u.inverse.z * uv.x + u.inverse.w * uv.y,
+    );
+    let base = vec2<f32>(select(0.0, floor(steps.x), tiled_x), select(0.0, floor(steps.y), tiled_y));
+    // The nearest copies first: with the lattice larger than the image, the copy holding
+    // this point can be a step or two further.
+    var order = array<i32, 5>(0, -1, 1, -2, 2);
+    var q = uv;
+    var found = false;
+    for (var i = 0; i < 5; i++) {
+        if (!tiled_x && i > 0) { break; }
+        for (var j = 0; j < 5; j++) {
+            if (!tiled_y && j > 0) { break; }
+            let m = base.x + f32(order[i]);
+            let n = base.y + f32(order[j]);
+            let c = uv - (m * u.lattice.xy + n * u.lattice.zw);
+            if (all(c >= vec2<f32>(0.0)) && all(c <= vec2<f32>(1.0))) {
+                q = c;
+                found = true;
+                break;
+            }
+        }
+        if (found) { break; }
+    }
+    if (!found) {
+        return shown(u.background.rgb);
+    }
+
+    let tiled = tiled_x || tiled_y;
     var c: vec4<f32>;
     if ((u.flags & 8u) != 0u) {
-        c = textureSample(tex, nearest_sampler, in.uv);
+        if (tiled) {
+            c = textureSampleLevel(tex, nearest_tiled, q, 0.0);
+        } else {
+            c = textureSampleLevel(tex, nearest_sampler, q, 0.0);
+        }
+    } else if (tiled) {
+        c = textureSampleLevel(tex, smooth_tiled, q, lod);
     } else {
-        c = textureSample(tex, smooth_sampler, in.uv);
+        c = textureSampleLevel(tex, smooth_sampler, q, lod);
     }
-    let cell = vec2<i32>(floor(in.pos.xy / max(u.checker, 1.0)));
+    let cell = vec2<i32>(floor(in.wp * u.size / max(u.checker, 1.0)));
     let check = select(vec3<f32>(0.22), vec3<f32>(0.32), ((cell.x + cell.y) & 1) == 1);
     var rgb = c.rgb;
     switch u.channel {
@@ -74,11 +131,7 @@ fn fs(in: V) -> @location(0) vec4<f32> {
         case 5u: { rgb = vec3<f32>(c.a); }
         default: { rgb = mix(check, c.rgb, clamp(c.a, 0.0, 1.0)); }
     }
-    rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * in.dim;
-    if ((u.flags & 4u) != 0u) {
-        rgb = to_linear(rgb);
-    }
-    return vec4<f32>(rgb, 1.0);
+    return shown(rgb);
 }
 "#;
 
@@ -89,6 +142,9 @@ struct Uniforms {
     size: [f32; 2],
     checker: f32,
     channel: u32,
+    lattice: [f32; 4],
+    inverse: [f32; 4],
+    background: [f32; 4],
     flags: u32,
     pad: [u32; 3],
 }
@@ -100,6 +156,9 @@ pub struct Scene {
     pub rect: Rectangle,
     pub channel: u32,
     pub tile: [bool; 2],
+    /// The two vectors the image repeats along, in image widths and heights: the sides of
+    /// the image for most nodes, the transformed ones for a Transform 2D.
+    pub lattice: [[f32; 2]; 2],
 }
 
 #[derive(Debug)]
@@ -108,6 +167,7 @@ pub struct Primitive {
     rect: Rectangle,
     channel: u32,
     tile: [bool; 2],
+    lattice: [[f32; 2]; 2],
     nearest: bool,
 }
 
@@ -123,6 +183,7 @@ impl shader::Program<Message> for Scene {
             rect: self.rect,
             channel: self.channel,
             tile: self.tile,
+            lattice: self.lattice,
             nearest,
         }
     }
@@ -134,6 +195,8 @@ pub struct Pipeline {
     uniforms: wgpu::Buffer,
     smooth: wgpu::Sampler,
     nearest: wgpu::Sampler,
+    smooth_tiled: wgpu::Sampler,
+    nearest_tiled: wgpu::Sampler,
     bind_group: Option<wgpu::BindGroup>,
     srgb: bool,
 }
@@ -181,6 +244,18 @@ impl shader::Pipeline for Pipeline {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -220,11 +295,14 @@ impl shader::Pipeline for Pipeline {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let sampler = |mag| {
+        // Repeating samplers for the tiling preview: filtering across the edge of the image
+        // then reads the pixels of the copy next to it, as the texture will be read.
+        let sampler = |mag, tiled| {
+            let mode = if tiled { wgpu::AddressMode::Repeat } else { wgpu::AddressMode::ClampToEdge };
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("tessera 2d view"),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_u: mode,
+                address_mode_v: mode,
                 mag_filter: mag,
                 min_filter: wgpu::FilterMode::Linear,
                 mipmap_filter: wgpu::FilterMode::Linear,
@@ -235,8 +313,10 @@ impl shader::Pipeline for Pipeline {
             pipeline,
             layout,
             uniforms,
-            smooth: sampler(wgpu::FilterMode::Linear),
-            nearest: sampler(wgpu::FilterMode::Nearest),
+            smooth: sampler(wgpu::FilterMode::Linear, false),
+            nearest: sampler(wgpu::FilterMode::Nearest, false),
+            smooth_tiled: sampler(wgpu::FilterMode::Linear, true),
+            nearest_tiled: sampler(wgpu::FilterMode::Nearest, true),
             bind_group: None,
             srgb: format.is_srgb(),
         }
@@ -274,11 +354,23 @@ impl shader::Primitive for Primitive {
         if self.nearest {
             flags |= 8;
         }
+        // A lattice that cannot be inverted (a transform scaled to nothing) repeats nothing.
+        let [a, b] = self.lattice;
+        let det = a[0] * b[1] - a[1] * b[0];
+        let (lattice, inverse) = if det.abs() > 1e-6 && [a[0], a[1], b[0], b[1]].iter().all(|v| v.is_finite()) {
+            ([a[0], a[1], b[0], b[1]], [b[1] / det, -b[0] / det, -a[1] / det, a[0] / det])
+        } else {
+            ([1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0])
+        };
+        let bg = crate::style::CANVAS;
         let u = Uniforms {
             rect: [r.x / w, r.y / h, (r.x + r.width) / w, (r.y + r.height) / h],
             size: [w * scale, h * scale],
             checker: 8.0 * scale,
             channel: self.channel,
+            lattice,
+            inverse,
+            background: [bg.r, bg.g, bg.b, 1.0],
             flags,
             pad: [0; 3],
         };
@@ -291,6 +383,8 @@ impl shader::Primitive for Primitive {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&pipeline.smooth) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&pipeline.nearest) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&pipeline.smooth_tiled) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&pipeline.nearest_tiled) },
             ],
         }));
     }
@@ -301,7 +395,7 @@ impl shader::Primitive for Primitive {
         {
             pass.set_pipeline(&pipeline.pipeline);
             pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..6, 0..9);
+            pass.draw(0..6, 0..1);
         }
         true
     }

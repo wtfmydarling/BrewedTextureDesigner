@@ -2110,6 +2110,14 @@ impl App {
                     self.ui.preview.node = Some(id);
                 }
             }
+            "tiling" => {
+                if let Some(id) = first(NodeKind::TRANSFORM_2D) {
+                    self.ui.selection = [id].into_iter().collect();
+                    self.ui.preview.node = Some(id);
+                    let _ = self.doc.apply(Edit::SetParam { node: id, key: "scale".into(), value: ParamValue::Vec2([0.5, 0.5]) });
+                }
+                self.ui.preview.show_tiling = true;
+            }
             "dialog" => {
                 let _ = self.doc.apply(Edit::SetResolution([1024, 1024]));
                 self.ui.dialog = Some(Dialog::Unsaved(PendingAction::Quit));
