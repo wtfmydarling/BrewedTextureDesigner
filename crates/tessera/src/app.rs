@@ -1869,8 +1869,10 @@ impl App {
             PickMessage::Cancel => {
                 let Some(pick) = &mut self.ui.screen_pick else { return Task::none() };
                 if pick.live {
-                    // The pick ends (as cancelled) on its own thread.
+                    // The pick ends on its own thread; the app forgets it right away, so
+                    // that nothing can leave the eyedropper stuck.
                     eyedropper::cancel();
+                    self.ui.screen_pick = None;
                     return Task::none();
                 }
                 if pick.done {

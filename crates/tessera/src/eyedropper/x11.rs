@@ -435,9 +435,19 @@ impl Picker {
         })
     }
 
-    /// Extend the path to the pointer: read the colors it crosses, and those its drawing
-    /// will cover, then draw it.
+    /// Extend the path to the pointer. A fast mouse jumps far between two events: the way
+    /// there is walked in steps, so that no step reads half the screen at once.
     fn extend_path(&mut self, to: Pixel) -> Result<(), Error> {
+        let from = self.path.last_pixel().unwrap_or(to);
+        for step in super::path::steps((from.0 as f32, from.1 as f32), (to.0 as f32, to.1 as f32)) {
+            self.extend_path_step((step.0.round() as i32, step.1.round() as i32))?;
+        }
+        Ok(())
+    }
+
+    /// Extend the path by one step: read the colors it crosses, and those its drawing
+    /// will cover, then draw it.
+    fn extend_path_step(&mut self, to: Pixel) -> Result<(), Error> {
         let from = self.path.last_pixel().unwrap_or(to);
         let pixels = self.path.advance((to.0 as f32 + 0.5, to.1 as f32 + 0.5));
         let (core_radius, edge_radius) = {
@@ -482,7 +492,9 @@ impl Picker {
         }
         drop(read);
         for (_, c) in colors {
-            self.colors.push(c);
+            if self.colors.len() < super::path::MAX_COLORS {
+                self.colors.push(c);
+            }
         }
         for (p, c) in hidden {
             self.hidden.entry(p).or_insert(c);

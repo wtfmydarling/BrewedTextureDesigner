@@ -75,29 +75,34 @@ fn toolbar(app: &App) -> Element<'_, Message> {
 
 fn footer(app: &App) -> Element<'_, Message> {
     let p = &app.ui.preview;
-    let mut parts = Vec::new();
+    // Words in the interface font, numbers in the monospaced one: they change under the
+    // cursor and should not make the line jump.
+    let mut words = Vec::new();
+    let mut numbers = Vec::new();
     if p.mode == ViewMode::ThreeD {
         let maps = crate::view::view3d::map_names(app);
-        parts.push(if maps.is_empty() { "no maps".to_string() } else { maps.join(" · ") });
-        parts.push("left drag orbits, right drag moves the light, the wheel zooms".to_string());
+        words.push(if maps.is_empty() { "no maps".to_string() } else { maps.join(" · ") });
+        words.push("left drag orbits, right drag moves the light, the wheel zooms".to_string());
     } else if let Some(img) = &app.res.preview {
-        parts.push(format!("{}×{}", img.size[0], img.size[1]));
-        parts.push(format!("{:.0}%", p.zoom * 100.0));
+        numbers.push(format!("{}×{}", img.size[0], img.size[1]));
+        numbers.push(format!("{:.0}%", p.zoom * 100.0));
     }
     if let (ViewMode::TwoD, Some(px), Some(node)) = (p.mode, p.probe, p.node) {
-        parts.push(format!("x {} y {}", px[0], px[1]));
+        numbers.push(format!("x {} y {}", px[0], px[1]));
         if let Some((n, at, c)) = app.res.probe
             && n == node
             && at == px
         {
-            parts.push(format!("R {:.3}  G {:.3}  B {:.3}  A {:.3}", c[0], c[1], c[2], c[3]));
+            numbers.push(format!("R {:.3}  G {:.3}  B {:.3}  A {:.3}", c[0], c[1], c[2], c[3]));
         }
     }
-    container(text(parts.join("   ·   ")).size(style::SMALL).font(style::mono()).color(style::TEXT_DIM))
-        .padding([4, 10])
-        .width(Length::Fill)
-        .style(style::panel_dark)
-        .into()
+    let line = row![
+        text(numbers.join("   ·   ")).size(style::SMALL).font(style::mono()).color(style::TEXT_DIM),
+        text(words.join("   ·   ")).size(style::SMALL).color(style::TEXT_FAINT),
+    ]
+    .spacing(if numbers.is_empty() || words.is_empty() { 0 } else { 14 })
+    .align_y(Alignment::Center);
+    container(line).padding([4, 10]).width(Length::Fill).style(style::panel_dark).into()
 }
 
 fn content_2d(app: &App) -> Element<'_, Message> {

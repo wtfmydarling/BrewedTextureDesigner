@@ -8,6 +8,9 @@ pub type Pixel = (i32, i32);
 
 /// Longest path kept, in samples; longer ones are resampled to this many.
 const MAX_SAMPLES: usize = 4096;
+/// Colors kept while a path is dragged: about a kilometre of screen, then it stops
+/// growing (the gradient is made of far fewer anyway).
+pub const MAX_COLORS: usize = 1 << 20;
 /// How far (0..1 per channel) the gradient may stray from the colors along the path.
 const TOLERANCE: f32 = 0.012;
 /// Samples averaged along the path: evens out dithering and noise without blurring edges
@@ -61,6 +64,26 @@ impl PathSampler {
 
 fn pixel(p: (f32, f32)) -> Pixel {
     (p.0.floor() as i32, p.1.floor() as i32)
+}
+
+/// Longest jump of the mouse handled in one go: a fast mouse can cross the screen between
+/// two of its events, and the eyedropper would read all of it at once.
+pub const MAX_JUMP: f32 = 128.0;
+
+/// Split the way from `from` to `to` into steps of at most [`MAX_JUMP`], so that no step
+/// reads too much of the screen. The last one is `to` itself.
+pub fn steps(from: (f32, f32), to: (f32, f32)) -> Vec<(f32, f32)> {
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    if !(dx.is_finite() && dy.is_finite()) {
+        return Vec::new();
+    }
+    let n = ((dx.abs().max(dy.abs()) / MAX_JUMP).ceil() as usize).clamp(1, 4096);
+    (1..=n)
+        .map(|i| {
+            let t = i as f32 / n as f32;
+            (from.0 + dx * t, from.1 + dy * t)
+        })
+        .collect()
 }
 
 /// A path over several monitors, each with pixels of its own (their scales differ): the
@@ -165,6 +188,18 @@ mod tests {
         assert_eq!(down, (11..=15).map(|y| (20, y)).collect::<Vec<_>>());
         // Moving within the same pixel adds nothing.
         assert!(path.advance((20.6, 15.6)).is_empty());
+    }
+
+    #[test]
+    fn long_jumps_are_split() {
+        // A mouse that crosses the screen between two events.
+        let long = steps((0.0, 0.0), (1000.0, 500.0));
+        assert_eq!(long.len(), 8);
+        assert_eq!(long.last(), Some(&(1000.0, 500.0)));
+        assert!(long.windows(2).all(|w| (w[1].0 - w[0].0).abs() <= MAX_JUMP));
+        // Short ones are one step, and nonsense is none.
+        assert_eq!(steps((10.0, 10.0), (12.0, 11.0)), [(12.0, 11.0)]);
+        assert!(steps((0.0, 0.0), (f32::NAN, 0.0)).is_empty());
     }
 
     #[test]

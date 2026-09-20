@@ -48,7 +48,7 @@ use wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_manager_v1::Z
 use self::screencopy::Capture;
 use super::loupe;
 use super::portal::ScreenCast;
-use super::path::{Pixel, Trace};
+use super::path::{self, Pixel, Trace};
 use super::stroke::{self, Area, Stroke};
 use super::{Cancel, Mode, Outcome, color, portal};
 
@@ -69,6 +69,8 @@ const KEY_ESCAPE: u32 = 1;
 const TICK: Duration = Duration::from_millis(16);
 /// The loupe follows what is on the screen at least this often while the pointer rests.
 const REFRESH: Duration = Duration::from_millis(50);
+/// Steps of the path read in one go (each is at most [`path::MAX_JUMP`] long).
+const STEPS_PER_READ: usize = 4;
 
 pub fn pick(mode: Mode, display: Option<Display>, cancel: &Cancel) -> Outcome {
     if mode == Mode::Color {
@@ -147,6 +149,7 @@ fn run(mode: Mode, display: Option<Display>, cancel: &Cancel) -> Result<Outcome,
         colors: Vec::new(),
         hidden: HashMap::new(),
         pending: Vec::new(),
+        walked: None,
         batch: None,
         finishing: false,
         captures: HashMap::new(),
@@ -407,6 +410,8 @@ pub struct State {
     hidden: HashMap<(usize, Pixel), [f32; 4]>,
     /// Pointer positions (while dragging) not read yet.
     pending: Vec<[f32; 2]>,
+    /// Where the queued way has got to.
+    walked: Option<[f32; 2]>,
     batch: Option<Batch>,
     /// The button is up: the path ends once its last pixels are read.
     finishing: bool,
@@ -797,6 +802,16 @@ impl State {
 
     // ---------------------------------------------------------------- gradients
 
+    /// Queue the way to a new pointer position, in steps short enough to read at once (a
+    /// fast mouse jumps far between two events).
+    fn walk_to(&mut self, at: [f32; 2]) {
+        match self.walked {
+            Some(from) => self.pending.extend(path::steps((from[0], from[1]), (at[0], at[1])).into_iter().map(|(x, y)| [x, y])),
+            None => self.pending.push(at),
+        }
+        self.walked = Some(at);
+    }
+
     /// Read the pixels of the path so far, when no read is in progress.
     fn next_batch(&mut self) {
         if self.batch.is_some() {
@@ -808,7 +823,9 @@ impl State {
             }
             return;
         }
-        let points = std::mem::take(&mut self.pending);
+        // A few steps at a time: one read covers them all, and it should not have to
+        // cover half the screen.
+        let points: Vec<[f32; 2]> = self.pending.drain(..self.pending.len().min(STEPS_PER_READ)).collect();
         let step = 0.5 / self.overlays.iter().map(|o| o.geometry.scale().0).fold(1.0, f32::max).min(8.0);
         let mut path = Vec::new();
         let mut segments = Vec::new();
@@ -850,6 +867,9 @@ impl State {
     fn batch_ready(&mut self) {
         let Some(batch) = self.batch.take() else { return };
         for &(o, p) in &batch.path {
+            if self.colors.len() >= path::MAX_COLORS {
+                break;
+            }
             let c = self.hidden.get(&(o, p)).copied().or_else(|| batch.pixels.get(&o)?.get(p).map(color));
             self.colors.extend(c);
         }
@@ -890,6 +910,7 @@ impl State {
         // A click without a drag: nothing to pick yet.
         self.colors.clear();
         self.trace = Trace::default();
+        self.walked = None;
         self.hidden.clear();
         for i in 0..self.overlays.len() {
             let area = self.overlays[i].geometry.area();
@@ -918,7 +939,7 @@ impl State {
             PointerEventKind::Motion { .. } => {
                 self.pointer_at = Some(at);
                 if self.pressed && self.mode == Mode::Gradient {
-                    self.pending.push(at);
+                    self.walk_to(at);
                 }
             }
             PointerEventKind::Press { button: BUTTON_LEFT, .. } => {
@@ -926,6 +947,7 @@ impl State {
                 self.pressed = true;
                 if self.mode == Mode::Gradient {
                     self.pending.push(at);
+                    self.walked = Some(at);
                 }
             }
             PointerEventKind::Release { button: BUTTON_LEFT, .. } if self.pressed => {
@@ -937,7 +959,7 @@ impl State {
                         self.refresh_loupe(true);
                     }
                     Mode::Gradient => {
-                        self.pending.push(at);
+                        self.walk_to(at);
                         self.finishing = true;
                     }
                 }

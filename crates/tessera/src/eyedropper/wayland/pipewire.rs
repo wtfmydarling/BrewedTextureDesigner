@@ -314,7 +314,8 @@ impl Streams {
         (0..self.streams.len()).all(|i| self.size(i).is_some())
     }
 
-    /// What a stream is doing (for the log and the tests): its state and its error.
+    /// What a stream is doing: its state and its error.
+    #[cfg(test)]
     pub fn status(&self, index: usize) -> Option<(c_int, String)> {
         Some(self.streams.get(index)?.data.status.lock().unwrap_or_else(|e| e.into_inner()).clone())
     }

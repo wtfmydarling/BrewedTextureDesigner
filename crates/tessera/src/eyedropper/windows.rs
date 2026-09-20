@@ -412,8 +412,17 @@ impl Picker {
         Some(read.pixel(p.x, p.y))
     }
 
-    /// Extend the path to the cursor: read the colors it crosses, then draw it.
+    /// Extend the path to the cursor. A fast mouse jumps far between two messages: the
+    /// way there is walked in steps, so that no step reads half the screen at once.
     fn extend_path(&mut self, to: POINT) {
+        let from = self.path.last_pixel().unwrap_or((to.x, to.y));
+        for step in super::path::steps((from.0 as f32, from.1 as f32), (to.x as f32, to.y as f32)) {
+            self.extend_path_step(POINT { x: step.0.round() as i32, y: step.1.round() as i32 });
+        }
+    }
+
+    /// Extend the path by one step: read the colors it crosses, then draw it.
+    fn extend_path_step(&mut self, to: POINT) {
         let to = (to.x, to.y);
         let from = self.path.last_pixel().unwrap_or(to);
         let pixels = self.path.advance((to.0 as f32 + 0.5, to.1 as f32 + 0.5));
@@ -429,8 +438,10 @@ impl Picker {
             if !self.monitors.iter().any(|m| inside(&m.rect, x, y)) {
                 continue;
             }
-            let c = self.hidden.get(&(x, y)).copied().unwrap_or_else(|| color(read.pixel(x, y)));
-            self.colors.push(c);
+            if self.colors.len() < super::path::MAX_COLORS {
+                let c = self.hidden.get(&(x, y)).copied().unwrap_or_else(|| color(read.pixel(x, y)));
+                self.colors.push(c);
+            }
         }
         if !self.excluded {
             // The path is about to cover these pixels: keep what they showed.
@@ -937,6 +948,42 @@ pub(super) mod tests {
 
     fn rgb(c: [f32; 4]) -> [i32; 3] {
         [0, 1, 2].map(|i| (c[i] * 255.0).round() as i32)
+    }
+
+    /// The loupe as Windows draws it: over white and over black, so that the ring and the
+    /// edges of the circle show whether the transparency is right.
+    #[test]
+    fn the_loupe_cursor_is_drawn_as_it_is_made() {
+        use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{DI_NORMAL, DrawIconEx};
+
+        let mut pixels = vec![Some([40u8, 120, 200]); loupe::PIXELS * loupe::PIXELS];
+        pixels[loupe::PIXELS * loupe::PIXELS / 2] = Some([250, 60, 40]);
+        let image = loupe::render(&pixels, 1.0);
+        let side = image.size as i32;
+        // SAFETY: a bitmap and a cursor of this test, drawn into and destroyed here.
+        unsafe {
+            let cursor = make_cursor(&image).expect("cursor");
+            for (name, background) in [("eyedropper_cursor_on_white", 0x00ffffff), ("eyedropper_cursor_on_black", 0)] {
+                let bitmap = Bitmap::new(side, side).expect("bitmap");
+                let brush = CreateSolidBrush(background);
+                let rect = RECT { left: 0, top: 0, right: side, bottom: side };
+                FillRect(bitmap.dc, &rect, brush);
+                DeleteObject(brush);
+                DrawIconEx(bitmap.dc, 0, 0, cursor, side, side, 0, std::ptr::null_mut(), DI_NORMAL);
+                GdiFlush();
+                let rgba: Vec<u8> = bitmap.pixels().chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], 255]).collect();
+                // The picked pixel is in the middle, whatever is behind the cursor.
+                let (hx, hy) = (image.hotspot.0 as usize, image.hotspot.1 as usize);
+                let at = (hy * side as usize + hx) * 4;
+                assert_eq!(&rgba[at..at + 3], &[250, 60, 40], "{name}: the middle pixel");
+                // And a neighbor is the color around it.
+                let side_by = ((hy - 20) * side as usize + hx) * 4;
+                assert_eq!(&rgba[side_by..side_by + 3], &[40, 120, 200], "{name}: a magnified pixel");
+                crate::eyedropper::save_snapshot(name, side as u32, side as u32, &rgba, false);
+            }
+            DestroyIcon(cursor);
+        }
     }
 
     #[test]

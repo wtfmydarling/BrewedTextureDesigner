@@ -60,7 +60,7 @@ pub fn color_editor<'a>(
         );
     }
     let footer = row![
-        eyedropper(PickTarget::Color(target), picking, "Pick from screen", "Click anywhere on any monitor to take its color. Esc or a right click cancels."),
+        eyedropper(PickTarget::Color(target), picking, "Pick color", "Click anywhere on any monitor to take its color. Esc or a right click cancels."),
         space().width(Length::Fill),
         text(to_hex(c)).size(style::SMALL).font(style::mono()).color(style::TEXT_DIM),
     ]

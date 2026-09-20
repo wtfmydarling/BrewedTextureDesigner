@@ -495,7 +495,7 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'static str, g: &'a Gr
         eyedropper(
             PickTarget::Gradient(id, key.to_string()),
             app.picking(),
-            "Pick from screen",
+            "Pick gradient",
             "Drag across any image on any monitor: the colors along the path become the gradient. Esc or a right click cancels.",
         ),
         space().width(Length::Fill),

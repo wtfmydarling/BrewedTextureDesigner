@@ -87,7 +87,8 @@ pub static GRADIENT_MAP: NodeDef = NodeDef {
     name: "Gradient Map",
     category: Category::Adjustments,
     description: "Colorizes a grayscale image with a color ramp of any number of stops. The gradient can \
-                  be picked from anything on the screen, along a line.",
+                  be picked from anything on the screen: drag across it and the colors along the way \
+                  become the ramp.",
     keywords: "colorize ramp lut palette",
     inputs: IMAGE_IN,
     outputs: IMAGE_OUT,
