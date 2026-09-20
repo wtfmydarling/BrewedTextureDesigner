@@ -203,6 +203,17 @@ pub fn brick_wall() -> (Graph, NodeId) {
     let out_ao = output(&mut g, [1200.0, 780.0], "ambient_occlusion", 3, crate::nodes::USAGE_AO);
     link(&mut g, ao, "o:output", out_ao, "i:input");
 
+    // Two comments, which say what the halves of the graph are for — and show what a
+    // comment is.
+    let shape = g.add_comment("The shape of the bricks".into(), [-580.0, -180.0], [1250.0, 1000.0]);
+    if let Some(c) = g.comment_mut(shape) {
+        c.color = 3;
+    }
+    let maps = g.add_comment("Maps for the 3D view".into(), [700.0, -180.0], [680.0, 1180.0]);
+    if let Some(c) = g.comment_mut(maps) {
+        c.color = 2;
+    }
+
     g.normalize();
     (g, out_color)
 }
