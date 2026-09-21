@@ -140,51 +140,58 @@ pub static GRADIENT: NodeDef = NodeDef {
     role: Role::Image,
 };
 
-/// Noise types, in the order the menu shows them (files store the index).
+/// Noise types, in the order the menu shows them (files store the index). Each is a
+/// different way of making noise, with a pattern of its own; ways of looking at the same
+/// pattern are the styles of a type.
 pub const NOISE_TYPES: &[&str] = &[
     "Perlin",
-    "Value",
-    "Billow",
-    "Ridged",
     "Liquid",
+    "Marble",
     "Streaks",
-    "Blotches",
+    "Ripples",
+    "Blocks",
     "Cells",
-    "Crystal",
-    "Mosaic",
-    "Cell Edges",
-    "Stones",
     "Spots",
-    "Fibers",
     "Scratches",
     "White Noise",
 ];
-const NOISE_LIQUID: u32 = 4;
-const NOISE_STREAKS: u32 = 5;
+const NOISE_PERLIN: u32 = 0;
+const NOISE_LIQUID: u32 = 1;
+const NOISE_MARBLE: u32 = 2;
+const NOISE_STREAKS: u32 = 3;
+const NOISE_RIPPLES: u32 = 4;
+const NOISE_BLOCKS: u32 = 5;
+pub const NOISE_CELLS: u32 = 6;
+pub const NOISE_SPOTS: u32 = 7;
+pub const NOISE_SCRATCHES: u32 = 8;
 /// White noise: one random value per pixel.
-pub const NOISE_WHITE: u32 = 15;
+pub const NOISE_WHITE: u32 = 9;
 /// Every type but white noise, which is one value per pixel.
-const NOISE_SCALED: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+const NOISE_SCALED: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
 /// Types made of octaves, each finer than the last.
-const NOISE_FRACTAL: &[u32] = &[0, 1, 2, 3, 4, 5, 6];
-/// Types made of cells around scattered points.
-const NOISE_CELLULAR: &[u32] = &[7, 8, 9, 10, 11];
-/// Types made of things scattered over some of the cells.
-const NOISE_SCATTERED: &[u32] = &[6, 12, 13, 14];
+const NOISE_FRACTAL: &[u32] = &[NOISE_PERLIN, NOISE_LIQUID, NOISE_MARBLE, NOISE_STREAKS, NOISE_BLOCKS];
+
+/// What Perlin noise shows: its clouds, the folds between them, or the ridges along them.
+pub const PERLIN_STYLES: &[&str] = &["Clouds", "Billow", "Ridged"];
+/// What cells show: the distance to their middle, their borders, a flat color each, a
+/// tilted facet each, or a rounded stone each.
+pub const CELL_STYLES: &[&str] = &["Distance", "Edges", "Flat", "Facets", "Stones"];
 
 pub static NOISE: NodeDef = NodeDef {
     id: "noise",
     name: "Noise",
     category: Category::Generators,
-    description: "Tileable procedural noises: clouds, ridges, swirls, streaks, blotches, cells, crystals, \
-                  stones, spots, fibers, scratches and white noise.",
-    keywords: "perlin fbm clouds value billow ridged liquid warp swirl streaks anisotropic brushed blotches \
-               camouflage voronoi worley cells crystal facets mosaic edges cracks stones spots dirt fibers fur \
-               hair scratches white random grain",
+    description: "Tileable procedural noises: clouds, swirls, marble, streaks, ripples, blocks, cells, spots, \
+                  scratches and white noise.",
+    keywords: "perlin fbm clouds billow ridged liquid warp swirl marble veins wood streaks anisotropic brushed \
+               ripples gabor fingerprint blocks pixel voronoi worley cells crystal facets mosaic edges cracks \
+               stones spots dirt scratches fibers fur hair white random grain",
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,
     params: &[
         choice("type", "Type", 0, NOISE_TYPES).pictured(),
+        choice("perlin_style", "Style", 0, PERLIN_STYLES).pictured().when("type", &[NOISE_PERLIN]),
+        choice("cell_style", "Style", 0, CELL_STYLES).pictured().when("type", &[NOISE_CELLS]),
         int("scale", "Scale", 8, 1, 128)
             .bounded()
             .tip("Number of noise cells across the image (an integer, so it tiles).")
@@ -198,20 +205,39 @@ pub static NOISE: NodeDef = NodeDef {
             .tip("How strong each finer layer is compared to the one before.")
             .when("type", NOISE_FRACTAL),
         float("distortion", "Distortion", 1.0, 0.0, 4.0)
-            .tip("How far the swirls push the noise around.")
-            .when("type", &[NOISE_LIQUID]),
+            .tip("How far the noise is pushed around.")
+            .when("type", &[NOISE_LIQUID, NOISE_MARBLE]),
         int("stretch", "Stretch", 8, 1, 32)
             .at_least(1.0)
             .tip("How many times longer the streaks are than they are tall.")
             .when("type", &[NOISE_STREAKS]),
+        angle("angle", "Angle", 0.0, -180.0, 180.0)
+            .tip("Which way the ripples run.")
+            .when("type", &[NOISE_RIPPLES]),
+        float("spread", "Spread", 1.0, 0.0, 1.0)
+            .bounded()
+            .tip("0 keeps every ripple running the same way; 1 lets them curl like a fingerprint.")
+            .when("type", &[NOISE_RIPPLES]),
         float("jitter", "Jitter", 1.0, 0.0, 1.0)
             .bounded()
             .tip("0 puts every cell's point in its middle (a regular grid), 1 anywhere in the cell.")
-            .when("type", NOISE_CELLULAR),
+            .when("type", &[NOISE_CELLS]),
         float("density", "Density", 0.5, 0.0, 1.0)
             .bounded()
             .tip("How much of the image is covered.")
-            .when("type", NOISE_SCATTERED),
+            .when("type", &[NOISE_SPOTS]),
+        float("line_density", "Density", 0.15, 0.0, 1.0)
+            .bounded()
+            .tip("How many lines there are: few for scratches, many for fibers or fur.")
+            .when("type", &[NOISE_SCRATCHES]),
+        float("length", "Length", 2.0, 0.1, 6.0)
+            .clamped(0.01, 6.0)
+            .tip("How long the lines are, in cells.")
+            .when("type", &[NOISE_SCRATCHES]),
+        pixels("width", "Width", 1.5, 0.0, 16.0)
+            .at_least(0.0)
+            .tip("How wide the lines are in the middle (they get thinner towards their ends).")
+            .when("type", &[NOISE_SCRATCHES]),
         int("seed", "Seed", 0, 0, 9999).bounded(),
         boolean("invert", "Invert", false),
     ],

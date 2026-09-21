@@ -5,7 +5,7 @@
 //! change the graph is evaluated on the CPU (values, effective parameters) and sent to the
 //! engine thread, which answers with images, thumbnails and reports as [`Event`]s.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,6 +24,7 @@ use crate::gpu::{self, EventSource};
 use crate::eyedropper;
 use crate::picker::{self, PickTarget, Shot};
 use crate::view;
+use crate::widget::frame_clock::FrameRate;
 
 // ---------------------------------------------------------------------------- options
 
@@ -194,15 +195,6 @@ pub struct ChoicePictures {
     pub pictures: Vec<image::Handle>,
 }
 
-/// What the last change that computed anything did, and how long it took.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Update {
-    pub recomputed: usize,
-    pub image_nodes: usize,
-    /// From the moment the engine started on the change until the GPU was done with it.
-    pub millis: f32,
-}
-
 /// A color or gradient being picked from the screen. Exists from the click on the
 /// eyedropper until the pick is done or cancelled.
 #[derive(Debug)]
@@ -261,6 +253,10 @@ pub struct Ui {
     /// Where the color picker floats: where it was opened from.
     pub color_picker_at: Point,
     pub choice_menu: Option<ChoiceMenu>,
+    /// The window draws frame after frame, rather than only when something changes.
+    pub realtime: bool,
+    /// How fast it did over the last second.
+    pub frame_rate: FrameRate,
     /// Selected stop of each gradient editor.
     pub gradient_stop: HashMap<(NodeId, String), usize>,
     /// The expression editor's text buffer (node, content).
@@ -291,9 +287,12 @@ pub struct Results {
     pub probe: Option<(NodeId, [u32; 2], [f32; 4])>,
     /// The pictures of the options of the choices whose menus were opened.
     pub choices: HashMap<(NodeId, String), ChoicePictures>,
-    /// The last change that computed anything (changes that computed nothing, like moving a
-    /// node, leave it as it was).
-    pub update: Option<Update>,
+    /// When the changes of the last second were done, and how long each took from the
+    /// moment the engine started on it until the GPU was done with it. Changes that
+    /// computed nothing (moving a node, say) are not among them.
+    pub updates: VecDeque<(Instant, f32)>,
+    /// GPU memory the engine's images take, in bytes.
+    pub memory: u64,
     pub evaluated_revision: u64,
     /// The last revision the GPU is done with.
     pub finished_revision: u64,
@@ -474,6 +473,10 @@ pub enum Message {
     ChoiceMenu(Option<(NodeId, &'static str)>),
     /// An option of such a choice was picked.
     PickChoice(NodeId, &'static str, u32),
+    // status bar
+    /// How fast the window draws (a few times a second).
+    FrameRate(FrameRate),
+    ToggleRealtime,
     Expression(NodeId, text_editor::Action),
     ColorPicker(Option<ColorTarget>),
     GradientStop(NodeId, String, usize),
@@ -593,6 +596,8 @@ impl App {
                 color_picker: None,
                 color_picker_at: Point::ORIGIN,
                 choice_menu: None,
+                realtime: true,
+                frame_rate: FrameRate::default(),
                 gradient_stop: HashMap::new(),
                 expression: None,
                 plot_var: 0,
@@ -699,9 +704,11 @@ impl App {
         if self.ui.status.is_some() || self.opts.screenshot.is_some() {
             subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
         }
-        // A change that takes long says so in the status bar (see `view::toolbar`), without
-        // waiting for anything else to happen.
-        if self.res.busy_since.is_some() {
+        // The status bar's readings change with time alone: a change that takes long says
+        // so, and the updates of the last second grow old. Drawing in real time, the frame
+        // clock (see `view::toolbar`) keeps them current; drawing on demand, a tick does.
+        let aging = self.res.busy_since.is_some() || !self.res.updates.is_empty();
+        if aging && !self.ui.realtime {
             subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick));
         }
         Subscription::batch(subs)
@@ -827,6 +834,17 @@ impl App {
         self.ui.context = None;
         self.ui.add_menu = None;
         self.ui.choice_menu = None;
+    }
+
+    /// Keep the status bar's readings current: forget the updates older than a second, and
+    /// note a change that has taken long enough to say so.
+    fn age_readings(&mut self) {
+        while self.res.updates.front().is_some_and(|(at, _)| at.elapsed() > view::toolbar::READING_SPAN) {
+            self.res.updates.pop_front();
+        }
+        if self.res.busy_since.is_some_and(|since| since.elapsed() >= view::toolbar::COMPUTING_AFTER) {
+            self.res.slow = true;
+        }
     }
 
     /// Open the menu of a choice picked by its pictures, and have the engine draw them.
@@ -1191,9 +1209,7 @@ impl App {
                 if self.ui.status.as_ref().is_some_and(|s| s.at.elapsed() > Duration::from_secs(if s.error { 12 } else { 6 })) {
                     self.ui.status = None;
                 }
-                if self.res.busy_since.is_some_and(|since| since.elapsed() >= view::toolbar::COMPUTING_AFTER) {
-                    self.res.slow = true;
-                }
+                self.age_readings();
                 return self.maybe_screenshot();
             }
             Message::Edit(edit) => {
@@ -1414,6 +1430,14 @@ impl App {
                 self.ui.choice_menu = None;
                 self.ui.context = c;
             }
+            Message::FrameRate(rate) => {
+                self.ui.frame_rate = rate;
+                self.age_readings();
+            }
+            Message::ToggleRealtime => {
+                self.ui.realtime = !self.ui.realtime;
+                self.ui.frame_rate = FrameRate::default();
+            }
             Message::ChoiceMenu(Some((node, key))) => self.open_choice_menu(node, key),
             Message::ChoiceMenu(None) => self.ui.choice_menu = None,
             Message::PickChoice(node, key, option) => {
@@ -1607,12 +1631,12 @@ impl App {
                     // The engine is at the next change already.
                     self.res.busy_since = Some(Instant::now());
                 }
-                if report.image_nodes == 0 {
-                    self.res.update = None;
-                } else if report.recomputed > 0 {
-                    self.res.update = Some(Update { recomputed: report.recomputed, image_nodes: report.image_nodes, millis });
+                if report.recomputed > 0 {
+                    self.res.updates.push_back((Instant::now(), millis));
                 }
+                self.age_readings();
             }
+            Event::Memory(bytes) => self.res.memory = bytes,
             Event::Choices(c) => {
                 let pictures = c.pictures.iter().map(|rgba| image::Handle::from_rgba(c.size, c.size, rgba.clone())).collect();
                 self.res.choices.insert((c.node, c.key), ChoicePictures { version: c.version, pictures });

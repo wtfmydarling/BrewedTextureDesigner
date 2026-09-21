@@ -507,28 +507,50 @@ fn occlusion_is_smooth_and_the_same_in_every_direction() {
     }
 }
 
-/// Every noise type with its defaults, each tiled 2×2 so seams would show
-/// (`BREWED_UI_SNAPSHOTS=<folder>`, writes `noises.png`).
+/// Every look of the noise node: each type, and each style of the types that have them,
+/// set on `noise` in turn; `f` gets its name.
+fn each_noise_look(g: &mut Graph, noise: NodeId, mut f: impl FnMut(&mut Graph, &str)) {
+    use brewed_texture_core::nodes::{CELL_STYLES, NOISE_CELLS, NOISE_TYPES, PERLIN_STYLES};
+    for (t, name) in NOISE_TYPES.iter().enumerate() {
+        set(g, noise, "type", ParamValue::Enum(t as u32));
+        let styles: &[&str] = match t as u32 {
+            0 => PERLIN_STYLES,
+            NOISE_CELLS => CELL_STYLES,
+            _ => &[],
+        };
+        if styles.is_empty() {
+            f(g, name);
+        }
+        for (s, style) in styles.iter().enumerate() {
+            let key = if t == 0 { "perlin_style" } else { "cell_style" };
+            set(g, noise, key, ParamValue::Enum(s as u32));
+            f(g, &format!("{name} {style}"));
+        }
+    }
+}
+
+/// Every look of the noise node with its defaults, each tiled 2×2 so seams would show
+/// (`BREWED_UI_SNAPSHOTS=<folder>`, writes `noises.png` and `noise_<look>.png`).
 #[test]
 #[ignore = "a picture to look at"]
 fn noises_as_a_picture() {
     let Some(mut e) = engine() else { return };
     let Some(dir) = std::env::var_os("BREWED_UI_SNAPSHOTS") else { return };
     const SIZE: u32 = 512;
-    const COLUMNS: u32 = 4;
-    let types = brewed_texture_core::nodes::NOISE_TYPES.len() as u32;
-    let rows = types.div_ceil(COLUMNS);
+    const COLUMNS: u32 = 5;
     let mut g = graph();
     g.resolution = [SIZE, SIZE];
     let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let mut looks = Vec::new();
+    each_noise_look(&mut g, noise, |g, name| looks.push((name.to_string(), eval_read(&mut e, g, noise))));
+    let rows = (looks.len() as u32).div_ceil(COLUMNS);
     let (w, h) = (COLUMNS * SIZE, rows * SIZE);
     let mut sheet = vec![0u8; (w * h * 4) as usize];
-    for t in 0..types {
-        set(&mut g, noise, "type", ParamValue::Enum(t));
-        let out = eval_read(&mut e, &g, noise);
+    for (t, (name, out)) in looks.iter().enumerate() {
+        let t = t as u32;
         let own: Vec<u8> = out.chunks(4).flat_map(|p| { let v = (p[0].clamp(0.0, 1.0) * 255.0).round() as u8; [v, v, v, 255] }).collect();
-        let name = brewed_texture_core::nodes::NOISE_TYPES[t as usize].to_lowercase().replace(' ', "_");
-        image::RgbaImage::from_raw(SIZE, SIZE, own).unwrap().save(std::path::Path::new(&dir).join(format!("noise_{name}.png"))).unwrap();
+        let file = format!("noise_{}.png", name.to_lowercase().replace(' ', "_"));
+        image::RgbaImage::from_raw(SIZE, SIZE, own).unwrap().save(std::path::Path::new(&dir).join(file)).unwrap();
         let (ox, oy) = ((t % COLUMNS) * SIZE, (t / COLUMNS) * SIZE);
         for y in 0..SIZE {
             for x in 0..SIZE {
@@ -544,7 +566,7 @@ fn noises_as_a_picture() {
     image::RgbaImage::from_raw(w, h, sheet).unwrap().save(std::path::Path::new(&dir).join("noises.png")).unwrap();
 }
 
-/// How long every noise type takes at 2048×2048 (prints; for tuning).
+/// How long every look of the noise takes at 2048×2048 (prints; for tuning).
 #[test]
 #[ignore = "a measurement"]
 fn noise_costs() {
@@ -552,17 +574,16 @@ fn noise_costs() {
     let mut g = graph();
     g.resolution = [2048, 2048];
     let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
-    for (t, name) in brewed_texture_core::nodes::NOISE_TYPES.iter().enumerate() {
-        set(&mut g, noise, "type", ParamValue::Enum(t as u32));
-        evaluate_blocking(&mut e, &g);
+    each_noise_look(&mut g, noise, |g, name| {
+        evaluate_blocking(&mut e, g);
         let runs = 10;
         let start = std::time::Instant::now();
         for seed in 1..=runs {
-            set(&mut g, noise, "seed", ParamValue::Int(seed));
-            evaluate_blocking(&mut e, &g);
+            set(g, noise, "seed", ParamValue::Int(seed));
+            evaluate_blocking(&mut e, g);
         }
-        println!("{name:>12}: {:6.2} ms", start.elapsed().as_secs_f64() * 1000.0 / runs as f64);
-    }
+        println!("{name:>18}: {:6.2} ms", start.elapsed().as_secs_f64() * 1000.0 / runs as f64);
+    });
 }
 
 /// Every image of the demo repeats without a seam: across each edge, neighbouring pixels
@@ -602,22 +623,21 @@ fn seams(px: &[f32], size: u32) -> (f32, f32) {
     (line(size - 1), inside)
 }
 
-/// Every type of noise tiles, and none of them comes out flat.
+/// Every look of the noise tiles, and none of them comes out flat.
 #[test]
 fn every_noise_tiles() {
     let Some(mut e) = engine() else { return };
     let mut g = graph();
     let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
-    for (t, name) in brewed_texture_core::nodes::NOISE_TYPES.iter().enumerate() {
-        set(&mut g, noise, "type", ParamValue::Enum(t as u32));
-        let px = eval_read(&mut e, &g, noise);
+    each_noise_look(&mut g, noise, |g, name| {
+        let px = eval_read(&mut e, g, noise);
         let m = mean(&px);
         let spread = px.iter().step_by(4).map(|v| (*v as f64 - m).powi(2)).sum::<f64>() / (RES * RES) as f64;
         assert!(spread.sqrt() > 0.05, "{name} is flat: {m} ± {}", spread.sqrt());
         let (across, inside) = seams(&px, RES);
-        eprintln!("{name:>12}: {across:.4} across the edges, at most {inside:.4} anywhere else");
+        eprintln!("{name:>18}: {across:.4} across the edges, at most {inside:.4} anywhere else");
         assert!(across <= inside * 1.25 + 1e-3, "{name}: {across} across the edges, at most {inside} anywhere else");
-    }
+    });
 }
 
 /// The pictures of a node's options: one per option, each what the node makes with it, the
@@ -655,6 +675,16 @@ fn pictures_of_the_options() {
     let seeded = e.render_choices(&g, &ev, noise, "type").expect("pictures");
     assert!(!std::sync::Arc::ptr_eq(&seeded.pictures, &choices.pictures));
     assert_ne!(seeded.pictures[0], choices.pictures[0]);
+    // The styles of a type are pictured the same way: every way of looking at its cells.
+    set(&mut g, noise, "type", ParamValue::Enum(brewed_texture_core::nodes::NOISE_CELLS));
+    let ev = evaluate_blocking(&mut e, &g);
+    let styles = e.render_choices(&g, &ev, noise, "cell_style").expect("pictures of the styles");
+    assert_eq!(styles.pictures.len(), brewed_texture_core::nodes::CELL_STYLES.len());
+    for i in 0..styles.pictures.len() {
+        for j in 0..i {
+            assert_ne!(styles.pictures[i], styles.pictures[j], "styles {i} and {j} look the same");
+        }
+    }
     // Only choices have pictures, and a node that is not there has none.
     assert!(e.render_choices(&g, &ev, noise, "scale").is_none());
     assert!(e.render_choices(&g, &ev, NodeId(9999), "type").is_none());

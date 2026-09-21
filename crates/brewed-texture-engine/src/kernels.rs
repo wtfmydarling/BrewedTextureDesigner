@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::eval::Params;
 use brewed_texture_core::expr;
-use brewed_texture_core::nodes::TILE_PATTERN_IMAGE;
+use brewed_texture_core::nodes::{NOISE_CELLS, NOISE_SCRATCHES, NOISE_SPOTS, TILE_PATTERN_IMAGE};
 
 use crate::gpu::{Gpu, GpuImage};
 
@@ -152,7 +152,7 @@ struct NoiseU {
     roughness: f32,
     jitter: f32,
     distortion: f32,
-    threshold: f32,
+    density: f32,
     scale: i32,
     octaves: i32,
     kind: u32,
@@ -160,7 +160,11 @@ struct NoiseU {
     tiling: u32,
     invert: u32,
     stretch: i32,
-    density: f32,
+    style: u32,
+    length: f32,
+    width: f32,
+    angle: f32,
+    spread: f32,
 }
 
 #[repr(C)]
@@ -431,36 +435,37 @@ fn gradient(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 
 fn noise(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let p = cx.params;
-    let density = p.f("density").clamp(0.0, 1.0);
+    let kind = p.u("type");
+    let scale = p.i("scale").clamp(1, 4096);
+    // Lines are as wide as they are at any resolution: a width in pixels of a 1024 px
+    // image, in cells.
+    let width = p.f("width").max(0.0) / 1024.0 * scale as f32;
+    let (style, density) = match kind {
+        NOISE_CELLS => (p.u("cell_style"), 0.0),
+        NOISE_SCRATCHES => (0, p.f("line_density")),
+        NOISE_SPOTS => (0, p.f("density")),
+        _ => (p.u("perlin_style"), 0.0),
+    };
     let u = NoiseU {
         roughness: p.f("roughness").clamp(0.0, 1.0),
         jitter: p.f("jitter").clamp(0.0, 1.0),
         distortion: p.f("distortion"),
-        threshold: blotch_threshold(density),
-        scale: p.i("scale").clamp(1, 4096),
+        density: density.clamp(0.0, 1.0),
+        scale,
         octaves: p.i("octaves").clamp(1, 10),
-        kind: p.u("type"),
+        kind,
         seed: p.i("seed") as u32,
         tiling: p.tiling(),
         invert: u32::from(p.b("invert")),
         stretch: p.i("stretch").clamp(1, 4096),
-        density,
+        style,
+        length: p.f("length").clamp(0.01, 6.0),
+        width,
+        angle: p.f("angle"),
+        spread: p.f("spread").clamp(0.0, 1.0),
     };
     cx.gpu.run(cx.encoder, "noise", bytes(&u), &[], cx.output)?;
     Ok(None)
-}
-
-/// The level blotches are cut from their clouds at, so that about `density` of the image
-/// is covered. The clouds are close to normally distributed around 0.5, and the logistic
-/// curve is near enough to that for a slider.
-fn blotch_threshold(density: f32) -> f32 {
-    if density <= 0.0 {
-        return 2.0;
-    }
-    if density >= 1.0 {
-        return -1.0;
-    }
-    0.5 + 0.1 * ((1.0 - density) / density).ln()
 }
 
 fn bitmap(cx: &mut ExecCtx) -> Result<Option<String>, String> {

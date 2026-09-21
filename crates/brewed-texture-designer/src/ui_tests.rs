@@ -970,19 +970,21 @@ fn choices_are_picked_by_their_pictures() {
         // A click on a type picks it and closes the menu; one undo puts the old one back.
         let cells = *texts(&mut w, "Cells").last().expect("Cells in the menu");
         click(&mut w, cells.center());
-        assert_eq!(kind(&w), Some(7));
+        assert_eq!(kind(&w), Some(brewed_texture_core::nodes::NOISE_CELLS));
         assert_eq!(w.app.ui.choice_menu, None);
         w.send(Message::Undo);
         assert_eq!(kind(&w), Some(0), "one undo puts Perlin back");
 
-        // The keyboard walks the menu: right, right, down (a row is three types) and Enter.
+        // The keyboard walks the menu: right, right, down (to the same place in the next row)
+        // and Enter.
+        let walked = 2 + view::choices::columns(NOISE_TYPES.len()) as u32;
         w.send(Message::ChoiceMenu(Some((noise, "type"))));
         for named in [keyboard::key::Named::ArrowRight, keyboard::key::Named::ArrowRight, keyboard::key::Named::ArrowDown] {
             press(&mut w, named);
         }
-        assert_eq!(w.app.ui.choice_menu.as_ref().map(|m| m.cursor), Some(5));
+        assert_eq!(w.app.ui.choice_menu.as_ref().map(|m| m.cursor as u32), Some(walked));
         press(&mut w, keyboard::key::Named::Enter);
-        assert_eq!(kind(&w), Some(5));
+        assert_eq!(kind(&w), Some(walked));
         assert_eq!(w.app.ui.choice_menu, None);
 
         // Esc, or a click anywhere else, closes it without picking anything.
@@ -994,6 +996,97 @@ fn choices_are_picked_by_their_pictures() {
         w.input(&[]);
         click(&mut w, Point::new(width * 0.3, height * 0.3));
         assert_eq!(w.app.ui.choice_menu, None);
-        assert_eq!(kind(&w), Some(5));
+        assert_eq!(kind(&w), Some(walked));
     }
+}
+
+/// What drawing one frame of the whole window costs on the CPU (prints; for tuning).
+#[test]
+#[ignore = "a measurement"]
+fn frame_cost() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    fake_thumbnails(&mut w.app);
+    let redraw = || iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()));
+    w.input(&[redraw()]);
+    w.input(&[redraw()]);
+    let theme = crate::style::theme();
+    let (cursor, runs) = (mouse::Cursor::Available(Point::new(800.0, 300.0)), 200);
+    let (update, draw) = w.frame(|ui, renderer| {
+        let (mut update, mut draw) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+        for _ in 0..runs {
+            let t = std::time::Instant::now();
+            let _ = ui.update(&[redraw()], cursor, renderer, &mut clipboard::Null, &mut Vec::new());
+            update += t.elapsed();
+            let t = std::time::Instant::now();
+            ui.draw(renderer, &theme, &renderer::Style { text_color: Color::WHITE }, cursor);
+            draw += t.elapsed();
+        }
+        (update, draw)
+    });
+    println!("update {:.3} ms, draw {:.3} ms a frame", update.as_secs_f64() * 1000.0 / runs as f64, draw.as_secs_f64() * 1000.0 / runs as f64);
+}
+
+
+/// Draw one frame at `at`, as the window does, and say whether the window asks for another.
+fn draw_frame(w: &mut Harness, at: std::time::Instant) -> window::RedrawRequest {
+    let mut messages = Vec::new();
+    let cursor = w.cursor;
+    let redraw = iced::Event::Window(window::Event::RedrawRequested(at));
+    let state = w.frame(|ui, renderer| ui.update(&[redraw], cursor, renderer, &mut clipboard::Null, &mut messages).0);
+    for m in messages {
+        w.send(m);
+    }
+    match state {
+        iced_runtime::user_interface::State::Updated { redraw_request, .. } => redraw_request,
+        iced_runtime::user_interface::State::Outdated => window::RedrawRequest::NextFrame,
+    }
+}
+
+/// Drawing in real time, the window asks for the next frame as soon as it drew one, and the
+/// status bar says how many it draws a second; drawing on demand, it asks for none.
+#[test]
+fn the_window_draws_in_real_time() {
+    let mut w = harness!(view::toolbar::status_bar, 1680.0, 24.0);
+    let start = std::time::Instant::now();
+    // A monitor that shows 144 frames a second.
+    let at = |frame: u64| start + std::time::Duration::from_nanos(frame * 1_000_000_000 / 144);
+    for frame in 0..300 {
+        assert_eq!(draw_frame(&mut w, at(frame)), window::RedrawRequest::NextFrame, "frame {frame}");
+    }
+    let rate = w.app.ui.frame_rate;
+    assert!((rate.fps - 144.0).abs() < 0.5, "{rate:?}");
+    assert!(!texts(&mut w, "144 FPS · 6.9 ms").is_empty(), "the status bar says so");
+
+    w.send(Message::ToggleRealtime);
+    assert_eq!(draw_frame(&mut w, at(300)), window::RedrawRequest::Wait, "on demand, a frame asks for none");
+    assert!(!texts(&mut w, "On demand").is_empty());
+}
+
+/// The status bar says what the engine does now: how long the graph took to update over
+/// the last second, that it is computing a change that takes long, or that it is idle; and
+/// how much GPU memory the images take.
+#[test]
+fn the_status_bar_says_what_happens_now() {
+    use brewed_texture_engine::{EvalReport, Event};
+    use std::time::{Duration, Instant};
+    let mut w = harness!(view::toolbar::status_bar, 1680.0, 24.0);
+    let shown = |w: &mut Harness, text: &str| !texts(w, text).is_empty();
+    // What the engine tells after two changes that computed three nodes each.
+    let report = EvalReport { recomputed: 3, image_nodes: 17 };
+    w.send(Message::Engine(Event::Memory(344 * 1024 * 1024)));
+    w.send(Message::Engine(Event::Finished { revision: 1, report, millis: 7.0 }));
+    w.send(Message::Engine(Event::Finished { revision: 1, report, millis: 9.0 }));
+    assert!(shown(&mut w, "Graph 8.0 ms"), "the average of the last second");
+    assert!(shown(&mut w, "VRAM 344 MB"));
+    // A change that computed nothing (a node moved) is not an update of the graph.
+    w.send(Message::Engine(Event::Finished { revision: 1, report: EvalReport { recomputed: 0, image_nodes: 17 }, millis: 0.1 }));
+    assert!(shown(&mut w, "Graph 8.0 ms"));
+    // A second later nothing is left of those updates: the graph is idle.
+    for update in &mut w.app.res.updates {
+        update.0 -= Duration::from_secs(2);
+    }
+    assert!(shown(&mut w, "Graph idle"));
+    // A change that takes long says so, and for how long it has taken.
+    w.app.res.busy_since = Some(Instant::now() - Duration::from_millis(1500));
+    assert!(shown(&mut w, "Graph computing… 1.5 s"));
 }

@@ -85,6 +85,18 @@ pub fn kernel_source(name: &str) -> Option<String> {
     KERNELS.iter().find(|k| k.name == name).map(|k| format!("{COMMON_WGSL}\n{}", k.source))
 }
 
+/// GPU memory an image texture takes, with all its mip levels.
+pub fn texture_bytes(texture: &wgpu::Texture) -> u64 {
+    let (mut w, mut h) = (u64::from(texture.width()), u64::from(texture.height()));
+    let mut total = 0;
+    for _ in 0..texture.mip_level_count() {
+        total += w * h * u64::from(BYTES_PER_PIXEL);
+        w = (w / 2).max(1);
+        h = (h / 2).max(1);
+    }
+    total
+}
+
 /// A GPU image with its default view.
 #[derive(Clone, Debug)]
 pub struct GpuImage {
@@ -101,6 +113,10 @@ impl GpuImage {
     }
     pub fn size(&self) -> [u32; 2] {
         [self.width(), self.height()]
+    }
+    /// GPU memory the image takes, with all its mip levels.
+    pub fn bytes(&self) -> u64 {
+        texture_bytes(&self.texture)
     }
     /// View of a single mip level (for writing mip chains).
     pub fn mip_view(&self, level: u32) -> wgpu::TextureView {
@@ -305,6 +321,11 @@ impl Gpu {
 
     pub fn clear_pool(&self) {
         self.pool.borrow_mut().clear();
+    }
+
+    /// GPU memory the scratch images kept for reuse take.
+    pub fn pool_bytes(&self) -> u64 {
+        self.pool.borrow().iter().map(GpuImage::bytes).sum()
     }
 
     /// Upload tightly packed RGBA f32 pixels (converted to half floats with SIMD).

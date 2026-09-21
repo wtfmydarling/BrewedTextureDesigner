@@ -86,6 +86,8 @@ pub enum Event {
         rgba: Option<[f32; 4]>,
     },
     Choices(ChoicePictures),
+    /// GPU memory the engine's images take now, in bytes (sent when it changes).
+    Memory(u64),
     Exported(Result<PathBuf, String>),
     GpuErrors(Vec<String>),
 }
@@ -149,6 +151,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
     let mut current: Option<(u64, Arc<Graph>, Arc<Evaluation>)> = None;
     let mut preview: Option<NodeId> = None;
     let mut materials: Vec<NodeId> = Vec::new();
+    let mut memory = 0;
     loop {
         // Wait for work; poll while files are being decoded in the background.
         let first = if engine.bitmaps_loading() {
@@ -259,6 +262,10 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         let errors = engine.gpu.take_errors();
         if !errors.is_empty() {
             (emit)(Event::GpuErrors(errors));
+        }
+        if engine.memory() != memory {
+            memory = engine.memory();
+            (emit)(Event::Memory(memory));
         }
     }
 }

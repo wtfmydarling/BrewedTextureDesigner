@@ -194,6 +194,23 @@ impl Engine {
         self.gpu.clear_pool();
     }
 
+    /// GPU memory the engine's images take: every node's image, the copies the views show,
+    /// baked gradients, loaded files and the scratch images kept for reuse.
+    pub fn memory(&self) -> u64 {
+        let nodes: u64 = self.states.values().filter_map(|s| s.image.as_ref()).map(GpuImage::bytes).sum();
+        let luts: u64 = self.luts.values().map(|l| l.image.bytes()).sum();
+        let files: u64 = self
+            .bitmaps
+            .values()
+            .map(|b| match b {
+                BitmapEntry::Ready { image, .. } => image.bytes(),
+                _ => 0,
+            })
+            .sum();
+        let shown: u64 = self.preview.iter().chain(self.materials.values()).map(|d| crate::gpu::texture_bytes(&d.texture)).sum();
+        nodes + luts + files + shown + self.gpu.pool_bytes()
+    }
+
     /// Block until the GPU finished everything submitted so far.
     pub fn wait_idle(&self) {
         let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
