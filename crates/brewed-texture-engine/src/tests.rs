@@ -437,3 +437,72 @@ fn demo_graph_evaluates_without_errors() {
     }
     assert!(e.gpu.take_errors().is_empty());
 }
+
+/// The occlusion of the demo wall at 1024 px, to look at (`BREWED_UI_SNAPSHOTS=<folder>`).
+#[test]
+#[ignore = "a picture to look at"]
+fn ao_of_the_demo_as_a_picture() {
+    let Some(mut e) = engine() else { return };
+    let Some(dir) = std::env::var_os("BREWED_UI_SNAPSHOTS") else { return };
+    let (mut g, _) = brewed_texture_core::demo::graph();
+    g.resolution = [1024, 1024];
+    let ao = g.nodes_of(NodeKind::AMBIENT_OCCLUSION).next().unwrap().id;
+    let out = eval_read(&mut e, &g, ao);
+    let px: Vec<u8> = out
+        .chunks(4)
+        .flat_map(|p| {
+            let v = (p[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+            [v, v, v, 255]
+        })
+        .collect();
+    image::RgbaImage::from_raw(1024, 1024, px).unwrap().save(std::path::Path::new(&dir).join("ao_demo.png")).unwrap();
+}
+
+/// Bilinear read of the red channel of a `size`×`size` output at a point in pixels.
+fn sample_at(data: &[f32], size: u32, x: f32, y: f32) -> f32 {
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let at = |dx: u32, dy: u32| {
+        let i = (((y0 as u32 + dy) * size + x0 as u32 + dx) * 4) as usize;
+        data[i]
+    };
+    let top = at(0, 0) * (1.0 - fx) + at(1, 0) * fx;
+    let bottom = at(0, 1) * (1.0 - fx) + at(1, 1) * fx;
+    top * (1.0 - fy) + bottom * fy
+}
+
+/// Occlusion around a round plateau: the same all the way round at any distance from its
+/// wall (no rays from the directions it is sampled in), and lighter the further from the
+/// wall, without rings (no layers from the steps along each direction).
+#[test]
+fn occlusion_is_smooth_and_the_same_in_every_direction() {
+    let Some(mut e) = engine() else { return };
+    // Fine enough that the disc itself is round at the pixel scale the occlusion is read at.
+    const SIZE: u32 = 1024;
+    let mut g = graph();
+    g.resolution = [SIZE, SIZE];
+    let disc = g.add_node(NodeKind::SHAPE, [0.0, 0.0]);
+    let ao = g.add_node(NodeKind::AMBIENT_OCCLUSION, [0.0, 0.0]);
+    g.connect(disc, "o:output", ao, "i:input").unwrap();
+    set(&mut g, ao, "radius", ParamValue::Float(96.0));
+    set(&mut g, ao, "height", ParamValue::Float(0.1));
+    let out = eval_read(&mut e, &g, ao);
+    let sample = |x: f32, y: f32| sample_at(&out, SIZE, x, y);
+    let c = SIZE as f32 / 2.0;
+    let edge = 0.3 * SIZE as f32;
+    let reach = 96.0 / 1024.0 * SIZE as f32;
+    // All the way round, a few distances out from the wall.
+    for out_by in [0.15, 0.35, 0.6] {
+        let r = edge + 1.5 + reach * out_by;
+        let ring: Vec<f32> = (0..144).map(|i| i as f32 / 144.0 * std::f32::consts::TAU).map(|a| sample(c + r * a.cos(), c + r * a.sin())).collect();
+        let (lo, hi) = ring.iter().fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+        // The directions it used to be read in left 0.07 here.
+        assert!(hi - lo < 0.03, "{} px out: from {lo} to {hi} round the plateau", r - edge);
+        assert!(lo < 0.97, "{} px out: {lo} is not occluded at all", r - edge);
+    }
+    // Out from the wall, pixel by pixel: never darker further away.
+    let line: Vec<f32> = (0..(reach as usize)).map(|i| sample(c + edge + 1.5 + i as f32, c + 0.37)).collect();
+    for (i, w) in line.windows(2).enumerate() {
+        assert!(w[1] >= w[0] - 0.004, "{} px out: {} after {}", i + 1, w[1], w[0]);
+    }
+}

@@ -24,11 +24,20 @@ struct KernelSource {
     source: &'static str,
     entry: &'static str,
     inputs: usize,
+    /// Reads its inputs through a trilinear sampler (bound after the output), which
+    /// wraps on the axes the node tiles on.
+    filtered: bool,
 }
 
 macro_rules! kernel {
     ($name:expr, $file:expr, $entry:expr, $inputs:expr) => {
-        KernelSource { name: $name, source: include_str!(concat!("shaders/", $file)), entry: $entry, inputs: $inputs }
+        KernelSource { name: $name, source: include_str!(concat!("shaders/", $file)), entry: $entry, inputs: $inputs, filtered: false }
+    };
+}
+
+macro_rules! filtered_kernel {
+    ($name:expr, $file:expr, $entry:expr, $inputs:expr) => {
+        KernelSource { name: $name, source: include_str!(concat!("shaders/", $file)), entry: $entry, inputs: $inputs, filtered: true }
     };
 }
 
@@ -53,7 +62,7 @@ static KERNELS: &[KernelSource] = &[
     kernel!("directional_blur", "directional.wgsl", "main", 1),
     kernel!("directional_warp", "slope.wgsl", "directional_warp", 2),
     kernel!("slope_blur", "slope.wgsl", "slope_blur", 2),
-    kernel!("ambient_occlusion", "height.wgsl", "ambient_occlusion", 1),
+    filtered_kernel!("ambient_occlusion", "ao.wgsl", "main", 1),
     kernel!("curvature", "height.wgsl", "curvature", 1),
     kernel!("edge_detect", "height.wgsl", "edge_detect", 1),
     kernel!("emboss", "emboss.wgsl", "main", 2),
@@ -107,6 +116,7 @@ pub struct Kernel {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
     inputs: usize,
+    filtered: bool,
 }
 
 pub struct Gpu {
@@ -114,7 +124,10 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
     pub adapter_info: String,
     kernels: RefCell<HashMap<String, Result<Rc<Kernel>, String>>>,
-    layouts: RefCell<HashMap<usize, wgpu::BindGroupLayout>>,
+    layouts: RefCell<HashMap<(usize, bool), wgpu::BindGroupLayout>>,
+    /// Trilinear samplers for the kernels that filter their inputs, by tiling: bit 0
+    /// repeats horizontally, bit 1 vertically; the other axes clamp.
+    samplers: [wgpu::Sampler; 4],
     pool: RefCell<Vec<GpuImage>>,
     /// 1x1 transparent black, bound to unconnected inputs.
     pub black: GpuImage,
@@ -137,6 +150,19 @@ impl Gpu {
                 }
             }
         }));
+        let sampler = |tiling: u32| {
+            let mode = |repeat: bool| if repeat { wgpu::AddressMode::Repeat } else { wgpu::AddressMode::ClampToEdge };
+            device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("filtered input"),
+                address_mode_u: mode(tiling & 1 != 0),
+                address_mode_v: mode(tiling & 2 != 0),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            })
+        };
+        let samplers = [sampler(0), sampler(1), sampler(2), sampler(3)];
         let black = Self::create_image_raw(&device, 1, 1, 1, "black");
         let white = Self::create_image_raw(&device, 1, 1, 1, "white");
         let gpu = Gpu {
@@ -145,6 +171,7 @@ impl Gpu {
             adapter_info,
             kernels: RefCell::default(),
             layouts: RefCell::default(),
+            samplers,
             pool: RefCell::default(),
             black,
             white,
@@ -251,12 +278,19 @@ impl Gpu {
 
     /// Borrow a scratch image of the given size from the pool.
     pub fn take_scratch(&self, w: u32, h: u32) -> GpuImage {
+        self.take_pooled(w, h, 1).unwrap_or_else(|| self.create_image(w, h, "scratch"))
+    }
+
+    /// Borrow a scratch image of the given size, with a full mip chain, from the pool.
+    pub fn take_scratch_with_mips(&self, w: u32, h: u32) -> GpuImage {
+        let mips = 32 - w.max(h).max(1).leading_zeros();
+        self.take_pooled(w, h, mips).unwrap_or_else(|| self.create_image_with_mips(w, h, "scratch mips"))
+    }
+
+    fn take_pooled(&self, w: u32, h: u32, mips: u32) -> Option<GpuImage> {
         let mut pool = self.pool.borrow_mut();
-        if let Some(i) = pool.iter().position(|img| img.size() == [w, h]) {
-            return pool.swap_remove(i);
-        }
-        drop(pool);
-        self.create_image(w, h, "scratch")
+        let i = pool.iter().position(|img| img.size() == [w, h] && img.texture.mip_level_count() == mips)?;
+        Some(pool.swap_remove(i))
     }
 
     /// Return a scratch image. Reusing it later in the same command encoder is safe:
@@ -299,8 +333,8 @@ impl Gpu {
         );
     }
 
-    fn layout(&self, inputs: usize) -> wgpu::BindGroupLayout {
-        if let Some(l) = self.layouts.borrow().get(&inputs) {
+    fn layout(&self, inputs: usize, filtered: bool) -> wgpu::BindGroupLayout {
+        if let Some(l) = self.layouts.borrow().get(&(inputs, filtered)) {
             return l.clone();
         }
         let mut entries = vec![wgpu::BindGroupLayoutEntry {
@@ -318,7 +352,7 @@ impl Gpu {
                 binding: 1 + i as u32,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    sample_type: wgpu::TextureSampleType::Float { filterable: filtered },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -335,18 +369,26 @@ impl Gpu {
             },
             count: None,
         });
+        if filtered {
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 2 + inputs as u32,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+        }
         let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("layout_{inputs}_inputs")),
+            label: Some(&format!("layout_{inputs}_inputs{}", if filtered { "_filtered" } else { "" })),
             entries: &entries,
         });
-        self.layouts.borrow_mut().insert(inputs, layout.clone());
+        self.layouts.borrow_mut().insert((inputs, filtered), layout.clone());
         layout
     }
 
     /// Compile WGSL into a compute kernel, capturing validation errors instead of
     /// panicking.
-    fn build_kernel(&self, label: &str, source: &str, entry: &str, inputs: usize) -> Result<Rc<Kernel>, String> {
-        let layout = self.layout(inputs);
+    fn build_kernel(&self, label: &str, source: &str, entry: &str, inputs: usize, filtered: bool) -> Result<Rc<Kernel>, String> {
+        let layout = self.layout(inputs, filtered);
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(label),
@@ -369,7 +411,7 @@ impl Gpu {
             log::error!("kernel '{label}' failed to compile: {err}");
             return Err(format!("Shader error in '{label}': {err}"));
         }
-        Ok(Rc::new(Kernel { pipeline, layout, inputs }))
+        Ok(Rc::new(Kernel { pipeline, layout, inputs, filtered }))
     }
 
     /// A built-in kernel, compiled on first use.
@@ -379,7 +421,7 @@ impl Gpu {
         }
         let src = KERNELS.iter().find(|k| k.name == name).ok_or_else(|| format!("unknown kernel '{name}'"))?;
         let source = format!("{COMMON_WGSL}\n{}", src.source);
-        let result = self.build_kernel(name, &source, src.entry, src.inputs);
+        let result = self.build_kernel(name, &source, src.entry, src.inputs, src.filtered);
         self.kernels.borrow_mut().insert(name.to_string(), result.clone());
         result
     }
@@ -390,7 +432,7 @@ impl Gpu {
         if let Some(k) = self.kernels.borrow().get(&key) {
             return k.clone();
         }
-        let result = self.build_kernel("pixel_math", source, "main", inputs);
+        let result = self.build_kernel("pixel_math", source, "main", inputs, false);
         let mut cache = self.kernels.borrow_mut();
         if cache.len() > 256 {
             cache.retain(|k, _| !k.starts_with("dyn:"));
@@ -408,6 +450,22 @@ impl Gpu {
         inputs: &[&wgpu::TextureView],
         output: &wgpu::TextureView,
         size: [u32; 2],
+    ) {
+        self.dispatch_with(encoder, kernel, params, inputs, output, size, 0);
+    }
+
+    /// Record one compute dispatch covering `output`; a kernel that filters its inputs
+    /// gets the sampler for `tiling`.
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_with(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        kernel: &Kernel,
+        params: &[u8],
+        inputs: &[&wgpu::TextureView],
+        output: &wgpu::TextureView,
+        size: [u32; 2],
+        tiling: u32,
     ) {
         debug_assert_eq!(inputs.len(), kernel.inputs, "kernel input count mismatch");
         let mut contents = params.to_vec();
@@ -429,6 +487,12 @@ impl Gpu {
             binding: 1 + inputs.len() as u32,
             resource: wgpu::BindingResource::TextureView(output),
         });
+        if kernel.filtered {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 2 + inputs.len() as u32,
+                resource: wgpu::BindingResource::Sampler(&self.samplers[(tiling & 3) as usize]),
+            });
+        }
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &kernel.layout,
@@ -438,6 +502,22 @@ impl Gpu {
         pass.set_pipeline(&kernel.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(size[0].div_ceil(WORKGROUP), size[1].div_ceil(WORKGROUP), 1);
+    }
+
+    /// Look up a kernel that filters its inputs and dispatch it, sampling them with the
+    /// node's tiling.
+    pub fn run_filtered(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        kernel: &str,
+        params: &[u8],
+        inputs: &[&wgpu::TextureView],
+        output: &GpuImage,
+        tiling: u32,
+    ) -> Result<(), String> {
+        let k = self.kernel(kernel)?;
+        self.dispatch_with(encoder, &k, params, inputs, &output.view, output.size(), tiling);
+        Ok(())
     }
 
     /// Convenience: look up a kernel by name and dispatch it.
