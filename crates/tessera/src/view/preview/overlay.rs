@@ -237,12 +237,9 @@ impl canvas::Program<Message> for Overlay<'_> {
                     mouse::ScrollDelta::Lines { y, .. } => y * 60.0,
                     mouse::ScrollDelta::Pixels { y, .. } => *y,
                 };
-                let zoom = (p.zoom * (dy * 0.002).exp()).clamp(0.02, 64.0);
-                // Keep the image point under the cursor fixed.
-                let center = Point::new(bounds.width / 2.0 + p.pan.x, bounds.height / 2.0 + p.pan.y);
-                let rel = (q - center) * (1.0 / p.zoom);
-                let pan = q - Point::new(bounds.width / 2.0, bounds.height / 2.0) - rel * zoom;
-                Some(canvas::Action::publish(Message::Preview(PreviewMessage::View { zoom, pan, fit: false })).and_capture())
+                // Relative to what the view is when the app gets it: several turns of the
+                // wheel can arrive in one frame.
+                Some(canvas::Action::publish(Message::Preview(PreviewMessage::ZoomAt { at: q, factor: (dy * 0.002).exp() })).and_capture())
             }
             Event::Mouse(mouse::Event::ButtonPressed(button)) => {
                 let q = local?;
@@ -276,8 +273,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                     Some(Drag::Pan { last }) => {
                         let d = q - *last;
                         *last = q;
-                        let pan = p.pan + d;
-                        Some(canvas::Action::publish(Message::Preview(PreviewMessage::View { zoom: p.zoom, pan, fit: false })))
+                        Some(canvas::Action::publish(Message::Preview(PreviewMessage::PanBy(d))))
                     }
                     Some(Drag::Gizmo { handle, start_uv, start_screen, start }) => {
                         let (id, _) = gizmo?;

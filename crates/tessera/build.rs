@@ -157,12 +157,12 @@ fn version_info() -> Vec<u8> {
         fixed.extend(u32::to_le_bytes(word));
     }
     let strings: Vec<Vec<u8>> = [
-        ("CompanyName", "Tessera"),
-        ("FileDescription", "Tessera"),
+        ("CompanyName", "anbrew"),
+        ("FileDescription", "Brewed Texture Designer"),
         ("FileVersion", version.as_str()),
-        ("InternalName", "tessera"),
-        ("OriginalFilename", "tessera.exe"),
-        ("ProductName", "Tessera"),
+        ("InternalName", "brewed-texture-designer"),
+        ("OriginalFilename", "brewed-texture-designer.exe"),
+        ("ProductName", "Brewed Texture Designer"),
         ("ProductVersion", version.as_str()),
     ]
     .iter()

@@ -93,5 +93,5 @@ pub fn screen_capture_allowed() -> Result<(), String> {
     }
     // Shows the system's request (once) and adds Tessera to the list in the settings.
     unsafe { request() };
-    Err("Allow Tessera to record the screen (System Settings → Privacy & Security → Screen Recording), then pick again".into())
+    Err("Allow Brewed Texture Designer to record the screen (System Settings → Privacy & Security → Screen Recording), then pick again".into())
 }

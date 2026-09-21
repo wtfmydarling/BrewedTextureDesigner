@@ -443,7 +443,7 @@ impl State {
                 Shell::Layer(layer)
             } else if let Some(xdg) = &self.xdg_shell {
                 let window = xdg.create_window(surface, WindowDecorations::None, &self.qh);
-                window.set_title("Tessera eyedropper");
+                window.set_title("Brewed Texture Designer eyedropper");
                 window.set_app_id("tessera");
                 window.set_fullscreen(Some(&output));
                 window.commit();

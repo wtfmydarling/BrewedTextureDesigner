@@ -102,7 +102,7 @@ fn footer_3d(app: &App) -> Element<'_, Message> {
     let maps = crate::view::view3d::map_names(app);
     let words = vec![
         if maps.is_empty() { "no maps: give an Output a Usage".to_string() } else { maps.join(" · ") },
-        "left drag orbits, right drag moves the light, the wheel zooms".to_string(),
+        "left drag orbits, middle drag moves, right drag turns the light, the wheel zooms".to_string(),
     ];
     footer(Vec::new(), words)
 }

@@ -21,12 +21,12 @@ use std::path::PathBuf;
 
 use app::{App, StartupOptions};
 
-const USAGE: &str = "Tessera — GPU accelerated node based texture editor
+const USAGE: &str = "Brewed Texture Designer — GPU accelerated node based texture editor
 
-usage: tessera [FILE.tessera]
-       tessera --screenshot OUT.png [--scenario NAME] [--select KIND] [--preview KIND] [FILE]
-       tessera --contact-sheet OUT.png [demo]
-       tessera --bench
+usage: brewed-texture-designer [FILE.tessera]
+       brewed-texture-designer --screenshot OUT.png [--scenario NAME] [--select KIND] [--preview KIND] [FILE]
+       brewed-texture-designer --contact-sheet OUT.png [demo]
+       brewed-texture-designer --bench
 
   --screenshot     start, wait until everything is computed, save a screenshot and quit
   --scenario       UI state for the screenshot: add-menu, file-menu, context-menu,

@@ -6,7 +6,7 @@
 
 use iced::widget::shader::{self, Viewport};
 use iced::widget::{button, container, pick_list, row, shader as shader_widget, text};
-use iced::{Alignment, Element, Length, Rectangle, mouse};
+use iced::{Alignment, Element, Length, Rectangle, Vector, mouse};
 use tessera_core::NodeKind;
 use tessera_core::nodes::{USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL, USAGE_ROUGHNESS};
 use tessera_engine::wgpu;
@@ -49,6 +49,8 @@ impl std::fmt::Display for Shape {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
+    /// The point the camera looks at and turns around; moved by the middle button.
+    pub target: [f32; 3],
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
@@ -64,6 +66,7 @@ pub struct Camera {
 impl Default for Camera {
     fn default() -> Self {
         Camera {
+            target: [0.0; 3],
             yaw: 0.0,
             pitch: 0.25,
             distance: 3.6,
@@ -72,6 +75,53 @@ impl Default for Camera {
             shape: Shape::RoundedCube,
             displacement: 0.04,
             tiling: 1.0,
+        }
+    }
+}
+
+/// What the mouse did to the 3D view, as a change: several moves can arrive in one frame,
+/// and each is added to the camera as it is by then.
+#[derive(Clone, Copy, Debug)]
+pub enum Move {
+    /// Turn around the target (left button), in pixels.
+    Orbit(Vector),
+    /// Turn the light (right button), in pixels.
+    Light(Vector),
+    /// Move the camera and its target sideways (middle button), in the units of the
+    /// scene across the view.
+    Pan(Vector),
+    /// Get closer by this factor (the wheel).
+    Zoom(f32),
+}
+
+impl Camera {
+    /// Where the camera is.
+    fn eye(&self) -> [f32; 3] {
+        let d = spherical(self.yaw, self.pitch);
+        [self.target[0] + d[0] * self.distance, self.target[1] + d[1] * self.distance, self.target[2] + d[2] * self.distance]
+    }
+
+    /// The camera after a move of the mouse.
+    pub fn moved(self, m: Move) -> Camera {
+        match m {
+            Move::Orbit(d) => Camera { yaw: self.yaw - d.x * 0.01, pitch: (self.pitch + d.y * 0.01).clamp(-1.5, 1.5), ..self },
+            Move::Light(d) => Camera {
+                light_yaw: self.light_yaw + d.x * 0.01,
+                light_pitch: (self.light_pitch - d.y * 0.01).clamp(-1.4, 1.5),
+                ..self
+            },
+            Move::Pan(d) => {
+                // Along the screen: its right and up, as the camera sees them.
+                let forward = spherical(self.yaw, self.pitch).map(|v| -v);
+                let right = normalize(cross(forward, [0.0, 1.0, 0.0]));
+                let up = cross(right, forward);
+                let t = self.target;
+                let target = [0, 1, 2].map(|i| t[i] - right[i] * d.x + up[i] * d.y);
+                // Never so far that the model is lost: it is always somewhere in view.
+                let limit = self.distance.max(4.0);
+                Camera { target: target.map(|v| v.clamp(-limit, limit)), ..self }
+            }
+            Move::Zoom(f) => Camera { distance: (self.distance * f).clamp(1.6, 14.0), ..self },
         }
     }
 }
@@ -184,6 +234,7 @@ pub struct Scene {
 pub struct DragState {
     orbit: Option<iced::Point>,
     light: Option<iced::Point>,
+    pan: Option<iced::Point>,
 }
 
 impl shader::Program<Message> for Scene {
@@ -197,41 +248,41 @@ impl shader::Program<Message> for Scene {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<shader::Action<Message>> {
-        let cam = self.camera;
-        let publish = |c: Camera| Some(shader::Action::publish(Message::Preview(PreviewMessage::Camera(c))).and_capture());
+        // Every move is sent as a change, never as the camera it makes: several moves can
+        // arrive in one frame, and each has to add to the one before.
+        let publish = |m: Move| Some(shader::Action::publish(Message::Preview(PreviewMessage::Move3d(m))).and_capture());
         match event {
             iced::Event::Mouse(mouse::Event::ButtonPressed(button)) => {
                 let p = cursor.position_over(bounds)?;
                 match button {
                     mouse::Button::Left => state.orbit = Some(p),
-                    mouse::Button::Right | mouse::Button::Middle => state.light = Some(p),
+                    mouse::Button::Right => state.light = Some(p),
+                    mouse::Button::Middle => state.pan = Some(p),
                     _ => return None,
                 }
                 Some(shader::Action::capture())
             }
             iced::Event::Mouse(mouse::Event::ButtonReleased(_)) => {
-                state.orbit = None;
-                state.light = None;
+                *state = DragState::default();
                 None
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
-                if let Some(last) = &mut state.orbit {
+                let step = |last: &mut iced::Point| {
                     let d = *position - *last;
                     *last = *position;
-                    return publish(Camera {
-                        yaw: cam.yaw - d.x * 0.01,
-                        pitch: (cam.pitch + d.y * 0.01).clamp(-1.5, 1.5),
-                        ..cam
-                    });
+                    d
+                };
+                if let Some(last) = &mut state.orbit {
+                    return publish(Move::Orbit(step(last)));
                 }
                 if let Some(last) = &mut state.light {
-                    let d = *position - *last;
-                    *last = *position;
-                    return publish(Camera {
-                        light_yaw: cam.light_yaw + d.x * 0.01,
-                        light_pitch: (cam.light_pitch - d.y * 0.01).clamp(-1.4, 1.5),
-                        ..cam
-                    });
+                    return publish(Move::Light(step(last)));
+                }
+                if let Some(last) = &mut state.pan {
+                    // The scene follows the mouse: a pixel of the view is this much of the scene
+                    // at the distance of the target.
+                    let scale = 2.0 * self.camera.distance * (FOV / 2.0).tan() / bounds.height.max(1.0);
+                    return publish(Move::Pan(step(last) * scale));
                 }
                 None
             }
@@ -241,7 +292,7 @@ impl shader::Program<Message> for Scene {
                     mouse::ScrollDelta::Lines { y, .. } => y * 60.0,
                     mouse::ScrollDelta::Pixels { y, .. } => *y,
                 };
-                publish(Camera { distance: (cam.distance * (-dy * 0.0015).exp()).clamp(1.6, 14.0), ..cam })
+                publish(Move::Zoom((-dy * 0.0015).exp()))
             }
             _ => None,
         }
@@ -252,7 +303,7 @@ impl shader::Program<Message> for Scene {
     }
 
     fn mouse_interaction(&self, state: &DragState, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
-        if state.orbit.is_some() || state.light.is_some() {
+        if state.orbit.is_some() || state.light.is_some() || state.pan.is_some() {
             mouse::Interaction::Grabbing
         } else if cursor.is_over(bounds) {
             mouse::Interaction::Grab
@@ -300,6 +351,9 @@ fn normalize(a: [f32; 3]) -> [f32; 3] {
 }
 
 /// Right handed perspective with depth in [0, 1].
+/// Vertical field of view of the 3D view, in radians.
+const FOV: f32 = 0.62;
+
 fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     let f = 1.0 / (fovy / 2.0).tan();
     [[f / aspect, 0.0, 0.0, 0.0], [0.0, f, 0.0, 0.0], [0.0, 0.0, far / (near - far), -1.0], [0.0, 0.0, near * far / (near - far), 0.0]]
@@ -796,9 +850,9 @@ impl shader::Primitive for Primitive {
         pipeline.shape = self.camera.shape;
 
         let c = &self.camera;
-        let eye = spherical(c.yaw, c.pitch).map(|v| v * c.distance);
+        let eye = c.eye();
         let aspect = (bounds.width / bounds.height.max(1.0)).max(0.01);
-        let view_proj = mul(&perspective(0.62, aspect, 0.05, 50.0), &look_at(eye, [0.0; 3], [0.0, 1.0, 0.0]));
+        let view_proj = mul(&perspective(FOV, aspect, 0.05, 50.0), &look_at(eye, c.target, [0.0, 1.0, 0.0]));
         let light = spherical(c.light_yaw + c.yaw, c.light_pitch);
         let mut present = 0u32;
         for (i, m) in self.maps.iter().enumerate() {

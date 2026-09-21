@@ -151,7 +151,7 @@ pub const CAPTION: f32 = 11.0;
 
 pub fn theme() -> Theme {
     Theme::custom(
-        "Tessera".to_string(),
+        tessera_core::APP_NAME.to_string(),
         Palette { background: PANEL, text: TEXT, primary: ACCENT, success: SUCCESS, warning: WARNING, danger: ERROR },
     )
 }

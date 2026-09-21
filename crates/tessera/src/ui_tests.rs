@@ -444,7 +444,8 @@ fn the_window_renders() {
     let tile = w.app.graph().nodes_of(NodeKind::TILE_GENERATOR).next().unwrap().pos;
     let bounds = w.app.ui.graph_view.bounds;
     let pan = iced::Vector::new(bounds.width * 0.3 - tile[0], bounds.height * 0.25 - tile[1]);
-    w.send(Message::Graph(GraphMessage::View { pan, zoom: 1.0 }));
+    w.app.ui.graph_view.pan = pan;
+    w.app.ui.graph_view.zoom = 1.0;
     w.input(&[]);
     w.snapshot("window_graph_100");
     w.send(Message::Frame);
@@ -832,4 +833,39 @@ fn the_color_picker_floats_over_the_interface() {
     drag(&mut w, Point::new(500.0, 900.0), Point::new(500.0, 900.0));
     assert_eq!(w.app.ui.color_picker, None, "a click elsewhere closes the picker");
     assert_eq!(color(&w), changed);
+}
+
+/// Panning the graph keeps the point that was grabbed under the mouse, however fast the
+/// mouse goes round: several moves arrive in one frame, and none of them may be lost.
+#[test]
+fn the_graph_stays_under_the_mouse_while_it_is_dragged() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+    w.send(Message::Frame);
+    w.input(&[]);
+    let view = w.app.ui.graph_view;
+    let start = Point::new(view.bounds.x + view.bounds.width * 0.5, view.bounds.y + view.bounds.height * 0.5);
+    let grabbed = view.to_graph(start);
+
+    // Fast circles with the middle button, many moves delivered at once, as the window
+    // does when the mouse is quicker than the frames.
+    w.hover(start);
+    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Middle));
+    let mut at = start;
+    for turn in 0..6 {
+        let moves: Vec<iced::Event> = (0..24)
+            .map(|i| {
+                let a = (turn * 24 + i) as f32 * 0.35;
+                at = Point::new(start.x + 120.0 * a.cos() - 120.0, start.y + 120.0 * a.sin());
+                iced::Event::Mouse(mouse::Event::CursorMoved { position: at })
+            })
+            .collect();
+        w.cursor = mouse::Cursor::Available(at);
+        w.input(&moves);
+    }
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Middle));
+
+    // The point that was grabbed is still right under the mouse.
+    let under = w.app.ui.graph_view.to_graph(at);
+    assert!((under[0] - grabbed[0]).abs() < 0.5 && (under[1] - grabbed[1]).abs() < 0.5, "{under:?} drifted from {grabbed:?}");
 }

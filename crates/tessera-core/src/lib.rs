@@ -28,4 +28,4 @@ pub use nodes::{Category, NodeDef, NodeKind, ParamDef, ParamKind, Role};
 pub use types::{DataType, ParamValue, Tiling, Value, can_connect};
 
 /// Name shown in window titles and dialogs.
-pub const APP_NAME: &str = "Tessera";
+pub const APP_NAME: &str = "Brewed Texture Designer";

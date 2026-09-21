@@ -73,9 +73,12 @@ mod tests {
             let at = |x: u32, y: u32| &px[((y * size + x) * 4) as usize..((y * size + x) * 4 + 4) as usize];
             assert_eq!(at(0, 0)[3], 0, "{size}: corner");
             assert_eq!(at(size / 2, size / 2)[3], 255, "{size}: center");
-            // The top middle tile is bright (the bar of the "T").
-            let tile = at(size / 2, (size as f32 * 0.3) as u32);
-            assert!(tile[0] > 200 && tile[2] < 120, "{size}: {tile:?}");
+            // White foam on top of the mug, amber beer in it.
+            let pick = |x: f32, y: f32| at((size as f32 * x) as u32, (size as f32 * y) as u32).to_vec();
+            let foam = pick(0.36, 0.33);
+            assert!(foam[0] > 200 && foam[2] > 180, "{size}: foam {foam:?}");
+            let beer = (0..size).flat_map(|x| (0..size).map(move |y| (x, y))).map(|(x, y)| at(x, y).to_vec());
+            assert!(beer.filter(|p| p[0] > 200 && p[2] < 120 && p[3] == 255).count() > (size * size / 20) as usize, "{size}: no beer");
             if let Some(dir) = std::env::var_os("TESSERA_UI_SNAPSHOTS") {
                 let path = std::path::Path::new(&dir).join(format!("icon_{size}.png"));
                 image::RgbaImage::from_raw(size, size, px).unwrap().save(path).unwrap();

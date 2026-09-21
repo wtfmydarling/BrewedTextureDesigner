@@ -315,7 +315,10 @@ pub enum GraphMessage {
     OpenAddMenu { at: Point, graph_pos: [f32; 2] },
     Preview(NodeId),
     Context { at: Point, target: ContextTarget },
-    View { pan: Vector, zoom: f32 },
+    /// The canvas moved by this much, in pixels.
+    PanBy(Vector),
+    /// Zoom by `factor`, keeping the point at `at` (canvas pixels) where it is.
+    ZoomAt { at: Point, factor: f32 },
     Bounds(Rectangle),
     Drop { payload: DragPayload, graph_pos: [f32; 2] },
     Error(String),
@@ -328,6 +331,12 @@ pub enum PreviewMessage {
     Fit,
     OneToOne,
     View { zoom: f32, pan: Vector, fit: bool },
+    /// The image moved by this much, in pixels.
+    PanBy(Vector),
+    /// Zoom by `factor`, keeping the point at `at` (view pixels) where it is.
+    ZoomAt { at: Point, factor: f32 },
+    /// The camera of the 3D view moved by the mouse.
+    Move3d(view::view3d::Move),
     Bounds(Rectangle),
     Probe(Option<[u32; 2]>),
     Camera(view::view3d::Camera),
@@ -967,8 +976,8 @@ impl App {
         Task::perform(
             blocking(move || {
                 let mut dialog = rfd::FileDialog::new()
-                    .set_title("Save Tessera graph")
-                    .add_filter("Tessera graph", &[project::FILE_EXTENSION])
+                    .set_title("Save graph")
+                    .add_filter(format!("{} graph", tessera_core::APP_NAME), &[project::FILE_EXTENSION])
                     .set_file_name(name);
                 if let Some(folder) = folder {
                     dialog = dialog.set_directory(folder);
@@ -1011,8 +1020,8 @@ impl App {
             PendingAction::Open => Task::perform(
                 blocking(|| {
                     rfd::FileDialog::new()
-                        .set_title("Open Tessera graph")
-                        .add_filter("Tessera graph", &[project::FILE_EXTENSION, project::LEGACY_EXTENSION, "json"])
+                        .set_title("Open graph")
+                        .add_filter(format!("{} graph", tessera_core::APP_NAME), &[project::FILE_EXTENSION, project::LEGACY_EXTENSION, "json"])
                         .pick_file()
                 }),
                 |p| Message::OpenPicked(p.flatten()),
@@ -1249,7 +1258,7 @@ impl App {
                 let clip = text.as_deref().and_then(Clipboard::from_text).or_else(|| self.ui.clipboard.clone());
                 match clip {
                     Some(clip) => self.paste_clipboard(clip),
-                    None => self.set_status("The clipboard holds no Tessera nodes", false),
+                    None => self.set_status("The clipboard holds no nodes", false),
                 }
             }
             Message::Duplicate => {
@@ -1610,7 +1619,7 @@ impl App {
             }
             return Task::none();
         }
-        self.set_status(format!("Cannot use '{}': drop a Tessera graph or an image", path.display()), true);
+        self.set_status(format!("Cannot use '{}': drop a graph or an image", path.display()), true);
         Task::none()
     }
 
@@ -1807,9 +1816,14 @@ impl App {
                 self.ui.add_menu = None;
                 self.ui.context = Some(ContextMenu { at, target });
             }
-            GraphMessage::View { pan, zoom } => {
-                self.ui.graph_view.pan = pan;
-                self.ui.graph_view.zoom = zoom;
+            GraphMessage::PanBy(delta) => self.ui.graph_view.pan += delta,
+            GraphMessage::ZoomAt { at, factor } => {
+                // The point of the graph under the cursor stays under it.
+                let view = &mut self.ui.graph_view;
+                let zoom = (view.zoom * factor).clamp(0.12, 3.0);
+                let g = [(at.x - view.pan.x) / view.zoom, (at.y - view.pan.y) / view.zoom];
+                view.pan = Vector::new(at.x - g[0] * zoom, at.y - g[1] * zoom);
+                view.zoom = zoom;
             }
             GraphMessage::Bounds(bounds) => {
                 self.ui.graph_view.bounds = bounds;
@@ -1886,6 +1900,20 @@ impl App {
                 p.pan = pan;
                 p.fit = fit;
             }
+            PreviewMessage::PanBy(d) => {
+                p.pan += d;
+                p.fit = false;
+            }
+            PreviewMessage::ZoomAt { at, factor } => {
+                // The point of the image under the cursor stays under it.
+                let zoom = (p.zoom * factor).clamp(0.02, 64.0);
+                let half = Vector::new(p.bounds.width / 2.0, p.bounds.height / 2.0);
+                let rel = (at - (Point::ORIGIN + half + p.pan)) * (1.0 / p.zoom);
+                p.pan = (at - Point::ORIGIN) - half - rel * zoom;
+                p.zoom = zoom;
+                p.fit = false;
+            }
+            PreviewMessage::Move3d(m) => p.view3d = p.view3d.moved(m),
             PreviewMessage::Bounds(b) => p.bounds = b,
             PreviewMessage::Probe(px) => {
                 p.probe = px;

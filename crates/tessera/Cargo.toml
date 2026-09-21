@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "tessera"
+name = "brewed-texture-designer"
 path = "src/main.rs"
 
 [dependencies]

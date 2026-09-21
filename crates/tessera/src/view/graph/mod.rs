@@ -258,19 +258,20 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                 let p = cursor.position().map(|p| p - Vector::new(bounds.x, bounds.y));
                 state.cursor = local;
                 match &mut state.interaction {
+                    // Only how far the mouse went: several moves arrive in one frame, before the
+                    // app has taken the previous ones, and each adds to what is there by then.
                     Interaction::Panning { last } => {
                         let p = p?;
                         let delta = p - *last;
                         *last = p;
-                        let pan = t.pan + delta;
-                        return publish(GraphMessage::View { pan, zoom: t.zoom });
+                        return publish(GraphMessage::PanBy(delta));
                     }
                     Interaction::PressedRight { at } => {
                         let p = p?;
                         if p.distance(*at) > 4.0 {
                             let delta = p - *at;
                             state.interaction = Interaction::Panning { last: p };
-                            return publish(GraphMessage::View { pan: t.pan + delta, zoom: t.zoom });
+                            return publish(GraphMessage::PanBy(delta));
                         }
                     }
                     Interaction::PressedNode { node, at } => {
@@ -347,11 +348,7 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                     mouse::ScrollDelta::Lines { y, .. } => y * 60.0,
                     mouse::ScrollDelta::Pixels { y, .. } => *y,
                 };
-                let factor = (dy * 0.0018).exp();
-                let zoom = (t.zoom * factor).clamp(0.12, 3.0);
-                let g = t.to_graph(p);
-                let pan = Vector::new(p.x - g[0] * zoom, p.y - g[1] * zoom);
-                publish(GraphMessage::View { pan, zoom })
+                publish(GraphMessage::ZoomAt { at: p, factor: (dy * 0.0018).exp() })
             }
             Event::Mouse(mouse::Event::ButtonPressed(button)) => {
                 let p = local?;

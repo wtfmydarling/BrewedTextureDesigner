@@ -120,6 +120,9 @@ impl Histogram {
                 // mid gray lands on; the gamma that puts it there is 0.5 to that power.
                 let span = self.hi - self.lo;
                 let t = if span.abs() > 1e-6 { (v - self.lo) / span } else { 0.5 };
+                // Past the black point the handle stays at black, past the white point at
+                // white: the logarithm of nothing or less is no gamma at all.
+                let t = t.clamp(f32::MIN_POSITIVE, 1.0);
                 let (lo, hi) = Self::gamma_limits();
                 set("gamma", (t.ln() / 0.5f32.ln()).clamp(lo, hi))
             }
@@ -294,6 +297,17 @@ mod tests {
         assert!(0.5f32.powf(light) > 0.99, "mid gray at {}", 0.5f32.powf(light));
         // A hair inside the ends is a strong gamma, not the end of its range.
         assert!((6.0..hi).contains(&gamma(left + 1.0)) && (lo..0.05).contains(&gamma(right - 1.0)));
+
+        // With the black and white points moved in, the gamma handle pushed past either of
+        // them stays at that end: it never jumps back to the middle.
+        let narrow = histogram(0.3, 0.8, 1.0);
+        let mid = plot.x + plot.width * (0.3 + 0.5 * 0.5);
+        for (to, dark) in [(left - 30.0, true), (left + plot.width * 0.1, true), (right + 30.0, false), (right - plot.width * 0.1, false)] {
+            let (key, g) = drag_to(&narrow, mid, to).expect("a gamma");
+            assert_eq!(key, "gamma");
+            let at = 0.5f32.powf(g);
+            assert!(if dark { at < 0.01 } else { at > 0.99 }, "dragged to {to}: gamma {g} puts mid gray at {at}");
+        }
 
         // A black point and a white point in the same place are not a division by zero.
         let flat = histogram(0.5, 0.5, 1.0);
