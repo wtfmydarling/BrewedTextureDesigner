@@ -49,7 +49,7 @@ pub static BLEND: NodeDef = NodeDef {
     category: Category::Filters,
     description: "Blends a foreground over a background with an optional mask.",
     keywords: "mix composite layer multiply add screen overlay",
-    inputs: &[image("foreground", "Foreground"), image("background", "Background"), image_opt("mask", "Mask")],
+    inputs: &[image("foreground", "Foreground"), image("background", "Background"), gray_opt("mask", "Mask")],
     outputs: IMAGE_OUT,
     params: &[
         choice("mode", "Blending Mode", 0, BLEND_MODES),
@@ -95,7 +95,7 @@ pub static SLOPE_BLUR: NodeDef = NodeDef {
     category: Category::Filters,
     description: "Smears the input along the slopes of a height map (dripping, erosion, fibers).",
     keywords: "erosion drip smear flow",
-    inputs: &[image("input", "Input"), image("slope", "Slope Map")],
+    inputs: &[image("input", "Input"), gray("slope", "Slope Map")],
     outputs: IMAGE_OUT,
     params: &[
         pixels("intensity", "Intensity", 16.0, -128.0, 128.0)
@@ -127,7 +127,7 @@ pub static WARP: NodeDef = NodeDef {
     category: Category::Filters,
     description: "Displaces the input along the slopes of a gradient map.",
     keywords: "distort displace",
-    inputs: &[image("input", "Input"), image("warp", "Warp Map")],
+    inputs: &[image("input", "Input"), gray("warp", "Warp Map")],
     outputs: IMAGE_OUT,
     params: &[float("intensity", "Intensity", 0.1, 0.0, 1.0)],
     role: Role::Image,
@@ -139,7 +139,7 @@ pub static DIRECTIONAL_WARP: NodeDef = NodeDef {
     category: Category::Filters,
     description: "Displaces the input in one direction by the brightness of an intensity map.",
     keywords: "distort displace offset",
-    inputs: &[image("input", "Input"), image("intensity", "Intensity Map")],
+    inputs: &[image("input", "Input"), gray("intensity", "Intensity Map")],
     outputs: IMAGE_OUT,
     params: &[
         angle("angle", "Angle", 0.0, -180.0, 180.0),
@@ -171,7 +171,7 @@ pub static PIXEL_MATH: NodeDef = NodeDef {
                   u, v, px, py, width and height are built in.",
     keywords: "expression formula shader per pixel custom",
     inputs: NO_SOCKETS,
-    outputs: IMAGE_OUT,
+    outputs: GRAY_OUT,
     params: &[
         expression("expression", "Expression", "u * v", true),
         choice("channel", "Read Channel", 0, &["Luminance", "Red", "Green", "Blue", "Alpha"])

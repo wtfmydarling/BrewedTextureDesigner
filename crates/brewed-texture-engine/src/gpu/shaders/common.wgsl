@@ -2,14 +2,42 @@
 // Shared helpers, prepended to every node kernel.
 //
 // Conventions:
-//   * images are rgba16float, uv in [0, 1] with texel centers at (i + 0.5) / size
-//     and y pointing down (row 0 is the top of the image);
+//   * a color image is rgba16float, a grayscale one r32float (one channel); uv in [0, 1]
+//     with texel centers at (i + 0.5) / size and y pointing down (row 0 is the top);
 //   * `tiling` is a bit set: bit 0 = wrap horizontally, bit 1 = wrap vertically;
 //   * angles given by the user are degrees, counter-clockwise on screen.
 // ---------------------------------------------------------------------------
 
 const PI: f32 = 3.14159265358979;
 const TAU: f32 = 6.28318530717959;
+
+// Kernels see every image as a color image: they read each input through `widen`, which
+// spreads the one channel of a grayscale image over red, green and blue, with an opaque
+// alpha. GRAYn says input n (binding n + 1) is grayscale; each pipeline is built with them
+// set for the images it reads. A kernel writes the same way whatever it writes to: a
+// grayscale image keeps the red channel.
+override GRAY0: bool = false;
+override GRAY1: bool = false;
+override GRAY2: bool = false;
+override GRAY3: bool = false;
+
+fn widen(c: vec4<f32>, gray: bool) -> vec4<f32> {
+    return select(c, vec4<f32>(c.r, c.r, c.r, 1.0), gray);
+}
+
+// What an output shows of an image in each of its formats
+// (brewed_texture_core::nodes::OUTPUT_FORMATS: RGBA, RGB, RG, R, G, B, A).
+fn as_output(c: vec4<f32>, format: u32) -> vec4<f32> {
+    switch format {
+        case 1u: { return vec4<f32>(c.rgb, 1.0); }
+        case 2u: { return vec4<f32>(c.r, c.g, 0.0, 1.0); }
+        case 3u: { return vec4<f32>(c.rrr, 1.0); }
+        case 4u: { return vec4<f32>(c.ggg, 1.0); }
+        case 5u: { return vec4<f32>(c.bbb, 1.0); }
+        case 6u: { return vec4<f32>(c.aaa, 1.0); }
+        default: { return c; }
+    }
+}
 
 fn tile_x(t: u32) -> bool { return (t & 1u) != 0u; }
 fn tile_y(t: u32) -> bool { return (t & 2u) != 0u; }

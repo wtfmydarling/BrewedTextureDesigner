@@ -28,8 +28,8 @@ fn pick(src: u32, a: vec4<f32>, b: vec4<f32>) -> f32 {
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = textureDimensions(out_tex);
     if (gid.x >= size.x || gid.y >= size.y) { return; }
-    let a = read_input(a_tex, gid.xy, size, P.tiling);
-    let b = read_input(b_tex, gid.xy, size, P.tiling);
+    let a = widen(read_input(a_tex, gid.xy, size, P.tiling), GRAY0);
+    let b = widen(read_input(b_tex, gid.xy, size, P.tiling), GRAY1);
     let o = vec4<f32>(pick(P.red, a, b), pick(P.green, a, b), pick(P.blue, a, b), pick(P.alpha, a, b));
     textureStore(out_tex, vec2<i32>(gid.xy), o);
 }

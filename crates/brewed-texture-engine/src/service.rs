@@ -19,6 +19,11 @@ use crate::export;
 use crate::gpu::Gpu;
 use crate::simd::ImageStats;
 
+/// How long the engine waits with nothing to do before it lets go of its scratch images:
+/// while changes keep coming (a slider dragged) they are reused, once they stop they only
+/// take memory.
+const IDLE: Duration = Duration::from_millis(500);
+
 /// One file to write.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportJob {
@@ -161,9 +166,20 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                 Err(RecvTimeoutError::Disconnected) => break,
             }
         } else {
-            match rx.recv() {
+            match rx.recv_timeout(IDLE) {
                 Ok(r) => Some(r),
-                Err(_) => break,
+                Err(RecvTimeoutError::Timeout) => {
+                    engine.gpu.clear_pool();
+                    if engine.memory() != memory {
+                        memory = engine.memory();
+                        (emit)(Event::Memory(memory));
+                    }
+                    match rx.recv() {
+                        Ok(r) => Some(r),
+                        Err(_) => break,
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         };
         let mut pending = Pending::default();
@@ -263,6 +279,8 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         if !errors.is_empty() {
             (emit)(Event::GpuErrors(errors));
         }
+        // What this round did not use, the next is unlikely to.
+        engine.gpu.trim_pool();
         if engine.memory() != memory {
             memory = engine.memory();
             (emit)(Event::Memory(memory));

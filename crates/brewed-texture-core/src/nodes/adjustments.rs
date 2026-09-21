@@ -34,8 +34,8 @@ pub static HISTOGRAM_SCAN: NodeDef = NodeDef {
     description: "Thresholds a grayscale image with a movable, softenable cut: the basic tool to turn \
                   noise and height into masks.",
     keywords: "threshold mask cut contrast",
-    inputs: IMAGE_IN,
-    outputs: IMAGE_OUT,
+    inputs: GRAY_IN,
+    outputs: GRAY_OUT,
     params: &[
         float("position", "Position", 0.5, 0.0, 1.0).bounded().tip("Input level that becomes mid gray; higher keeps less."),
         float("contrast", "Contrast", 0.5, 0.0, 1.0).bounded().tip("0 keeps the input as a ramp, 1 is a hard threshold."),
@@ -62,8 +62,8 @@ pub static GRAYSCALE: NodeDef = NodeDef {
     category: Category::Adjustments,
     description: "Converts to grayscale.",
     keywords: "desaturate luminance channel",
-    inputs: IMAGE_IN,
-    outputs: IMAGE_OUT,
+    inputs: COLOR_IN,
+    outputs: GRAY_OUT,
     params: &[choice("mode", "Mode", 0, &["Luminance", "Average", "Red", "Green", "Blue", "Alpha", "Max"])],
     role: Role::Image,
 };
@@ -74,8 +74,8 @@ pub static HSL: NodeDef = NodeDef {
     category: Category::Adjustments,
     description: "Hue, saturation and lightness adjustment.",
     keywords: "hue saturation lightness color",
-    inputs: IMAGE_IN,
-    outputs: IMAGE_OUT,
+    inputs: COLOR_IN,
+    outputs: COLOR_OUT,
     params: &[
         angle("hue", "Hue", 0.0, -180.0, 180.0),
         float("saturation", "Saturation", 0.0, -1.0, 1.0).bounded(),
@@ -92,8 +92,8 @@ pub static GRADIENT_MAP: NodeDef = NodeDef {
                   be picked from anything on the screen: drag across it and the colors along the way \
                   become the ramp.",
     keywords: "colorize ramp lut palette",
-    inputs: IMAGE_IN,
-    outputs: IMAGE_OUT,
+    inputs: GRAY_IN,
+    outputs: COLOR_OUT,
     params: &[
         gradient(
             "gradient",
@@ -113,8 +113,8 @@ pub static CHANNEL_SHUFFLE: NodeDef = NodeDef {
     category: Category::Adjustments,
     description: "Builds an image from arbitrary channels of two inputs.",
     keywords: "swizzle pack merge split channels",
-    inputs: &[image("a", "A"), image_opt("b", "B")],
-    outputs: IMAGE_OUT,
+    inputs: &[color_image("a", "A"), color_image_opt("b", "B")],
+    outputs: COLOR_OUT,
     params: &[
         choice("red", "Red", 0, SHUFFLE_SOURCES),
         choice("green", "Green", 1, SHUFFLE_SOURCES),

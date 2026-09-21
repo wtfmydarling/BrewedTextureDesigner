@@ -23,7 +23,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var acc = vec4<f32>(0.0);
     for (var i = 0; i < n; i++) {
         let t = start + (f32(i) + 0.5) / f32(n);
-        acc = acc + sample_bilinear(in0, uv + dir * t, P.tiling);
+        acc = acc + widen(sample_bilinear(in0, uv + dir * t, P.tiling), GRAY0);
     }
     textureStore(out_tex, vec2<i32>(gid.xy), acc / f32(n));
 }

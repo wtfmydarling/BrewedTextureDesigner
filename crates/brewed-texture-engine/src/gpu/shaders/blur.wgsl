@@ -21,7 +21,7 @@ fn blur_1d(@builtin(global_invocation_id) gid: vec3<u32>) {
     var wsum = 0.0;
     for (var i = -P.radius; i <= P.radius; i++) {
         let w = exp(f32(i * i) * k);
-        acc = acc + fetch(in0, p + dir * i, P.tiling) * w;
+        acc = acc + widen(fetch(in0, p + dir * i, P.tiling), GRAY0) * w;
         wsum = wsum + w;
     }
     textureStore(out_tex, p, acc / wsum);
@@ -33,8 +33,8 @@ fn downsample(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = textureDimensions(out_tex);
     if (gid.x >= size.x || gid.y >= size.y) { return; }
     let p = vec2<i32>(gid.xy) * 2;
-    let c = fetch(in0, p, P.tiling) + fetch(in0, p + vec2<i32>(1, 0), P.tiling)
-          + fetch(in0, p + vec2<i32>(0, 1), P.tiling) + fetch(in0, p + vec2<i32>(1, 1), P.tiling);
+    let c = widen(fetch(in0, p, P.tiling), GRAY0) + widen(fetch(in0, p + vec2<i32>(1, 0), P.tiling), GRAY0)
+          + widen(fetch(in0, p + vec2<i32>(0, 1), P.tiling), GRAY0) + widen(fetch(in0, p + vec2<i32>(1, 1), P.tiling), GRAY0);
     textureStore(out_tex, vec2<i32>(gid.xy), c * 0.25);
 }
 
@@ -44,5 +44,5 @@ fn resample(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = textureDimensions(out_tex);
     if (gid.x >= size.x || gid.y >= size.y) { return; }
     let uv = out_uv(gid.xy, size);
-    textureStore(out_tex, vec2<i32>(gid.xy), sample_bilinear(in0, uv, P.tiling));
+    textureStore(out_tex, vec2<i32>(gid.xy), widen(sample_bilinear(in0, uv, P.tiling), GRAY0));
 }

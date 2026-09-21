@@ -81,7 +81,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (P.pattern == 14u) {
                 let pu = q / max(half, vec2<f32>(1e-5)) * 0.5 + 0.5;
                 if (pu.x < 0.0 || pu.y < 0.0 || pu.x > 1.0 || pu.y > 1.0) { continue; }
-                let c = sample_bilinear(pattern_tex, pu, 0u);
+                let c = widen(sample_bilinear(pattern_tex, pu, 0u), GRAY0);
                 value = c.rgb * c.a * lum;
             } else {
                 sp.half = half;

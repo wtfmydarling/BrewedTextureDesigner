@@ -7,7 +7,7 @@ struct Params {
 @group(0) @binding(2) var out_tex: texture_storage_2d<rgba16float, write>;
 
 fn h(p: vec2<i32>) -> f32 {
-    return luminance(fetch(in0, p, P.tiling).rgb);
+    return luminance(widen(fetch(in0, p, P.tiling), GRAY0).rgb);
 }
 
 @compute @workgroup_size(8, 8, 1)

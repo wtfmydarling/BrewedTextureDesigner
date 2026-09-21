@@ -8,7 +8,7 @@ struct Params {
 @group(0) @binding(3) var out_tex: texture_storage_2d<rgba16float, write>;
 
 fn height(uv: vec2<f32>) -> f32 {
-    return luminance(sample_bilinear(warp_tex, uv, P.tiling).rgb);
+    return luminance(widen(sample_bilinear(warp_tex, uv, P.tiling), GRAY1).rgb);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -21,5 +21,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let gx = (height(uv + vec2<f32>(d.x, 0.0)) - height(uv - vec2<f32>(d.x, 0.0))) / (2.0 * d.x);
     let gy = (height(uv + vec2<f32>(0.0, d.y)) - height(uv - vec2<f32>(0.0, d.y))) / (2.0 * d.y);
     let src = uv + vec2<f32>(gx, gy) * P.intensity * 0.02;
-    textureStore(out_tex, vec2<i32>(gid.xy), sample_bilinear(in0, src, P.tiling));
+    textureStore(out_tex, vec2<i32>(gid.xy), widen(sample_bilinear(in0, src, P.tiling), GRAY0));
 }

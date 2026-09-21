@@ -15,6 +15,7 @@ use iced::widget::text_input as text_input_w;
 use iced::widget::toggler as toggler_w;
 use iced::{Background, Color, Font, Shadow, Theme, Vector};
 
+use brewed_texture_core::nodes::ImageKind;
 use brewed_texture_core::{Category, DataType};
 
 pub const fn rgb(r: u8, g: u8, b: u8) -> Color {
@@ -86,6 +87,15 @@ pub fn type_color(ty: DataType) -> Color {
         DataType::Bool => rgb(236, 110, 110),
         DataType::Vec2 => rgb(236, 196, 96),
         DataType::Color => rgb(194, 146, 228),
+    }
+}
+
+/// Image sockets and links, by what the image is: grayscale images gray, color images
+/// orange, as in Substance Designer. (Either kind, before it is known, is gray.)
+pub fn image_color(kind: Option<ImageKind>) -> Color {
+    match kind {
+        Some(ImageKind::Color) => rgb(236, 142, 64),
+        _ => rgb(200, 202, 206),
     }
 }
 

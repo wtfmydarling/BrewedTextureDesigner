@@ -35,9 +35,9 @@ fn transformed(dest: vec2<f32>, aspect: f32) -> vec4<f32> {
         return P.matte;
     }
     if (P.filtering == 1u) {
-        return sample_nearest(in0, suv, P.tiling);
+        return widen(sample_nearest(in0, suv, P.tiling), GRAY0);
     }
-    return sample_bilinear(in0, suv, P.tiling);
+    return widen(sample_bilinear(in0, suv, P.tiling), GRAY0);
 }
 
 @compute @workgroup_size(8, 8, 1)

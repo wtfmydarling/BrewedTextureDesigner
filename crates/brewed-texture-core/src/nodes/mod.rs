@@ -66,30 +66,84 @@ impl Category {
 
 // ---------------------------------------------------------------------------- sockets
 
+/// What an image is, as in Substance Designer: grayscale (one channel, half the memory of
+/// a color image) or color (red, green, blue and alpha).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ImageKind {
+    Gray,
+    Color,
+}
+
+impl ImageKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            ImageKind::Gray => "Grayscale",
+            ImageKind::Color => "Color",
+        }
+    }
+}
+
+/// What an image socket takes or gives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot {
+    /// A grayscale image; a color image arriving here is read as its luminance.
+    Gray,
+    /// A color image; a grayscale image arriving here is read as gray in every channel.
+    Color,
+    /// Either. An output of this kind is what its `Any` inputs are: color when one of them
+    /// is, grayscale otherwise.
+    Any,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct SocketDef {
     pub key: &'static str,
     pub label: &'static str,
     pub ty: DataType,
+    /// For image sockets, which kind of image; value sockets ignore it.
+    pub slot: Slot,
     /// Optional inputs do not produce a warning when they are not connected.
     pub optional: bool,
 }
 
+/// An image input of either kind (or, as an output, one that follows its inputs).
 pub(crate) const fn image(key: &'static str, label: &'static str) -> SocketDef {
-    SocketDef { key, label, ty: DataType::Image, optional: false }
+    SocketDef { key, label, ty: DataType::Image, slot: Slot::Any, optional: false }
 }
 
 pub(crate) const fn image_opt(key: &'static str, label: &'static str) -> SocketDef {
-    SocketDef { key, label, ty: DataType::Image, optional: true }
+    SocketDef { key, label, ty: DataType::Image, slot: Slot::Any, optional: true }
+}
+
+pub(crate) const fn gray(key: &'static str, label: &'static str) -> SocketDef {
+    SocketDef { key, label, ty: DataType::Image, slot: Slot::Gray, optional: false }
+}
+
+pub(crate) const fn gray_opt(key: &'static str, label: &'static str) -> SocketDef {
+    SocketDef { key, label, ty: DataType::Image, slot: Slot::Gray, optional: true }
+}
+
+pub(crate) const fn color_image(key: &'static str, label: &'static str) -> SocketDef {
+    SocketDef { key, label, ty: DataType::Image, slot: Slot::Color, optional: false }
+}
+
+pub(crate) const fn color_image_opt(key: &'static str, label: &'static str) -> SocketDef {
+    SocketDef { key, label, ty: DataType::Image, slot: Slot::Color, optional: true }
 }
 
 pub(crate) const fn value(key: &'static str, label: &'static str, ty: DataType) -> SocketDef {
-    SocketDef { key, label, ty, optional: false }
+    SocketDef { key, label, ty, slot: Slot::Any, optional: false }
 }
 
 pub(crate) const NO_SOCKETS: &[SocketDef] = &[];
+/// An output of the kind of the inputs.
 pub(crate) const IMAGE_OUT: &[SocketDef] = &[image("output", "Output")];
+pub(crate) const GRAY_OUT: &[SocketDef] = &[gray("output", "Output")];
+pub(crate) const COLOR_OUT: &[SocketDef] = &[color_image("output", "Output")];
+/// An input of either kind.
 pub(crate) const IMAGE_IN: &[SocketDef] = &[image("input", "Input")];
+pub(crate) const GRAY_IN: &[SocketDef] = &[gray("input", "Input")];
+pub(crate) const COLOR_IN: &[SocketDef] = &[color_image("input", "Input")];
 
 // ---------------------------------------------------------------------------- parameters
 
@@ -358,6 +412,17 @@ pub const TILING_PARAM: ParamDef = choice("tiling", "Tiling", Tiling::Both as u3
      edge and generators leave the outside empty.",
 );
 
+/// The kind of image a node makes: [`NodeDef::output_kind`], except where its parameters
+/// decide. (A Bitmap is the kind of its file, which only the engine knows once it is read.)
+pub fn image_kind(kind: NodeKind, params: &crate::eval::Params, inputs: &[Option<ImageKind>]) -> ImageKind {
+    if kind == NodeKind::TILE_GENERATOR {
+        // Tiles of a shape are grayscale; tiles of an image are what the image is.
+        let image = params.u("pattern") == TILE_PATTERN_IMAGE && inputs.first() == Some(&Some(ImageKind::Color));
+        return if image { ImageKind::Color } else { ImageKind::Gray };
+    }
+    kind.def().output_kind(inputs)
+}
+
 // ---------------------------------------------------------------------------- node types
 
 /// What a node produces.
@@ -418,6 +483,25 @@ impl NodeDef {
     /// True for Pixel Math: the expression runs per pixel and its variables are images.
     pub fn is_pixel_expression(&self) -> bool {
         matches!(self.expression_param().map(|p| p.kind), Some(ParamKind::Expression { pixel: true, .. }))
+    }
+
+    /// The kind of image the node makes from the kinds of the images arriving at its fixed
+    /// inputs (`None` where nothing arrives). A few nodes decide otherwise from their
+    /// parameters or their file (see [`image_kind`]).
+    pub fn output_kind(&self, inputs: &[Option<ImageKind>]) -> ImageKind {
+        let slot = match self.role {
+            // An output shows what arrives at it.
+            Role::Output => Slot::Any,
+            _ => self.outputs.first().map_or(Slot::Any, |o| o.slot),
+        };
+        match slot {
+            Slot::Gray => ImageKind::Gray,
+            Slot::Color => ImageKind::Color,
+            Slot::Any => {
+                let color = self.inputs.iter().zip(inputs).any(|(s, k)| s.slot == Slot::Any && *k == Some(ImageKind::Color));
+                if color { ImageKind::Color } else { ImageKind::Gray }
+            }
+        }
     }
 
     /// Does `query` (lower case) find this node?
@@ -651,6 +735,30 @@ mod tests {
             assert!(!d.description.is_empty(), "{} has no description", d.name);
         }
         const { assert!(!TILING_PARAM.exposable, "tiling must not be exposable") };
+    }
+
+    /// What each node makes, as in Substance Designer: generators of shapes and noise make
+    /// grayscale images, colorizing makes color, and the filters pass on what they are given.
+    #[test]
+    fn image_kinds() {
+        use ImageKind::{Color, Gray};
+        let params = crate::eval::Params::default();
+        let kind = |k: NodeKind, inputs: &[Option<ImageKind>]| image_kind(k, &params, inputs);
+        assert_eq!(kind(NodeKind::NOISE, &[]), Gray);
+        assert_eq!(kind(NodeKind::UNIFORM_COLOR, &[]), Color);
+        assert_eq!(kind(NodeKind::GRADIENT_MAP, &[Some(Gray)]), Color);
+        assert_eq!(kind(NodeKind::GRAYSCALE, &[Some(Color)]), Gray);
+        assert_eq!(kind(NodeKind::NORMAL, &[Some(Gray)]), Color);
+        assert_eq!(kind(NodeKind::LEVELS, &[Some(Gray)]), Gray);
+        assert_eq!(kind(NodeKind::LEVELS, &[Some(Color)]), Color);
+        assert_eq!(kind(NodeKind::BLEND, &[Some(Gray), Some(Gray), None]), Gray);
+        assert_eq!(kind(NodeKind::BLEND, &[Some(Gray), Some(Color), None]), Color);
+        // A mask is grayscale whatever arrives at it: it does not make the blend color.
+        assert_eq!(kind(NodeKind::BLEND, &[Some(Gray), Some(Gray), Some(Color)]), Gray);
+        // Tiles of a shape are grayscale even with a color image at the pattern input.
+        assert_eq!(kind(NodeKind::TILE_GENERATOR, &[Some(Color)]), Gray);
+        assert_eq!(kind(NodeKind::OUTPUT, &[Some(Color)]), Color);
+        assert_eq!(kind(NodeKind::BLUR, &[None]), Gray, "nothing arriving is grayscale");
     }
 
     #[test]

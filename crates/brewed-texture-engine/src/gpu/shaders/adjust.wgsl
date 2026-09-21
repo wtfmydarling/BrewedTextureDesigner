@@ -1,5 +1,5 @@
 // Per-pixel adjustments that share one parameter block. `op` selects the operation:
-//   0 levels, 1 invert, 2 grayscale, 3 hsl, 4 histogram scan, 5 posterize, 6 output format
+//   0 levels, 1 invert, 2 grayscale, 3 hsl, 4 histogram scan, 5 posterize
 
 struct Params {
     f0: f32, f1: f32, f2: f32, f3: f32,
@@ -114,24 +114,11 @@ fn posterize(c: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(q, c.a);
 }
 
-// mode: 0 RGBA, 1 RGB, 2 RG, 3 R, 4 G, 5 B, 6 A. Single channels are shown as gray.
-fn output_format(c: vec4<f32>) -> vec4<f32> {
-    switch P.mode {
-        case 1u: { return vec4<f32>(c.rgb, 1.0); }
-        case 2u: { return vec4<f32>(c.r, c.g, 0.0, 1.0); }
-        case 3u: { return gray(c.r); }
-        case 4u: { return gray(c.g); }
-        case 5u: { return gray(c.b); }
-        case 6u: { return gray(c.a); }
-        default: { return c; }
-    }
-}
-
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = textureDimensions(out_tex);
     if (gid.x >= size.x || gid.y >= size.y) { return; }
-    let c = read_input(in0, gid.xy, size, P.tiling);
+    let c = widen(read_input(in0, gid.xy, size, P.tiling), GRAY0);
     var o = c;
     switch P.op {
         case 0u: { o = levels(c); }
@@ -139,8 +126,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         case 2u: { o = grayscale(c); }
         case 3u: { o = hsl_adjust(c); }
         case 4u: { o = histogram_scan(c); }
-        case 5u: { o = posterize(c); }
-        default: { o = output_format(c); }
+        default: { o = posterize(c); }
     }
     textureStore(out_tex, vec2<i32>(gid.xy), o);
 }

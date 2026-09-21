@@ -52,7 +52,7 @@ pub static UNIFORM_COLOR: NodeDef = NodeDef {
     description: "Fills the image with a single color.",
     keywords: "solid fill constant flat",
     inputs: NO_SOCKETS,
-    outputs: IMAGE_OUT,
+    outputs: COLOR_OUT,
     params: &[color("color", "Color", [0.5, 0.5, 0.5, 1.0])],
     role: Role::Image,
 };
@@ -64,7 +64,7 @@ pub static SHAPE: NodeDef = NodeDef {
     description: "Anti-aliased geometric shapes and height profiles.",
     keywords: "disc circle square polygon star ring cross capsule cone pyramid bell gaussian waves",
     inputs: NO_SOCKETS,
-    outputs: IMAGE_OUT,
+    outputs: GRAY_OUT,
     params: &[
         choice("shape", "Shape", 0, SHAPES).pictured(),
         vec2("size", "Size", [0.6, 0.6], 0.0, 2.0)
@@ -128,7 +128,7 @@ pub static GRADIENT: NodeDef = NodeDef {
     description: "Linear, radial, angular and diamond grayscale gradients.",
     keywords: "ramp linear radial angular diamond",
     inputs: NO_SOCKETS,
-    outputs: IMAGE_OUT,
+    outputs: GRAY_OUT,
     params: &[
         choice("type", "Type", 0, &["Linear", "Mirrored Linear", "Radial", "Angular", "Diamond"]).pictured(),
         angle("angle", "Angle", 0.0, -180.0, 180.0),
@@ -187,7 +187,7 @@ pub static NOISE: NodeDef = NodeDef {
                ripples gabor fingerprint blocks pixel voronoi worley cells crystal facets mosaic edges cracks \
                stones spots dirt scratches fibers fur hair white random grain",
     inputs: NO_SOCKETS,
-    outputs: IMAGE_OUT,
+    outputs: GRAY_OUT,
     params: &[
         choice("type", "Type", 0, NOISE_TYPES).pictured(),
         choice("perlin_style", "Style", 0, PERLIN_STYLES).pictured().when("type", &[NOISE_PERLIN]),
@@ -251,7 +251,7 @@ pub static BITMAP: NodeDef = NodeDef {
     description: "Loads an image file (PNG, JPEG, TGA, BMP, TIFF, EXR), resampled to the graph size.",
     keywords: "image file picture photo load",
     inputs: NO_SOCKETS,
-    outputs: IMAGE_OUT,
+    outputs: COLOR_OUT,
     params: &[file("path", "File", &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "exr"])],
     role: Role::Image,
 };

@@ -11,7 +11,7 @@ struct Params {
 @group(0) @binding(2) var out_tex: texture_storage_2d<rgba16float, write>;
 
 fn h(uv: vec2<f32>) -> f32 {
-    return luminance(sample_bilinear(in0, uv, P.tiling).rgb);
+    return luminance(widen(sample_bilinear(in0, uv, P.tiling), GRAY0).rgb);
 }
 
 // Negative Laplacian at the given scale: ridges bright, valleys dark, flat = 0.5.

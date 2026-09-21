@@ -12,8 +12,8 @@ struct Params {
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = textureDimensions(out_tex);
     if (gid.x >= size.x || gid.y >= size.y) { return; }
-    let s = read_input(src_tex, gid.xy, size, P.tiling);
-    let b = read_input(blurred_tex, gid.xy, size, P.tiling);
+    let s = widen(read_input(src_tex, gid.xy, size, P.tiling), GRAY0);
+    let b = widen(read_input(blurred_tex, gid.xy, size, P.tiling), GRAY1);
     let rgb = clamp(s.rgb + (s.rgb - b.rgb) * P.intensity, vec3<f32>(0.0), vec3<f32>(1.0));
     textureStore(out_tex, vec2<i32>(gid.xy), vec4<f32>(rgb, s.a));
 }

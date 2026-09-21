@@ -12,7 +12,7 @@ use iced::widget::text::{Alignment as TextAlign, LineHeight, Shaping};
 use iced::advanced::mouse;
 use iced::{Color, Element, Pixels, Point, Rectangle, Size, Vector, keyboard};
 use brewed_texture_core::graph::{Comment, CommentId, Link, Node, NodeId, SocketRef};
-use brewed_texture_core::nodes::{OUTPUT_FORMATS, Role};
+use brewed_texture_core::nodes::{ImageKind, OUTPUT_FORMATS, Role, Slot};
 use brewed_texture_core::{DataType, NodeKind, Value, can_connect};
 
 use crate::app::{App, ContextTarget, GraphMessage, Message, SelectMode};
@@ -600,7 +600,7 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
             }
             let Some((a, b)) = layout::link_endpoints(&layouts, link) else { continue };
             let ty = graph.output_socket(link.from, &link.from_socket).map_or(DataType::Float, |s| s.ty);
-            let mut color = style::type_color(ty);
+            let mut color = if ty == DataType::Image { style::image_color(made_kind(app, link.from)) } else { style::type_color(ty) };
             let mut width = if ty == DataType::Image { 2.6 } else { 1.9 } * z.clamp(0.5, 1.5);
             if app.ui.selected_link.as_ref() == Some(link) {
                 color = style::ACCENT;
@@ -1014,7 +1014,19 @@ impl GraphCanvas<'_> {
                 } else {
                     input_linked(&s.key)
                 };
-                let mut color = style::type_color(s.ty);
+                let mut color = if s.ty != DataType::Image {
+                    style::type_color(s.ty)
+                } else if output {
+                    style::image_color(made_kind(app, node.id))
+                } else {
+                    // What the input takes, or what arrives at an input that takes either.
+                    let arriving = graph.link_into(node.id, &s.key).and_then(|lk| made_kind(app, lk.from));
+                    style::image_color(match s.slot {
+                        Slot::Gray => Some(ImageKind::Gray),
+                        Slot::Color => Some(ImageKind::Color),
+                        Slot::Any => arriving,
+                    })
+                };
                 let mut radius = r;
                 if let Some((from, ty)) = linking {
                     let hit = Hit { node: node.id, key: s.key.clone(), output, ty: s.ty, pos: *p };
@@ -1032,6 +1044,18 @@ impl GraphCanvas<'_> {
             }
         }
     }
+}
+
+/// The kind of image `node` makes as far as it is known: what the engine last made, or else
+/// what the node always makes.
+pub fn made_kind(app: &App, node: NodeId) -> Option<ImageKind> {
+    app.res.reports.get(&node).and_then(|r| r.kind).or_else(|| {
+        match app.graph().node(node)?.def().outputs.first()?.slot {
+            Slot::Gray => Some(ImageKind::Gray),
+            Slot::Color => Some(ImageKind::Color),
+            Slot::Any => None,
+        }
+    })
 }
 
 /// The size a comment gets while its corner is dragged from `origin` to `current`, in

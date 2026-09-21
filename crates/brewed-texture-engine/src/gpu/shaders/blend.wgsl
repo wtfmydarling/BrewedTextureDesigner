@@ -57,9 +57,9 @@ fn blend_channel(mode: u32, a: f32, b: f32) -> f32 {
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = textureDimensions(out_tex);
     if (gid.x >= size.x || gid.y >= size.y) { return; }
-    let fg = read_input(fg_tex, gid.xy, size, P.tiling);
-    let bg = read_input(bg_tex, gid.xy, size, P.tiling);
-    let mask = read_input(mask_tex, gid.xy, size, P.tiling).r;
+    let fg = widen(read_input(fg_tex, gid.xy, size, P.tiling), GRAY0);
+    let bg = widen(read_input(bg_tex, gid.xy, size, P.tiling), GRAY1);
+    let mask = widen(read_input(mask_tex, gid.xy, size, P.tiling), GRAY2).r;
 
     let blended = vec3<f32>(
         blend_channel(P.mode, bg.r, fg.r),

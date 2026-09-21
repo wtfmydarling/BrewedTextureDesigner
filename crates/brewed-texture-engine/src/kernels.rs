@@ -66,7 +66,7 @@ pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
         "curvature" => curvature,
         "edge_detect" => edge_detect,
         "emboss" => emboss,
-        "levels" | "histogram_scan" | "invert" | "grayscale" | "hsl" | "posterize" | "output" => adjust,
+        "levels" | "histogram_scan" | "invert" | "grayscale" | "hsl" | "posterize" => adjust,
         "gradient_map" => gradient_map,
         "channel_shuffle" => channel_shuffle,
         _ => return None,
@@ -302,7 +302,9 @@ struct EmbossU {
 pub struct DisplayU {
     pub mode: u32,
     pub checker: f32,
-    pub pad: [u32; 2],
+    /// The format of the output an image is shown as (0 shows it as it is).
+    pub format: u32,
+    pub pad: u32,
 }
 
 #[repr(C)]
@@ -412,7 +414,7 @@ fn tile_generator(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         vertical: u32::from(p.b("vertical_offset")),
     };
     let pattern_img = input(cx.inputs, 0, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, "tile_gen", bytes(&u), &[&pattern_img.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "tile_gen", bytes(&u), &[pattern_img], cx.output)?;
     Ok(warning)
 }
 
@@ -471,7 +473,7 @@ fn noise(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 fn bitmap(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     match cx.bitmap {
         Some(img) => {
-            cx.gpu.run(cx.encoder, "resample", bytes(&BlurU::copy(cx.params.tiling())), &[&img.view], cx.output)?
+            cx.gpu.run(cx.encoder, "resample", bytes(&BlurU::copy(cx.params.tiling())), &[img], cx.output)?
         }
         None => cx.gpu.run(cx.encoder, "uniform_color", bytes(&ColorU { color: [0.0; 4] }), &[], cx.output)?,
     }
@@ -503,7 +505,7 @@ fn transform_2d(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         pad1: 0,
     };
     let img = input(cx.inputs, 0, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, "transform", bytes(&u), &[&img.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "transform", bytes(&u), &[img], cx.output)?;
     Ok(None)
 }
 
@@ -520,7 +522,7 @@ fn blend(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let fg = input(cx.inputs, 0, &cx.gpu.black);
     let bg = input(cx.inputs, 1, &cx.gpu.black);
     let mask = input(cx.inputs, 2, &cx.gpu.white);
-    cx.gpu.run(cx.encoder, "blend", bytes(&u), &[&fg.view, &bg.view, &mask.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "blend", bytes(&u), &[fg, bg, mask], cx.output)?;
     Ok(None)
 }
 
@@ -548,7 +550,7 @@ fn directional_blur(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         pad2: 0,
     };
     let img = input(cx.inputs, 0, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, "directional_blur", bytes(&u), &[&img.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "directional_blur", bytes(&u), &[img], cx.output)?;
     Ok(None)
 }
 
@@ -567,7 +569,7 @@ fn slope_blur(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     };
     let img = input(cx.inputs, 0, &cx.gpu.black);
     let map = input(cx.inputs, 1, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, "slope_blur", bytes(&u), &[&img.view, &map.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "slope_blur", bytes(&u), &[img, map], cx.output)?;
     Ok(None)
 }
 
@@ -576,10 +578,10 @@ fn sharpen(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let sigma = (p.f("radius").max(0.05) * 0.5 * cx.output.width() as f32 / 1024.0).max(0.35);
     let img = input(cx.inputs, 0, &cx.gpu.black).clone();
     let [w, h] = cx.output.size();
-    let blurred = cx.gpu.take_scratch(w, h);
+    let blurred = cx.gpu.take_scratch(w, h, cx.output.format());
     gaussian_blur(cx.gpu, cx.encoder, &img, &blurred, sigma, p.tiling())?;
     let u = ScalarU { value: p.f("intensity"), a: p.tiling(), b: 0, c: 0 };
-    let r = cx.gpu.run(cx.encoder, "sharpen", bytes(&u), &[&img.view, &blurred.view], cx.output);
+    let r = cx.gpu.run(cx.encoder, "sharpen", bytes(&u), &[&img, &blurred], cx.output);
     cx.gpu.recycle(blurred);
     r?;
     Ok(None)
@@ -589,7 +591,7 @@ fn warp(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let u = ScalarU { value: cx.params.f("intensity"), a: cx.params.tiling(), b: 0, c: 0 };
     let img = input(cx.inputs, 0, &cx.gpu.black);
     let map = input(cx.inputs, 1, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, "warp", bytes(&u), &[&img.view, &map.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "warp", bytes(&u), &[img, map], cx.output)?;
     Ok(None)
 }
 
@@ -610,14 +612,14 @@ fn directional_warp(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     };
     let img = input(cx.inputs, 0, &cx.gpu.black);
     let map = input(cx.inputs, 1, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, "directional_warp", bytes(&u), &[&img.view, &map.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "directional_warp", bytes(&u), &[img, map], cx.output)?;
     Ok(None)
 }
 
 fn mirror(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let u = ScalarU { value: cx.params.f("offset"), a: cx.params.u("mode"), b: cx.params.tiling(), c: 0 };
     let img = input(cx.inputs, 0, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, "mirror", bytes(&u), &[&img.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "mirror", bytes(&u), &[img], cx.output)?;
     Ok(None)
 }
 
@@ -626,7 +628,7 @@ fn mirror(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 fn normal(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let u = ScalarU { value: cx.params.f("intensity"), a: cx.params.u("format"), b: cx.params.tiling(), c: 0 };
     let img = input(cx.inputs, 0, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, "normal", bytes(&u), &[&img.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "normal", bytes(&u), &[img], cx.output)?;
     Ok(None)
 }
 
@@ -642,7 +644,7 @@ fn height_kernel(cx: &mut ExecCtx, kernel: &str, radius_px: f32, intensity: f32,
         pad: [0; 2],
     };
     let img = input(cx.inputs, 0, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, kernel, bytes(&u), &[&img.view], cx.output)
+    cx.gpu.run(cx.encoder, kernel, bytes(&u), &[img], cx.output)
 }
 
 fn ambient_occlusion(cx: &mut ExecCtx) -> Result<Option<String>, String> {
@@ -651,12 +653,12 @@ fn ambient_occlusion(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     // The input at every scale: a sample far from the pixel reads the whole patch of
     // ground it stands for, from the level of that size.
     let img = input(cx.inputs, 0, &cx.gpu.black).clone();
-    let [w, h] = img.size();
-    let heights = cx.gpu.take_scratch_with_mips(w, h);
-    cx.gpu.encode_copy_with_mips(cx.encoder, &img, &heights)?;
+    let [w, h] = cx.output.size();
+    let heights = cx.gpu.take_scratch_with_mips(w, h, crate::gpu::COLOR_FORMAT);
+    cx.gpu.encode_copy_with_mips(cx.encoder, &img, &heights, 0)?;
     let r = px_to_uv(radius, cx.output);
     let u = HeightU { radius_x: r[0], radius_y: r[1], intensity, depth, invert: 0, tiling: p.tiling(), pad: [0; 2] };
-    let result = cx.gpu.run_filtered(cx.encoder, "ambient_occlusion", bytes(&u), &[&heights.view], cx.output, p.tiling());
+    let result = cx.gpu.run_filtered(cx.encoder, "ambient_occlusion", bytes(&u), &[&heights], cx.output, p.tiling());
     cx.gpu.recycle(heights);
     result.map(|()| None)
 }
@@ -692,7 +694,7 @@ fn emboss(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     }
     let height = input(cx.inputs, 0, &cx.gpu.black);
     let color = input(cx.inputs, 1, &cx.gpu.white);
-    cx.gpu.run(cx.encoder, "emboss", bytes(&u), &[&height.view, &color.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "emboss", bytes(&u), &[height, color], cx.output)?;
     Ok(warning)
 }
 
@@ -732,13 +734,10 @@ fn adjust(cx: &mut ExecCtx) -> Result<Option<String>, String> {
             u.op = 5;
             u.f[0] = p.i("steps").clamp(2, 256) as f32;
         }
-        _ => {
-            u.op = 6;
-            u.mode = p.u("format");
-        }
+        other => return Err(format!("'{other}' is not an adjustment")),
     }
     let img = input(cx.inputs, 0, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, "adjust", bytes(&u), &[&img.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "adjust", bytes(&u), &[img], cx.output)?;
     Ok(None)
 }
 
@@ -751,7 +750,7 @@ fn gradient_map(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         pad: 0,
     };
     let img = input(cx.inputs, 0, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, "gradient_map", bytes(&u), &[&img.view, &lut.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "gradient_map", bytes(&u), &[img, lut], cx.output)?;
     Ok(None)
 }
 
@@ -761,7 +760,7 @@ fn channel_shuffle(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         ShuffleU { channels: [p.u("red"), p.u("green"), p.u("blue"), p.u("alpha")], tiling: p.tiling(), pad: [0; 3] };
     let a = input(cx.inputs, 0, &cx.gpu.black);
     let b = input(cx.inputs, 1, &cx.gpu.black);
-    cx.gpu.run(cx.encoder, "shuffle", bytes(&u), &[&a.view, &b.view], cx.output)?;
+    cx.gpu.run(cx.encoder, "shuffle", bytes(&u), &[a, b], cx.output)?;
     Ok(None)
 }
 
@@ -774,7 +773,7 @@ pub fn passthrough(
     tiling: u32,
 ) -> Result<(), String> {
     match input {
-        Some(img) => gpu.run(encoder, "resample", bytes(&BlurU::copy(tiling)), &[&img.view], output),
+        Some(img) => gpu.run(encoder, "resample", bytes(&BlurU::copy(tiling)), &[img], output),
         None => gpu.run(encoder, "uniform_color", bytes(&ColorU { color: [0.0; 4] }), &[], output),
     }
 }
@@ -799,7 +798,7 @@ pub fn gaussian_blur(
     let copy = BlurU::copy(tiling);
     if sigma < 0.2 || input.size() != output.size() {
         // Nothing to blur (or a 1x1 placeholder input): plain resample.
-        return gpu.run(encoder, "resample", bytes(&copy), &[&input.view], output);
+        return gpu.run(encoder, "resample", bytes(&copy), &[input], output);
     }
     let mut s = sigma;
     let mut levels = 0;
@@ -811,8 +810,8 @@ pub fn gaussian_blur(
     let mut current = input.clone();
     for _ in 0..levels {
         let (cw, ch) = (current.width().div_ceil(2).max(1), current.height().div_ceil(2).max(1));
-        let next = gpu.take_scratch(cw, ch);
-        gpu.run(encoder, "downsample", bytes(&copy), &[&current.view], &next)?;
+        let next = gpu.take_scratch(cw, ch, output.format());
+        gpu.run(encoder, "downsample", bytes(&copy), &[&current], &next)?;
         current = next.clone();
         chain.push(next);
     }
@@ -820,14 +819,14 @@ pub fn gaussian_blur(
     let radius = (s * 3.0).ceil() as i32;
     let horizontal = BlurU { sigma: s, radius, dir_x: 1, dir_y: 0, tiling, pad: [0; 3] };
     let vertical = BlurU { dir_x: 0, dir_y: 1, ..horizontal };
-    let a = gpu.take_scratch(cw, ch);
-    gpu.run(encoder, "blur_1d", bytes(&horizontal), &[&current.view], &a)?;
+    let a = gpu.take_scratch(cw, ch, output.format());
+    gpu.run(encoder, "blur_1d", bytes(&horizontal), &[&current], &a)?;
     if levels == 0 {
-        gpu.run(encoder, "blur_1d", bytes(&vertical), &[&a.view], output)?;
+        gpu.run(encoder, "blur_1d", bytes(&vertical), &[&a], output)?;
     } else {
-        let b = gpu.take_scratch(cw, ch);
-        gpu.run(encoder, "blur_1d", bytes(&vertical), &[&a.view], &b)?;
-        gpu.run(encoder, "resample", bytes(&copy), &[&b.view], output)?;
+        let b = gpu.take_scratch(cw, ch, output.format());
+        gpu.run(encoder, "blur_1d", bytes(&vertical), &[&a], &b)?;
+        gpu.run(encoder, "resample", bytes(&copy), &[&b], output)?;
         gpu.recycle(b);
     }
     gpu.recycle(a);
@@ -897,8 +896,9 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         source.push_str(&format!("@group(0) @binding({}) var t{i}: texture_2d<f32>;\n", i + 1));
     }
     source.push_str(&format!(
-        "@group(0) @binding({}) var out_tex: texture_storage_2d<rgba16float, write>;\n",
-        images.len() + 1
+        "@group(0) @binding({}) var out_tex: texture_storage_2d<{}, write>;\n",
+        images.len() + 1,
+        crate::gpu::wgsl_format(cx.output.format())
     ));
     source.push_str(
         "fn chan(c: vec4<f32>) -> f32 {\n\
@@ -916,21 +916,22 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
              if (gid.x >= size.x || gid.y >= size.y) { return; }\n\
              let uv = out_uv(gid.xy, size);\n",
     );
-    for i in 0..images.len() {
-        source.push_str(&format!("    let img{i} = chan(read_input(t{i}, gid.xy, size, P.tiling));\n"));
+    for (i, image) in images.iter().enumerate() {
+        let gray = image.is_gray();
+        source.push_str(&format!("    let img{i} = chan(widen(read_input(t{i}, gid.xy, size, P.tiling), {gray}));\n"));
     }
     source.push_str(&format!(
         "    let r = {body};\n    textureStore(out_tex, vec2<i32>(gid.xy), vec4<f32>(r, r, r, 1.0));\n}}\n"
     ));
 
-    let kernel = cx.gpu.dynamic_kernel(&source, images.len())?;
+    let kernel = cx.gpu.dynamic_kernel(&source, images.len(), cx.output.format())?;
     let mut u =
         PixelMathU { consts: [[0.0; 4]; 4], tiling: params.tiling(), channel: params.u("channel"), pad: [0; 2] };
     for (i, v) in consts.iter().enumerate() {
         u.consts[i / 4][i % 4] = *v;
     }
-    let views: Vec<&wgpu::TextureView> = images.iter().map(|i| &i.view).collect();
-    cx.gpu.dispatch(cx.encoder, &kernel, bytes(&u), &views, &cx.output.view, cx.output.size());
+    let inputs: Vec<&GpuImage> = images.iter().collect();
+    cx.gpu.run_dynamic(cx.encoder, &kernel, bytes(&u), &inputs, cx.output);
     Ok(None)
 }
 
@@ -941,7 +942,10 @@ mod tests {
     #[test]
     fn every_image_node_has_a_kernel() {
         for kind in NodeKind::ALL {
-            if kind.def().has_image() {
+            if *kind == NodeKind::OUTPUT {
+                // An output shows what arrives at it.
+                assert!(kernel_for(*kind).is_none());
+            } else if kind.def().has_image() {
                 assert!(kernel_for(*kind).is_some(), "no kernel for {}", kind.def().name);
             } else {
                 assert!(kernel_for(*kind).is_none(), "value node {} has a kernel", kind.def().name);

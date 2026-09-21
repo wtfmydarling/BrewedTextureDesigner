@@ -34,5 +34,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             q.y = reflect_coord(p.y, ay, true);
         }
     }
-    textureStore(out_tex, vec2<i32>(gid.xy), fetch(in0, q, P.tiling));
+    textureStore(out_tex, vec2<i32>(gid.xy), widen(fetch(in0, q, P.tiling), GRAY0));
 }

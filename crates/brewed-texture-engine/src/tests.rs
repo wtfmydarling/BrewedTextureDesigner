@@ -113,10 +113,17 @@ fn transform_identity_and_wrapping_offset() {
             assert!(close(a, b, 2e-3), "({x},{y}): {a} vs {b}");
         }
     }
-    // Without tiling the uncovered area shows the matte color (transparent).
+    // Without tiling the uncovered area shows the matte color: as gray on a grayscale image,
+    // which has no alpha...
     set(&mut g, t, "tiling", ParamValue::Enum(0));
+    set(&mut g, t, "matte", ParamValue::Color([0.5, 0.5, 0.5, 0.0]));
     let out = eval_read(&mut e, &g, t);
-    assert_eq!(pixel(&out, 10, 10), [0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(pixel(&out, 10, 10), [0.5, 0.5, 0.5, 1.0]);
+    // ... and as it is, transparent, on a color image.
+    let color = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    g.connect(color, "o:output", t, "i:input").unwrap();
+    let out = eval_read(&mut e, &g, t);
+    assert_eq!(pixel(&out, 10, 10), [0.5, 0.5, 0.5, 0.0]);
 }
 
 #[test]
@@ -708,4 +715,125 @@ fn pictures_of_the_options_use_the_inputs() {
     let image = brewed_texture_core::nodes::TILE_PATTERN_IMAGE as usize;
     assert_ne!(fed.pictures[image], empty.pictures[image], "the input image is not in the picture");
     assert_eq!(fed.pictures[0], empty.pictures[0], "the other options do not use the input");
+}
+
+/// What the demo takes in GPU memory at 2048×2048, as the app shows it (prints).
+#[test]
+#[ignore = "a measurement"]
+fn demo_memory() {
+    let Some(mut e) = engine() else { return };
+    let (mut g, preview) = brewed_texture_core::demo::graph();
+    g.resolution = [2048, 2048];
+    evaluate_blocking(&mut e, &g);
+    let outputs: Vec<NodeId> = g.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
+    e.prepare_preview(preview);
+    e.prepare_materials(&outputs);
+    e.render_thumbnails();
+    e.wait_idle();
+    let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
+    println!("demo at 2048x2048: {:.0} MB, of which {:.0} MB scratch images", mb(e.memory()), mb(e.gpu.pool_bytes()));
+    e.gpu.trim_pool();
+    e.gpu.trim_pool();
+    println!("without scratch images: {:.0} MB", mb(e.memory()));
+}
+
+/// Grayscale images are stored in one channel, and what arrives at an input of the other
+/// kind is converted: color at a grayscale input is its luminance, grayscale at a color
+/// input is gray in every channel.
+#[test]
+fn grayscale_and_color_images() {
+    use brewed_texture_core::nodes::ImageKind;
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let color = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    set(&mut g, color, "color", ParamValue::Color([0.2, 0.6, 0.9, 1.0]));
+    // Color into a grayscale input.
+    let gray = g.add_node(NodeKind::GRAYSCALE, [0.0, 0.0]);
+    g.connect(color, "o:output", gray, "i:input").unwrap();
+    let scan = g.add_node(NodeKind::HISTOGRAM_SCAN, [0.0, 0.0]);
+    set(&mut g, scan, "contrast", ParamValue::Float(0.0));
+    g.connect(color, "o:output", scan, "i:input").unwrap();
+    // Grayscale into a color input.
+    let hsl = g.add_node(NodeKind::HSL, [0.0, 0.0]);
+    g.connect(noise, "o:output", hsl, "i:input").unwrap();
+    // A filter is what it is given.
+    let blur = g.add_node(NodeKind::BLUR, [0.0, 0.0]);
+    g.connect(noise, "o:output", blur, "i:input").unwrap();
+    evaluate_blocking(&mut e, &g);
+
+    let kind = |e: &Engine, id| e.image(id).map(|i| i.kind());
+    assert_eq!(kind(&e, noise), Some(ImageKind::Gray));
+    assert_eq!(kind(&e, blur), Some(ImageKind::Gray));
+    assert_eq!(kind(&e, gray), Some(ImageKind::Gray));
+    assert_eq!(kind(&e, color), Some(ImageKind::Color));
+    assert_eq!(kind(&e, hsl), Some(ImageKind::Color));
+    assert!(e.image(noise).unwrap().is_gray() && e.image(noise).unwrap().bytes() == u64::from(RES * RES * 4));
+    // A uniform color is one pixel, and reads as the whole texture.
+    assert_eq!(e.image(color).unwrap().size(), [1, 1]);
+    let px = e.read_image(color).unwrap();
+    assert_eq!((px.0, px.1), (RES, RES));
+    let [r, g2, b, a] = pixel(&px.2, 200, 100);
+    assert!(close(r, 0.2, 1e-3) && close(g2, 0.6, 1e-3) && close(b, 0.9, 1e-3) && a == 1.0, "{:?}", pixel(&px.2, 200, 100));
+
+    let luminance = 0.2126 * 0.2 + 0.7152 * 0.6 + 0.0722 * 0.9;
+    let out = e.read_image(gray).unwrap().2;
+    assert!(close(pixel(&out, 7, 7)[0], luminance, 2e-3), "{:?}", pixel(&out, 7, 7));
+    let noise_px = e.read_image(noise).unwrap().2;
+    let hsl_px = e.read_image(hsl).unwrap().2;
+    let [r, g2, b, a] = pixel(&hsl_px, 31, 17);
+    assert!(close(r, pixel(&noise_px, 31, 17)[0], 2e-3) && close(r, g2, 2e-3) && close(g2, b, 2e-3) && a == 1.0);
+    // The report tells the interface what each node makes.
+    assert_eq!(e.reports()[&hsl].kind, Some(ImageKind::Color));
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+/// An output shows what arrives at it, as its format shows it, and keeps no image of its
+/// own; so does a bypassed node, which passes on what arrives at it.
+#[test]
+fn outputs_and_bypassed_nodes_share_their_input() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let invert = g.add_node(NodeKind::INVERT, [0.0, 0.0]);
+    g.connect(noise, "o:output", invert, "i:input").unwrap();
+    let out = g.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+    g.connect(invert, "o:output", out, "i:input").unwrap();
+    evaluate_blocking(&mut e, &g);
+    let texture = |e: &Engine, id| e.image(id).map(|i| i.texture.clone());
+    assert_eq!(texture(&e, out), texture(&e, invert), "the output is its input");
+    let memory = e.memory();
+
+    g.node_mut(invert).unwrap().bypass = true;
+    evaluate_blocking(&mut e, &g);
+    assert_eq!(texture(&e, invert), texture(&e, noise), "a bypassed node is its input");
+    assert_eq!(texture(&e, out), texture(&e, noise));
+    assert!(e.memory() < memory, "{} is not less than {memory}", e.memory());
+    // Back again: the node makes an image of its own, and does not write into its input's.
+    let before = e.read_image(noise).unwrap().2;
+    g.node_mut(invert).unwrap().bypass = false;
+    evaluate_blocking(&mut e, &g);
+    assert_ne!(texture(&e, invert), texture(&e, noise));
+    assert_eq!(e.read_image(noise).unwrap().2, before, "the input was written into");
+    let inverted = e.read_image(out).unwrap().2;
+    assert!(close(pixel(&inverted, 9, 9)[0], 1.0 - pixel(&before, 9, 9)[0], 2e-3));
+}
+
+/// The demo at a texture size of 512: what it takes in GPU memory with what the views
+/// show, which was 2.4 times as much before grayscale images, outputs without copies of
+/// their own, 8-bit copies for the views and one-pixel uniform colors.
+#[test]
+fn the_demo_takes_a_third_of_what_it_did() {
+    let Some(mut e) = engine() else { return };
+    let (mut g, preview) = brewed_texture_core::demo::graph();
+    g.resolution = [512, 512];
+    evaluate_blocking(&mut e, &g);
+    let outputs: Vec<NodeId> = g.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
+    e.prepare_preview(preview);
+    e.prepare_materials(&outputs);
+    // As the engine is once nothing changes for a moment: without its scratch images.
+    e.gpu.clear_pool();
+    let mb = e.memory() as f64 / (1024.0 * 1024.0);
+    // 802 MB at 2048 was 50 MB at 512.
+    assert!(mb < 22.0, "the demo takes {mb:.1} MB at 512");
 }

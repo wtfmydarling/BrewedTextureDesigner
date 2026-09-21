@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::nodes::{NodeDef, NodeKind, PIXEL_MATH_BUILTINS, ParamDef, ParamKind, Role, TILING_PARAM};
+use crate::nodes::{NodeDef, NodeKind, PIXEL_MATH_BUILTINS, ParamDef, ParamKind, Role, Slot, TILING_PARAM};
 use crate::types::{DataType, ParamValue, Tiling, Value, can_connect};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -294,6 +294,8 @@ pub struct SocketInfo {
     pub key: String,
     pub label: String,
     pub ty: DataType,
+    /// For image sockets, which kind of image (see [`Slot`]).
+    pub slot: Slot,
     pub kind: SocketKind,
 }
 
@@ -585,6 +587,7 @@ impl Graph {
                 key: input_socket_key(s.key),
                 label: s.label.to_string(),
                 ty: s.ty,
+                slot: s.slot,
                 kind: SocketKind::Input,
             })
             .collect();
@@ -598,13 +601,15 @@ impl Graph {
                     key: param_socket_key(pd.key),
                     label: pd.label.to_string(),
                     ty,
+                    slot: Slot::Any,
                     kind: SocketKind::Param,
                 });
             }
         }
-        let var_ty = if d.is_pixel_expression() { DataType::Image } else { DataType::Float };
+        // Pixel Math reads a channel of each image: color, which a grayscale image is too.
+        let (var_ty, var_slot) = if d.is_pixel_expression() { (DataType::Image, Slot::Color) } else { (DataType::Float, Slot::Any) };
         for v in node.expression_vars() {
-            out.push(SocketInfo { key: var_socket_key(&v), label: v.clone(), ty: var_ty, kind: SocketKind::Variable });
+            out.push(SocketInfo { key: var_socket_key(&v), label: v.clone(), ty: var_ty, slot: var_slot, kind: SocketKind::Variable });
         }
         out
     }
@@ -617,6 +622,7 @@ impl Graph {
                 key: output_socket_key(s.key),
                 label: s.label.to_string(),
                 ty: s.ty,
+                slot: s.slot,
                 kind: SocketKind::Output,
             })
             .collect()
