@@ -16,7 +16,8 @@ brewed-texture-engine = { path = "crates/brewed-texture-engine" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
-env_logger = "0.11"
+# Without `regex`: log filters are plain module names here.
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 
 # GPU. The version must match the one iced renders with, so that the engine and the UI
 # share one device (the 2D view samples the engine's textures directly).
@@ -40,7 +41,10 @@ iced = { version = "0.14", default-features = false, features = [
     "linux-theme-detection",
     "tokio",
     "canvas",
-    "image",
+    # The image widget without every codec of the `image` crate (an AV1 encoder among
+    # them): it shows pixels the engine made, and the codecs Bitmap reads are the ones
+    # the `image` dependency below enables.
+    "image-without-codecs",
     "svg",
     "advanced",
 ] }
