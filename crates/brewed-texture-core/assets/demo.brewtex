@@ -1,0 +1,1469 @@
+{
+  "format": "brewed-texture-designer",
+  "version": 1,
+  "graph": {
+    "nodes": [
+      {
+        "id": 1,
+        "kind": "int_input",
+        "pos": [
+          -520.0,
+          -60.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          }
+        ],
+        "variable": "bricks_x"
+      },
+      {
+        "id": 2,
+        "kind": "int_input",
+        "pos": [
+          -520.0,
+          20.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          }
+        ],
+        "variable": "bricks_y"
+      },
+      {
+        "id": 3,
+        "kind": "float_input",
+        "pos": [
+          -520.0,
+          130.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          }
+        ],
+        "variable": "mortar"
+      },
+      {
+        "id": 4,
+        "kind": "float_input",
+        "pos": [
+          -520.0,
+          340.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          }
+        ],
+        "variable": "wear"
+      },
+      {
+        "id": 5,
+        "kind": "float_input",
+        "pos": [
+          -520.0,
+          540.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          }
+        ],
+        "variable": "angle"
+      },
+      {
+        "id": 6,
+        "kind": "color_input",
+        "pos": [
+          560.0,
+          780.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          }
+        ],
+        "variable": "tint"
+      },
+      {
+        "id": 7,
+        "kind": "math",
+        "pos": [
+          -320.0,
+          130.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "expression",
+            "value": {
+              "Text": "1 - 2*mortar"
+            },
+            "exposed": false
+          },
+          {
+            "key": "auto_bind",
+            "value": {
+              "Bool": true
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "kind": "tile_generator",
+        "pos": [
+          -60.0,
+          -80.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "pattern",
+            "value": {
+              "Enum": 2
+            },
+            "exposed": false
+          },
+          {
+            "key": "x_amount",
+            "value": {
+              "Int": 8
+            },
+            "exposed": true
+          },
+          {
+            "key": "y_amount",
+            "value": {
+              "Int": 8
+            },
+            "exposed": true
+          },
+          {
+            "key": "size",
+            "value": {
+              "Vec2": [
+                0.9,
+                0.9
+              ]
+            },
+            "exposed": true
+          },
+          {
+            "key": "scale",
+            "value": {
+              "Float": 1.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "offset",
+            "value": {
+              "Float": 0.5
+            },
+            "exposed": false
+          },
+          {
+            "key": "vertical_offset",
+            "value": {
+              "Bool": false
+            },
+            "exposed": false
+          },
+          {
+            "key": "rotation",
+            "value": {
+              "Float": 0.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "random_rotation",
+            "value": {
+              "Float": 0.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "random_scale",
+            "value": {
+              "Float": 0.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "random_offset",
+            "value": {
+              "Float": 0.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "luminance",
+            "value": {
+              "Float": 1.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "random_luminance",
+            "value": {
+              "Float": 0.35
+            },
+            "exposed": false
+          },
+          {
+            "key": "mask_random",
+            "value": {
+              "Float": 0.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "softness",
+            "value": {
+              "Float": 0.12
+            },
+            "exposed": false
+          },
+          {
+            "key": "sides",
+            "value": {
+              "Int": 6
+            },
+            "exposed": false
+          },
+          {
+            "key": "inner_radius",
+            "value": {
+              "Float": 0.5
+            },
+            "exposed": false
+          },
+          {
+            "key": "thickness",
+            "value": {
+              "Float": 0.2
+            },
+            "exposed": false
+          },
+          {
+            "key": "corner_radius",
+            "value": {
+              "Float": 0.15
+            },
+            "exposed": false
+          },
+          {
+            "key": "blend_mode",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "seed",
+            "value": {
+              "Int": 7
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "kind": "noise",
+        "pos": [
+          -320.0,
+          360.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "type",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "scale",
+            "value": {
+              "Int": 6
+            },
+            "exposed": false
+          },
+          {
+            "key": "octaves",
+            "value": {
+              "Int": 7
+            },
+            "exposed": false
+          },
+          {
+            "key": "roughness",
+            "value": {
+              "Float": 0.55
+            },
+            "exposed": false
+          },
+          {
+            "key": "jitter",
+            "value": {
+              "Float": 1.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "seed",
+            "value": {
+              "Int": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "invert",
+            "value": {
+              "Bool": false
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "kind": "math",
+        "pos": [
+          -320.0,
+          580.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "expression",
+            "value": {
+              "Text": "angle + 5*sin(angle/10)"
+            },
+            "exposed": false
+          },
+          {
+            "key": "auto_bind",
+            "value": {
+              "Bool": true
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "kind": "transform_2d",
+        "pos": [
+          -60.0,
+          360.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "offset",
+            "value": {
+              "Vec2": [
+                0.0,
+                0.0
+              ]
+            },
+            "exposed": false
+          },
+          {
+            "key": "rotation",
+            "value": {
+              "Float": 0.0
+            },
+            "exposed": true
+          },
+          {
+            "key": "scale",
+            "value": {
+              "Vec2": [
+                1.0,
+                1.0
+              ]
+            },
+            "exposed": false
+          },
+          {
+            "key": "pivot",
+            "value": {
+              "Vec2": [
+                0.5,
+                0.5
+              ]
+            },
+            "exposed": false
+          },
+          {
+            "key": "filtering",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "matte",
+            "value": {
+              "Color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "kind": "blend",
+        "pos": [
+          160.0,
+          120.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "mode",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "opacity",
+            "value": {
+              "Float": 1.0
+            },
+            "exposed": true
+          },
+          {
+            "key": "alpha",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "clamp",
+            "value": {
+              "Bool": true
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "kind": "levels",
+        "pos": [
+          360.0,
+          120.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "in_low",
+            "value": {
+              "Float": 0.04
+            },
+            "exposed": false
+          },
+          {
+            "key": "in_high",
+            "value": {
+              "Float": 0.85
+            },
+            "exposed": false
+          },
+          {
+            "key": "gamma",
+            "value": {
+              "Float": 0.9
+            },
+            "exposed": false
+          },
+          {
+            "key": "out_low",
+            "value": {
+              "Float": 0.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "out_high",
+            "value": {
+              "Float": 1.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "channels",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "clamp",
+            "value": {
+              "Bool": true
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "kind": "blur",
+        "pos": [
+          560.0,
+          120.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "radius",
+            "value": {
+              "Float": 1.5
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "kind": "gradient_map",
+        "pos": [
+          760.0,
+          300.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "gradient",
+            "value": {
+              "Gradient": {
+                "stops": [
+                  {
+                    "pos": 0.0,
+                    "color": [
+                      0.26,
+                      0.25,
+                      0.24,
+                      1.0
+                    ]
+                  },
+                  {
+                    "pos": 0.3,
+                    "color": [
+                      0.52,
+                      0.5,
+                      0.47,
+                      1.0
+                    ]
+                  },
+                  {
+                    "pos": 0.55,
+                    "color": [
+                      0.86,
+                      0.84,
+                      0.8,
+                      1.0
+                    ]
+                  },
+                  {
+                    "pos": 1.0,
+                    "color": [
+                      1.0,
+                      0.98,
+                      0.95,
+                      1.0
+                    ]
+                  }
+                ],
+                "interpolation": "Linear"
+              }
+            },
+            "exposed": false
+          },
+          {
+            "key": "channel",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "keep_alpha",
+            "value": {
+              "Bool": true
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 16,
+        "kind": "histogram_scan",
+        "pos": [
+          760.0,
+          540.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "position",
+            "value": {
+              "Float": 0.3
+            },
+            "exposed": false
+          },
+          {
+            "key": "contrast",
+            "value": {
+              "Float": 0.85
+            },
+            "exposed": false
+          },
+          {
+            "key": "invert",
+            "value": {
+              "Bool": false
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 17,
+        "kind": "uniform_color",
+        "pos": [
+          760.0,
+          780.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "color",
+            "value": {
+              "Color": [
+                0.5,
+                0.5,
+                0.5,
+                1.0
+              ]
+            },
+            "exposed": true
+          }
+        ]
+      },
+      {
+        "id": 18,
+        "kind": "blend",
+        "pos": [
+          980.0,
+          300.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "mode",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "opacity",
+            "value": {
+              "Float": 1.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "alpha",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "clamp",
+            "value": {
+              "Bool": true
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 19,
+        "kind": "normal",
+        "pos": [
+          760.0,
+          -120.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "intensity",
+            "value": {
+              "Float": 6.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "format",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 20,
+        "kind": "ambient_occlusion",
+        "pos": [
+          980.0,
+          780.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "radius",
+            "value": {
+              "Float": 32.0
+            },
+            "exposed": false
+          },
+          {
+            "key": "height",
+            "value": {
+              "Float": 0.06
+            },
+            "exposed": false
+          },
+          {
+            "key": "intensity",
+            "value": {
+              "Float": 1.0
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 21,
+        "kind": "pixel_math",
+        "pos": [
+          980.0,
+          540.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "expression",
+            "value": {
+              "Text": "0.35 + 0.55*(1 - h)^2"
+            },
+            "exposed": false
+          },
+          {
+            "key": "channel",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "auto_bind",
+            "value": {
+              "Bool": true
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 22,
+        "kind": "output",
+        "pos": [
+          1200.0,
+          300.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "name",
+            "value": {
+              "Text": "basecolor"
+            },
+            "exposed": false
+          },
+          {
+            "key": "format",
+            "value": {
+              "Enum": 1
+            },
+            "exposed": false
+          },
+          {
+            "key": "bit_depth",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "usage",
+            "value": {
+              "Enum": 1
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 23,
+        "kind": "output",
+        "pos": [
+          1200.0,
+          -120.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "name",
+            "value": {
+              "Text": "normal"
+            },
+            "exposed": false
+          },
+          {
+            "key": "format",
+            "value": {
+              "Enum": 1
+            },
+            "exposed": false
+          },
+          {
+            "key": "bit_depth",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "usage",
+            "value": {
+              "Enum": 2
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 24,
+        "kind": "output",
+        "pos": [
+          1200.0,
+          90.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "name",
+            "value": {
+              "Text": "height"
+            },
+            "exposed": false
+          },
+          {
+            "key": "format",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "bit_depth",
+            "value": {
+              "Enum": 1
+            },
+            "exposed": false
+          },
+          {
+            "key": "usage",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 25,
+        "kind": "output",
+        "pos": [
+          1200.0,
+          540.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "name",
+            "value": {
+              "Text": "roughness"
+            },
+            "exposed": false
+          },
+          {
+            "key": "format",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "bit_depth",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "usage",
+            "value": {
+              "Enum": 4
+            },
+            "exposed": false
+          }
+        ]
+      },
+      {
+        "id": 26,
+        "kind": "output",
+        "pos": [
+          1200.0,
+          780.0
+        ],
+        "params": [
+          {
+            "key": "tiling",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "name",
+            "value": {
+              "Text": "ambient_occlusion"
+            },
+            "exposed": false
+          },
+          {
+            "key": "format",
+            "value": {
+              "Enum": 3
+            },
+            "exposed": false
+          },
+          {
+            "key": "bit_depth",
+            "value": {
+              "Enum": 0
+            },
+            "exposed": false
+          },
+          {
+            "key": "usage",
+            "value": {
+              "Enum": 6
+            },
+            "exposed": false
+          }
+        ]
+      }
+    ],
+    "links": [
+      {
+        "from": 3,
+        "from_socket": "o:value",
+        "to": 7,
+        "to_socket": "v:mortar"
+      },
+      {
+        "from": 1,
+        "from_socket": "o:value",
+        "to": 8,
+        "to_socket": "p:x_amount"
+      },
+      {
+        "from": 2,
+        "from_socket": "o:value",
+        "to": 8,
+        "to_socket": "p:y_amount"
+      },
+      {
+        "from": 7,
+        "from_socket": "o:result",
+        "to": 8,
+        "to_socket": "p:size"
+      },
+      {
+        "from": 5,
+        "from_socket": "o:value",
+        "to": 10,
+        "to_socket": "v:angle"
+      },
+      {
+        "from": 9,
+        "from_socket": "o:output",
+        "to": 11,
+        "to_socket": "i:input"
+      },
+      {
+        "from": 10,
+        "from_socket": "o:result",
+        "to": 11,
+        "to_socket": "p:rotation"
+      },
+      {
+        "from": 11,
+        "from_socket": "o:output",
+        "to": 12,
+        "to_socket": "i:foreground"
+      },
+      {
+        "from": 8,
+        "from_socket": "o:output",
+        "to": 12,
+        "to_socket": "i:background"
+      },
+      {
+        "from": 4,
+        "from_socket": "o:value",
+        "to": 12,
+        "to_socket": "p:opacity"
+      },
+      {
+        "from": 12,
+        "from_socket": "o:output",
+        "to": 13,
+        "to_socket": "i:input"
+      },
+      {
+        "from": 13,
+        "from_socket": "o:output",
+        "to": 14,
+        "to_socket": "i:input"
+      },
+      {
+        "from": 14,
+        "from_socket": "o:output",
+        "to": 15,
+        "to_socket": "i:input"
+      },
+      {
+        "from": 14,
+        "from_socket": "o:output",
+        "to": 16,
+        "to_socket": "i:input"
+      },
+      {
+        "from": 6,
+        "from_socket": "o:value",
+        "to": 17,
+        "to_socket": "p:color"
+      },
+      {
+        "from": 17,
+        "from_socket": "o:output",
+        "to": 18,
+        "to_socket": "i:foreground"
+      },
+      {
+        "from": 15,
+        "from_socket": "o:output",
+        "to": 18,
+        "to_socket": "i:background"
+      },
+      {
+        "from": 16,
+        "from_socket": "o:output",
+        "to": 18,
+        "to_socket": "i:mask"
+      },
+      {
+        "from": 14,
+        "from_socket": "o:output",
+        "to": 19,
+        "to_socket": "i:input"
+      },
+      {
+        "from": 14,
+        "from_socket": "o:output",
+        "to": 20,
+        "to_socket": "i:input"
+      },
+      {
+        "from": 14,
+        "from_socket": "o:output",
+        "to": 21,
+        "to_socket": "v:h"
+      },
+      {
+        "from": 18,
+        "from_socket": "o:output",
+        "to": 22,
+        "to_socket": "i:input"
+      },
+      {
+        "from": 19,
+        "from_socket": "o:output",
+        "to": 23,
+        "to_socket": "i:input"
+      },
+      {
+        "from": 14,
+        "from_socket": "o:output",
+        "to": 24,
+        "to_socket": "i:input"
+      },
+      {
+        "from": 21,
+        "from_socket": "o:output",
+        "to": 25,
+        "to_socket": "i:input"
+      },
+      {
+        "from": 20,
+        "from_socket": "o:output",
+        "to": 26,
+        "to_socket": "i:input"
+      }
+    ],
+    "variables": [
+      {
+        "name": "bricks_x",
+        "ty": "Int",
+        "value": {
+          "Int": 4
+        },
+        "default": {
+          "Int": 4
+        },
+        "min": {
+          "Int": 1
+        },
+        "max": {
+          "Int": 16
+        },
+        "description": "Bricks per row"
+      },
+      {
+        "name": "bricks_y",
+        "ty": "Int",
+        "value": {
+          "Int": 8
+        },
+        "default": {
+          "Int": 8
+        },
+        "min": {
+          "Int": 1
+        },
+        "max": {
+          "Int": 32
+        },
+        "description": "Number of rows"
+      },
+      {
+        "name": "mortar",
+        "ty": "Float",
+        "value": {
+          "Float": 0.06
+        },
+        "default": {
+          "Float": 0.06
+        },
+        "min": {
+          "Float": 0.0
+        },
+        "max": {
+          "Float": 0.25
+        },
+        "description": "Gap between bricks"
+      },
+      {
+        "name": "wear",
+        "ty": "Float",
+        "value": {
+          "Float": 0.55
+        },
+        "default": {
+          "Float": 0.55
+        },
+        "min": {
+          "Float": 0.0
+        },
+        "max": {
+          "Float": 1.0
+        },
+        "description": "How much dirt is blended in"
+      },
+      {
+        "name": "angle",
+        "ty": "Float",
+        "value": {
+          "Float": 30.0
+        },
+        "default": {
+          "Float": 30.0
+        },
+        "min": {
+          "Float": -180.0
+        },
+        "max": {
+          "Float": 180.0
+        },
+        "description": "Rotation of the dirt layer"
+      },
+      {
+        "name": "tint",
+        "ty": "Color",
+        "value": {
+          "Color": [
+            0.62,
+            0.26,
+            0.16,
+            1.0
+          ]
+        },
+        "default": {
+          "Color": [
+            0.62,
+            0.26,
+            0.16,
+            1.0
+          ]
+        },
+        "min": {
+          "Color": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "max": {
+          "Color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "description": "Brick color"
+      }
+    ],
+    "comments": [
+      {
+        "id": 27,
+        "text": "The shape of the bricks",
+        "pos": [
+          -580.0,
+          -180.0
+        ],
+        "size": [
+          1250.0,
+          1000.0
+        ],
+        "color": [
+          0.28,
+          0.51,
+          0.8,
+          1.0
+        ]
+      },
+      {
+        "id": 28,
+        "text": "Maps for the 3D view",
+        "pos": [
+          700.0,
+          -180.0
+        ],
+        "size": [
+          680.0,
+          1180.0
+        ],
+        "color": [
+          0.29,
+          0.64,
+          0.44,
+          1.0
+        ]
+      }
+    ],
+    "resolution": [
+      2048,
+      2048
+    ],
+    "next_id": 29
+  },
+  "view": {
+    "preview": 22
+  }
+}

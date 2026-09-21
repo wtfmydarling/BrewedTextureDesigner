@@ -60,7 +60,7 @@ fn main() -> iced::Result {
             "--contact-sheet" => {
                 let out = value(i).unwrap_or_else(|| "contact_sheet.png".into());
                 let (graph, nodes) = if args.get(i + 2).map(String::as_str) == Some("demo") {
-                    let (g, _) = brewed_texture_core::demo::brick_wall();
+                    let (g, _) = brewed_texture_core::demo::graph();
                     let nodes = g
                         .nodes
                         .iter()

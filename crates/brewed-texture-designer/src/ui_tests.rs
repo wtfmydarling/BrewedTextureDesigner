@@ -274,7 +274,7 @@ fn gradient_of(app: &App, node: brewed_texture_core::graph::NodeId) -> brewed_te
 /// windows then close and the pick is over.
 #[test]
 fn a_gradient_is_picked_along_a_line_on_the_screen() {
-    let (graph, _) = brewed_texture_core::demo::brick_wall();
+    let (graph, _) = brewed_texture_core::demo::graph();
     let gm = graph.nodes_of(NodeKind::GRADIENT_MAP).next().unwrap().id;
     let Some((mut w, overlay)) = picker_window(PickTarget::Gradient(gm, "gradient".into())) else {
         eprintln!("no GPU for the headless renderer: test skipped");
@@ -310,7 +310,7 @@ fn a_gradient_is_picked_along_a_line_on_the_screen() {
 #[test]
 fn a_color_is_picked_with_a_click_and_keeps_its_alpha() {
     // A new node (the demo's Uniform Color is driven by an input, so its color is locked).
-    let (mut graph, _) = brewed_texture_core::demo::brick_wall();
+    let (mut graph, _) = brewed_texture_core::demo::graph();
     let uniform = graph.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
     let target = PickTarget::Color(ColorTarget::Param(uniform, "color".into()));
     let Some((mut w, _)) = picker_window(target) else {
@@ -392,7 +392,7 @@ fn a_pick_ends_up_where_the_eyedropper_was_clicked() {
 /// Esc (or a right click) ends the pick without changing anything.
 #[test]
 fn escape_cancels_a_pick() {
-    let (graph, _) = brewed_texture_core::demo::brick_wall();
+    let (graph, _) = brewed_texture_core::demo::graph();
     let gm = graph.nodes_of(NodeKind::GRADIENT_MAP).next().unwrap().id;
     let Some((mut w, overlay)) = picker_window(PickTarget::Gradient(gm, "gradient".into())) else {
         eprintln!("no GPU for the headless renderer: test skipped");

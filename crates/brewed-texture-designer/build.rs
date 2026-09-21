@@ -1,4 +1,4 @@
-//! Embeds the application icon (drawn by src/brand/art.rs) and the version information in
+//! Embeds the application icon (assets/logo.svg, drawn by src/brand/art.rs) and the version information in
 //! the Windows executable. The resource file is written directly and handed to the
 //! linker, so no resource compiler is needed.
 
@@ -11,6 +11,7 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/brand/art.rs");
+    println!("cargo:rerun-if-changed=assets/logo.svg");
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     // `free_unix`: the systems where windows are X11 or Wayland ones (as in winit).

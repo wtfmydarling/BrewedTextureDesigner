@@ -87,8 +87,8 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let (graph, preview) = crate::demo::brick_wall();
-        let view = ViewState { preview: Some(preview), graph_pan: Some([1.0, 2.0]), graph_zoom: Some(0.8) };
+        let (graph, preview) = crate::demo::graph();
+        let view = ViewState { preview, graph_pan: Some([1.0, 2.0]), graph_zoom: Some(0.8) };
         let json = to_json(&graph, &view).unwrap();
         let loaded = from_json(&json).unwrap();
         assert_eq!(loaded.graph, graph);
@@ -103,7 +103,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("brewed_project_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a.brewtex");
-        let (graph, _) = crate::demo::brick_wall();
+        let (graph, _) = crate::demo::graph();
         save(&path, &graph, &ViewState::default()).unwrap();
         assert_eq!(load(&path).unwrap().graph, graph);
         let _ = std::fs::remove_dir_all(&dir);

@@ -114,7 +114,7 @@ pub fn bench() -> Result<(), String> {
     println!("GPU: {}", gpu.adapter_info);
     println!("CPU threads: {}", rayon::current_num_threads());
     let mut engine = Engine::new(gpu);
-    let (mut g, _) = brewed_texture_core::demo::brick_wall();
+    let (mut g, _) = brewed_texture_core::demo::graph();
     g.resolution = [2048, 2048];
 
     let t = std::time::Instant::now();

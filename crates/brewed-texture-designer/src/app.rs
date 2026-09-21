@@ -505,7 +505,7 @@ fn find_kind(graph: &Graph, name: &str) -> Option<NodeId> {
 
 impl App {
     pub fn boot(opts: StartupOptions) -> (App, Task<Message>) {
-        let (graph, preview_node) = brewed_texture_core::demo::brick_wall();
+        let (graph, preview_node) = brewed_texture_core::demo::graph();
         let eval = Arc::new(eval::evaluate(&graph));
         let mut app = App {
             doc: Document::new(graph, None),
@@ -522,7 +522,7 @@ impl App {
                 graph_view: GraphView { pan: Vector::ZERO, zoom: 1.0, bounds: Rectangle::default() },
                 frame_request: true,
                 preview: PreviewState {
-                    node: Some(preview_node),
+                    node: preview_node,
                     channel: 0,
                     show_tiling: false,
                     zoom: 1.0,
@@ -1003,9 +1003,9 @@ impl App {
                 Task::none()
             }
             PendingAction::LoadDemo => {
-                let (g, p) = brewed_texture_core::demo::brick_wall();
+                let (g, p) = brewed_texture_core::demo::graph();
                 self.doc.replace(g, None);
-                self.after_document_change(Some(p));
+                self.after_document_change(p);
                 Task::none()
             }
             PendingAction::OpenPath(path) => {

@@ -5,7 +5,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let out = args.first().cloned().unwrap_or_else(|| "contact_sheet.png".into());
     let (graph, nodes) = if args.get(1).map(String::as_str) == Some("demo") {
-        let (g, _) = brewed_texture_core::demo::brick_wall();
+        let (g, _) = brewed_texture_core::demo::graph();
         let nodes = g.nodes.iter().filter(|n| n.def().has_image()).map(|n| (n.id, n.def().name.to_string())).collect();
         (g, nodes)
     } else {

@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Brewed Texture Designer</title>
+  <defs>
+    <clipPath id="icon">
+      <rect x="10.24" y="10.24" width="235.52" height="235.52" rx="51.2"/>
+    </clipPath>
+    <linearGradient id="background" x1="0" y1="0" x2="0" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2e2e2e"/>
+      <stop offset="1" stop-color="#1a1a1a"/>
+    </linearGradient>
+    <!-- The magenta and black checker of a missing texture. -->
+    <pattern id="missing" x="0" y="0" width="51.2" height="51.2" patternUnits="userSpaceOnUse">
+      <rect width="51.2" height="51.2" fill="#121212"/>
+      <rect width="25.6" height="25.6" fill="#e800e6"/>
+      <rect x="25.6" y="25.6" width="25.6" height="25.6" fill="#e800e6"/>
+    </pattern>
+    <linearGradient id="fold" x1="200" y1="56.64" x2="203.84" y2="52.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0a0a0a"/>
+      <stop offset="1" stop-color="#0a0a0a" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="beer" x1="0" y1="81.92" x2="0" y2="225.28" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fcc840"/>
+      <stop offset="1" stop-color="#ce7610"/>
+    </linearGradient>
+    <linearGradient id="foam" x1="0" y1="84.48" x2="0" y2="97.28" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fcf8ee"/>
+      <stop offset="1" stop-color="#e2d6be"/>
+    </linearGradient>
+  </defs>
+
+  <g clip-path="url(#icon)">
+    <!-- A dark rounded square with a light rim. -->
+    <rect width="256" height="256" fill="url(#background)"/>
+    <rect x="10.24" y="10.24" width="235.52" height="235.52" rx="51.2" fill="none" stroke="#474747" stroke-width="7.2"/>
+
+    <!-- One corner peels off to show what lies under every texture that is not there yet. -->
+    <polygon points="143.36,0 256,0 256,112.64" fill="url(#missing)"/>
+    <polygon points="143.36,0 151.04,0 256,104.96 256,112.64" fill="url(#fold)"/>
+
+    <!-- The mug: a handle, the glass, the beer with bubbles and a shine, and the foam. -->
+    <path d="M 158.72 122.24 A 36.48 36.48 0 0 1 158.72 195.2" fill="none" stroke="#d6dce2" stroke-width="14.08"/>
+    <rect x="40.96" y="81.92" width="117.76" height="143.36" rx="12.8" fill="#d6dce2"/>
+    <rect x="49.92" y="81.92" width="99.84" height="130.56" rx="6.4" fill="url(#beer)"/>
+    <g fill="#ffe6a0" fill-opacity="0.85">
+      <circle cx="87.04" cy="133.12" r="4.61"/>
+      <circle cx="117.76" cy="163.84" r="3.58"/>
+      <circle cx="74.24" cy="184.32" r="3.07"/>
+      <circle cx="133.12" cy="120.32" r="3.07"/>
+      <circle cx="104.96" cy="199.68" r="4.1"/>
+    </g>
+    <rect x="55.04" y="107.52" width="7.68" height="87.04" rx="3.84" fill="#fff4d6" fill-opacity="0.55"/>
+    <g fill="url(#foam)">
+      <rect x="37.12" y="76.8" width="125.44" height="20.48"/>
+      <circle cx="53.76" cy="79.36" r="19.2"/>
+      <circle cx="79.36" cy="64" r="19.2"/>
+      <circle cx="110.08" cy="69.12" r="19.2"/>
+      <circle cx="138.24" cy="61.44" r="19.2"/>
+      <circle cx="158.72" cy="76.8" r="19.2"/>
+    </g>
+  </g>
+</svg>

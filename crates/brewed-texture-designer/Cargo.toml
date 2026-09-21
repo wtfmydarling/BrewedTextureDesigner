@@ -24,6 +24,13 @@ log.workspace = true
 env_logger.workspace = true
 # Shares the pixels of screen captures between display and color sampling (iced uses it too).
 bytes = "1"
+# Draws the logo (assets/logo.svg) at the sizes the windows ask for — the library iced
+# draws its SVGs with, so nothing more to build.
+resvg = { version = "0.45", default-features = false }
+
+[build-dependencies]
+# ...and at the sizes the Windows executable embeds.
+resvg = { version = "0.45", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 # The eyedropper (live, see src/eyedropper/windows.rs), the taskbar icon and console output.

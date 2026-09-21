@@ -425,7 +425,7 @@ fn bitmap_node_decodes_and_resamples() {
 #[test]
 fn demo_graph_evaluates_without_errors() {
     let Some(mut e) = engine() else { return };
-    let (mut g, _) = brewed_texture_core::demo::brick_wall();
+    let (mut g, _) = brewed_texture_core::demo::graph();
     g.resolution = [512, 512];
     let ev = evaluate_blocking(&mut e, &g);
     for n in &g.nodes {
