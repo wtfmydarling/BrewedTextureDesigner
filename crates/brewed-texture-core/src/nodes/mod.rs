@@ -20,7 +20,7 @@ use crate::gradient::Gradient;
 use crate::types::{DataType, ParamValue, Tiling};
 
 pub use filters::{BLEND_MODES, PIXEL_MATH_BUILTINS};
-pub use generators::{SHAPE_POLYGON, SHAPE_ROUNDED, SHAPE_STAR, SHAPES, TILE_PATTERN_IMAGE};
+pub use generators::{NOISE_TYPES, NOISE_WHITE, SHAPE_POLYGON, SHAPE_ROUNDED, SHAPE_STAR, SHAPES, TILE_PATTERN_IMAGE};
 pub use output::{
     OUTPUT_FORMATS, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL,
     USAGE_ROUGHNESS, output_format_channels,
@@ -156,6 +156,9 @@ pub struct ParamDef {
     /// none: a slider covers the useful range and going past it is how unusual textures are
     /// found. Only what would mean nothing (a gamma of zero, a third of a tile) is bounded.
     pub limits: Option<(f32, f32)>,
+    /// The options are chosen by how they look: the menu shows each as a picture of what
+    /// the node makes with it, not only its name.
+    pub pictured: bool,
 }
 
 impl ParamDef {
@@ -169,7 +172,17 @@ impl ParamDef {
                 | ParamKind::Color { .. }
                 | ParamKind::Enum { .. }
         );
-        Self { key, label, kind, tooltip: "", visible_if: None, exposed_by_default: false, exposable, limits: None }
+        Self {
+            key,
+            label,
+            kind,
+            tooltip: "",
+            visible_if: None,
+            exposed_by_default: false,
+            exposable,
+            limits: None,
+            pictured: false,
+        }
     }
     /// Hold the value to the range of the slider: outside it the parameter means nothing.
     pub(crate) const fn bounded(mut self) -> Self {
@@ -188,6 +201,12 @@ impl ParamDef {
     /// Hold the value to a range of its own, wider than the slider.
     pub(crate) const fn clamped(mut self, min: f32, max: f32) -> Self {
         self.limits = Some((min, max));
+        self
+    }
+
+    /// Show the options as pictures of what the node makes with each.
+    pub(crate) const fn pictured(mut self) -> Self {
+        self.pictured = true;
         self
     }
 
@@ -601,6 +620,14 @@ mod tests {
                 }
                 if let ParamKind::Enum { default, options } = p.kind {
                     assert!((default as usize) < options.len(), "{}::{}", d.name, p.key);
+                }
+                if p.pictured {
+                    assert!(
+                        matches!(p.kind, ParamKind::Enum { .. }) && d.has_image(),
+                        "{}::{}: only the choices of image nodes have pictures",
+                        d.name,
+                        p.key
+                    );
                 }
                 assert!(p.accepts(&p.default_value()));
                 if p.exposable {

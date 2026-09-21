@@ -26,6 +26,9 @@ use crate::simd::{self, ImageStats};
 pub const THUMB_SIZE: u32 = 128;
 /// Samples in a baked gradient.
 pub const LUT_SIZE: usize = 1024;
+/// The size the pictures of a node's options are drawn at before they are made into
+/// thumbnails: fine enough for their look, small enough to draw them all at once.
+pub const CHOICE_RES: u32 = 256;
 
 /// What the engine knows about one node.
 #[derive(Default)]
@@ -48,11 +51,12 @@ pub struct ImageReport {
     pub warning: Option<String>,
 }
 
+/// What an evaluation did.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct EvalReport {
+    /// Image nodes computed again (the others were up to date).
     pub recomputed: usize,
     pub image_nodes: usize,
-    pub cpu_ms: f32,
 }
 
 /// A small display image of a node (RGBA8, composited over a checkerboard).
@@ -62,6 +66,20 @@ pub struct Thumbnail {
     pub version: u64,
     pub size: u32,
     pub rgba: Vec<u8>,
+}
+
+/// What a node makes with each option of one of its choices, as thumbnails (RGBA8,
+/// [`THUMB_SIZE`] square, composited over a checkerboard): a menu of the options can show
+/// how each one looks rather than only its name.
+#[derive(Clone, Debug)]
+pub struct ChoicePictures {
+    pub node: NodeId,
+    pub key: String,
+    /// The version of the node's image when the pictures were drawn.
+    pub version: u64,
+    pub size: u32,
+    /// One picture per option, in the order of the options.
+    pub pictures: Arc<Vec<Vec<u8>>>,
 }
 
 /// A mip-mapped copy of a node image for display (2D and 3D views sample it directly).
@@ -90,6 +108,13 @@ struct Lut {
     image: GpuImage,
 }
 
+/// Pictures of options, with a hash of everything they depend on (see
+/// [`Engine::render_choices`]).
+struct Drawn {
+    hash: u64,
+    pictures: Arc<Vec<Vec<u8>>>,
+}
+
 pub struct Engine {
     pub gpu: Gpu,
     states: HashMap<NodeId, NodeState>,
@@ -102,6 +127,8 @@ pub struct Engine {
     preview: Option<DisplayImage>,
     /// Display copies of the outputs used by the 3D view, by output node.
     materials: HashMap<NodeId, DisplayImage>,
+    /// The pictures of the options of a node's choice, as last drawn.
+    choices: HashMap<(NodeId, String), Drawn>,
     last_resolution: [u32; 2],
     pub report: EvalReport,
 }
@@ -120,6 +147,7 @@ impl Engine {
             luts: HashMap::new(),
             preview: None,
             materials: HashMap::new(),
+            choices: HashMap::new(),
             last_resolution: [0, 0],
             report: EvalReport::default(),
         }
@@ -162,6 +190,7 @@ impl Engine {
         self.luts.clear();
         self.preview = None;
         self.materials.clear();
+        self.choices.clear();
         self.gpu.clear_pool();
     }
 
@@ -222,7 +251,6 @@ impl Engine {
     /// Bring every image up to date with `graph`. `eval` is the CPU evaluation of the
     /// same graph (values and effective parameters).
     pub fn evaluate(&mut self, graph: &Graph, eval: &Evaluation) -> EvalReport {
-        let start = Instant::now();
         self.receive_bitmaps();
 
         // Forget nodes that were deleted.
@@ -230,6 +258,7 @@ impl Engine {
         self.states.retain(|id, _| alive.contains(id));
         self.luts.retain(|id, _| alive.contains(id));
         self.materials.retain(|id, _| alive.contains(id));
+        self.choices.retain(|(id, _), _| alive.contains(id));
         for id in &eval.cyclic {
             let state = self.states.entry(*id).or_default();
             state.image = None;
@@ -255,7 +284,6 @@ impl Engine {
             }
         }
         self.gpu.queue.submit(Some(encoder.finish()));
-        report.cpu_ms = start.elapsed().as_secs_f32() * 1000.0;
         self.report = report;
         report
     }
@@ -478,6 +506,111 @@ impl Engine {
             self.gpu.recycle(thumb);
         }
         out
+    }
+
+    // ------------------------------------------------------------------ pictures of options
+
+    /// What `node` makes with each option of its choice `key`, everything else as it is now:
+    /// its parameters, its inputs, its tiling. Drawn at [`CHOICE_RES`] and made into
+    /// thumbnails like the node's own. The pictures are kept, and asking again before
+    /// anything they depend on changed costs nothing. Blocks until they are read back.
+    pub fn render_choices(&mut self, graph: &Graph, eval: &Evaluation, node: NodeId, key: &str) -> Option<ChoicePictures> {
+        let n = graph.node(node)?;
+        let d = n.def();
+        let options = d.param(key)?.enum_options().len();
+        // Nodes that need more than parameters and images (a file, a baked gradient,
+        // variables per pixel) have no choices worth a picture. A bypassed node shows what
+        // it will make once it is not: that is what its options are chosen for.
+        let plain = d.has_image() && !d.is_pixel_expression() && ![NodeKind::BITMAP, NodeKind::GRADIENT_MAP].contains(&n.kind);
+        if options == 0 || !plain {
+            return None;
+        }
+        let kernel = kernels::kernel_for(n.kind)?;
+        let mut params = eval.node(node)?.params.clone();
+        let choice = params.values.iter().position(|(k, _)| k == key)?;
+
+        let mut hasher = DefaultHasher::new();
+        n.kind.id().hash(&mut hasher);
+        let mut inputs = Vec::with_capacity(d.inputs.len());
+        for s in d.inputs {
+            let source = graph
+                .link_into(node, &input_socket_key(s.key))
+                .and_then(|l| self.states.get(&l.from).filter(|st| st.image.is_some()).map(|st| (l.from, st)));
+            match source {
+                Some((from, st)) => {
+                    (1u8, from.0, st.version).hash(&mut hasher);
+                    inputs.push(st.image.clone());
+                }
+                None => {
+                    0u8.hash(&mut hasher);
+                    inputs.push(None);
+                }
+            }
+        }
+        // Everything but the choice itself: picking another option changes nothing drawn.
+        params.values[choice].1 = brewed_texture_core::ParamValue::Enum(0);
+        params.hash_into(&mut hasher);
+        let hash = hasher.finish();
+
+        let version = self.version(node).unwrap_or(0);
+        let cache = (node, key.to_string());
+        if let Some(drawn) = self.choices.get(&cache)
+            && drawn.hash == hash
+        {
+            return Some(ChoicePictures { node, key: key.to_string(), version, size: THUMB_SIZE, pictures: drawn.pictures.clone() });
+        }
+
+        let thumbnail = self.gpu.kernel("thumbnail").ok()?;
+        let display = DisplayU { mode: 0, checker: 8.0, pad: [0; 2] };
+        let picture = self.gpu.take_scratch(CHOICE_RES, CHOICE_RES);
+        let mut encoder = self.gpu.encoder();
+        let mut jobs = Vec::with_capacity(options);
+        for option in 0..options {
+            params.values[choice].1 = brewed_texture_core::ParamValue::Enum(option as u32);
+            let mut cx = ExecCtx {
+                kind: n.kind,
+                gpu: &self.gpu,
+                encoder: &mut encoder,
+                params: &params,
+                inputs: &inputs,
+                output: &picture,
+                bitmap: None,
+                lut: None,
+                pixel_vars: &[],
+            };
+            if kernel(&mut cx).is_err() {
+                let _ = kernels::clear(&self.gpu, &mut encoder, &picture);
+            }
+            let thumb = self.gpu.take_scratch(THUMB_SIZE, THUMB_SIZE);
+            self.gpu.dispatch(
+                &mut encoder,
+                &thumbnail,
+                bytemuck::bytes_of(&display),
+                &[&picture.view],
+                &thumb.view,
+                [THUMB_SIZE, THUMB_SIZE],
+            );
+            let readback = self.gpu.encode_readback(&mut encoder, &thumb);
+            jobs.push((thumb, readback));
+        }
+        self.gpu.queue.submit(Some(encoder.finish()));
+        for (_, rb) in &jobs {
+            rb.map();
+        }
+        self.wait_idle();
+        let mut pictures = Vec::with_capacity(options);
+        for (thumb, rb) in jobs {
+            let mut bytes = vec![0u8; (THUMB_SIZE * THUMB_SIZE * 4) as usize];
+            if let Some(Ok(())) = rb.poll() {
+                simd::quantize_u8(&rb.to_f32(), &mut bytes);
+            }
+            pictures.push(bytes);
+            self.gpu.recycle(thumb);
+        }
+        self.gpu.recycle(picture);
+        let pictures = Arc::new(pictures);
+        self.choices.insert(cache, Drawn { hash, pictures: pictures.clone() });
+        Some(ChoicePictures { node, key: key.to_string(), version, size: THUMB_SIZE, pictures })
     }
 
     // ------------------------------------------------------------------ display images

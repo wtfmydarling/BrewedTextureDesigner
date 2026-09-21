@@ -140,13 +140,20 @@ struct MenuOverlay<'a, 'b, Message> {
 
 impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer> for MenuOverlay<'_, '_, Message> {
     fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
-        let limits = layout::Limits::new(Size::ZERO, bounds);
+        const GAP: f32 = 2.0;
+        // Below the anchor, or above it when there is more room there; never over it, and
+        // as low as the room is (a menu that scrolls then shows the rest).
+        let top = self.anchor.y + self.anchor.height + GAP;
+        let room_below = (bounds.height - top).max(0.0);
+        let room_above = (self.anchor.y - GAP).max(0.0);
+        let full = self.menu.as_widget_mut().layout(self.tree, renderer, &layout::Limits::new(Size::ZERO, bounds)).size();
+        let below = full.height <= room_below || room_below >= room_above;
+        let room = if below { room_below } else { room_above };
+        let limits = layout::Limits::new(Size::ZERO, Size::new(bounds.width, room));
         let node = self.menu.as_widget_mut().layout(self.tree, renderer, &limits);
         let size = node.size();
-        // Below the anchor, kept inside the window.
         let x = self.anchor.x.min(bounds.width - size.width).max(0.0);
-        let below = self.anchor.y + self.anchor.height + 2.0;
-        let y = if below + size.height > bounds.height { (self.anchor.y - size.height - 2.0).max(0.0) } else { below };
+        let y = if below { top } else { self.anchor.y - GAP - size.height };
         node.move_to(Point::new(x, y))
     }
 

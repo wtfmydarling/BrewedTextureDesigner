@@ -1,6 +1,8 @@
 //! The bars around the panes: the menu bar at the top of the window, the status bar at
 //! the bottom, and the header of the graph pane with the texture size.
 
+use std::time::Duration;
+
 use iced::widget::{button, column, container, image, pick_list, row, rule, space, text, tooltip};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::Edit;
@@ -170,21 +172,49 @@ pub fn graph_header(app: &App) -> Element<'_, Message> {
     crate::view::pane_header("Graph", tools)
 }
 
-/// The status bar across the bottom of the window: the latest message, then what the
-/// last evaluation did and the GPU.
+/// How long a change takes before the status bar says it is being computed: quicker ones
+/// just show how long they took.
+pub const COMPUTING_AFTER: Duration = Duration::from_millis(250);
+
+/// A duration in milliseconds, as precise as is worth reading.
+fn duration(millis: f32) -> String {
+    match millis {
+        m if m < 10.0 => format!("{m:.1} ms"),
+        m if m < 1000.0 => format!("{m:.0} ms"),
+        m => format!("{:.1} s", m / 1000.0),
+    }
+}
+
+/// The status bar across the bottom of the window: the latest message (nothing when there
+/// is none), how long the last change took to compute (or that one is being computed) and
+/// the GPU.
 pub fn status_bar(app: &App) -> Element<'_, Message> {
-    let status = match &app.ui.status {
-        Some(s) => text(s.text.clone()).size(style::SMALL).color(if s.error { style::ERROR } else { style::TEXT }),
-        None => text("Ready").size(style::SMALL).color(style::TEXT_FAINT),
-    };
-    let r = &app.res.report;
-    let stats = tip(
-        text(format!("{} nodes  ·  {} recomputed  ·  {:.1} ms", app.graph().nodes.len(), r.recomputed, r.cpu_ms))
+    let status: Element<'_, Message> = match &app.ui.status {
+        Some(s) => text(s.text.clone())
             .size(style::SMALL)
-            .color(style::TEXT_DIM),
-        "Only nodes whose inputs or parameters changed are recomputed on the GPU",
-        tooltip::Position::Top,
-    );
+            .color(if s.error { style::ERROR } else { style::TEXT })
+            .wrapping(text::Wrapping::None)
+            .into(),
+        None => space().into(),
+    };
+    let computing = app.res.slow || app.res.busy_since.is_some_and(|since| since.elapsed() >= COMPUTING_AFTER);
+    let work: Element<'_, Message> = match (computing, app.res.update) {
+        (true, _) => text("Computing…").size(style::SMALL).color(style::TEXT).into(),
+        (false, Some(u)) => {
+            let nodes = if u.recomputed == 1 { "1 node".to_string() } else { format!("{} nodes", u.recomputed) };
+            tip(
+                text(format!("{nodes} updated in {}", duration(u.millis))).size(style::SMALL).color(style::TEXT_DIM),
+                format!(
+                    "The last change computed {} of the {} image nodes again: only those it affected. \
+                     The time runs from the change until the GPU was done with the images, their \
+                     thumbnails and the views.",
+                    u.recomputed, u.image_nodes
+                ),
+                tooltip::Position::Top,
+            )
+        }
+        (false, None) => space().into(),
+    };
     let gpu = if app.engine.is_none() {
         "Starting the GPU…".to_string()
     } else if app.adapter.is_empty() {
@@ -194,8 +224,8 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
     };
     container(
         row![
-            container(status.wrapping(text::Wrapping::None)).clip(true).width(Length::Fill),
-            stats,
+            container(status).clip(true).width(Length::Fill),
+            work,
             container(space().width(1).height(12)).style(style::hairline(style::LINE)),
             text(gpu).size(style::SMALL).color(style::TEXT_FAINT),
         ]

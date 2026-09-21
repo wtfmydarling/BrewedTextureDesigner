@@ -9,12 +9,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use brewed_texture_core::eval::Evaluation;
 use brewed_texture_core::graph::{Graph, NodeId};
 
-use crate::engine::{DisplayImage, Engine, EvalReport, ImageReport, Thumbnail};
+use crate::engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Thumbnail};
 use crate::export;
 use crate::gpu::Gpu;
 use crate::simd::ImageStats;
@@ -46,6 +46,11 @@ pub enum Request {
         pixel: [u32; 2],
     },
     Export(Vec<ExportJob>),
+    /// Pictures of what a node makes with each option of one of its choices.
+    Choices {
+        node: NodeId,
+        key: String,
+    },
     ReloadBitmap(String),
     /// Forget every cached image (e.g. after opening another document).
     Reset,
@@ -53,10 +58,18 @@ pub enum Request {
 
 #[derive(Clone, Debug)]
 pub enum Event {
+    /// The work of a change is on its way to the GPU: every node's version and problems.
     Evaluated {
         revision: u64,
         reports: HashMap<NodeId, ImageReport>,
+    },
+    /// The GPU finished what a change asked for: its images, their copies for the views
+    /// and their thumbnails. `millis` is how long that took from the moment the engine
+    /// started on the change.
+    Finished {
+        revision: u64,
         report: EvalReport,
+        millis: f32,
     },
     Thumbnails(Vec<Thumbnail>),
     /// The 2D view image changed (or went away).
@@ -72,6 +85,7 @@ pub enum Event {
         pixel: [u32; 2],
         rgba: Option<[f32; 4]>,
     },
+    Choices(ChoicePictures),
     Exported(Result<PathBuf, String>),
     GpuErrors(Vec<String>),
 }
@@ -125,6 +139,7 @@ struct Pending {
     evaluate: Option<(u64, Arc<Graph>, Arc<Evaluation>)>,
     stats: Vec<NodeId>,
     probe: Option<(NodeId, [u32; 2])>,
+    choices: Option<(NodeId, String)>,
     exports: Vec<ExportJob>,
     preview_changed: bool,
     materials_changed: bool,
@@ -167,6 +182,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                 }
                 Request::Probe { node, pixel } => pending.probe = Some((node, pixel)),
                 Request::Export(jobs) => pending.exports.extend(jobs),
+                Request::Choices { node, key } => pending.choices = Some((node, key)),
                 Request::ReloadBitmap(path) => {
                     engine.reload_bitmap(&path);
                     pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
@@ -181,29 +197,42 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
             pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
         }
 
-        let mut evaluated = false;
+        let mut evaluated = None;
         if let Some((revision, graph, eval)) = pending.evaluate.take() {
+            let started = Instant::now();
             let report = engine.evaluate(&graph, &eval);
-            (emit)(Event::Evaluated { revision, reports: engine.reports(), report });
+            (emit)(Event::Evaluated { revision, reports: engine.reports() });
             current = Some((revision, graph, eval));
-            evaluated = true;
+            evaluated = Some((revision, report, started));
         }
-        if (evaluated || pending.preview_changed)
+        let evaluated_now = evaluated.is_some();
+        if (evaluated_now || pending.preview_changed)
             && let Some(change) = engine.prepare_preview(preview)
         {
             (emit)(Event::Preview(change));
         }
-        if (evaluated || pending.materials_changed)
+        if (evaluated_now || pending.materials_changed)
             && let Some(set) = engine.prepare_materials(&materials)
         {
             (emit)(Event::Materials(set));
         }
-        if evaluated {
+        if let Some((revision, report, started)) = evaluated {
             // Also waits for the GPU, which throttles the loop to the GPU's pace.
             let thumbs = engine.render_thumbnails();
             if !thumbs.is_empty() {
                 (emit)(Event::Thumbnails(thumbs));
             }
+            // Whatever the thumbnails did not wait for is done too before the clock stops.
+            engine.wait_idle();
+            let millis = started.elapsed().as_secs_f32() * 1000.0;
+            (emit)(Event::Finished { revision, report, millis });
+        }
+        // After the evaluation, so the pictures show the node as it is now.
+        if let Some((node, key)) = pending.choices
+            && let Some((_, graph, eval)) = &current
+            && let Some(pictures) = engine.render_choices(graph, eval, node, &key)
+        {
+            (emit)(Event::Choices(pictures));
         }
         for node in pending.stats {
             if let (Some(stats), Some(version)) = (engine.stats(node), engine.version(node)) {

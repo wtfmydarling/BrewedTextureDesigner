@@ -2,6 +2,7 @@
 //! actions to [`Message`]s. Views only read state; all changes happen in `App::update`.
 
 pub mod add_menu;
+pub mod choices;
 pub mod context_menu;
 pub mod dialogs;
 pub mod editors;

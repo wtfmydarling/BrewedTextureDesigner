@@ -498,6 +498,7 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, value: &'a Pa
             let open = app.ui.color_picker == Some(ColorTarget::Param(id, key.to_string()));
             swatch(*c, open, Message::ColorPicker(Some(ColorTarget::Param(id, key.to_string()))))
         }
+        (ParamKind::Enum { .. }, ParamValue::Enum(v)) if pd.pictured => crate::view::choices::field(app, node, pd, *v),
         (ParamKind::Enum { options, .. }, ParamValue::Enum(v)) => {
             let choices: Vec<Choice> = options.iter().enumerate().map(|(i, l)| Choice { index: i as u32, label: l }).collect();
             let selected = choices.get(*v as usize).cloned();

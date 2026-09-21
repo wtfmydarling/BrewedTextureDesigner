@@ -17,7 +17,7 @@ use brewed_texture_core::eval::{self, Evaluation};
 use brewed_texture_core::graph::{Clipboard, CommentId, Graph, Link, NodeId, SocketRef};
 use brewed_texture_core::project::{self, ViewState};
 use brewed_texture_core::{Category, Document, Edit, NodeKind, ParamValue, Value};
-use brewed_texture_engine::{DisplayImage, EngineService, EvalReport, Event, ExportJob, ImageReport, Request};
+use brewed_texture_engine::{DisplayImage, EngineService, Event, ExportJob, ImageReport, Request};
 use brewed_texture_engine::simd::ImageStats;
 
 use crate::gpu::{self, EventSource};
@@ -178,6 +178,31 @@ pub enum VarField {
     Default,
 }
 
+/// The open menu of a choice picked by its pictures (see [`crate::view::choices`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChoiceMenu {
+    pub node: NodeId,
+    pub key: &'static str,
+    /// The option the arrow keys are on (Enter picks it).
+    pub cursor: usize,
+}
+
+/// Pictures of what a node makes with each option of a choice, as the engine drew them.
+pub struct ChoicePictures {
+    /// The version of the node's image they were drawn for.
+    pub version: u64,
+    pub pictures: Vec<image::Handle>,
+}
+
+/// What the last change that computed anything did, and how long it took.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Update {
+    pub recomputed: usize,
+    pub image_nodes: usize,
+    /// From the moment the engine started on the change until the GPU was done with it.
+    pub millis: f32,
+}
+
 /// A color or gradient being picked from the screen. Exists from the click on the
 /// eyedropper until the pick is done or cancelled.
 #[derive(Debug)]
@@ -235,6 +260,7 @@ pub struct Ui {
     pub color_picker: Option<ColorTarget>,
     /// Where the color picker floats: where it was opened from.
     pub color_picker_at: Point,
+    pub choice_menu: Option<ChoiceMenu>,
     /// Selected stop of each gradient editor.
     pub gradient_stop: HashMap<(NodeId, String), usize>,
     /// The expression editor's text buffer (node, content).
@@ -263,8 +289,20 @@ pub struct Results {
     pub stats: HashMap<NodeId, (u64, Arc<ImageStats>)>,
     pub stats_requested: HashMap<NodeId, u64>,
     pub probe: Option<(NodeId, [u32; 2], [f32; 4])>,
-    pub report: EvalReport,
+    /// The pictures of the options of the choices whose menus were opened.
+    pub choices: HashMap<(NodeId, String), ChoicePictures>,
+    /// The last change that computed anything (changes that computed nothing, like moving a
+    /// node, leave it as it was).
+    pub update: Option<Update>,
     pub evaluated_revision: u64,
+    /// The last revision the GPU is done with.
+    pub finished_revision: u64,
+    /// Since when the engine has been at the change it is computing now: since it was sent,
+    /// or since the change before it was done. None once every change sent is done.
+    pub busy_since: Option<Instant>,
+    /// A change took long enough to say so. "Computing…" then stays until every change is
+    /// done, rather than blink between the changes of a drag.
+    pub slow: bool,
     pub exports_pending: usize,
 }
 
@@ -432,6 +470,10 @@ pub enum Message {
     PanelPress(DragPayload),
     PanelAdd(DragPayload),
     // properties
+    /// Open the menu of a choice picked by its pictures, or close it.
+    ChoiceMenu(Option<(NodeId, &'static str)>),
+    /// An option of such a choice was picked.
+    PickChoice(NodeId, &'static str, u32),
     Expression(NodeId, text_editor::Action),
     ColorPicker(Option<ColorTarget>),
     GradientStop(NodeId, String, usize),
@@ -550,6 +592,7 @@ impl App {
                 clipboard: None,
                 color_picker: None,
                 color_picker_at: Point::ORIGIN,
+                choice_menu: None,
                 gradient_stop: HashMap::new(),
                 expression: None,
                 plot_var: 0,
@@ -656,6 +699,11 @@ impl App {
         if self.ui.status.is_some() || self.opts.screenshot.is_some() {
             subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
         }
+        // A change that takes long says so in the status bar (see `view::toolbar`), without
+        // waiting for anything else to happen.
+        if self.res.busy_since.is_some() {
+            subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick));
+        }
         Subscription::batch(subs)
     }
 
@@ -693,13 +741,21 @@ impl App {
             self.ui.preview.node = None;
         }
         self.res.thumbs.retain(|id, _| graph.contains(*id));
+        self.res.choices.retain(|(id, _), _| graph.contains(*id));
+        // A menu of pictures belongs to a choice that is still there to be made.
+        if let Some(menu) = &self.ui.choice_menu
+            && !graph.node(menu.node).is_some_and(|n| n.def().param(menu.key).is_some_and(|pd| n.param_visible(pd)) && !n.is_exposed(menu.key))
+        {
+            self.ui.choice_menu = None;
+        }
         self.send_graph();
     }
 
-    fn send_graph(&self) {
+    fn send_graph(&mut self) {
         if self.engine.is_none() {
             return;
         }
+        self.res.busy_since.get_or_insert_with(Instant::now);
         self.send(Request::Evaluate {
             revision: self.doc.revision(),
             graph: Arc::new(self.doc.graph().clone()),
@@ -770,6 +826,43 @@ impl App {
         self.ui.menu = None;
         self.ui.context = None;
         self.ui.add_menu = None;
+        self.ui.choice_menu = None;
+    }
+
+    /// Open the menu of a choice picked by its pictures, and have the engine draw them.
+    fn open_choice_menu(&mut self, node: NodeId, key: &'static str) {
+        self.close_popups();
+        let Some(current) = self.graph().node(node).map(|n| n.enum_value(key) as usize) else {
+            return;
+        };
+        self.ui.choice_menu = Some(ChoiceMenu { node, key, cursor: current });
+        self.send(Request::Choices { node, key: key.to_string() });
+    }
+
+    /// Move the keyboard through the open menu of pictures: left and right go from option
+    /// to option, up and down from row to row.
+    fn move_in_choice_menu(&mut self, key: &keyboard::Key) -> bool {
+        use keyboard::key::Named;
+        let Some(menu) = &self.ui.choice_menu else { return false };
+        let options = self.graph().node(menu.node).and_then(|n| n.def().param(menu.key)).map_or(0, |pd| pd.enum_options().len());
+        if options == 0 {
+            return false;
+        }
+        let columns = view::choices::columns(options) as isize;
+        let step = match key {
+            keyboard::Key::Named(Named::ArrowLeft) => -1,
+            keyboard::Key::Named(Named::ArrowRight) => 1,
+            keyboard::Key::Named(Named::ArrowUp) => -columns,
+            keyboard::Key::Named(Named::ArrowDown) => columns,
+            keyboard::Key::Named(Named::Home) => -(options as isize),
+            keyboard::Key::Named(Named::End) => options as isize,
+            _ => return false,
+        };
+        let cursor = (menu.cursor as isize + step).clamp(0, options as isize - 1) as usize;
+        if let Some(menu) = &mut self.ui.choice_menu {
+            menu.cursor = cursor;
+        }
+        true
     }
 
     /// Frame the selection (or everything) in the graph view.
@@ -1098,6 +1191,9 @@ impl App {
                 if self.ui.status.as_ref().is_some_and(|s| s.at.elapsed() > Duration::from_secs(if s.error { 12 } else { 6 })) {
                     self.ui.status = None;
                 }
+                if self.res.busy_since.is_some_and(|since| since.elapsed() >= view::toolbar::COMPUTING_AFTER) {
+                    self.res.slow = true;
+                }
                 return self.maybe_screenshot();
             }
             Message::Edit(edit) => {
@@ -1315,7 +1411,17 @@ impl App {
             Message::Context(c) => {
                 self.ui.menu = None;
                 self.ui.add_menu = None;
+                self.ui.choice_menu = None;
                 self.ui.context = c;
+            }
+            Message::ChoiceMenu(Some((node, key))) => self.open_choice_menu(node, key),
+            Message::ChoiceMenu(None) => self.ui.choice_menu = None,
+            Message::PickChoice(node, key, option) => {
+                self.ui.choice_menu = None;
+                // A pick is a step of its own in the history.
+                self.doc.seal();
+                self.apply(Edit::SetParam { node, key: key.to_string(), value: ParamValue::Enum(option) });
+                self.doc.seal();
             }
             Message::AddMenu(msg) => return self.add_menu_message(msg),
             Message::LibrarySearch(q) => self.ui.library_search = q,
@@ -1480,11 +1586,36 @@ impl App {
 
     fn engine_event(&mut self, event: Event) -> Task<Message> {
         match event {
-            Event::Evaluated { revision, reports, report } => {
+            Event::Evaluated { revision, reports } => {
                 self.res.reports = reports;
-                self.res.report = report;
                 self.res.evaluated_revision = revision;
                 self.request_stats();
+                // An open menu of pictures shows the node as it is now.
+                if let Some(menu) = &self.ui.choice_menu {
+                    let drawn = self.res.choices.get(&(menu.node, menu.key.to_string())).map(|c| c.version);
+                    if drawn != self.res.reports.get(&menu.node).map(|r| r.version) {
+                        self.send(Request::Choices { node: menu.node, key: menu.key.to_string() });
+                    }
+                }
+            }
+            Event::Finished { revision, report, millis } => {
+                self.res.finished_revision = self.res.finished_revision.max(revision);
+                if self.res.finished_revision >= self.eval_revision {
+                    self.res.busy_since = None;
+                    self.res.slow = false;
+                } else {
+                    // The engine is at the next change already.
+                    self.res.busy_since = Some(Instant::now());
+                }
+                if report.image_nodes == 0 {
+                    self.res.update = None;
+                } else if report.recomputed > 0 {
+                    self.res.update = Some(Update { recomputed: report.recomputed, image_nodes: report.image_nodes, millis });
+                }
+            }
+            Event::Choices(c) => {
+                let pictures = c.pictures.iter().map(|rgba| image::Handle::from_rgba(c.size, c.size, rgba.clone())).collect();
+                self.res.choices.insert((c.node, c.key), ChoicePictures { version: c.version, pictures });
             }
             Event::Thumbnails(thumbs) => {
                 for t in thumbs {
@@ -1631,7 +1762,7 @@ impl App {
             if self.ui.screen_pick.is_some() {
                 return self.pick_message(PickMessage::Cancel);
             }
-            if self.ui.add_menu.is_some() || self.ui.menu.is_some() || self.ui.context.is_some() {
+            if self.ui.add_menu.is_some() || self.ui.menu.is_some() || self.ui.context.is_some() || self.ui.choice_menu.is_some() {
                 self.close_popups();
             } else if self.ui.dialog.is_some() {
                 self.ui.dialog = None;
@@ -1648,6 +1779,15 @@ impl App {
         // window).
         if self.ui.screen_pick.is_some() {
             return Task::none();
+        }
+        if let Some(menu) = &self.ui.choice_menu {
+            if key == Key::Named(Named::Enter) {
+                let (node, key, option) = (menu.node, menu.key, menu.cursor as u32);
+                return self.update_nested(Message::PickChoice(node, key, option));
+            }
+            if self.move_in_choice_menu(&key) {
+                return Task::none();
+            }
         }
         if self.ui.add_menu.is_some() {
             return match key {
@@ -2148,18 +2288,34 @@ impl App {
                 self.ui.color_picker = Some(ColorTarget::Variable("tint".into(), VarField::Value));
             }
             "transform" => {
-                if let Some(id) = first(NodeKind::TRANSFORM_2D) {
+                // A Transform 2D of the noise, rotated so its gizmo shows.
+                if let Some(noise) = first(NodeKind::NOISE)
+                    && let Ok(done) = self.doc.apply(Edit::AddNode { kind: NodeKind::TRANSFORM_2D, pos: [160.0, 520.0] })
+                    && let Some(&id) = done.created.first()
+                {
+                    let _ = self.doc.apply(Edit::Connect {
+                        a: SocketRef { node: noise, key: "o:output".into(), output: true },
+                        b: SocketRef { node: id, key: "i:input".into(), output: false },
+                    });
+                    let _ = self.doc.apply(Edit::SetParam { node: id, key: "rotation".into(), value: ParamValue::Float(30.0) });
                     self.ui.selection = [id].into_iter().collect();
                     self.ui.preview.node = Some(id);
                 }
             }
             "tiling" => {
-                if let Some(id) = first(NodeKind::TRANSFORM_2D) {
+                // The wall repeated: no seams.
+                if let Some(id) = first(NodeKind::OUTPUT) {
                     self.ui.selection = [id].into_iter().collect();
                     self.ui.preview.node = Some(id);
-                    let _ = self.doc.apply(Edit::SetParam { node: id, key: "scale".into(), value: ParamValue::Vec2([0.5, 0.5]) });
                 }
                 self.ui.preview.show_tiling = true;
+            }
+            "choices" => {
+                if let Some(id) = first(NodeKind::NOISE) {
+                    self.ui.selection = [id].into_iter().collect();
+                    self.ui.preview.node = Some(id);
+                    self.open_choice_menu(id, "type");
+                }
             }
             "dialog" => {
                 let _ = self.doc.apply(Edit::SetResolution([1024, 1024]));

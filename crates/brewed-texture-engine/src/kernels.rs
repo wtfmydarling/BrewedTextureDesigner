@@ -151,16 +151,16 @@ struct GradientU {
 struct NoiseU {
     roughness: f32,
     jitter: f32,
-    pad0: f32,
-    pad1: f32,
+    distortion: f32,
+    threshold: f32,
     scale: i32,
     octaves: i32,
     kind: u32,
     seed: u32,
     tiling: u32,
     invert: u32,
-    pad2: u32,
-    pad3: u32,
+    stretch: i32,
+    density: f32,
 }
 
 #[repr(C)]
@@ -431,22 +431,36 @@ fn gradient(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 
 fn noise(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let p = cx.params;
+    let density = p.f("density").clamp(0.0, 1.0);
     let u = NoiseU {
         roughness: p.f("roughness").clamp(0.0, 1.0),
         jitter: p.f("jitter").clamp(0.0, 1.0),
-        pad0: 0.0,
-        pad1: 0.0,
+        distortion: p.f("distortion"),
+        threshold: blotch_threshold(density),
         scale: p.i("scale").clamp(1, 4096),
         octaves: p.i("octaves").clamp(1, 10),
         kind: p.u("type"),
         seed: p.i("seed") as u32,
         tiling: p.tiling(),
         invert: u32::from(p.b("invert")),
-        pad2: 0,
-        pad3: 0,
+        stretch: p.i("stretch").clamp(1, 4096),
+        density,
     };
     cx.gpu.run(cx.encoder, "noise", bytes(&u), &[], cx.output)?;
     Ok(None)
+}
+
+/// The level blotches are cut from their clouds at, so that about `density` of the image
+/// is covered. The clouds are close to normally distributed around 0.5, and the logistic
+/// curve is near enough to that for a slider.
+fn blotch_threshold(density: f32) -> f32 {
+    if density <= 0.0 {
+        return 2.0;
+    }
+    if density >= 1.0 {
+        return -1.0;
+    }
+    0.5 + 0.1 * ((1.0 - density) / density).ln()
 }
 
 fn bitmap(cx: &mut ExecCtx) -> Result<Option<String>, String> {

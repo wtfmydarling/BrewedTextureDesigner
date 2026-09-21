@@ -478,9 +478,22 @@ fn window_states_render() {
     let levels = first(&w, NodeKind::LEVELS);
     select(&mut w, levels);
     w.snapshot("state_levels");
+    // A Transform 2D of its own (the demo has none: nothing in it may break the tiling).
+    let noise = first(&w, NodeKind::NOISE);
+    w.send(Message::Edit(Edit::AddNodeConnected {
+        kind: NodeKind::TRANSFORM_2D,
+        pos: [160.0, 520.0],
+        socket: brewed_texture_core::graph::SocketRef { node: noise, key: "o:output".into(), output: true },
+    }));
     let transform = first(&w, NodeKind::TRANSFORM_2D);
     select(&mut w, transform);
     w.snapshot("state_transform");
+    w.send(Message::Undo);
+
+    select(&mut w, noise);
+    w.send(Message::ChoiceMenu(Some((noise, "type"))));
+    w.snapshot("state_noise_types");
+    w.send(Message::ChoiceMenu(None));
 
     w.send(Message::ToggleVariable("mortar".into()));
     w.send(Message::ColorPicker(Some(ColorTarget::Variable("tint".into(), VarField::Value))));
@@ -868,4 +881,119 @@ fn the_graph_stays_under_the_mouse_while_it_is_dragged() {
     // The point that was grabbed is still right under the mouse.
     let under = w.app.ui.graph_view.to_graph(at);
     assert!((under[0] - grabbed[0]).abs() < 0.5 && (under[1] - grabbed[1]).abs() < 0.5, "{under:?} drifted from {grabbed:?}");
+}
+
+/// Where the view shows exactly `wanted`, in the order the widgets are laid out (the
+/// window first, then what floats over it).
+fn texts(w: &mut Harness, wanted: &str) -> Vec<iced::Rectangle> {
+    struct Find<'a> {
+        wanted: &'a str,
+        found: Vec<iced::Rectangle>,
+    }
+    impl Operation for Find<'_> {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+            operate(self);
+        }
+        fn text(&mut self, _: Option<&iced::widget::Id>, bounds: iced::Rectangle, text: &str) {
+            if text == self.wanted {
+                self.found.push(bounds);
+            }
+        }
+    }
+    let mut find = Find { wanted, found: Vec::new() };
+    w.frame(|ui, renderer| ui.operate(renderer, &mut find));
+    find.found
+}
+
+fn click(w: &mut Harness, at: Point) {
+    drag(w, at, at);
+}
+
+/// Presses a key that types nothing (arrows, Enter…) as the window reports it.
+fn press(w: &mut Harness, named: keyboard::key::Named) {
+    let key = Key::Named(named);
+    let window = w.app.main_window().expect("the main window");
+    let event = iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key: key.clone(),
+        modified_key: key,
+        physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::default(),
+        text: None,
+        repeat: false,
+    });
+    w.send(Message::Runtime(event, iced::event::Status::Ignored, window));
+}
+
+/// A noise is picked by how it looks: the menu shows a picture of every type next to its
+/// name, below the field or above it but never over it, and a click, or the arrow keys and
+/// Enter, pick one in a single undo step.
+#[test]
+fn choices_are_picked_by_their_pictures() {
+    use brewed_texture_core::nodes::NOISE_TYPES;
+    use crate::app::ChoiceMenu;
+
+    for (width, height) in [(1680.0, 1000.0), (1000.0, 640.0)] {
+        let mut w = harness!(view::root, width, height);
+        fake_thumbnails(&mut w.app);
+        let noise = w.app.graph().nodes_of(NodeKind::NOISE).next().expect("the demo's noise").id;
+        let kind = |w: &Harness| w.app.graph().node(noise).map(|n| n.enum_value("type"));
+        w.send(Message::Graph(GraphMessage::Select { node: noise, mode: SelectMode::Replace }));
+        w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+
+        // The field shows the current type; a click on it opens the menu.
+        let field = texts(&mut w, "Perlin").first().copied().expect("the field says Perlin");
+        click(&mut w, field.center());
+        assert_eq!(w.app.ui.choice_menu, Some(ChoiceMenu { node: noise, key: "type", cursor: 0 }), "{width}×{height}");
+        // The engine draws the pictures (here, one of each gray).
+        let pictures = (0..NOISE_TYPES.len()).map(|i| vec![(i * 15) as u8; 4 * 4 * 4]).collect();
+        w.send(Message::Engine(brewed_texture_engine::Event::Choices(brewed_texture_engine::ChoicePictures {
+            node: noise,
+            key: "type".into(),
+            version: 0,
+            size: 4,
+            pictures: std::sync::Arc::new(pictures),
+        })));
+        assert_eq!(w.app.res.choices.get(&(noise, "type".to_string())).map(|c| c.pictures.len()), Some(NOISE_TYPES.len()));
+        w.input(&[]);
+        w.snapshot(&format!("choices_{width}x{height}"));
+
+        // Every type is in the menu, inside the window and clear of the field.
+        let window = iced::Rectangle::new(Point::ORIGIN, Size::new(width, height));
+        for name in NOISE_TYPES {
+            let at = *texts(&mut w, name).last().unwrap_or_else(|| panic!("{name} is not in the menu"));
+            let (x1, y1) = (at.x + at.width, at.y + at.height);
+            assert!(at.x >= 0.0 && at.y >= 0.0 && x1 <= window.width && y1 <= window.height, "{name} at {at:?}");
+            assert!(at.intersection(&field).is_none(), "{name} covers the field");
+        }
+
+        // A click on a type picks it and closes the menu; one undo puts the old one back.
+        let cells = *texts(&mut w, "Cells").last().expect("Cells in the menu");
+        click(&mut w, cells.center());
+        assert_eq!(kind(&w), Some(7));
+        assert_eq!(w.app.ui.choice_menu, None);
+        w.send(Message::Undo);
+        assert_eq!(kind(&w), Some(0), "one undo puts Perlin back");
+
+        // The keyboard walks the menu: right, right, down (a row is three types) and Enter.
+        w.send(Message::ChoiceMenu(Some((noise, "type"))));
+        for named in [keyboard::key::Named::ArrowRight, keyboard::key::Named::ArrowRight, keyboard::key::Named::ArrowDown] {
+            press(&mut w, named);
+        }
+        assert_eq!(w.app.ui.choice_menu.as_ref().map(|m| m.cursor), Some(5));
+        press(&mut w, keyboard::key::Named::Enter);
+        assert_eq!(kind(&w), Some(5));
+        assert_eq!(w.app.ui.choice_menu, None);
+
+        // Esc, or a click anywhere else, closes it without picking anything.
+        w.send(Message::ChoiceMenu(Some((noise, "type"))));
+        press(&mut w, keyboard::key::Named::ArrowLeft);
+        press(&mut w, keyboard::key::Named::Escape);
+        assert_eq!(w.app.ui.choice_menu, None);
+        w.send(Message::ChoiceMenu(Some((noise, "type"))));
+        w.input(&[]);
+        click(&mut w, Point::new(width * 0.3, height * 0.3));
+        assert_eq!(w.app.ui.choice_menu, None);
+        assert_eq!(kind(&w), Some(5));
+    }
 }

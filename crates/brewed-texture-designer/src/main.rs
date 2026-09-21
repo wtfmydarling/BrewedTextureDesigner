@@ -30,7 +30,8 @@ usage: brewed-texture-designer [FILE.brewtex]
 
   --screenshot     start, wait until everything is computed, save a screenshot and quit
   --scenario       UI state for the screenshot: add-menu, file-menu, context-menu,
-                   gradient, math, levels, inputs, transform, tiling, dialog, tile
+                   gradient, math, levels, inputs, transform, tiling, dialog, tile,
+                   choices
   --select KIND    select the first node of this type (e.g. math, levels)
   --preview KIND   show the first node of this type in the 2D view
   --contact-sheet  render every node type (or the demo graph) into one image

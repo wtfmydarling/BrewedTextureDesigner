@@ -76,24 +76,6 @@
         "variable": "wear"
       },
       {
-        "id": 5,
-        "kind": "float_input",
-        "pos": [
-          -520.0,
-          540.0
-        ],
-        "params": [
-          {
-            "key": "tiling",
-            "value": {
-              "Enum": 3
-            },
-            "exposed": false
-          }
-        ],
-        "variable": "angle"
-      },
-      {
         "id": 6,
         "kind": "color_input",
         "pos": [
@@ -313,7 +295,7 @@
         "id": 9,
         "kind": "noise",
         "pos": [
-          -320.0,
+          -60.0,
           360.0
         ],
         "params": [
@@ -370,110 +352,6 @@
             "key": "invert",
             "value": {
               "Bool": false
-            },
-            "exposed": false
-          }
-        ]
-      },
-      {
-        "id": 10,
-        "kind": "math",
-        "pos": [
-          -320.0,
-          580.0
-        ],
-        "params": [
-          {
-            "key": "tiling",
-            "value": {
-              "Enum": 3
-            },
-            "exposed": false
-          },
-          {
-            "key": "expression",
-            "value": {
-              "Text": "angle + 5*sin(angle/10)"
-            },
-            "exposed": false
-          },
-          {
-            "key": "auto_bind",
-            "value": {
-              "Bool": true
-            },
-            "exposed": false
-          }
-        ]
-      },
-      {
-        "id": 11,
-        "kind": "transform_2d",
-        "pos": [
-          -60.0,
-          360.0
-        ],
-        "params": [
-          {
-            "key": "tiling",
-            "value": {
-              "Enum": 3
-            },
-            "exposed": false
-          },
-          {
-            "key": "offset",
-            "value": {
-              "Vec2": [
-                0.0,
-                0.0
-              ]
-            },
-            "exposed": false
-          },
-          {
-            "key": "rotation",
-            "value": {
-              "Float": 0.0
-            },
-            "exposed": true
-          },
-          {
-            "key": "scale",
-            "value": {
-              "Vec2": [
-                1.0,
-                1.0
-              ]
-            },
-            "exposed": false
-          },
-          {
-            "key": "pivot",
-            "value": {
-              "Vec2": [
-                0.5,
-                0.5
-              ]
-            },
-            "exposed": false
-          },
-          {
-            "key": "filtering",
-            "value": {
-              "Enum": 0
-            },
-            "exposed": false
-          },
-          {
-            "key": "matte",
-            "value": {
-              "Color": [
-                0.0,
-                0.0,
-                0.0,
-                0.0
-              ]
             },
             "exposed": false
           }
@@ -1163,34 +1041,16 @@
         "to_socket": "p:size"
       },
       {
-        "from": 5,
-        "from_socket": "o:value",
-        "to": 10,
-        "to_socket": "v:angle"
-      },
-      {
-        "from": 9,
-        "from_socket": "o:output",
-        "to": 11,
-        "to_socket": "i:input"
-      },
-      {
-        "from": 10,
-        "from_socket": "o:result",
-        "to": 11,
-        "to_socket": "p:rotation"
-      },
-      {
-        "from": 11,
-        "from_socket": "o:output",
-        "to": 12,
-        "to_socket": "i:foreground"
-      },
-      {
         "from": 8,
         "from_socket": "o:output",
         "to": 12,
         "to_socket": "i:background"
+      },
+      {
+        "from": 9,
+        "from_socket": "o:output",
+        "to": 12,
+        "to_socket": "i:foreground"
       },
       {
         "from": 4,
@@ -1365,23 +1225,6 @@
         "description": "How much dirt is blended in"
       },
       {
-        "name": "angle",
-        "ty": "Float",
-        "value": {
-          "Float": 30.0
-        },
-        "default": {
-          "Float": 30.0
-        },
-        "min": {
-          "Float": -180.0
-        },
-        "max": {
-          "Float": 180.0
-        },
-        "description": "Rotation of the dirt layer"
-      },
-      {
         "name": "tint",
         "ty": "Color",
         "value": {
@@ -1429,7 +1272,7 @@
         ],
         "size": [
           1250.0,
-          1000.0
+          800.0
         ],
         "color": [
           0.28,

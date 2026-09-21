@@ -1,6 +1,7 @@
 //! The graph the app opens with: a procedural brick wall that exercises variables, Math,
-//! exposed parameters, Transform 2D, Blend, Levels, Blur, Gradient Map, Histogram Scan,
-//! Ambient Occlusion, Pixel Math, comments and several outputs for the 3D view.
+//! exposed parameters, Noise, Blend, Levels, Blur, Gradient Map, Histogram Scan, Ambient
+//! Occlusion, Pixel Math, comments and several outputs for the 3D view. Every image in it
+//! tiles.
 //!
 //! It is an ordinary project file, `assets/demo.brewtex`, built into the program: open it,
 //! change it, save it over itself, and the next build opens with that.
@@ -40,8 +41,8 @@ mod tests {
         for out in g.nodes_of(NodeKind::OUTPUT) {
             assert!(g.link_into(out.id, "i:input").is_some(), "output {} is not connected", out.text("name"));
         }
-        assert_eq!(g.variables.len(), 6);
-        assert_eq!(g.links.len(), 26);
+        assert_eq!(g.variables.len(), 5);
+        assert_eq!(g.links.len(), 23);
         assert_eq!(g.comments.len(), 2);
         let ev = crate::eval::evaluate(&g);
         for n in &g.nodes {

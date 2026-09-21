@@ -66,7 +66,7 @@ pub static SHAPE: NodeDef = NodeDef {
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,
     params: &[
-        choice("shape", "Shape", 0, SHAPES),
+        choice("shape", "Shape", 0, SHAPES).pictured(),
         vec2("size", "Size", [0.6, 0.6], 0.0, 2.0)
             .tip("Extent of the shape relative to its cell (1 = touches the edges)."),
         float("scale", "Scale", 1.0, 0.0, 2.0),
@@ -92,7 +92,7 @@ pub static TILE_GENERATOR: NodeDef = NodeDef {
     inputs: &[image_opt("pattern", "Pattern")],
     outputs: IMAGE_OUT,
     params: &[
-        choice("pattern", "Pattern", 1, TILE_PATTERNS),
+        choice("pattern", "Pattern", 1, TILE_PATTERNS).pictured(),
         int("x_amount", "X Amount", 8, 1, 64).bounded(),
         int("y_amount", "Y Amount", 8, 1, 64).bounded(),
         vec2("size", "Size", [0.9, 0.9], 0.0, 2.0).tip("Pattern size relative to the cell."),
@@ -130,7 +130,7 @@ pub static GRADIENT: NodeDef = NodeDef {
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,
     params: &[
-        choice("type", "Type", 0, &["Linear", "Mirrored Linear", "Radial", "Angular", "Diamond"]),
+        choice("type", "Type", 0, &["Linear", "Mirrored Linear", "Radial", "Angular", "Diamond"]).pictured(),
         angle("angle", "Angle", 0.0, -180.0, 180.0),
         vec2("center", "Center", [0.5, 0.5], 0.0, 1.0),
         float("repeat", "Repeat", 1.0, 0.1, 16.0),
@@ -140,20 +140,78 @@ pub static GRADIENT: NodeDef = NodeDef {
     role: Role::Image,
 };
 
+/// Noise types, in the order the menu shows them (files store the index).
+pub const NOISE_TYPES: &[&str] = &[
+    "Perlin",
+    "Value",
+    "Billow",
+    "Ridged",
+    "Liquid",
+    "Streaks",
+    "Blotches",
+    "Cells",
+    "Crystal",
+    "Mosaic",
+    "Cell Edges",
+    "Stones",
+    "Spots",
+    "Fibers",
+    "Scratches",
+    "White Noise",
+];
+const NOISE_LIQUID: u32 = 4;
+const NOISE_STREAKS: u32 = 5;
+/// White noise: one random value per pixel.
+pub const NOISE_WHITE: u32 = 15;
+/// Every type but white noise, which is one value per pixel.
+const NOISE_SCALED: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+/// Types made of octaves, each finer than the last.
+const NOISE_FRACTAL: &[u32] = &[0, 1, 2, 3, 4, 5, 6];
+/// Types made of cells around scattered points.
+const NOISE_CELLULAR: &[u32] = &[7, 8, 9, 10, 11];
+/// Types made of things scattered over some of the cells.
+const NOISE_SCATTERED: &[u32] = &[6, 12, 13, 14];
+
 pub static NOISE: NodeDef = NodeDef {
     id: "noise",
     name: "Noise",
     category: Category::Generators,
-    description: "Tileable procedural noises: Perlin and value fBm, ridged, cells, cell edges, white noise.",
-    keywords: "perlin fbm clouds voronoi worley cells ridged white random",
+    description: "Tileable procedural noises: clouds, ridges, swirls, streaks, blotches, cells, crystals, \
+                  stones, spots, fibers, scratches and white noise.",
+    keywords: "perlin fbm clouds value billow ridged liquid warp swirl streaks anisotropic brushed blotches \
+               camouflage voronoi worley cells crystal facets mosaic edges cracks stones spots dirt fibers fur \
+               hair scratches white random grain",
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,
     params: &[
-        choice("type", "Type", 0, &["Perlin fBm", "Value fBm", "Ridged", "Cells", "Cell Edges", "White Noise"]),
-        int("scale", "Scale", 8, 1, 128).bounded().tip("Number of noise cells across the image (an integer, so it tiles)."),
-        int("octaves", "Octaves", 5, 1, 10).bounded().when("type", &[0, 1, 2]),
-        float("roughness", "Roughness", 0.5, 0.0, 1.0).bounded().when("type", &[0, 1, 2]),
-        float("jitter", "Jitter", 1.0, 0.0, 1.0).bounded().when("type", &[3, 4]),
+        choice("type", "Type", 0, NOISE_TYPES).pictured(),
+        int("scale", "Scale", 8, 1, 128)
+            .bounded()
+            .tip("Number of noise cells across the image (an integer, so it tiles).")
+            .when("type", NOISE_SCALED),
+        int("octaves", "Octaves", 5, 1, 10)
+            .bounded()
+            .tip("Layers of ever finer detail on top of each other.")
+            .when("type", NOISE_FRACTAL),
+        float("roughness", "Roughness", 0.5, 0.0, 1.0)
+            .bounded()
+            .tip("How strong each finer layer is compared to the one before.")
+            .when("type", NOISE_FRACTAL),
+        float("distortion", "Distortion", 1.0, 0.0, 4.0)
+            .tip("How far the swirls push the noise around.")
+            .when("type", &[NOISE_LIQUID]),
+        int("stretch", "Stretch", 8, 1, 32)
+            .at_least(1.0)
+            .tip("How many times longer the streaks are than they are tall.")
+            .when("type", &[NOISE_STREAKS]),
+        float("jitter", "Jitter", 1.0, 0.0, 1.0)
+            .bounded()
+            .tip("0 puts every cell's point in its middle (a regular grid), 1 anywhere in the cell.")
+            .when("type", NOISE_CELLULAR),
+        float("density", "Density", 0.5, 0.0, 1.0)
+            .bounded()
+            .tip("How much of the image is covered.")
+            .when("type", NOISE_SCATTERED),
         int("seed", "Seed", 0, 0, 9999).bounded(),
         boolean("invert", "Invert", false),
     ],

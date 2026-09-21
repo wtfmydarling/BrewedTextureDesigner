@@ -37,9 +37,6 @@ pub fn gallery_graph() -> (Graph, Vec<(NodeId, String)>) {
         (NodeKind::SHAPE, "Polygon", "shape", ParamValue::Enum(3)),
         (NodeKind::SHAPE, "Ring", "shape", ParamValue::Enum(5)),
         (NodeKind::SHAPE, "Paraboloid", "shape", ParamValue::Enum(8)),
-        (NodeKind::NOISE, "Cells", "type", ParamValue::Enum(3)),
-        (NodeKind::NOISE, "Cell Edges", "type", ParamValue::Enum(4)),
-        (NodeKind::NOISE, "Ridged", "type", ParamValue::Enum(2)),
         (NodeKind::GRADIENT, "Radial", "type", ParamValue::Enum(2)),
         (NodeKind::GRADIENT, "Angular", "type", ParamValue::Enum(3)),
         (NodeKind::TILE_GENERATOR, "Tiles Disc", "pattern", ParamValue::Enum(0)),
@@ -56,6 +53,12 @@ pub fn gallery_graph() -> (Graph, Vec<(NodeId, String)>) {
             set(&mut g, id, "offset", ParamValue::Float(0.5));
         }
         out.push((id, label.to_string()));
+    }
+    // Every other type of noise (the first is the plain Noise above).
+    for (i, name) in brewed_texture_core::nodes::NOISE_TYPES.iter().enumerate().skip(1) {
+        let id = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+        set(&mut g, id, "type", ParamValue::Enum(i as u32));
+        out.push((id, format!("Noise: {name}")));
     }
     let transform = g.add_node(NodeKind::TRANSFORM_2D, [0.0, 0.0]);
     let _ = g.connect(shape, "o:output", transform, "i:input");

@@ -322,7 +322,41 @@ pub fn row_button(selected: bool) -> impl Fn(&Theme, button_w::Status) -> button
     }
 }
 
+/// An option in a menu of pictures: tinted when it is the current one, lit when the mouse
+/// or the keyboard is on it.
+pub fn option_button(current: bool, lit: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
+    move |theme, status| {
+        let status = if lit && status == button_w::Status::Active { button_w::Status::Hovered } else { status };
+        let mut style = row_button(current)(theme, status);
+        if lit {
+            style.border = Border { color: BORDER_LIGHT, width: 1.0, radius: 2.0.into() };
+        }
+        style
+    }
+}
+
+/// The frame around a picture of an option.
+pub fn picture_frame(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(THUMB_BACKGROUND.into()),
+        border: Border { color: BORDER, width: 1.0, radius: 2.0.into() },
+        ..Default::default()
+    }
+}
+
 // ---------------------------------------------------------------------------- inputs
+
+/// A field that opens a menu, like a pick list: raised while hovered, outlined while open.
+pub fn choice_field(open: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
+    move |_, status| {
+        let (bg, border) = match (open, status) {
+            (true, _) => (RAISED, FOCUS),
+            (false, button_w::Status::Hovered | button_w::Status::Pressed) => (RAISED, BORDER_LIGHT),
+            _ => (FIELD, LINE),
+        };
+        button_base(Some(bg), TEXT, border)
+    }
+}
 
 pub fn text_input(_: &Theme, status: text_input_w::Status) -> text_input_w::Style {
     let border = match status {
