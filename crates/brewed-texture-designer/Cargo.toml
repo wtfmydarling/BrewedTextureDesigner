@@ -1,0 +1,72 @@
+[package]
+name = "brewed-texture-designer"
+description = "GPU accelerated, node based procedural texture editor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "brewed-texture-designer"
+path = "src/main.rs"
+
+[dependencies]
+brewed-texture-core.workspace = true
+brewed-texture-engine.workspace = true
+iced.workspace = true
+rfd.workspace = true
+futures.workspace = true
+bytemuck.workspace = true
+image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+env_logger.workspace = true
+# Shares the pixels of screen captures between display and color sampling (iced uses it too).
+bytes = "1"
+
+[target.'cfg(windows)'.dependencies]
+# The eyedropper (live, see src/eyedropper/windows.rs), the taskbar icon and console output.
+windows-sys = { version = "0.61", features = [
+    "Wdk_System_SystemServices",
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# The eyedropper on X11 and Wayland. All of these are pure Rust or load the system
+# libraries at run time (the same versions winit already uses): nothing to install to
+# build.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+x11rb = { version = "0.13", features = ["render", "shape"] }
+libc = "0.2"
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+smithay-client-toolkit = { version = "0.19", default-features = false }
+rustix = { version = "1", features = ["event"] }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The system color sampler, and the capture gradients are picked on.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSColor", "NSColorSampler", "NSColorSpace", "NSResponder", "NSView", "NSWindow", "block2"] }
+block2 = "0.6"
+libc = "0.2"
+xcap = "0.9"
+
+[dev-dependencies]
+# Headless user interface for the UI tests (the same version iced uses).
+iced_runtime = "0.14"
+
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dev-dependencies]
+# Simulated input for the eyedropper tests (in a virtual X server).
+x11rb = { version = "0.13", features = ["xtest"] }

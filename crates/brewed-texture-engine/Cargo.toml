@@ -1,0 +1,18 @@
+[package]
+name = "brewed-texture-engine"
+description = "GPU (wgpu compute) evaluation of Brewed Texture Designer graphs, multithreaded SIMD pixel kernels and export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+brewed-texture-core.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+bytemuck.workspace = true
+half.workspace = true
+wide.workspace = true
+rayon.workspace = true
+image.workspace = true
+log.workspace = true

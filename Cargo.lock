@@ -517,6 +517,63 @@ dependencies = [
 ]
 
 [[package]]
+name = "brewed-texture-core"
+version = "0.2.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "brewed-texture-designer"
+version = "0.2.0"
+dependencies = [
+ "block2 0.6.2",
+ "brewed-texture-core",
+ "brewed-texture-engine",
+ "bytemuck",
+ "bytes",
+ "env_logger",
+ "futures",
+ "iced",
+ "iced_runtime",
+ "image",
+ "libc",
+ "log",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "rfd",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "smithay-client-toolkit 0.19.2",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
+ "windows-sys 0.61.2",
+ "x11rb",
+ "xcap",
+ "zbus",
+]
+
+[[package]]
+name = "brewed-texture-engine"
+version = "0.2.0"
+dependencies = [
+ "brewed-texture-core",
+ "bytemuck",
+ "half",
+ "image",
+ "log",
+ "pollster 1.0.1",
+ "rayon",
+ "wgpu",
+ "wide",
+]
+
+[[package]]
 name = "built"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4522,63 +4579,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "tessera"
-version = "0.2.0"
-dependencies = [
- "block2 0.6.2",
- "bytemuck",
- "bytes",
- "env_logger",
- "futures",
- "iced",
- "iced_runtime",
- "image",
- "libc",
- "log",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "rfd",
- "rustix 1.1.5",
- "serde",
- "serde_json",
- "smithay-client-toolkit 0.19.2",
- "tessera-core",
- "tessera-engine",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-wlr",
- "windows-sys 0.61.2",
- "x11rb",
- "xcap",
- "zbus",
-]
-
-[[package]]
-name = "tessera-core"
-version = "0.2.0"
-dependencies = [
- "log",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "tessera-engine"
-version = "0.2.0"
-dependencies = [
- "bytemuck",
- "half",
- "image",
- "log",
- "pollster 1.0.1",
- "rayon",
- "tessera-core",
- "wgpu",
- "wide",
 ]
 
 [[package]]

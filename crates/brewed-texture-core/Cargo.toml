@@ -1,0 +1,12 @@
+[package]
+name = "brewed-texture-core"
+description = "Document model of Brewed Texture Designer: node types, graph, expressions, edits, undo, project files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
