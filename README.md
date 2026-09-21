@@ -148,7 +148,7 @@ PipeWire подгружается только там, где без него н
 ## Проверка
 
 ```bash
-cargo test --workspace                                            # 122 теста
+cargo test --workspace                                            # 123 теста
 cargo test --workspace -- --ignored                               # живые тесты пипетки и захвата указателя (нужен рабочий стол)
 cargo run --release -- --bench                                    # замеры GPU и SIMD
 cargo run --release -- --contact-sheet sheet.png                  # все ядра на одной картинке
