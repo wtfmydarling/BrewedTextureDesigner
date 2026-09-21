@@ -904,12 +904,7 @@ impl App {
         match project::load(&path) {
             Ok(loaded) => {
                 let preview = loaded.view.preview.or_else(|| loaded.graph.nodes_of(NodeKind::OUTPUT).next().map(|n| n.id));
-                if loaded.converted {
-                    // Saving writes a new .brewtex file next to the old one.
-                    self.doc.replace_converted(loaded.graph, &path);
-                } else {
-                    self.doc.replace(loaded.graph, Some(path.clone()));
-                }
+                self.doc.replace(loaded.graph, Some(path.clone()));
                 self.after_document_change(preview);
                 if let (Some(pan), Some(zoom)) = (loaded.view.graph_pan, loaded.view.graph_zoom) {
                     self.ui.graph_view.pan = Vector::new(pan[0], pan[1]);
@@ -969,7 +964,7 @@ impl App {
     }
 
     fn pick_save_path(&self) -> Task<Message> {
-        let hint = self.doc.save_path_hint();
+        let hint = self.doc.path();
         let name = hint.and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
         let name = name.unwrap_or_else(|| format!("untitled.{}", project::FILE_EXTENSION));
         let folder = hint.and_then(|p| p.parent()).filter(|d| d.is_dir()).map(PathBuf::from);
@@ -1021,10 +1016,7 @@ impl App {
                 blocking(|| {
                     rfd::FileDialog::new()
                         .set_title("Open graph")
-                        .add_filter(
-                            format!("{} graph", brewed_texture_core::APP_NAME),
-                            &[project::FILE_EXTENSION, project::EARLIER_EXTENSIONS[0], project::EARLIER_EXTENSIONS[1], "json"],
-                        )
+                        .add_filter(format!("{} graph", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION, "json"])
                         .pick_file()
                 }),
                 |p| Message::OpenPicked(p.flatten()),
@@ -1604,7 +1596,7 @@ impl App {
     /// A file dropped on the window: a graph is opened, an image becomes a Bitmap node.
     fn file_dropped(&mut self, path: PathBuf) -> Task<Message> {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
-        if ext == project::FILE_EXTENSION || project::EARLIER_EXTENSIONS.contains(&ext.as_str()) {
+        if ext == project::FILE_EXTENSION {
             return self.guarded(PendingAction::OpenPath(path));
         }
         if file_extensions(NodeKind::BITMAP, "path").contains(&ext.as_str()) {
