@@ -122,7 +122,7 @@ pub fn bench() -> Result<(), String> {
 
     let t = std::time::Instant::now();
     evaluate_blocking(&mut engine, &g);
-    println!("\nGraph: {} nodes ({} image nodes) at 2048x2048, rgba16float", g.nodes.len(), engine.report.image_nodes);
+    println!("\nGraph: {} nodes ({} image nodes) at 2048x2048", g.nodes.len(), engine.report.image_nodes);
     println!("  first evaluation (includes shader compilation): {:8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
 
     let full = time_ms(10, || {

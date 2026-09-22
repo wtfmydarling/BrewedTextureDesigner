@@ -190,13 +190,17 @@ pub fn map_names(app: &App) -> Vec<&'static str> {
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let mut maps: [Option<wgpu::TextureView>; 7] = Default::default();
+    let mut gray = 0u32;
     for img in &app.res.materials {
         if let Some(s) = slot(app, img) {
             maps[s] = Some(img.view.clone());
+            if img.gray {
+                gray |= 1 << s;
+            }
         }
     }
     let missing = maps.iter().all(Option::is_none);
-    let scene = Scene { camera: app.ui.preview.view3d, maps, realtime: app.ui.realtime };
+    let scene = Scene { camera: app.ui.preview.view3d, maps, gray, realtime: app.ui.realtime };
     let mut layers: Vec<Element<'_, Message>> = vec![shader_widget(scene).width(Length::Fill).height(Length::Fill).into()];
     if missing {
         layers.push(
@@ -229,6 +233,8 @@ pub struct Scene {
     camera: Camera,
     /// Base color, normal, height, roughness, metallic, ambient occlusion, emissive.
     maps: [Option<wgpu::TextureView>; 7],
+    /// The maps that are one channel (gray), as bits.
+    gray: u32,
     /// Draw frame after frame, rather than only when something changes.
     realtime: bool,
 }
@@ -312,7 +318,7 @@ impl shader::Program<Message> for Scene {
     }
 
     fn draw(&self, _state: &DragState, _cursor: mouse::Cursor, _bounds: Rectangle) -> Primitive {
-        Primitive { camera: self.camera, maps: self.maps.clone() }
+        Primitive { camera: self.camera, maps: self.maps.clone(), gray: self.gray }
     }
 
     fn mouse_interaction(&self, state: &DragState, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
@@ -330,6 +336,7 @@ impl shader::Program<Message> for Scene {
 pub struct Primitive {
     camera: Camera,
     maps: [Option<wgpu::TextureView>; 7],
+    gray: u32,
 }
 
 // ---------------------------------------------------------------------------- math
@@ -536,7 +543,7 @@ struct U {
     eye: vec4<f32>,
     light: vec4<f32>,
     params: vec4<f32>,   // displacement, texture repeat, _, _
-    flags: vec4<u32>,    // present maps (bits), sRGB target, _, _
+    flags: vec4<u32>,    // present maps (bits), sRGB target, gray maps (bits), _
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -568,6 +575,11 @@ struct VOut {
 
 fn has(bit: u32) -> bool {
     return (u.flags.x & (1u << bit)) != 0u;
+}
+
+// A map's color; a map of one channel is gray.
+fn color(c: vec4<f32>, bit: u32) -> vec3<f32> {
+    return select(c.rgb, c.rrr, (u.flags.z & (1u << bit)) != 0u);
 }
 
 @vertex
@@ -632,13 +644,13 @@ fn brdf(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, albedo: vec3<f32>, rough: f32,
 fn fs(i: VOut) -> @location(0) vec4<f32> {
     var albedo = vec3<f32>(0.72);
     if (has(0u)) {
-        albedo = srgb_to_linear(clamp(textureSample(base_map, samp, i.uv).rgb, vec3<f32>(0.0), vec3<f32>(1.0)));
+        albedo = srgb_to_linear(clamp(color(textureSample(base_map, samp, i.uv), 0u), vec3<f32>(0.0), vec3<f32>(1.0)));
     }
     var n = normalize(i.normal);
     if (has(1u)) {
         let t = normalize(i.tangent.xyz - n * dot(n, i.tangent.xyz));
         let b = cross(n, t) * i.tangent.w;
-        let m = textureSample(normal_map, samp, i.uv).xyz * 2.0 - 1.0;
+        let m = color(textureSample(normal_map, samp, i.uv), 1u) * 2.0 - 1.0;
         // OpenGL normal maps: +y points up in the texture, i.e. against v.
         n = normalize(t * m.x + b * m.y + n * m.z);
     }
@@ -649,7 +661,7 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
     var ao = 1.0;
     if (has(5u)) { ao = clamp(textureSample(ao_map, samp, i.uv).r, 0.0, 1.0); }
     var emissive = vec3<f32>(0.0);
-    if (has(6u)) { emissive = srgb_to_linear(max(textureSample(emissive_map, samp, i.uv).rgb, vec3<f32>(0.0))); }
+    if (has(6u)) { emissive = srgb_to_linear(max(color(textureSample(emissive_map, samp, i.uv), 6u), vec3<f32>(0.0))); }
 
     let v = normalize(u.eye.xyz - i.world);
     let key = normalize(u.light.xyz);
@@ -878,7 +890,7 @@ impl shader::Primitive for Primitive {
             eye: [eye[0], eye[1], eye[2], 1.0],
             light: [light[0], light[1], light[2], 1.0],
             params: [c.displacement, c.tiling, 0.0, 0.0],
-            flags: [present, u32::from(pipeline.srgb), 0, 0],
+            flags: [present, u32::from(pipeline.srgb), self.gray, 0],
         };
         queue.write_buffer(&pipeline.uniforms, 0, bytemuck::bytes_of(&u));
         let view = |i: usize| self.maps[i].as_ref().unwrap_or(&pipeline.defaults[i]);

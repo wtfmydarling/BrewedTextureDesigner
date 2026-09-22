@@ -26,6 +26,25 @@ pub fn window_icon() -> Option<iced::window::Icon> {
     iced::window::icon::from_rgba(art::icon_rgba(SIZE), SIZE, SIZE).ok()
 }
 
+/// Keep a window off the screen while it is drawn (`true`), or let it show (`false`). A window
+/// that shows before its first frame is drawn shows white for a moment; a cloaked one is on
+/// screen as far as the system goes, and drawn, but the desktop does not show it.
+#[cfg(windows)]
+pub fn cloak(window: &dyn iced::window::Window, cloaked: bool) {
+    use iced::window::raw_window_handle::RawWindowHandle;
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
+
+    let Ok(handle) = window.window_handle() else { return };
+    let RawWindowHandle::Win32(win32) = handle.as_raw() else { return };
+    let hwnd = win32.hwnd.get() as HWND;
+    let value = i32::from(cloaked);
+    // SAFETY: a plain Win32 call on a live window of this thread, with a BOOL and its size.
+    unsafe {
+        DwmSetWindowAttribute(hwnd, DWMWA_CLOAK as u32, (&raw const value).cast(), size_of::<i32>() as u32);
+    }
+}
+
 /// Use the icons embedded in the executable for a window (both the big one of the
 /// taskbar and the small one of the title bar), sized for the window's display scale.
 #[cfg(windows)]

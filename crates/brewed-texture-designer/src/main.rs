@@ -13,6 +13,7 @@ mod scrub;
 mod style;
 mod view;
 mod widget;
+mod workspace;
 
 #[cfg(test)]
 mod ui_tests;
@@ -101,6 +102,12 @@ fn main() -> iced::Result {
             other => options.open = Some(PathBuf::from(other)),
         }
         i += 1;
+    }
+
+    // The layout of the last session, kept for the next one (not for screenshots, which
+    // show the program as it starts the first time).
+    if options.screenshot.is_none() {
+        options.workspace = Some(workspace::Workspace::load());
     }
 
     // A daemon: besides the main window, the eyedropper opens a window on every monitor.

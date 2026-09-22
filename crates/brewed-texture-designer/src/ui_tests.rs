@@ -950,13 +950,12 @@ fn choices_are_picked_by_their_pictures() {
         // The engine draws the pictures (here, one of each gray).
         let pictures = (0..NOISE_TYPES.len()).map(|i| vec![(i * 15) as u8; 4 * 4 * 4]).collect();
         w.send(Message::Engine(brewed_texture_engine::Event::Choices(brewed_texture_engine::ChoicePictures {
-            node: noise,
+            kind: NodeKind::NOISE,
             key: "type".into(),
-            version: 0,
             size: 4,
             pictures: std::sync::Arc::new(pictures),
         })));
-        assert_eq!(w.app.res.choices.get(&(noise, "type".to_string())).map(|c| c.pictures.len()), Some(NOISE_TYPES.len()));
+        assert_eq!(w.app.res.choices.get(&(NodeKind::NOISE.id(), "type")).map(Vec::len), Some(NOISE_TYPES.len()));
         w.input(&[]);
         w.snapshot(&format!("choices_{width}x{height}"));
 
@@ -1092,8 +1091,8 @@ fn draw_frame(w: &mut Harness, at: std::time::Instant) -> window::RedrawRequest 
     }
 }
 
-/// The 3D view draws frame after frame in real time and counts them; the status bar says how
-/// many it drew in the last second, and says so no longer once it stops.
+/// The 3D view draws frame after frame in real time and counts them; its header says how many
+/// it drew in the last second and how long a frame took, and says so no longer once it stops.
 #[test]
 fn the_3d_view_draws_in_real_time() {
     use std::time::{Duration, Instant};
@@ -1106,7 +1105,7 @@ fn the_3d_view_draws_in_real_time() {
     }
     let rate = w.app.ui.frame_rate;
     assert!((rate.fps - 144.0).abs() < 0.5, "{rate:?}");
-    assert!(!texts(&mut w, "3D 144 FPS").is_empty(), "the status bar says so");
+    assert!(!texts(&mut w, "144 FPS · 6.9 ms").is_empty(), "the 3D view says so");
 
     // Drawing on demand, a frame asks for no other.
     w.send(Message::ToggleRealtime);
@@ -1114,7 +1113,7 @@ fn the_3d_view_draws_in_real_time() {
     // A second after its last frame, the 3D view has drawn none in the last second.
     w.app.ui.frame_rate_at = Some(Instant::now() - Duration::from_secs(2));
     w.send(Message::Tick);
-    assert!(!texts(&mut w, "3D 0 FPS").is_empty());
+    assert!(!texts(&mut w, "0 FPS · 0.0 ms").is_empty());
 }
 
 /// The status bar says what happens now, and nothing older than a second: how many nodes the
@@ -1137,12 +1136,33 @@ fn the_status_bar_says_what_happens_now() {
     // A change that computed nothing (a node moved) is not an update of the graph.
     w.send(Message::Engine(Event::Finished { revision: 1, report: EvalReport { recomputed: 0, image_nodes: 17 }, millis: 0.1 }));
     assert!(shown(&mut w, &format!("{nodes} nodes · 3 recomputed · 8.0 ms")));
-    // A second later nothing is left of those updates: nothing is computed now.
+    // A second later nothing is left of those updates: nothing is computed now, in no time.
     for update in &mut w.app.res.updates {
         update.0 -= Duration::from_secs(2);
     }
-    assert!(shown(&mut w, &format!("{nodes} nodes · 0 recomputed")));
+    assert!(shown(&mut w, &format!("{nodes} nodes · 0 recomputed · 0.0 ms")));
     // A change that takes long says so, and for how long it has taken.
     w.app.res.busy_since = Some(Instant::now() - Duration::from_millis(1500));
     assert!(shown(&mut w, &format!("{nodes} nodes · computing… 1.5 s")));
+}
+
+/// The panels come back split where they were when the program was closed; a layout that
+/// does not fit (another program's, or a broken file) gives way to the first one.
+#[test]
+fn the_panels_come_back_as_they_were() {
+    let saved = [0.2, 0.7, 0.55, 0.5, 0.3];
+    assert_eq!(crate::app::splits_of(&crate::app::panes(&saved)), saved.to_vec());
+    let first = crate::app::splits_of(&crate::app::panes(&[]));
+    assert_eq!(first.len(), saved.len());
+    for broken in [&[0.5][..], &[0.2, 0.7, 0.55, 0.5, 1.5], &[0.2, 0.7, 0.55, 0.5, 0.3, 0.4]] {
+        assert_eq!(crate::app::splits_of(&crate::app::panes(broken)), first, "{broken:?}");
+    }
+    // Resized in the window, a panel is saved where it was left.
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let split = match w.app.ui.panes.layout() {
+        iced::widget::pane_grid::Node::Split { id, .. } => *id,
+        _ => panic!("the panels are split"),
+    };
+    w.send(Message::PaneResized(iced::widget::pane_grid::ResizeEvent { split, ratio: 0.25 }));
+    assert_eq!(crate::app::splits_of(&w.app.ui.panes)[0], 0.25);
 }

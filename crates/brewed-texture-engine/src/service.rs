@@ -12,6 +12,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use brewed_texture_core::eval::Evaluation;
+use brewed_texture_core::NodeKind;
 use brewed_texture_core::graph::{Graph, NodeId};
 
 use crate::engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Thumbnail};
@@ -51,9 +52,9 @@ pub enum Request {
         pixel: [u32; 2],
     },
     Export(Vec<ExportJob>),
-    /// Pictures of what a node makes with each option of one of its choices.
+    /// Pictures of what a node of a kind makes with each option of one of its choices.
     Choices {
-        node: NodeId,
+        kind: NodeKind,
         key: String,
     },
     ReloadBitmap(String),
@@ -146,7 +147,7 @@ struct Pending {
     evaluate: Option<(u64, Arc<Graph>, Arc<Evaluation>)>,
     stats: Vec<NodeId>,
     probe: Option<(NodeId, [u32; 2])>,
-    choices: Option<(NodeId, String)>,
+    choices: Vec<(NodeKind, String)>,
     exports: Vec<ExportJob>,
     preview_changed: bool,
     materials_changed: bool,
@@ -201,7 +202,11 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                 }
                 Request::Probe { node, pixel } => pending.probe = Some((node, pixel)),
                 Request::Export(jobs) => pending.exports.extend(jobs),
-                Request::Choices { node, key } => pending.choices = Some((node, key)),
+                Request::Choices { kind, key } => {
+                    if !pending.choices.iter().any(|(k, c)| *k == kind && *c == key) {
+                        pending.choices.push((kind, key));
+                    }
+                }
                 Request::ReloadBitmap(path) => {
                     engine.reload_bitmap(&path);
                     pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
@@ -214,6 +219,13 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         }
         if engine.receive_bitmaps() {
             pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
+        }
+        // The node the 2D view shows is read: if its image was let go of, it is computed again.
+        if pending.preview_changed {
+            engine.set_preview(preview);
+            if preview.is_some_and(|node| engine.released(node)) {
+                pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
+            }
         }
 
         let mut evaluated = None;
@@ -246,12 +258,10 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
             let millis = started.elapsed().as_secs_f32() * 1000.0;
             (emit)(Event::Finished { revision, report, millis });
         }
-        // After the evaluation, so the pictures show the node as it is now.
-        if let Some((node, key)) = pending.choices
-            && let Some((_, graph, eval)) = &current
-            && let Some(pictures) = engine.render_choices(graph, eval, node, &key)
-        {
-            (emit)(Event::Choices(pictures));
+        for (kind, key) in pending.choices {
+            if let Some(pictures) = engine.render_choices(kind, &key) {
+                (emit)(Event::Choices(pictures));
+            }
         }
         for node in pending.stats {
             if let (Some(stats), Some(version)) = (engine.stats(node), engine.version(node)) {
@@ -278,6 +288,10 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         let errors = engine.gpu.take_errors();
         if !errors.is_empty() {
             (emit)(Event::GpuErrors(errors));
+        }
+        // What nothing reads needs no more than its thumbnail, drawn by now.
+        if let Some((_, graph, _)) = &current {
+            engine.release_unread(graph);
         }
         // What this round did not use, the next is unlikely to.
         engine.gpu.trim_pool();

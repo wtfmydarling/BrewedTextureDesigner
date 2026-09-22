@@ -212,8 +212,8 @@ fn divider<'a>() -> Element<'a, Message> {
 
 /// The status bar across the bottom of the window: the latest message (nothing when there is
 /// none), then what is happening now, over the last second: the graph's nodes, how many of
-/// them its last change computed again and how long its changes take; how fast the 3D view
-/// draws; how much GPU memory the images take; and the GPU.
+/// them its last change computed again and how long its changes take; how much GPU memory
+/// the images take; and the GPU. (How fast the 3D view draws, it says itself.)
 pub fn status_bar(app: &App) -> Element<'_, Message> {
     let status: Element<'_, Message> = match &app.ui.status {
         Some(s) => text(s.text.clone())
@@ -232,13 +232,13 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
         Some(for_) if app.res.slow || for_ >= COMPUTING_AFTER => {
             format!("{nodes} · computing… {}", duration(for_.as_secs_f32() * 1000.0))
         }
-        _ => match recent.last() {
-            Some((_, recomputed)) => {
-                let average = recent.iter().map(|(millis, _)| millis).sum::<f32>() / recent.len() as f32;
-                format!("{nodes} · {recomputed} recomputed · {}", duration(average))
-            }
-            None => format!("{nodes} · 0 recomputed"),
-        },
+        _ => {
+            let (recomputed, average) = match recent.last() {
+                Some((_, recomputed)) => (*recomputed, recent.iter().map(|(millis, _)| millis).sum::<f32>() / recent.len() as f32),
+                None => (0, 0.0),
+            };
+            format!("{nodes} · {recomputed} recomputed · {}", duration(average))
+        }
     };
     let graph = reading(
         graph,
@@ -248,24 +248,13 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
             .into(),
     );
 
-    let rate = app.ui.frame_rate;
-    let frames = reading(
-        format!("3D {:.0} FPS", rate.fps),
-        format!(
-            "Frames the 3D view drew in the last second: {} apart on average, {} at the most. View → \
-             Real-time Rendering draws it frame after frame; without it, it draws only when something \
-             changes.",
-            duration(rate.frame_ms),
-            duration(rate.worst_ms)
-        ),
-    );
-
     // The engine is there once it started, or once it said anything.
     let engine = app.engine.is_some() || app.res.finished_revision > 0;
     let memory = reading(
         format!("VRAM {}", megabytes(app.res.memory)),
-        "GPU memory the images take: every node's image at the texture size, the copies the 2D and \
-         3D views show, and the scratch images kept for reuse while changes keep coming."
+        "GPU memory the images take: every image another node or a view reads, at the texture size \
+         (grayscale ones in one channel), the 8-bit copies the 2D and 3D views show, and the scratch \
+         images kept for reuse while changes keep coming."
             .into(),
     );
 
@@ -276,7 +265,7 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
     } else {
         app.adapter.clone()
     };
-    let mut bar = row![container(status).clip(true).width(Length::Fill), graph, divider(), frames]
+    let mut bar = row![container(status).clip(true).width(Length::Fill), graph]
         .spacing(8)
         .align_y(Alignment::Center)
         .height(Length::Fixed(STATUS_BAR_H));

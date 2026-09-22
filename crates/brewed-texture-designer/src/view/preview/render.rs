@@ -15,7 +15,7 @@ struct U {
     checker: f32,         // checker cell size in physical pixels
     channel: u32,         // 0 RGBA, 1 RGB, 2 R, 3 G, 4 B, 5 A
     background: vec4<f32>,// what is behind the image
-    flags: u32,           // 1 tile x, 2 tile y, 4 sRGB target, 8 nearest
+    flags: u32,           // 1 tile x, 2 tile y, 4 sRGB target, 8 nearest, 16 one channel (gray)
     pad0: u32, pad1: u32, pad2: u32,
 };
 
@@ -94,6 +94,10 @@ fn fs(in: V) -> @location(0) vec4<f32> {
     } else {
         c = textureSampleLevel(tex, smooth_sampler, q, lod);
     }
+    // A copy of one channel is gray, and opaque.
+    if ((u.flags & 16u) != 0u) {
+        c = vec4<f32>(c.rrr, 1.0);
+    }
     let cell = vec2<i32>(floor(in.wp * u.size / max(u.checker, 1.0)));
     let check = select(vec3<f32>(0.22), vec3<f32>(0.32), ((cell.x + cell.y) & 1) == 1);
     var rgb = c.rgb;
@@ -124,6 +128,8 @@ struct Uniforms {
 /// What the 2D view shows (built by the view every frame).
 pub struct Scene {
     pub image: Option<(wgpu::TextureView, [u32; 2])>,
+    /// The image is one channel: gray.
+    pub gray: bool,
     /// Image rectangle relative to the widget, in logical pixels.
     pub rect: Rectangle,
     pub channel: u32,
@@ -133,6 +139,7 @@ pub struct Scene {
 #[derive(Debug)]
 pub struct Primitive {
     image: Option<wgpu::TextureView>,
+    gray: bool,
     rect: Rectangle,
     channel: u32,
     tile: [bool; 2],
@@ -148,6 +155,7 @@ impl shader::Program<Message> for Scene {
         let nearest = self.image.as_ref().is_some_and(|(_, size)| self.rect.width > size[0] as f32 * 1.5);
         Primitive {
             image: self.image.as_ref().map(|(view, _)| view.clone()),
+            gray: self.gray,
             rect: self.rect,
             channel: self.channel,
             tile: self.tile,
@@ -320,6 +328,9 @@ impl shader::Primitive for Primitive {
         }
         if self.nearest {
             flags |= 8;
+        }
+        if self.gray {
+            flags |= 16;
         }
         let bg = crate::style::CANVAS;
         let u = Uniforms {

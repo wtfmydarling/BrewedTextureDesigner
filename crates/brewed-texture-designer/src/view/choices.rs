@@ -1,12 +1,12 @@
 //! Choices picked by how they look. What a noise or a shape is called matters less than
 //! what it looks like, so the field shows the node's picture next to the option's name, and
-//! its menu shows every option as a picture of what the node makes with it: drawn by the
-//! engine with everything else as it is now, the seed and the scale included. A long menu
-//! has a search field, which finds options by their names and by what they look like.
+//! its menu shows every option as a picture of what a node of its kind makes with it, as the
+//! node is when it is added: the same pictures in every menu of the kind, drawn once. A long
+//! menu has a search field, which finds options by their names and by what they look like.
 
 use iced::widget::{Id, button, column, container, image, row, scrollable, space, text, text_input};
 use iced::{Alignment, Element, Length};
-use brewed_texture_core::graph::{Node, NodeId};
+use brewed_texture_core::graph::Node;
 use brewed_texture_core::nodes::ParamDef;
 
 use crate::app::{App, Message};
@@ -76,14 +76,15 @@ pub fn field<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, current: u
     .padding([2, 6])
     .style(style::choice_field(open))
     .on_press(Message::ChoiceMenu(if open { None } else { Some((id, pd.key)) }));
-    let menu: Element<'a, Message> = if open { menu(app, id, pd, current) } else { space().into() };
+    let menu: Element<'a, Message> = if open { menu(app, node, pd, current) } else { space().into() };
     dropdown(face, menu, open).on_dismiss(Message::ChoiceMenu(None)).into()
 }
 
 /// Every option the search leaves: its picture, then its name.
-fn menu<'a>(app: &'a App, id: NodeId, pd: &'static ParamDef, current: u32) -> Element<'a, Message> {
+fn menu<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, current: u32) -> Element<'a, Message> {
+    let id = node.id;
     let options = pd.enum_options();
-    let pictures = app.res.choices.get(&(id, pd.key.to_string()));
+    let pictures = app.res.choices.get(&(node.kind.id(), pd.key));
     let (lit, query) = app.ui.choice_menu.as_ref().map_or((current as usize, ""), |m| (m.cursor, m.query.as_str()));
     // As many columns, and as wide, whatever the search leaves, so the menu keeps its place.
     let columns = columns(options.len());
@@ -95,7 +96,7 @@ fn menu<'a>(app: &'a App, id: NodeId, pd: &'static ParamDef, current: u32) -> El
         for &i in chunk {
             line = line.push(
                 button(
-                    row![picture(pictures.and_then(|p| p.pictures.get(i)), PICTURE), text(options[i]).size(style::TEXT_SIZE)]
+                    row![picture(pictures.and_then(|p| p.get(i)), PICTURE), text(options[i]).size(style::TEXT_SIZE)]
                         .spacing(10)
                         .align_y(Alignment::Center),
                 )

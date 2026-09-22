@@ -25,6 +25,7 @@ use crate::eyedropper;
 use crate::picker::{self, PickTarget, Shot};
 use crate::view;
 use crate::view::frames::FrameRate;
+use crate::workspace::Workspace;
 
 // ---------------------------------------------------------------------------- options
 
@@ -39,6 +40,9 @@ pub struct StartupOptions {
     pub select: Option<String>,
     /// Show the first node of this type in the 2D view.
     pub preview: Option<String>,
+    /// How the window was laid out last time: kept, and saved again on quitting. `None`
+    /// starts from the defaults and saves nothing.
+    pub workspace: Option<Workspace>,
 }
 
 // ---------------------------------------------------------------------------- ui state
@@ -190,13 +194,6 @@ pub struct ChoiceMenu {
     pub query: String,
 }
 
-/// Pictures of what a node makes with each option of a choice, as the engine drew them.
-pub struct ChoicePictures {
-    /// The version of the node's image they were drawn for.
-    pub version: u64,
-    pub pictures: Vec<image::Handle>,
-}
-
 /// A color or gradient being picked from the screen. Exists from the click on the
 /// eyedropper until the pick is done or cancelled.
 #[derive(Debug)]
@@ -257,6 +254,11 @@ pub struct Ui {
     pub choice_menu: Option<ChoiceMenu>,
     /// The 3D view draws frame after frame, rather than only when something changes.
     pub realtime: bool,
+    /// The main window is on screen: on Windows, not until it has drawn a frame (see
+    /// `Message::FirstFrame`).
+    pub shown: bool,
+    /// The main window, shown cloaked: drawn, not yet on screen.
+    pub cloaked: Option<window::Id>,
     /// How fast the 3D view drew over the last second, and when it last said so.
     pub frame_rate: FrameRate,
     pub frame_rate_at: Option<Instant>,
@@ -288,8 +290,12 @@ pub struct Results {
     pub stats: HashMap<NodeId, (u64, Arc<ImageStats>)>,
     pub stats_requested: HashMap<NodeId, u64>,
     pub probe: Option<(NodeId, [u32; 2], [f32; 4])>,
-    /// The pictures of the options of the choices whose menus were opened.
-    pub choices: HashMap<(NodeId, String), ChoicePictures>,
+    /// Pictures of what a node of a kind makes with each option of a choice, everything else
+    /// as it is when the node is added, by node kind and parameter: drawn once for the kinds
+    /// the graph has, and kept.
+    pub choices: HashMap<(&'static str, &'static str), Vec<image::Handle>>,
+    /// The pictures asked for (and those drawn).
+    pub choices_asked: HashSet<(&'static str, &'static str)>,
     /// The changes of the last second: when each was done, how long it took from the
     /// moment the engine started on it until the GPU was done with it, and how many nodes
     /// it computed again. Changes that computed nothing (moving a node, say) are not among
@@ -483,6 +489,14 @@ pub enum Message {
     /// How fast the 3D view draws (it says so a few times a second while it draws).
     FrameRate(FrameRate),
     ToggleRealtime,
+    /// The main window was shown cloaked (see `crate::brand::cloak`).
+    #[cfg(windows)]
+    Cloaked(window::Id),
+    /// A window drew a frame: the main window shows once it has one to show (or a second
+    /// after it was shown cloaked, whatever happens).
+    FirstFrame(window::Id),
+    /// Quitting: whether the window fills the screen, for the next session.
+    Quitting(bool),
     Expression(NodeId, text_editor::Action),
     ColorPicker(Option<ColorTarget>),
     GradientStop(NodeId, String, usize),
@@ -513,10 +527,19 @@ pub enum Message {
 
 // ---------------------------------------------------------------------------- boot
 
-fn main_window_settings() -> window::Settings {
+const MIN_WINDOW: Size = Size::new(1000.0, 640.0);
+
+fn main_window_settings(workspace: Option<&Workspace>) -> window::Settings {
+    let size = workspace.and_then(|w| w.size).map_or(Size::new(1680.0, 1000.0), |[w, h]| {
+        Size::new(w.max(MIN_WINDOW.width), h.max(MIN_WINDOW.height))
+    });
     window::Settings {
-        size: Size::new(1680.0, 1000.0),
-        min_size: Some(Size::new(1000.0, 640.0)),
+        size,
+        // On Windows it is cloaked, made to fill the screen and shown in that order, once
+        // it is there (see `App::boot`).
+        maximized: !cfg!(windows) && workspace.is_some_and(|w| w.maximized),
+        min_size: Some(MIN_WINDOW),
+        visible: !cfg!(windows),
         // Closing asks about unsaved changes first.
         exit_on_close_request: false,
         icon: crate::brand::window_icon(),
@@ -524,25 +547,47 @@ fn main_window_settings() -> window::Settings {
     }
 }
 
-fn default_panes() -> pane_grid::State<Pane> {
+/// Where the panels are split at first.
+const SPLITS: [f32; 5] = [0.125, 0.765, 0.6, 0.42, 0.34];
+
+/// The panels, split where `splits` says (in the order the splits are made), or where they
+/// are at first when it does not say that.
+pub(crate) fn panes(splits: &[f32]) -> pane_grid::State<Pane> {
     use pane_grid::{Axis, Configuration as C};
+    let r = match splits {
+        s if s.len() == SPLITS.len() && s.iter().all(|r| (0.02..=0.98).contains(r)) => s,
+        _ => &SPLITS[..],
+    };
     let split = |axis, ratio, a, b| C::Split { axis, ratio, a: Box::new(a), b: Box::new(b) };
     pane_grid::State::with_configuration(split(
         Axis::Vertical,
-        0.125,
+        r[0],
         C::Pane(Pane::Library),
         split(
             Axis::Vertical,
-            0.765,
-            split(
-                Axis::Horizontal,
-                0.6,
-                C::Pane(Pane::Graph),
-                split(Axis::Vertical, 0.42, C::Pane(Pane::View3D), C::Pane(Pane::View2D)),
-            ),
-            split(Axis::Horizontal, 0.34, C::Pane(Pane::Inputs), C::Pane(Pane::Properties)),
+            r[1],
+            split(Axis::Horizontal, r[2], C::Pane(Pane::Graph), split(Axis::Vertical, r[3], C::Pane(Pane::View3D), C::Pane(Pane::View2D))),
+            split(Axis::Horizontal, r[4], C::Pane(Pane::Inputs), C::Pane(Pane::Properties)),
         ),
     ))
+}
+
+fn default_panes() -> pane_grid::State<Pane> {
+    panes(&SPLITS)
+}
+
+/// Where the panels are split now, in the order [`panes`] makes the splits in.
+pub(crate) fn splits_of(panes: &pane_grid::State<Pane>) -> Vec<f32> {
+    fn walk(node: &pane_grid::Node, out: &mut Vec<f32>) {
+        if let pane_grid::Node::Split { ratio, a, b, .. } = node {
+            out.push(*ratio);
+            walk(a, out);
+            walk(b, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(panes.layout(), &mut out);
+    out
 }
 
 fn find_kind(graph: &Graph, name: &str) -> Option<NodeId> {
@@ -583,7 +628,7 @@ impl App {
                     probe: None,
                     view3d: view::view3d::Camera::default(),
                 },
-                panes: default_panes(),
+                panes: opts.workspace.as_ref().map_or_else(default_panes, |w| panes(&w.splits)),
                 library_search: String::new(),
                 library_collapsed: HashSet::new(),
                 menu: None,
@@ -602,7 +647,9 @@ impl App {
                 color_picker: None,
                 color_picker_at: Point::ORIGIN,
                 choice_menu: None,
-                realtime: true,
+                realtime: opts.workspace.as_ref().and_then(|w| w.realtime).unwrap_or(true),
+                shown: !cfg!(windows),
+                cloaked: None,
                 frame_rate: FrameRate::default(),
                 frame_rate_at: None,
                 gradient_stop: HashMap::new(),
@@ -640,20 +687,31 @@ impl App {
         app.sync_expression();
         // The app runs as a daemon (the eyedropper opens more windows): it opens its main
         // window itself.
-        let (main, open) = window::open(main_window_settings());
+        let (main, open) = window::open(main_window_settings(opts.workspace.as_ref()));
         app.window = Some(main);
-        let setup = open.then(|id| {
+        #[cfg(windows)]
+        let maximized = opts.workspace.as_ref().is_some_and(|w| w.maximized);
+        let setup = open.then(move |id| {
+            // A new window on Windows shows white until its first frame is drawn: it is shown
+            // cloaked, which has it drawn without showing it (and made to fill the screen
+            // there, if it did last time), and uncloaked once it has drawn a frame
+            // (`Message::FirstFrame`). Elsewhere its settings show it.
             #[cfg(windows)]
-            let icon = window::run(id, crate::brand::use_embedded_icon).discard();
+            let appear = window::run(id, crate::brand::use_embedded_icon)
+                .discard()
+                .chain(window::run(id, |window| crate::brand::cloak(window, true)).discard())
+                .chain(if maximized { window::maximize(id, true) } else { Task::none() })
+                .chain(window::set_mode(id, window::Mode::Windowed))
+                .chain(Task::done(Message::Cloaked(id)));
             #[cfg(not(windows))]
-            let icon = Task::none();
+            let appear = Task::none();
             let host = window::run(id, |window: &dyn iced::window::Window| {
                 // Where the pointer is locked while a value is dragged, and what the
                 // eyedropper needs to cover the screen.
                 crate::scrub::remember(window);
                 eyedropper::Host::of(window)
             });
-            Task::batch([icon, host.map(Message::Host)])
+            Task::batch([appear, host.map(Message::Host)])
         });
         (app, Task::batch([setup, scenario]))
     }
@@ -718,6 +776,18 @@ impl App {
         if aging {
             subs.push(iced::time::every(Duration::from_millis(200)).map(|_| Message::Tick));
         }
+        // Until the main window shows: it does once it has drawn a frame, or a second after it
+        // was shown cloaked whatever happens (should a system not draw a cloaked window).
+        if !self.ui.shown {
+            // (Raw: the others leave frames out.)
+            subs.push(iced::event::listen_raw(|event, _, window| match event {
+                iced::Event::Window(window::Event::RedrawRequested(_)) => Some(Message::FirstFrame(window)),
+                _ => None,
+            }));
+            if let Some(id) = self.ui.cloaked {
+                subs.push(iced::time::every(Duration::from_secs(1)).with(id).map(|(id, _)| Message::FirstFrame(id)));
+            }
+        }
         Subscription::batch(subs)
     }
 
@@ -755,7 +825,6 @@ impl App {
             self.ui.preview.node = None;
         }
         self.res.thumbs.retain(|id, _| graph.contains(*id));
-        self.res.choices.retain(|(id, _), _| graph.contains(*id));
         // A menu of pictures belongs to a choice that is still there to be made.
         if let Some(menu) = &self.ui.choice_menu
             && !graph.node(menu.node).is_some_and(|n| n.def().param(menu.key).is_some_and(|pd| n.param_visible(pd)) && !n.is_exposed(menu.key))
@@ -777,6 +846,28 @@ impl App {
         });
         self.send(Request::Preview(self.ui.preview.node));
         self.send(Request::Materials(self.material_nodes()));
+        self.ask_for_choices();
+    }
+
+    /// Have the engine draw the pictures of the choices of the kinds of nodes the graph has,
+    /// those it has not drawn yet: by the time a menu of them opens, they are there.
+    fn ask_for_choices(&mut self) {
+        // Once the engine is there (it asks when it starts).
+        if self.engine.is_none() {
+            return;
+        }
+        let mut asked = Vec::new();
+        for node in &self.doc.graph().nodes {
+            let kind = node.kind;
+            for pd in kind.def().params.iter().filter(|pd| pd.pictured) {
+                if self.res.choices_asked.insert((kind.id(), pd.key)) {
+                    asked.push(Request::Choices { kind, key: pd.key.to_string() });
+                }
+            }
+        }
+        for request in asked {
+            self.send(request);
+        }
     }
 
     /// Output nodes the 3D view uses (one per usage). The 3D view is always on screen, so
@@ -871,7 +962,7 @@ impl App {
         };
         self.close_popups();
         self.ui.choice_menu = Some(ChoiceMenu { node, key, cursor: current, query: String::new() });
-        self.send(Request::Choices { node, key: key.to_string() });
+        self.ask_for_choices();
         if searched { operation::focus(view::choices::search_id()) } else { Task::none() }
     }
 
@@ -1181,7 +1272,39 @@ impl App {
                 }),
                 |p| Message::OpenPicked(p.flatten()),
             ),
-            PendingAction::Quit => iced::exit(),
+            PendingAction::Quit => self.quit(),
+        }
+    }
+
+    /// Quit: save how the window is laid out (when the session keeps it), then go.
+    fn quit(&mut self) -> Task<Message> {
+        match self.window {
+            Some(id) if self.opts.workspace.is_some() => window::is_maximized(id).map(Message::Quitting),
+            _ => self.hide_and_exit(),
+        }
+    }
+
+    /// Hide the window first: a window whose pixels go before it does flashes white.
+    fn hide_and_exit(&self) -> Task<Message> {
+        match self.window {
+            Some(id) => window::set_mode(id, window::Mode::Hidden).chain(iced::exit()),
+            None => iced::exit(),
+        }
+    }
+
+    fn save_workspace(&mut self, maximized: bool) {
+        let Some(last) = &self.opts.workspace else { return };
+        let size = self.ui.window_size;
+        let workspace = Workspace {
+            splits: splits_of(&self.ui.panes),
+            // Filling the screen, the window is as big as the screen: the size it has when it
+            // does not is the one it had.
+            size: if maximized { last.size } else { Some([size.width, size.height]) },
+            maximized,
+            realtime: Some(self.ui.realtime),
+        };
+        if let Err(e) = workspace.save() {
+            log::warn!("the layout was not saved: {e}");
         }
     }
 
@@ -1269,10 +1392,18 @@ impl App {
                 if self.apply(edit)
                     && let Some([w, h]) = large
                 {
-                    // Every image node keeps an rgba16float image (8 bytes a pixel).
-                    let images = self.graph().nodes.iter().filter(|n| n.def().has_image()).count().max(1) as u64;
-                    let gb = (w as u64 * h as u64 * 8 * images) as f64 / (1u64 << 30) as f64;
-                    self.set_status(format!("{w}×{h}: about {gb:.1} GB of GPU memory for the {images} image nodes"), false);
+                    // What the image nodes keep at most: 2 bytes a pixel of a grayscale image, 8 of
+                    // a color one (an output keeps what arrives at it, no image of its own).
+                    let graph = self.graph();
+                    let nodes: Vec<NodeId> =
+                        graph.nodes.iter().filter(|n| n.def().has_image() && n.kind != NodeKind::OUTPUT).map(|n| n.id).collect();
+                    let per_pixel: u64 = nodes
+                        .iter()
+                        .map(|id| if view::graph::made_kind(self, *id) == Some(brewed_texture_core::nodes::ImageKind::Gray) { 2 } else { 8 })
+                        .sum();
+                    let gb = (w as u64 * h as u64 * per_pixel) as f64 / (1u64 << 30) as f64;
+                    let images = nodes.len();
+                    self.set_status(format!("{w}×{h}: up to {gb:.1} GB of GPU memory for the {images} image nodes"), false);
                 }
             }
             Message::Edits(edits) => self.apply_all(edits),
@@ -1485,6 +1616,20 @@ impl App {
                 self.age_readings();
             }
             Message::ToggleRealtime => self.ui.realtime = !self.ui.realtime,
+            #[cfg(windows)]
+            Message::Cloaked(id) => self.ui.cloaked = Some(id),
+            Message::FirstFrame(id) => {
+                if Some(id) == self.window && !self.ui.shown {
+                    self.ui.shown = true;
+                    log::debug!("the main window shows, {:?} after the start", self.started.elapsed());
+                    #[cfg(windows)]
+                    return window::run(id, |window| crate::brand::cloak(window, false)).discard();
+                }
+            }
+            Message::Quitting(maximized) => {
+                self.save_workspace(maximized);
+                return self.hide_and_exit();
+            }
             Message::ChoiceMenu(Some((node, key))) => return self.open_choice_menu(node, key),
             Message::ChoiceMenu(None) => self.ui.choice_menu = None,
             Message::ChoiceSearch(query) => return self.search_choice_menu(query),
@@ -1662,13 +1807,6 @@ impl App {
                 self.res.reports = reports;
                 self.res.evaluated_revision = revision;
                 self.request_stats();
-                // An open menu of pictures shows the node as it is now.
-                if let Some(menu) = &self.ui.choice_menu {
-                    let drawn = self.res.choices.get(&(menu.node, menu.key.to_string())).map(|c| c.version);
-                    if drawn != self.res.reports.get(&menu.node).map(|r| r.version) {
-                        self.send(Request::Choices { node: menu.node, key: menu.key.to_string() });
-                    }
-                }
             }
             Event::Finished { revision, report, millis } => {
                 self.res.finished_revision = self.res.finished_revision.max(revision);
@@ -1686,8 +1824,10 @@ impl App {
             }
             Event::Memory(bytes) => self.res.memory = bytes,
             Event::Choices(c) => {
-                let pictures = c.pictures.iter().map(|rgba| image::Handle::from_rgba(c.size, c.size, rgba.clone())).collect();
-                self.res.choices.insert((c.node, c.key), ChoicePictures { version: c.version, pictures });
+                if let Some(pd) = c.kind.def().param(&c.key) {
+                    let pictures = c.pictures.iter().map(|rgba| image::Handle::from_rgba(c.size, c.size, rgba.clone())).collect();
+                    self.res.choices.insert((c.kind.id(), pd.key), pictures);
+                }
             }
             Event::Thumbnails(thumbs) => {
                 for t in thumbs {
@@ -2420,7 +2560,9 @@ impl App {
             // The model wears the maps in every screenshot: they take longest to arrive.
             && self.res.materials.len() >= self.material_nodes().len()
             // An open menu of pictures shows all of them.
-            && self.ui.choice_menu.as_ref().is_none_or(|m| self.res.choices.contains_key(&(m.node, m.key.to_string())));
+            && self.ui.choice_menu.as_ref().is_none_or(|m| {
+                self.graph().node(m.node).is_some_and(|n| self.res.choices.contains_key(&(n.kind.id(), m.key)))
+            });
         if !settled || self.started.elapsed() < Duration::from_secs(3) {
             if self.started.elapsed() > Duration::from_secs(30) {
                 log::error!("screenshot: gave up waiting for the engine");

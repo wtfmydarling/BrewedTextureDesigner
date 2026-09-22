@@ -59,9 +59,21 @@ fn toolbar_2d(app: &App) -> Element<'_, Message> {
     header(bar)
 }
 
-/// The header of the 3D view: the shape and the light.
+/// The header of the 3D view: how fast it draws, the shape and the light.
 fn toolbar_3d(app: &App) -> Element<'_, Message> {
-    let bar = row![icon(Icon::Cube, 14.0, style::TEXT_DIM), space().width(Length::Fill), crate::view::view3d::toolbar(app)]
+    let rate = app.ui.frame_rate;
+    // Digits in the monospaced font: they change every quarter of a second.
+    let frames = crate::view::tip(
+        text(format!("{:.0} FPS · {:.1} ms", rate.fps, rate.frame_ms)).size(style::SMALL).font(style::mono()).color(style::TEXT_DIM),
+        format!(
+            "Frames the 3D view drew in the last second, and how long a frame took on average (the \
+             longest {:.1} ms). View → Real-time Rendering draws it frame after frame; without it, it \
+             draws only when something changes.",
+            rate.worst_ms
+        ),
+        Position::Bottom,
+    );
+    let bar = row![icon(Icon::Cube, 14.0, style::TEXT_DIM), frames, space().width(Length::Fill), crate::view::view3d::toolbar(app)]
         .spacing(6)
         .align_y(Alignment::Center);
     header(bar)
@@ -145,6 +157,7 @@ fn content_2d(app: &App) -> Element<'_, Message> {
     let tiling = p.node.and_then(|id| app.eval.params(id)).map_or(0, |x| x.tiling());
     let scene = render::Scene {
         image: image.map(|img| (img.view.clone(), img.size)),
+        gray: image.is_some_and(|img| img.gray),
         rect,
         channel: p.channel,
         tile: [p.show_tiling && tiling & 1 != 0, p.show_tiling && tiling & 2 != 0],

@@ -654,64 +654,92 @@ fn every_noise_tiles() {
     });
 }
 
-/// The pictures of a node's options: one per option, each what the node makes with it, the
-/// current one what the node makes now, and drawn again only when something else changes.
+/// The pictures of a kind of node's options: one per option, each what a node of the kind
+/// makes with it as it is added, drawn once and the same whatever any node of the graph is
+/// set to.
 #[test]
 fn pictures_of_the_options() {
     let Some(mut e) = engine() else { return };
-    let mut g = graph();
-    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
-    set(&mut g, noise, "type", ParamValue::Enum(3));
-    let ev = evaluate_blocking(&mut e, &g);
-    let thumb = e.render_thumbnails().into_iter().find(|t| t.node == noise).expect("a thumbnail");
-    let choices = e.render_choices(&g, &ev, noise, "type").expect("pictures");
     let types = brewed_texture_core::nodes::NOISE_TYPES.len();
+    let choices = e.render_choices(NodeKind::NOISE, "type").expect("pictures");
     assert_eq!(choices.pictures.len(), types);
-    assert_eq!(choices.version, e.version(noise).unwrap());
-    // Drawn at the size of the test graph, the current option is the node's own thumbnail.
-    assert_eq!(crate::engine::CHOICE_RES, RES);
-    assert_eq!(choices.pictures[3], thumb.rgba);
     for i in 0..types {
         assert_eq!(choices.pictures[i].len(), (choices.size * choices.size * 4) as usize);
         for j in 0..i {
             assert_ne!(choices.pictures[i], choices.pictures[j], "options {i} and {j} look the same");
         }
     }
-    // Picking another option does not change any picture: they are kept.
-    set(&mut g, noise, "type", ParamValue::Enum(7));
-    let ev = evaluate_blocking(&mut e, &g);
-    let again = e.render_choices(&g, &ev, noise, "type").expect("pictures");
-    assert!(std::sync::Arc::ptr_eq(&again.pictures, &choices.pictures), "drawn again for nothing");
-    assert_eq!(again.version, e.version(noise).unwrap());
-    // Another seed changes all of them.
+    // The first is what a noise node makes as it is added: its own thumbnail (to a step of
+    // 8 bits here and there: the picture is drawn in 32 bits, the node stored in 16).
+    assert_eq!(crate::engine::CHOICE_RES, RES);
+    let mut g = graph();
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    evaluate_blocking(&mut e, &g);
+    let thumb = e.render_thumbnails().into_iter().find(|t| t.node == noise).expect("a thumbnail");
+    let off = thumb.rgba.iter().zip(&choices.pictures[0]).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+    assert!(off <= 1, "the picture is {off} off the thumbnail");
+    // Nothing a node is set to changes them: asking again gives the same pictures.
     set(&mut g, noise, "seed", ParamValue::Int(5));
-    let ev = evaluate_blocking(&mut e, &g);
-    let seeded = e.render_choices(&g, &ev, noise, "type").expect("pictures");
-    assert!(!std::sync::Arc::ptr_eq(&seeded.pictures, &choices.pictures));
-    assert_ne!(seeded.pictures[0], choices.pictures[0]);
-    // Only choices have pictures, and a node that is not there has none.
-    assert!(e.render_choices(&g, &ev, noise, "scale").is_none());
-    assert!(e.render_choices(&g, &ev, NodeId(9999), "type").is_none());
+    set(&mut g, noise, "scale", ParamValue::Int(3));
+    evaluate_blocking(&mut e, &g);
+    let again = e.render_choices(NodeKind::NOISE, "type").expect("pictures");
+    assert!(std::sync::Arc::ptr_eq(&again.pictures, &choices.pictures), "drawn again for nothing");
+    // Only choices have pictures, and only choices of nodes that draw from their parameters.
+    assert!(e.render_choices(NodeKind::NOISE, "scale").is_none());
+    assert!(e.render_choices(NodeKind::NOISE, "nothing").is_none());
+    assert!(e.render_choices(NodeKind::BITMAP, "tiling").is_none());
+    assert!(e.render_choices(NodeKind::SHAPE, "shape").is_some_and(|c| c.pictures.len() == brewed_texture_core::nodes::SHAPES.len()));
     assert!(e.gpu.take_errors().is_empty());
 }
 
-/// A node with an image input shows its options with what arrives there.
+/// An image nothing reads is let go of once its thumbnail is drawn: a node no other node
+/// takes and the 2D view does not show needs no more than its thumbnail. It is computed again
+/// only when it changes or something comes to read it.
 #[test]
-fn pictures_of_the_options_use_the_inputs() {
+fn images_nothing_reads_are_let_go_of() {
     let Some(mut e) = engine() else { return };
     let mut g = graph();
-    let tiles = g.add_node(NodeKind::TILE_GENERATOR, [0.0, 0.0]);
-    let empty = {
-        let ev = evaluate_blocking(&mut e, &g);
-        e.render_choices(&g, &ev, tiles, "pattern").expect("pictures")
-    };
-    let pattern = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
-    g.connect(pattern, "o:output", tiles, "i:pattern").unwrap();
-    let ev = evaluate_blocking(&mut e, &g);
-    let fed = e.render_choices(&g, &ev, tiles, "pattern").expect("pictures");
-    let image = brewed_texture_core::nodes::TILE_PATTERN_IMAGE as usize;
-    assert_ne!(fed.pictures[image], empty.pictures[image], "the input image is not in the picture");
-    assert_eq!(fed.pictures[0], empty.pictures[0], "the other options do not use the input");
+    let alone = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let read = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let blur = g.add_node(NodeKind::BLUR, [0.0, 0.0]);
+    g.connect(read, "o:output", blur, "i:input").unwrap();
+    evaluate_blocking(&mut e, &g);
+    let thumbs = e.render_thumbnails();
+    let before = e.memory();
+    e.release_unread(&g);
+    assert!(e.image(alone).is_none() && e.released(alone), "nothing reads it");
+    assert!(e.image(read).is_some(), "the blur reads it");
+    // The blur's own image is read by nothing either: its thumbnail is all that is left.
+    assert!(e.image(blur).is_none());
+    assert!(thumbs.iter().any(|t| t.node == alone), "its thumbnail was drawn first");
+    assert_eq!(before - e.memory(), 2 * RES as u64 * RES as u64 * 2, "two grayscale images of 2 bytes a pixel");
+
+    // Another node's change does not compute it again.
+    set(&mut g, read, "seed", ParamValue::Int(4));
+    evaluate_blocking(&mut e, &g);
+    assert!(e.image(alone).is_none(), "computed for nothing");
+    // Its own change does, for its thumbnail, and then it is let go of again.
+    set(&mut g, alone, "seed", ParamValue::Int(4));
+    evaluate_blocking(&mut e, &g);
+    assert_eq!(e.report.recomputed, 1);
+    assert!(e.render_thumbnails().iter().any(|t| t.node == alone));
+    e.release_unread(&g);
+    assert!(e.image(alone).is_none());
+    // Shown in the 2D view, it is computed and kept.
+    e.set_preview(Some(alone));
+    evaluate_blocking(&mut e, &g);
+    assert!(e.image(alone).is_some());
+    e.render_thumbnails();
+    e.release_unread(&g);
+    assert!(e.image(alone).is_some(), "the 2D view reads it");
+    // Read by another node, it is too.
+    e.set_preview(None);
+    let levels = g.add_node(NodeKind::LEVELS, [0.0, 0.0]);
+    g.connect(alone, "o:output", levels, "i:input").unwrap();
+    evaluate_blocking(&mut e, &g);
+    e.render_thumbnails();
+    e.release_unread(&g);
+    assert!(e.image(alone).is_some(), "the levels read it");
 }
 
 /// What the demo takes in GPU memory at 2048×2048, as the app shows it (prints).
@@ -765,7 +793,7 @@ fn grayscale_and_color_images() {
     assert_eq!(kind(&e, gray), Some(ImageKind::Gray));
     assert_eq!(kind(&e, color), Some(ImageKind::Color));
     assert_eq!(kind(&e, hsl), Some(ImageKind::Color));
-    assert!(e.image(noise).unwrap().is_gray() && e.image(noise).unwrap().bytes() == u64::from(RES * RES * 4));
+    assert!(e.image(noise).unwrap().is_gray() && e.image(noise).unwrap().bytes() == u64::from(RES * RES * 2), "two bytes a pixel");
     // A uniform color is one pixel, and reads as the whole texture.
     assert_eq!(e.image(color).unwrap().size(), [1, 1]);
     let px = e.read_image(color).unwrap();
@@ -820,7 +848,7 @@ fn outputs_and_bypassed_nodes_share_their_input() {
 /// show, which was 2.4 times as much before grayscale images, outputs without copies of
 /// their own, 8-bit copies for the views and one-pixel uniform colors.
 #[test]
-fn the_demo_takes_a_third_of_what_it_did() {
+fn the_demo_takes_a_quarter_of_what_it_did() {
     let Some(mut e) = engine() else { return };
     let (mut g, preview) = brewed_texture_core::demo::graph();
     g.resolution = [512, 512];
@@ -831,6 +859,6 @@ fn the_demo_takes_a_third_of_what_it_did() {
     // As the engine is once nothing changes for a moment: without its scratch images.
     e.gpu.clear_pool();
     let mb = e.memory() as f64 / (1024.0 * 1024.0);
-    // 802 MB at 2048 was 50 MB at 512.
-    assert!(mb < 22.0, "the demo takes {mb:.1} MB at 512");
+    // 802 MB at 2048 was 50 MB at 512; 219 MB at 2048 is 13.7 at 512.
+    assert!(mb < 14.0, "the demo takes {mb:.1} MB at 512");
 }
