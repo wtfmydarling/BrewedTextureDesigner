@@ -21,6 +21,11 @@ override GRAY1: bool = false;
 override GRAY2: bool = false;
 override GRAY3: bool = false;
 
+// The kind of image a kernel that makes several kinds (the types of noise) is built for.
+// Each kind is a pipeline of its own, with only the code of its kind: the compiler drops the
+// rest, and one kind builds in a fraction of the time all of them together would take.
+override KIND: u32 = 0u;
+
 fn widen(c: vec4<f32>, gray: bool) -> vec4<f32> {
     return select(c, vec4<f32>(c.r, c.r, c.r, 1.0), gray);
 }
@@ -42,9 +47,13 @@ fn as_output(c: vec4<f32>, format: u32) -> vec4<f32> {
 fn tile_x(t: u32) -> bool { return (t & 1u) != 0u; }
 fn tile_y(t: u32) -> bool { return (t & 2u) != 0u; }
 
+// `i` modulo `n`, from 0 to n - 1 whatever the sign of `i`. The remainder is only ever taken
+// of a number of zero or more: of a negative one, NVIDIA's Vulkan driver (616.92 still) gets
+// it wrong in some kernels (the corners of simplex noise left of the image), where DX12,
+// Mesa and the WGSL spec agree on it.
 fn wrap_i(i: i32, n: i32) -> i32 {
-    let r = i % n;
-    return select(r, r + n, r < 0);
+    if (i >= 0) { return i % n; }
+    return (i + n * (1 + (-i) / n)) % n;
 }
 
 // Texel fetch that wraps on tiled axes and clamps to the edge otherwise.

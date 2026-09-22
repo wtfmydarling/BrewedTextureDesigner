@@ -59,17 +59,39 @@ struct KernelSource {
     /// Reads its inputs through a trilinear sampler (bound after the output), which
     /// wraps on the axes the node tiles on.
     filtered: bool,
+    /// How many kinds of image it makes, each built on its own (the `KIND` of common.wgsl).
+    kinds: u32,
 }
 
 macro_rules! kernel {
     ($name:expr, $file:expr, $entry:expr, $inputs:expr) => {
-        KernelSource { name: $name, source: include_str!(concat!("shaders/", $file)), entry: $entry, inputs: $inputs, filtered: false }
+        kinded_kernel!($name, $file, $entry, $inputs, 1)
+    };
+}
+
+macro_rules! kinded_kernel {
+    ($name:expr, $file:expr, $entry:expr, $inputs:expr, $kinds:expr) => {
+        KernelSource {
+            name: $name,
+            source: include_str!(concat!("shaders/", $file)),
+            entry: $entry,
+            inputs: $inputs,
+            filtered: false,
+            kinds: $kinds,
+        }
     };
 }
 
 macro_rules! filtered_kernel {
     ($name:expr, $file:expr, $entry:expr, $inputs:expr) => {
-        KernelSource { name: $name, source: include_str!(concat!("shaders/", $file)), entry: $entry, inputs: $inputs, filtered: true }
+        KernelSource {
+            name: $name,
+            source: include_str!(concat!("shaders/", $file)),
+            entry: $entry,
+            inputs: $inputs,
+            filtered: true,
+            kinds: 1,
+        }
     };
 }
 
@@ -78,7 +100,8 @@ static KERNELS: &[KernelSource] = &[
     kernel!("shape", "shape.wgsl", "main", 0),
     kernel!("tile_gen", "tile_gen.wgsl", "main", 1),
     kernel!("gradient", "gradient.wgsl", "main", 0),
-    kernel!("noise", "noise.wgsl", "main", 0),
+    // One pipeline per type of noise (and white noise after them).
+    kinded_kernel!("noise", "noise.wgsl", "main", 0, brewed_texture_core::nodes::NOISE_TYPES.len() as u32),
     kernel!("transform", "transform.wgsl", "main", 1),
     kernel!("blend", "blend.wgsl", "main", 3),
     kernel!("blur_1d", "blur.wgsl", "blur_1d", 1),
@@ -180,9 +203,9 @@ pub struct Kernel {
     filtered: bool,
 }
 
-/// A kernel as built for the images it runs on: its name (or source), the format it writes
-/// and which of its inputs are grayscale.
-type KernelKey = (String, wgpu::TextureFormat, u8);
+/// A kernel as built for the images it runs on: its name (or source), the format it writes,
+/// which of its inputs are grayscale, and the kind of image it makes.
+type KernelKey = (String, wgpu::TextureFormat, u8, u32);
 
 /// Scratch images kept for reuse, each with whether it was used since the pool was last
 /// trimmed.
@@ -492,7 +515,8 @@ impl Gpu {
     }
 
     /// Compile WGSL into a compute kernel, capturing validation errors instead of
-    /// panicking. `gray` has bit n set when input n is grayscale.
+    /// panicking. `gray` has bit n set when input n is grayscale; `kind` is the kind of image
+    /// it makes.
     #[allow(clippy::too_many_arguments)]
     fn build_kernel(
         &self,
@@ -503,6 +527,7 @@ impl Gpu {
         filtered: bool,
         output: wgpu::TextureFormat,
         gray: u8,
+        kind: u32,
     ) -> Result<Rc<Kernel>, String> {
         let layout = self.layout(inputs, filtered, output);
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -516,7 +541,7 @@ impl Gpu {
             push_constant_ranges: &[],
         });
         let bit = |n: u8| if gray & (1 << n) != 0 { 1.0 } else { 0.0 };
-        let constants = [("GRAY0", bit(0)), ("GRAY1", bit(1)), ("GRAY2", bit(2)), ("GRAY3", bit(3))];
+        let constants = [("GRAY0", bit(0)), ("GRAY1", bit(1)), ("GRAY2", bit(2)), ("GRAY3", bit(3)), ("KIND", f64::from(kind))];
         let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some(label),
             layout: Some(&pipeline_layout),
@@ -534,18 +559,23 @@ impl Gpu {
 
     /// A built-in kernel writing color images from color images, compiled on first use.
     pub fn kernel(&self, name: &str) -> Result<Rc<Kernel>, String> {
-        self.kernel_variant(name, COLOR_FORMAT, 0)
+        self.kernel_variant(name, COLOR_FORMAT, 0, 0)
     }
 
-    /// A built-in kernel as built for writing `output` and reading grayscale images at the
-    /// inputs whose bits are set in `gray`.
-    pub fn kernel_variant(&self, name: &str, output: wgpu::TextureFormat, gray: u8) -> Result<Rc<Kernel>, String> {
-        let key = (name.to_string(), output, gray);
+    /// A built-in kernel as built for writing `output`, reading grayscale images at the
+    /// inputs whose bits are set in `gray`, and making the kind of image `kind`.
+    pub fn kernel_variant(&self, name: &str, output: wgpu::TextureFormat, gray: u8, kind: u32) -> Result<Rc<Kernel>, String> {
+        let key = (name.to_string(), output, gray, kind);
         if let Some(k) = self.kernels.borrow().get(&key) {
             return k.clone();
         }
         let src = KERNELS.iter().find(|k| k.name == name).ok_or_else(|| format!("unknown kernel '{name}'"))?;
-        let result = self.build_kernel(name, &kernel_source(src, output), src.entry, src.inputs, src.filtered, output, gray);
+        let result = if kind < src.kinds {
+            let label = if src.kinds > 1 { format!("{name} {kind}") } else { name.to_string() };
+            self.build_kernel(&label, &kernel_source(src, output), src.entry, src.inputs, src.filtered, output, gray, kind)
+        } else {
+            Err(format!("'{name}' makes {} kinds of image, not a kind {kind}", src.kinds))
+        };
         self.kernels.borrow_mut().insert(key, result.clone());
         result
     }
@@ -553,14 +583,14 @@ impl Gpu {
     /// A kernel generated at runtime (Pixel Math) writing `output`, cached by its source text.
     /// Its source says itself which inputs are grayscale.
     pub fn dynamic_kernel(&self, source: &str, inputs: usize, output: wgpu::TextureFormat) -> Result<Rc<Kernel>, String> {
-        let key = (format!("dyn:{inputs}:{source}"), output, 0);
+        let key = (format!("dyn:{inputs}:{source}"), output, 0, 0);
         if let Some(k) = self.kernels.borrow().get(&key) {
             return k.clone();
         }
-        let result = self.build_kernel("pixel_math", source, "main", inputs, false, output, 0);
+        let result = self.build_kernel("pixel_math", source, "main", inputs, false, output, 0, 0);
         let mut cache = self.kernels.borrow_mut();
         if cache.len() > 256 {
-            cache.retain(|(k, _, _), _| !k.starts_with("dyn:"));
+            cache.retain(|(k, ..), _| !k.starts_with("dyn:"));
         }
         cache.insert(key, result.clone());
         result
@@ -643,8 +673,23 @@ impl Gpu {
         output: &GpuImage,
         size: [u32; 2],
     ) -> Result<(), String> {
-        let k = self.kernel_variant(kernel, output.format(), Self::gray_inputs(inputs))?;
+        let k = self.kernel_variant(kernel, output.format(), Self::gray_inputs(inputs), 0)?;
         self.dispatch(encoder, &k, params, inputs, output, size, 0);
+        Ok(())
+    }
+
+    /// [`Gpu::run`] of a kernel that makes several kinds of image, making `kind`.
+    pub fn run_kind(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        kernel: &str,
+        kind: u32,
+        params: &[u8],
+        inputs: &[&GpuImage],
+        output: &GpuImage,
+    ) -> Result<(), String> {
+        let k = self.kernel_variant(kernel, output.format(), Self::gray_inputs(inputs), kind)?;
+        self.dispatch(encoder, &k, params, inputs, output, output.size(), 0);
         Ok(())
     }
 
@@ -662,7 +707,7 @@ impl Gpu {
         if inputs.iter().any(|i| i.is_gray()) {
             return Err(format!("'{kernel}' filters its inputs, which a grayscale image cannot be"));
         }
-        let k = self.kernel_variant(kernel, output.format(), 0)?;
+        let k = self.kernel_variant(kernel, output.format(), 0, 0)?;
         self.dispatch(encoder, &k, params, inputs, output, output.size(), tiling);
         Ok(())
     }
@@ -837,21 +882,24 @@ mod tests {
             }
         };
         let mut failures = Vec::new();
-        for name in kernel_names() {
-            let filtered = KERNELS.iter().any(|k| k.name == name && k.filtered);
-            let inputs = KERNELS.iter().find(|k| k.name == name).map_or(0, |k| k.inputs);
+        for src in KERNELS {
+            let name = src.name;
             // Every way the engine builds them: writing color or grayscale images (or the
-            // views' copies), from color or grayscale inputs.
-            let gray_inputs: u8 = if filtered { 0 } else { ((1u16 << inputs) - 1) as u8 };
+            // views' copies), from color or grayscale inputs, and every kind of image.
+            let gray_inputs: u8 = if src.filtered { 0 } else { ((1u16 << src.inputs) - 1) as u8 };
             for output in [COLOR_FORMAT, GRAY_FORMAT, DISPLAY_FORMAT] {
                 for gray in [0, gray_inputs] {
-                    if let Err(e) = gpu.kernel_variant(name, output, gray) {
-                        failures.push(format!("{name} ({output:?}, gray {gray:b}): {e}"));
+                    for kind in 0..src.kinds {
+                        if let Err(e) = gpu.kernel_variant(name, output, gray, kind) {
+                            failures.push(format!("{name} ({output:?}, gray {gray:b}, kind {kind}): {e}"));
+                        }
                     }
                 }
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+        // A kind the kernel does not make is an error, not a pipeline.
+        assert!(gpu.kernel_variant("noise", GRAY_FORMAT, 0, 1000).is_err());
     }
 
     #[test]

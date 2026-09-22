@@ -6,6 +6,7 @@ pub mod choices;
 pub mod context_menu;
 pub mod dialogs;
 pub mod editors;
+pub mod frames;
 pub mod graph;
 pub mod inputs;
 pub mod library;

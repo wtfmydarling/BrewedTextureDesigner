@@ -2,7 +2,6 @@
 
 pub mod color;
 pub mod dropdown;
-pub mod frame_clock;
 pub mod gradient;
 pub mod layered;
 pub mod number;

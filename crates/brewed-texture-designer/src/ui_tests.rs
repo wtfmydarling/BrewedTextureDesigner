@@ -927,7 +927,8 @@ fn press(w: &mut Harness, named: keyboard::key::Named) {
 
 /// A noise is picked by how it looks: the menu shows a picture of every type next to its
 /// name, below the field or above it but never over it, and a click, or the arrow keys and
-/// Enter, pick one in a single undo step.
+/// Enter, pick one in a single undo step. What is typed finds types by their names and by
+/// what they look like.
 #[test]
 fn choices_are_picked_by_their_pictures() {
     use brewed_texture_core::nodes::NOISE_TYPES;
@@ -944,7 +945,8 @@ fn choices_are_picked_by_their_pictures() {
         // The field shows the current type; a click on it opens the menu.
         let field = texts(&mut w, "Perlin").first().copied().expect("the field says Perlin");
         click(&mut w, field.center());
-        assert_eq!(w.app.ui.choice_menu, Some(ChoiceMenu { node: noise, key: "type", cursor: 0 }), "{width}×{height}");
+        let opened = ChoiceMenu { node: noise, key: "type", cursor: 0, query: String::new() };
+        assert_eq!(w.app.ui.choice_menu, Some(opened), "{width}×{height}");
         // The engine draws the pictures (here, one of each gray).
         let pictures = (0..NOISE_TYPES.len()).map(|i| vec![(i * 15) as u8; 4 * 4 * 4]).collect();
         w.send(Message::Engine(brewed_texture_engine::Event::Choices(brewed_texture_engine::ChoicePictures {
@@ -958,14 +960,17 @@ fn choices_are_picked_by_their_pictures() {
         w.input(&[]);
         w.snapshot(&format!("choices_{width}x{height}"));
 
-        // Every type is in the menu, inside the window and clear of the field.
+        // Every type is in the menu, clear of the field; in a window too low for all of them
+        // the menu scrolls, and what of it shows is inside the window.
         let window = iced::Rectangle::new(Point::ORIGIN, Size::new(width, height));
+        let inside = |at: iced::Rectangle| at.x >= 0.0 && at.y >= 0.0 && at.x + at.width <= width && at.y + at.height <= height;
         for name in NOISE_TYPES {
             let at = *texts(&mut w, name).last().unwrap_or_else(|| panic!("{name} is not in the menu"));
-            let (x1, y1) = (at.x + at.width, at.y + at.height);
-            assert!(at.x >= 0.0 && at.y >= 0.0 && x1 <= window.width && y1 <= window.height, "{name} at {at:?}");
             assert!(at.intersection(&field).is_none(), "{name} covers the field");
+            assert!(inside(at) || height < 1000.0, "{name} at {at:?}, outside {window:?}");
         }
+        let first = *texts(&mut w, "Perlin").last().expect("Perlin in the menu");
+        assert!(inside(first), "the top of the menu at {first:?}, outside {window:?}");
 
         // A click on a type picks it and closes the menu; one undo puts the old one back.
         let cells = *texts(&mut w, "Cells").last().expect("Cells in the menu");
@@ -994,9 +999,50 @@ fn choices_are_picked_by_their_pictures() {
         assert_eq!(w.app.ui.choice_menu, None);
         w.send(Message::ChoiceMenu(Some((noise, "type"))));
         w.input(&[]);
-        click(&mut w, Point::new(width * 0.3, height * 0.3));
+        click(&mut w, Point::new(width * 0.05, height * 0.5));
         assert_eq!(w.app.ui.choice_menu, None);
         assert_eq!(kind(&w), Some(walked));
+
+        // Typed into the search field (which opening the menu gives the keyboard to), a word
+        // leaves the types it names or describes: these are all made of cells.
+        w.send(Message::ChoiceMenu(Some((noise, "type"))));
+        w.input(&[]);
+        assert!(matches!(w.operate(focusable::focus::<()>(view::choices::search_id())), Outcome::None));
+        assert_eq!(w.focused(), Some(view::choices::search_id()), "the search field takes the keyboard");
+        assert!(w.input(&typing("voronoi")) > 0, "the search field got nothing");
+        let cellular = ["Cells", "Cracks", "Crystal", "Mosaic", "Stones"];
+        for (i, name) in NOISE_TYPES.iter().enumerate() {
+            // (The field says what the type is now.)
+            let in_field = usize::from(i as u32 == walked);
+            let shows = texts(&mut w, name).len() > in_field;
+            assert_eq!(shows, cellular.contains(name), "{name} {}", if shows { "shows" } else { "is gone" });
+        }
+        // The keyboard is on the first of them; down goes to the next row of what is left.
+        let option = |name: &str| NOISE_TYPES.iter().position(|n| *n == name).map(|i| i as u32);
+        assert_eq!(w.app.ui.choice_menu.as_ref().map(|m| m.cursor as u32), option("Cells"));
+        press(&mut w, keyboard::key::Named::ArrowDown);
+        let below = cellular[view::choices::columns(NOISE_TYPES.len()).min(cellular.len() - 1)];
+        assert_eq!(w.app.ui.choice_menu.as_ref().map(|m| m.cursor as u32), option(below));
+        // Left and right move in the text while there is some, not from picture to picture.
+        press(&mut w, keyboard::key::Named::ArrowLeft);
+        assert_eq!(w.app.ui.choice_menu.as_ref().map(|m| m.cursor as u32), option(below));
+        // Two words must both match; nothing matching says so, and Enter then picks nothing.
+        w.send(Message::ChoiceSearch("voronoi flat".into()));
+        assert!(texts(&mut w, "Cells").is_empty() && !texts(&mut w, "Mosaic").is_empty());
+        w.send(Message::ChoiceSearch("zzz".into()));
+        assert!(!texts(&mut w, "Nothing matches").is_empty());
+        press(&mut w, keyboard::key::Named::Enter);
+        assert_eq!(kind(&w), Some(walked));
+        // A name picks with Enter, whatever the keyboard was on before.
+        w.send(Message::ChoiceSearch("maze".into()));
+        press(&mut w, keyboard::key::Named::Enter);
+        assert_eq!(kind(&w), option("Maze"));
+        assert_eq!(w.app.ui.choice_menu, None);
+        // The next time the menu opens, the search is empty and every type shows again.
+        w.send(Message::ChoiceMenu(Some((noise, "type"))));
+        assert_eq!(w.app.ui.choice_menu.as_ref().map(|m| m.query.as_str()), Some(""));
+        assert!(!texts(&mut w, "Cells").is_empty());
+        w.send(Message::ChoiceMenu(None));
     }
 }
 
@@ -1027,66 +1073,76 @@ fn frame_cost() {
 }
 
 
-/// Draw one frame at `at`, as the window does, and say whether the window asks for another.
+/// Draw one frame, as the window does at `at`, and say what comes next: what the widgets ask
+/// for, or another frame when they published anything (the runtime draws again after
+/// messages).
 fn draw_frame(w: &mut Harness, at: std::time::Instant) -> window::RedrawRequest {
     let mut messages = Vec::new();
     let cursor = w.cursor;
     let redraw = iced::Event::Window(window::Event::RedrawRequested(at));
     let state = w.frame(|ui, renderer| ui.update(&[redraw], cursor, renderer, &mut clipboard::Null, &mut messages).0);
+    let published = !messages.is_empty();
     for m in messages {
         w.send(m);
     }
     match state {
+        _ if published => window::RedrawRequest::NextFrame,
         iced_runtime::user_interface::State::Updated { redraw_request, .. } => redraw_request,
         iced_runtime::user_interface::State::Outdated => window::RedrawRequest::NextFrame,
     }
 }
 
-/// Drawing in real time, the window asks for the next frame as soon as it drew one, and the
-/// status bar says how many it draws a second; drawing on demand, it asks for none.
+/// The 3D view draws frame after frame in real time and counts them; the status bar says how
+/// many it drew in the last second, and says so no longer once it stops.
 #[test]
-fn the_window_draws_in_real_time() {
-    let mut w = harness!(view::toolbar::status_bar, 1680.0, 24.0);
-    let start = std::time::Instant::now();
+fn the_3d_view_draws_in_real_time() {
+    use std::time::{Duration, Instant};
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let start = Instant::now();
     // A monitor that shows 144 frames a second.
-    let at = |frame: u64| start + std::time::Duration::from_nanos(frame * 1_000_000_000 / 144);
+    let at = |frame: u64| start + Duration::from_nanos(frame * 1_000_000_000 / 144);
     for frame in 0..300 {
         assert_eq!(draw_frame(&mut w, at(frame)), window::RedrawRequest::NextFrame, "frame {frame}");
     }
     let rate = w.app.ui.frame_rate;
     assert!((rate.fps - 144.0).abs() < 0.5, "{rate:?}");
-    assert!(!texts(&mut w, "144 FPS · 6.9 ms").is_empty(), "the status bar says so");
+    assert!(!texts(&mut w, "3D 144 FPS").is_empty(), "the status bar says so");
 
+    // Drawing on demand, a frame asks for no other.
     w.send(Message::ToggleRealtime);
     assert_eq!(draw_frame(&mut w, at(300)), window::RedrawRequest::Wait, "on demand, a frame asks for none");
-    assert!(!texts(&mut w, "On demand").is_empty());
+    // A second after its last frame, the 3D view has drawn none in the last second.
+    w.app.ui.frame_rate_at = Some(Instant::now() - Duration::from_secs(2));
+    w.send(Message::Tick);
+    assert!(!texts(&mut w, "3D 0 FPS").is_empty());
 }
 
-/// The status bar says what the engine does now: how long the graph took to update over
-/// the last second, that it is computing a change that takes long, or that it is idle; and
-/// how much GPU memory the images take.
+/// The status bar says what happens now, and nothing older than a second: how many nodes the
+/// graph has, how many of them its last change computed again and how long its changes take,
+/// or how long a change has been computed when it takes long; and the GPU memory.
 #[test]
 fn the_status_bar_says_what_happens_now() {
     use brewed_texture_engine::{EvalReport, Event};
     use std::time::{Duration, Instant};
     let mut w = harness!(view::toolbar::status_bar, 1680.0, 24.0);
     let shown = |w: &mut Harness, text: &str| !texts(w, text).is_empty();
+    let nodes = w.app.graph().nodes.len();
     // What the engine tells after two changes that computed three nodes each.
     let report = EvalReport { recomputed: 3, image_nodes: 17 };
     w.send(Message::Engine(Event::Memory(344 * 1024 * 1024)));
     w.send(Message::Engine(Event::Finished { revision: 1, report, millis: 7.0 }));
     w.send(Message::Engine(Event::Finished { revision: 1, report, millis: 9.0 }));
-    assert!(shown(&mut w, "Graph 8.0 ms"), "the average of the last second");
+    assert!(shown(&mut w, &format!("{nodes} nodes · 3 recomputed · 8.0 ms")), "the average of the last second");
     assert!(shown(&mut w, "VRAM 344 MB"));
     // A change that computed nothing (a node moved) is not an update of the graph.
     w.send(Message::Engine(Event::Finished { revision: 1, report: EvalReport { recomputed: 0, image_nodes: 17 }, millis: 0.1 }));
-    assert!(shown(&mut w, "Graph 8.0 ms"));
-    // A second later nothing is left of those updates: the graph is idle.
+    assert!(shown(&mut w, &format!("{nodes} nodes · 3 recomputed · 8.0 ms")));
+    // A second later nothing is left of those updates: nothing is computed now.
     for update in &mut w.app.res.updates {
         update.0 -= Duration::from_secs(2);
     }
-    assert!(shown(&mut w, "Graph idle"));
+    assert!(shown(&mut w, &format!("{nodes} nodes · 0 recomputed")));
     // A change that takes long says so, and for how long it has taken.
     w.app.res.busy_since = Some(Instant::now() - Duration::from_millis(1500));
-    assert!(shown(&mut w, "Graph computing… 1.5 s"));
+    assert!(shown(&mut w, &format!("{nodes} nodes · computing… 1.5 s")));
 }

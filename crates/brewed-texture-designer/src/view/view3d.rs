@@ -6,7 +6,7 @@
 
 use iced::widget::shader::{self, Viewport};
 use iced::widget::{button, container, pick_list, row, shader as shader_widget, text};
-use iced::{Alignment, Element, Length, Rectangle, Vector, mouse};
+use iced::{Alignment, Element, Length, Rectangle, Vector, mouse, window};
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::nodes::{USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL, USAGE_ROUGHNESS};
 use brewed_texture_engine::wgpu;
@@ -14,6 +14,7 @@ use wgpu::util::DeviceExt;
 
 use crate::app::{App, Message, PreviewMessage};
 use crate::style;
+use crate::view::frames::FrameCounter;
 use crate::widget::number::number;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -195,7 +196,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         }
     }
     let missing = maps.iter().all(Option::is_none);
-    let scene = Scene { camera: app.ui.preview.view3d, maps };
+    let scene = Scene { camera: app.ui.preview.view3d, maps, realtime: app.ui.realtime };
     let mut layers: Vec<Element<'_, Message>> = vec![shader_widget(scene).width(Length::Fill).height(Length::Fill).into()];
     if missing {
         layers.push(
@@ -228,6 +229,8 @@ pub struct Scene {
     camera: Camera,
     /// Base color, normal, height, roughness, metallic, ambient occlusion, emissive.
     maps: [Option<wgpu::TextureView>; 7],
+    /// Draw frame after frame, rather than only when something changes.
+    realtime: bool,
 }
 
 #[derive(Default)]
@@ -235,6 +238,8 @@ pub struct DragState {
     orbit: Option<iced::Point>,
     light: Option<iced::Point>,
     pan: Option<iced::Point>,
+    /// The frames the view drew, for the status bar.
+    frames: FrameCounter,
 }
 
 impl shader::Program<Message> for Scene {
@@ -252,6 +257,14 @@ impl shader::Program<Message> for Scene {
         // arrive in one frame, and each has to add to the one before.
         let publish = |m: Move| Some(shader::Action::publish(Message::Preview(PreviewMessage::Move3d(m))).and_capture());
         match event {
+            // Every frame the view draws is counted, and a few times a second the rate is said
+            // (which draws the next frame too). Drawing in real time, each frame asks for the
+            // next.
+            iced::Event::Window(window::Event::RedrawRequested(now)) => match state.frames.frame(*now) {
+                Some(rate) => Some(shader::Action::publish(Message::FrameRate(rate))),
+                None if self.realtime => Some(shader::Action::request_redraw()),
+                None => None,
+            },
             iced::Event::Mouse(mouse::Event::ButtonPressed(button)) => {
                 let p = cursor.position_over(bounds)?;
                 match button {
@@ -263,7 +276,7 @@ impl shader::Program<Message> for Scene {
                 Some(shader::Action::capture())
             }
             iced::Event::Mouse(mouse::Event::ButtonReleased(_)) => {
-                *state = DragState::default();
+                (state.orbit, state.light, state.pan) = (None, None, None);
                 None
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {

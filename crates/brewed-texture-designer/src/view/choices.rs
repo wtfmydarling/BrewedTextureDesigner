@@ -1,9 +1,10 @@
 //! Choices picked by how they look. What a noise or a shape is called matters less than
 //! what it looks like, so the field shows the node's picture next to the option's name, and
 //! its menu shows every option as a picture of what the node makes with it: drawn by the
-//! engine with everything else as it is now, the seed and the scale included.
+//! engine with everything else as it is now, the seed and the scale included. A long menu
+//! has a search field, which finds options by their names and by what they look like.
 
-use iced::widget::{button, column, container, image, row, scrollable, space, text};
+use iced::widget::{Id, button, column, container, image, row, scrollable, space, text, text_input};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::graph::{Node, NodeId};
 use brewed_texture_core::nodes::ParamDef;
@@ -19,14 +20,39 @@ const PICTURE: f32 = 56.0;
 const FIELD_PICTURE: f32 = 18.0;
 /// Width of an option in the menu.
 const OPTION_W: f32 = 178.0;
+/// Space between the options.
+const GAP: f32 = 2.0;
+
+pub const SEARCH_ID: &str = "brewed-choice-search";
+pub const LIST_ID: &str = "brewed-choice-list";
+
+pub fn search_id() -> Id {
+    Id::new(SEARCH_ID)
+}
+
+pub fn list_id() -> Id {
+    Id::new(LIST_ID)
+}
+
+/// Whether the menu of a choice has a search field: one with more options than fit in a
+/// glance has.
+pub fn searched(pd: &ParamDef) -> bool {
+    pd.enum_options().len() > 12
+}
+
+/// The options a search leaves, in their order.
+pub fn shown(pd: &ParamDef, query: &str) -> Vec<usize> {
+    (0..pd.enum_options().len()).filter(|&i| pd.option_matches(i, query)).collect()
+}
 
 /// Columns of a menu of `options` options: a short list stays a list, a long one spreads
-/// out so it fits under the field.
+/// out so it fits under (or over) the field.
 pub fn columns(options: usize) -> usize {
     match options {
         0..=6 => 1,
         7..=12 => 2,
-        _ => 3,
+        13..=24 => 3,
+        _ => 4,
     }
 }
 
@@ -54,20 +80,22 @@ pub fn field<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, current: u
     dropdown(face, menu, open).on_dismiss(Message::ChoiceMenu(None)).into()
 }
 
-/// Every option: its picture, then its name.
+/// Every option the search leaves: its picture, then its name.
 fn menu<'a>(app: &'a App, id: NodeId, pd: &'static ParamDef, current: u32) -> Element<'a, Message> {
     let options = pd.enum_options();
     let pictures = app.res.choices.get(&(id, pd.key.to_string()));
-    let lit = app.ui.choice_menu.as_ref().map_or(current as usize, |m| m.cursor);
+    let (lit, query) = app.ui.choice_menu.as_ref().map_or((current as usize, ""), |m| (m.cursor, m.query.as_str()));
+    // As many columns, and as wide, whatever the search leaves, so the menu keeps its place.
     let columns = columns(options.len());
-    let mut grid = column![].spacing(2);
-    for (r, chunk) in options.chunks(columns).enumerate() {
-        let mut line = row![].spacing(2);
-        for (c, label) in chunk.iter().enumerate() {
-            let i = r * columns + c;
+    let width = Length::Fixed(columns as f32 * OPTION_W + (columns - 1) as f32 * GAP);
+    let shown = shown(pd, query);
+    let mut grid = column![].spacing(GAP).width(width);
+    for chunk in shown.chunks(columns) {
+        let mut line = row![].spacing(GAP);
+        for &i in chunk {
             line = line.push(
                 button(
-                    row![picture(pictures.and_then(|p| p.pictures.get(i)), PICTURE), text(*label).size(style::TEXT_SIZE)]
+                    row![picture(pictures.and_then(|p| p.pictures.get(i)), PICTURE), text(options[i]).size(style::TEXT_SIZE)]
                         .spacing(10)
                         .align_y(Alignment::Center),
                 )
@@ -79,8 +107,28 @@ fn menu<'a>(app: &'a App, id: NodeId, pd: &'static ParamDef, current: u32) -> El
         }
         grid = grid.push(line);
     }
+    if shown.is_empty() {
+        grid = grid.push(container(text("Nothing matches").size(style::SMALL).color(style::TEXT_DIM)).padding(8));
+    }
     // Scrolls when the window is too low for all of it.
-    container(scrollable(grid).style(style::scrollable)).padding(4).style(style::popup).into()
+    let list = scrollable(grid).id(list_id()).style(style::scrollable);
+    let body: Element<'a, Message> = if searched(pd) {
+        column![
+            text_input("Search…", query)
+                .id(search_id())
+                .on_input(Message::ChoiceSearch)
+                .padding([5, 8])
+                .size(style::TEXT_SIZE)
+                .width(width)
+                .style(style::text_input),
+            list,
+        ]
+        .spacing(4)
+        .into()
+    } else {
+        list.into()
+    };
+    container(body).padding(4).style(style::popup).into()
 }
 
 /// A picture in its frame, or the empty frame until the engine has drawn it.

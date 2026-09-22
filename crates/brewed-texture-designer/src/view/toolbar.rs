@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use iced::widget::{button, column, container, image, pick_list, row, rule, space, stack, text, tooltip};
+use iced::widget::{button, column, container, image, pick_list, row, rule, space, text, tooltip};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::Edit;
 
@@ -12,7 +12,6 @@ use crate::icons::{Icon, icon};
 use crate::style;
 use crate::view::tip;
 use crate::widget::dropdown::dropdown;
-use crate::widget::frame_clock::frame_clock;
 
 const RESOLUTIONS: [u32; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
 const MENU_BAR_H: f32 = 30.0;
@@ -193,21 +192,28 @@ fn megabytes(bytes: u64) -> String {
     if mb < 1000.0 { format!("{mb:.0} MB") } else { format!("{:.1} GB", mb / 1024.0) }
 }
 
-/// A reading of the status bar: as wide as it can get, so that its neighbours stay put
-/// while its digits change.
-fn reading<'a>(content: String, width: f32, hint: String) -> Element<'a, Message> {
+/// `n` of `thing`, as English counts them.
+fn count(n: usize, thing: &str) -> String {
+    if n == 1 { format!("1 {thing}") } else { format!("{n} {thing}s") }
+}
+
+/// A reading of the status bar, as long as it has to be and no longer.
+fn reading<'a>(content: String, hint: String) -> Element<'a, Message> {
     tip(
-        container(text(content).size(style::SMALL).color(style::TEXT_DIM).wrapping(text::Wrapping::None))
-            .width(Length::Fixed(width))
-            .align_x(iced::alignment::Horizontal::Right),
+        text(content).size(style::SMALL).color(style::TEXT_DIM).wrapping(text::Wrapping::None),
         hint,
         tooltip::Position::Top,
     )
 }
 
-/// The status bar across the bottom of the window: the latest message (nothing when there
-/// is none), then what is happening right now: how fast the window draws, how long the
-/// graph takes to update and how much GPU memory its images take, and the GPU.
+fn divider<'a>() -> Element<'a, Message> {
+    container(space().width(1).height(12)).style(style::hairline(style::LINE)).into()
+}
+
+/// The status bar across the bottom of the window: the latest message (nothing when there is
+/// none), then what is happening now, over the last second: the graph's nodes, how many of
+/// them its last change computed again and how long its changes take; how fast the 3D view
+/// draws; how much GPU memory the images take; and the GPU.
 pub fn status_bar(app: &App) -> Element<'_, Message> {
     let status: Element<'_, Message> = match &app.ui.status {
         Some(s) => text(s.text.clone())
@@ -218,54 +224,48 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
         None => space().into(),
     };
 
-    let rate = app.ui.frame_rate;
-    let frames = if app.ui.realtime {
-        reading(
-            format!("{:.0} FPS · {}", rate.fps, duration(rate.frame_ms)),
-            120.0,
-            format!(
-                "Frames the window draws a second, and how long a frame takes on average; \
-                 the longest one in the last second took {}. View → Real-time Rendering stops \
-                 drawing when nothing changes.",
-                duration(rate.worst_ms)
-            ),
-        )
-    } else {
-        reading(
-            "On demand".into(),
-            120.0,
-            "The window draws only when something changes. View → Real-time Rendering draws frame \
-             after frame, and counts them."
-                .into(),
-        )
-    };
-
-    // The engine is there once it started, or once it said anything.
-    let engine = app.engine.is_some() || app.res.finished_revision > 0;
+    let nodes = count(app.graph().nodes.len(), "node");
     let busy = app.res.busy_since.map(|since| since.elapsed());
-    let recent: Vec<f32> =
-        app.res.updates.iter().filter(|(at, _)| at.elapsed() <= READING_SPAN).map(|(_, millis)| *millis).collect();
+    let recent: Vec<(f32, usize)> =
+        app.res.updates.iter().filter(|(at, ..)| at.elapsed() <= READING_SPAN).map(|(_, millis, n)| (*millis, *n)).collect();
     let graph = match busy {
         Some(for_) if app.res.slow || for_ >= COMPUTING_AFTER => {
-            format!("Graph computing… {}", duration(for_.as_secs_f32() * 1000.0))
+            format!("{nodes} · computing… {}", duration(for_.as_secs_f32() * 1000.0))
         }
-        _ if !recent.is_empty() => format!("Graph {}", duration(recent.iter().sum::<f32>() / recent.len() as f32)),
-        _ if !engine => String::new(),
-        _ => "Graph idle".into(),
+        _ => match recent.last() {
+            Some((_, recomputed)) => {
+                let average = recent.iter().map(|(millis, _)| millis).sum::<f32>() / recent.len() as f32;
+                format!("{nodes} · {recomputed} recomputed · {}", duration(average))
+            }
+            None => format!("{nodes} · 0 recomputed"),
+        },
     };
     let graph = reading(
         graph,
-        150.0,
-        "How long the graph takes to update, averaged over the last second: from a change until \
-         the GPU is done with its images, their thumbnails and the views. Only the nodes a change \
-         affects are computed again. Idle while nothing changes."
+        "The nodes of the graph; how many of them the last change of the last second computed again \
+         (only those it affects); and how long the changes of the last second took on average, from \
+         the change until the GPU was done with the images, their thumbnails and the views."
             .into(),
     );
+
+    let rate = app.ui.frame_rate;
+    let frames = reading(
+        format!("3D {:.0} FPS", rate.fps),
+        format!(
+            "Frames the 3D view drew in the last second: {} apart on average, {} at the most. View → \
+             Real-time Rendering draws it frame after frame; without it, it draws only when something \
+             changes.",
+            duration(rate.frame_ms),
+            duration(rate.worst_ms)
+        ),
+    );
+
+    // The engine is there once it started, or once it said anything.
+    let engine = app.engine.is_some() || app.res.finished_revision > 0;
     let memory = reading(
-        if engine { format!("VRAM {}", megabytes(app.res.memory)) } else { String::new() },
-        100.0,
-        "GPU memory the images take: every node's image at the texture size, the copies the 2D \
-         and 3D views show, and the scratch images kept for reuse."
+        format!("VRAM {}", megabytes(app.res.memory)),
+        "GPU memory the images take: every node's image at the texture size, the copies the 2D and \
+         3D views show, and the scratch images kept for reuse while changes keep coming."
             .into(),
     );
 
@@ -276,22 +276,13 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
     } else {
         app.adapter.clone()
     };
-    container(
-        row![
-            container(status).clip(true).width(Length::Fill),
-            // The clock takes no room: it only keeps the window drawing and counts frames.
-            stack![frames, frame_clock(app.ui.realtime, Message::FrameRate)],
-            graph,
-            memory,
-            container(space().width(1).height(12)).style(style::hairline(style::LINE)),
-            text(gpu).size(style::SMALL).color(style::TEXT_FAINT),
-        ]
-        .spacing(12)
+    let mut bar = row![container(status).clip(true).width(Length::Fill), graph, divider(), frames]
+        .spacing(8)
         .align_y(Alignment::Center)
-        .height(Length::Fixed(STATUS_BAR_H)),
-    )
-    .padding([0, 10])
-    .width(Length::Fill)
-    .style(style::window_bar)
-    .into()
+        .height(Length::Fixed(STATUS_BAR_H));
+    if engine {
+        bar = bar.push(divider()).push(memory);
+    }
+    bar = bar.push(divider()).push(text(gpu).size(style::SMALL).color(style::TEXT_FAINT));
+    container(bar).padding([0, 10]).width(Length::Fill).style(style::window_bar).into()
 }

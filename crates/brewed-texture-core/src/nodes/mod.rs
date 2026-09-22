@@ -21,8 +21,8 @@ use crate::types::{DataType, ParamValue, Tiling};
 
 pub use filters::{BLEND_MODES, PIXEL_MATH_BUILTINS};
 pub use generators::{
-    CELL_STYLES, NOISE_CELLS, NOISE_SCRATCHES, NOISE_SPOTS, NOISE_TYPES, NOISE_WHITE, PERLIN_STYLES, SHAPE_POLYGON, SHAPE_ROUNDED,
-    SHAPE_STAR, SHAPES, TILE_PATTERN_IMAGE,
+    NOISE_CELLS, NOISE_CRACKS, NOISE_FIBERS, NOISE_SCRATCHES, NOISE_TYPES, NOISE_VEINS, NOISE_WHITE, NOISE_WOOD,
+    SHAPE_POLYGON, SHAPE_ROUNDED, SHAPE_STAR, SHAPES, TILE_PATTERN_IMAGE,
 };
 pub use output::{
     OUTPUT_FORMATS, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL,
@@ -216,6 +216,9 @@ pub struct ParamDef {
     /// The options are chosen by how they look: the menu shows each as a picture of what
     /// the node makes with it, not only its name.
     pub pictured: bool,
+    /// Words each option is found by in its menu's search besides its name, one string of
+    /// words per option (or none).
+    pub words: &'static [&'static str],
 }
 
 impl ParamDef {
@@ -239,6 +242,7 @@ impl ParamDef {
             exposable,
             limits: None,
             pictured: false,
+            words: &[],
         }
     }
     /// Hold the value to the range of the slider: outside it the parameter means nothing.
@@ -264,6 +268,11 @@ impl ParamDef {
     /// Show the options as pictures of what the node makes with each.
     pub(crate) const fn pictured(mut self) -> Self {
         self.pictured = true;
+        self
+    }
+    /// Words each option is found by besides its name (one string of words per option).
+    pub(crate) const fn searched(mut self, words: &'static [&'static str]) -> Self {
+        self.words = words;
         self
     }
 
@@ -306,6 +315,18 @@ impl ParamDef {
             ParamKind::Enum { options, .. } => options,
             _ => &[],
         }
+    }
+
+    /// Does option `option` match a search? Every word of the query has to be in the
+    /// option's name, or begin one of its words.
+    pub fn option_matches(&self, option: usize, query: &str) -> bool {
+        let Some(name) = self.enum_options().get(option) else { return false };
+        let name = name.to_lowercase();
+        let words = self.words.get(option).map(|w| w.to_lowercase()).unwrap_or_default();
+        query
+            .to_lowercase()
+            .split_whitespace()
+            .all(|q| name.contains(q) || words.split_whitespace().any(|w| w.starts_with(q)))
     }
 
     pub fn can_expose(&self) -> bool {

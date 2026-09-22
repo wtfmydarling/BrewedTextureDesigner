@@ -24,7 +24,7 @@ use crate::gpu::{self, EventSource};
 use crate::eyedropper;
 use crate::picker::{self, PickTarget, Shot};
 use crate::view;
-use crate::widget::frame_clock::FrameRate;
+use crate::view::frames::FrameRate;
 
 // ---------------------------------------------------------------------------- options
 
@@ -186,6 +186,8 @@ pub struct ChoiceMenu {
     pub key: &'static str,
     /// The option the arrow keys are on (Enter picks it).
     pub cursor: usize,
+    /// What is typed in the menu's search field: only the options it matches show.
+    pub query: String,
 }
 
 /// Pictures of what a node makes with each option of a choice, as the engine drew them.
@@ -253,10 +255,11 @@ pub struct Ui {
     /// Where the color picker floats: where it was opened from.
     pub color_picker_at: Point,
     pub choice_menu: Option<ChoiceMenu>,
-    /// The window draws frame after frame, rather than only when something changes.
+    /// The 3D view draws frame after frame, rather than only when something changes.
     pub realtime: bool,
-    /// How fast it did over the last second.
+    /// How fast the 3D view drew over the last second, and when it last said so.
     pub frame_rate: FrameRate,
+    pub frame_rate_at: Option<Instant>,
     /// Selected stop of each gradient editor.
     pub gradient_stop: HashMap<(NodeId, String), usize>,
     /// The expression editor's text buffer (node, content).
@@ -287,10 +290,11 @@ pub struct Results {
     pub probe: Option<(NodeId, [u32; 2], [f32; 4])>,
     /// The pictures of the options of the choices whose menus were opened.
     pub choices: HashMap<(NodeId, String), ChoicePictures>,
-    /// When the changes of the last second were done, and how long each took from the
-    /// moment the engine started on it until the GPU was done with it. Changes that
-    /// computed nothing (moving a node, say) are not among them.
-    pub updates: VecDeque<(Instant, f32)>,
+    /// The changes of the last second: when each was done, how long it took from the
+    /// moment the engine started on it until the GPU was done with it, and how many nodes
+    /// it computed again. Changes that computed nothing (moving a node, say) are not among
+    /// them.
+    pub updates: VecDeque<(Instant, f32, usize)>,
     /// GPU memory the engine's images take, in bytes.
     pub memory: u64,
     pub evaluated_revision: u64,
@@ -471,10 +475,12 @@ pub enum Message {
     // properties
     /// Open the menu of a choice picked by its pictures, or close it.
     ChoiceMenu(Option<(NodeId, &'static str)>),
+    /// Something was typed in the search field of such a menu.
+    ChoiceSearch(String),
     /// An option of such a choice was picked.
     PickChoice(NodeId, &'static str, u32),
     // status bar
-    /// How fast the window draws (a few times a second).
+    /// How fast the 3D view draws (it says so a few times a second while it draws).
     FrameRate(FrameRate),
     ToggleRealtime,
     Expression(NodeId, text_editor::Action),
@@ -598,6 +604,7 @@ impl App {
                 choice_menu: None,
                 realtime: true,
                 frame_rate: FrameRate::default(),
+                frame_rate_at: None,
                 gradient_stop: HashMap::new(),
                 expression: None,
                 plot_var: 0,
@@ -705,11 +712,11 @@ impl App {
             subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
         }
         // The status bar's readings change with time alone: a change that takes long says
-        // so, and the updates of the last second grow old. Drawing in real time, the frame
-        // clock (see `view::toolbar`) keeps them current; drawing on demand, a tick does.
-        let aging = self.res.busy_since.is_some() || !self.res.updates.is_empty();
-        if aging && !self.ui.realtime {
-            subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick));
+        // so, and what the last second held grows old, the frames of a 3D view that stopped
+        // drawing too.
+        let aging = self.res.busy_since.is_some() || !self.res.updates.is_empty() || self.ui.frame_rate_at.is_some();
+        if aging {
+            subs.push(iced::time::every(Duration::from_millis(200)).map(|_| Message::Tick));
         }
         Subscription::batch(subs)
     }
@@ -836,51 +843,93 @@ impl App {
         self.ui.choice_menu = None;
     }
 
-    /// Keep the status bar's readings current: forget the updates older than a second, and
-    /// note a change that has taken long enough to say so.
+    /// Keep the status bar's readings current: forget the updates older than a second and the
+    /// frames of a 3D view that has drawn none since, and note a change that has taken long
+    /// enough to say so.
     fn age_readings(&mut self) {
-        while self.res.updates.front().is_some_and(|(at, _)| at.elapsed() > view::toolbar::READING_SPAN) {
+        while self.res.updates.front().is_some_and(|(at, ..)| at.elapsed() > view::toolbar::READING_SPAN) {
             self.res.updates.pop_front();
+        }
+        if self.ui.frame_rate_at.is_some_and(|at| at.elapsed() > view::frames::WINDOW) {
+            self.ui.frame_rate = FrameRate::default();
+            self.ui.frame_rate_at = None;
         }
         if self.res.busy_since.is_some_and(|since| since.elapsed() >= view::toolbar::COMPUTING_AFTER) {
             self.res.slow = true;
         }
     }
 
-    /// Open the menu of a choice picked by its pictures, and have the engine draw them.
-    fn open_choice_menu(&mut self, node: NodeId, key: &'static str) {
-        self.close_popups();
-        let Some(current) = self.graph().node(node).map(|n| n.enum_value(key) as usize) else {
-            return;
+    /// Open the menu of a choice picked by its pictures, and have the engine draw them. A
+    /// long menu has a search field, and what is typed goes into it right away.
+    fn open_choice_menu(&mut self, node: NodeId, key: &'static str) -> Task<Message> {
+        let Some((current, searched)) = self
+            .graph()
+            .node(node)
+            .map(|n| (n.enum_value(key) as usize, n.def().param(key).is_some_and(view::choices::searched)))
+        else {
+            return Task::none();
         };
-        self.ui.choice_menu = Some(ChoiceMenu { node, key, cursor: current });
+        self.close_popups();
+        self.ui.choice_menu = Some(ChoiceMenu { node, key, cursor: current, query: String::new() });
         self.send(Request::Choices { node, key: key.to_string() });
+        if searched { operation::focus(view::choices::search_id()) } else { Task::none() }
     }
 
-    /// Move the keyboard through the open menu of pictures: left and right go from option
-    /// to option, up and down from row to row.
-    fn move_in_choice_menu(&mut self, key: &keyboard::Key) -> bool {
+    /// The options of the open menu of pictures that its search leaves, and how many
+    /// there are to a row.
+    fn choice_menu_options(&self) -> Option<(Vec<usize>, usize)> {
+        let menu = self.ui.choice_menu.as_ref()?;
+        let pd = self.graph().node(menu.node)?.def().param(menu.key)?;
+        Some((view::choices::shown(pd, &menu.query), view::choices::columns(pd.enum_options().len())))
+    }
+
+    /// Put the keyboard of the open menu on the option `at` of those its search leaves, and
+    /// scroll the menu as far down as that option's row is down the list, which keeps the
+    /// row in sight.
+    fn choice_menu_to(&mut self, at: usize) -> Task<Message> {
+        let Some((shown, columns)) = self.choice_menu_options() else { return Task::none() };
+        let Some(menu) = &mut self.ui.choice_menu else { return Task::none() };
+        let Some(&option) = shown.get(at) else { return Task::none() };
+        menu.cursor = option;
+        let rows = shown.len().div_ceil(columns);
+        let down = if rows > 1 { (at / columns) as f32 / (rows - 1) as f32 } else { 0.0 };
+        operation::snap_to(view::choices::list_id(), operation::RelativeOffset { x: None, y: Some(down) })
+    }
+
+    /// Show only the options of the open menu that match `query`; the keyboard stays on its
+    /// option if that still shows, or goes to the first that does.
+    fn search_choice_menu(&mut self, query: String) -> Task<Message> {
+        let Some(menu) = &mut self.ui.choice_menu else { return Task::none() };
+        menu.query = query;
+        let cursor = menu.cursor;
+        let Some((shown, _)) = self.choice_menu_options() else { return Task::none() };
+        self.choice_menu_to(shown.iter().position(|&o| o == cursor).unwrap_or(0))
+    }
+
+    /// Move the keyboard through the open menu of pictures, among the options its search
+    /// leaves: left and right go from option to option, up and down from row to row. While
+    /// something is typed in the search field, left, right, Home and End move in the text.
+    /// `None` when the key is not for the menu.
+    fn move_in_choice_menu(&mut self, key: &keyboard::Key) -> Option<Task<Message>> {
         use keyboard::key::Named;
-        let Some(menu) = &self.ui.choice_menu else { return false };
-        let options = self.graph().node(menu.node).and_then(|n| n.def().param(menu.key)).map_or(0, |pd| pd.enum_options().len());
-        if options == 0 {
-            return false;
-        }
-        let columns = view::choices::columns(options) as isize;
+        let typing = !self.ui.choice_menu.as_ref()?.query.is_empty();
+        let (shown, columns) = self.choice_menu_options()?;
+        let columns = columns as isize;
         let step = match key {
-            keyboard::Key::Named(Named::ArrowLeft) => -1,
-            keyboard::Key::Named(Named::ArrowRight) => 1,
             keyboard::Key::Named(Named::ArrowUp) => -columns,
             keyboard::Key::Named(Named::ArrowDown) => columns,
-            keyboard::Key::Named(Named::Home) => -(options as isize),
-            keyboard::Key::Named(Named::End) => options as isize,
-            _ => return false,
+            keyboard::Key::Named(Named::ArrowLeft) if !typing => -1,
+            keyboard::Key::Named(Named::ArrowRight) if !typing => 1,
+            keyboard::Key::Named(Named::Home) if !typing => -(shown.len() as isize),
+            keyboard::Key::Named(Named::End) if !typing => shown.len() as isize,
+            _ => return None,
         };
-        let cursor = (menu.cursor as isize + step).clamp(0, options as isize - 1) as usize;
-        if let Some(menu) = &mut self.ui.choice_menu {
-            menu.cursor = cursor;
+        if shown.is_empty() {
+            return Some(Task::none());
         }
-        true
+        let cursor = self.ui.choice_menu.as_ref()?.cursor;
+        let at = shown.iter().position(|&o| o == cursor).unwrap_or(0) as isize;
+        Some(self.choice_menu_to((at + step).clamp(0, shown.len() as isize - 1) as usize))
     }
 
     /// Frame the selection (or everything) in the graph view.
@@ -1432,14 +1481,13 @@ impl App {
             }
             Message::FrameRate(rate) => {
                 self.ui.frame_rate = rate;
+                self.ui.frame_rate_at = Some(Instant::now());
                 self.age_readings();
             }
-            Message::ToggleRealtime => {
-                self.ui.realtime = !self.ui.realtime;
-                self.ui.frame_rate = FrameRate::default();
-            }
-            Message::ChoiceMenu(Some((node, key))) => self.open_choice_menu(node, key),
+            Message::ToggleRealtime => self.ui.realtime = !self.ui.realtime,
+            Message::ChoiceMenu(Some((node, key))) => return self.open_choice_menu(node, key),
             Message::ChoiceMenu(None) => self.ui.choice_menu = None,
+            Message::ChoiceSearch(query) => return self.search_choice_menu(query),
             Message::PickChoice(node, key, option) => {
                 self.ui.choice_menu = None;
                 // A pick is a step of its own in the history.
@@ -1632,7 +1680,7 @@ impl App {
                     self.res.busy_since = Some(Instant::now());
                 }
                 if report.recomputed > 0 {
-                    self.res.updates.push_back((Instant::now(), millis));
+                    self.res.updates.push_back((Instant::now(), millis, report.recomputed));
                 }
                 self.age_readings();
             }
@@ -1806,11 +1854,17 @@ impl App {
         }
         if let Some(menu) = &self.ui.choice_menu {
             if key == Key::Named(Named::Enter) {
-                let (node, key, option) = (menu.node, menu.key, menu.cursor as u32);
-                return self.update_nested(Message::PickChoice(node, key, option));
+                // The option the keyboard is on, or else the first the search leaves.
+                let (node, key, cursor) = (menu.node, menu.key, menu.cursor);
+                let shown = self.choice_menu_options().map(|(shown, _)| shown).unwrap_or_default();
+                let option = if shown.contains(&cursor) { Some(cursor) } else { shown.first().copied() };
+                return match option {
+                    Some(option) => self.update_nested(Message::PickChoice(node, key, option as u32)),
+                    None => Task::none(),
+                };
             }
-            if self.move_in_choice_menu(&key) {
-                return Task::none();
+            if let Some(task) = self.move_in_choice_menu(&key) {
+                return task;
             }
         }
         if self.ui.add_menu.is_some() {
@@ -2338,7 +2392,7 @@ impl App {
                 if let Some(id) = first(NodeKind::NOISE) {
                     self.ui.selection = [id].into_iter().collect();
                     self.ui.preview.node = Some(id);
-                    self.open_choice_menu(id, "type");
+                    let _ = self.open_choice_menu(id, "type");
                 }
             }
             "dialog" => {
@@ -2364,7 +2418,9 @@ impl App {
             && self.started.elapsed() > Duration::from_millis(2500)
             && (self.ui.preview.node.is_none() || self.res.preview.is_some())
             // The model wears the maps in every screenshot: they take longest to arrive.
-            && self.res.materials.len() >= self.material_nodes().len();
+            && self.res.materials.len() >= self.material_nodes().len()
+            // An open menu of pictures shows all of them.
+            && self.ui.choice_menu.as_ref().is_none_or(|m| self.res.choices.contains_key(&(m.node, m.key.to_string())));
         if !settled || self.started.elapsed() < Duration::from_secs(3) {
             if self.started.elapsed() > Duration::from_secs(30) {
                 log::error!("screenshot: gave up waiting for the engine");

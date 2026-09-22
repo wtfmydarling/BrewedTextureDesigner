@@ -140,58 +140,138 @@ pub static GRADIENT: NodeDef = NodeDef {
     role: Role::Image,
 };
 
-/// Noise types, in the order the menu shows them (files store the index). Each is a
-/// different way of making noise, with a pattern of its own; ways of looking at the same
-/// pattern are the styles of a type.
+/// Noise types, in the order the menu shows them (files store the index). Each is a way of
+/// making noise of its own, with a look of its own, not a look of another one.
 pub const NOISE_TYPES: &[&str] = &[
     "Perlin",
+    "Simplex",
+    "Value",
+    "Billow",
+    "Ridged",
     "Liquid",
     "Marble",
+    "Wood",
+    "Veins",
     "Streaks",
-    "Ripples",
-    "Blocks",
-    "Cells",
-    "Spots",
+    "Flow",
+    "Fibers",
     "Scratches",
+    "Ripples",
+    "Turing",
+    "Raindrops",
+    "Caustics",
+    "Cells",
+    "Cracks",
+    "Crystal",
+    "Mosaic",
+    "Stones",
+    "Scales",
+    "Blocks",
+    "Truchet",
+    "Maze",
+    "Spots",
+    "Blotches",
+    "Craters",
     "White Noise",
 ];
+/// What each type is found by in the menu's search besides its name: what it looks like
+/// and what it is called elsewhere.
+const NOISE_WORDS: &[&str] = &[
+    "gradient fbm fractal clouds smoke soft",
+    "gradient fbm fractal clouds smooth",
+    "fbm fractal clouds soft blurry",
+    "turbulence puffy clouds cotton cumulus",
+    "mountains ridges terrain multifractal",
+    "warp swirl swirls smoke fluid",
+    "stone bands veins turbulence",
+    "grain rings plank timber tree",
+    "lines lightning coastline electric ice",
+    "brushed metal anisotropic directional stripes",
+    "streamlines wind hair brush strokes current curl",
+    "fur hair fabric cloth strands grass",
+    "lines wear damage scuffs",
+    "gabor fingerprint sand stripes",
+    "reaction diffusion labyrinth coral zebra brain stripes spots",
+    "rain drops ripples rings circles water puddle waves",
+    "water light pool underwater",
+    "voronoi worley cellular",
+    "cell edges voronoi borders dry mud paint broken",
+    "facets voronoi gem crumpled shards",
+    "voronoi flat patches patchwork stained glass",
+    "cobblestones pebbles rocks pavement voronoi",
+    "fish dragon reptile roof shingles",
+    "pixels squares pixelated digital",
+    "arcs pipes tubes loops",
+    "labyrinth corridors paths",
+    "dots dirt blobs",
+    "camouflage patches moisture stains",
+    "moon pits holes impacts",
+    "random grain static pixels",
+];
 const NOISE_PERLIN: u32 = 0;
-const NOISE_LIQUID: u32 = 1;
-const NOISE_MARBLE: u32 = 2;
-const NOISE_STREAKS: u32 = 3;
-const NOISE_RIPPLES: u32 = 4;
-const NOISE_BLOCKS: u32 = 5;
-pub const NOISE_CELLS: u32 = 6;
-pub const NOISE_SPOTS: u32 = 7;
-pub const NOISE_SCRATCHES: u32 = 8;
+const NOISE_SIMPLEX: u32 = 1;
+const NOISE_VALUE: u32 = 2;
+const NOISE_BILLOW: u32 = 3;
+const NOISE_RIDGED: u32 = 4;
+const NOISE_LIQUID: u32 = 5;
+const NOISE_MARBLE: u32 = 6;
+pub const NOISE_WOOD: u32 = 7;
+pub const NOISE_VEINS: u32 = 8;
+const NOISE_STREAKS: u32 = 9;
+const NOISE_FLOW: u32 = 10;
+pub const NOISE_FIBERS: u32 = 11;
+pub const NOISE_SCRATCHES: u32 = 12;
+const NOISE_RIPPLES: u32 = 13;
+const NOISE_TURING: u32 = 14;
+const NOISE_RAINDROPS: u32 = 15;
+const NOISE_CAUSTICS: u32 = 16;
+pub const NOISE_CELLS: u32 = 17;
+pub const NOISE_CRACKS: u32 = 18;
+const NOISE_CRYSTAL: u32 = 19;
+const NOISE_MOSAIC: u32 = 20;
+const NOISE_STONES: u32 = 21;
+const NOISE_SCALES: u32 = 22;
+const NOISE_BLOCKS: u32 = 23;
+const NOISE_TRUCHET: u32 = 24;
+const NOISE_MAZE: u32 = 25;
+const NOISE_SPOTS: u32 = 26;
+const NOISE_BLOTCHES: u32 = 27;
+const NOISE_CRATERS: u32 = 28;
 /// White noise: one random value per pixel.
-pub const NOISE_WHITE: u32 = 9;
+pub const NOISE_WHITE: u32 = 29;
 /// Every type but white noise, which is one value per pixel.
-const NOISE_SCALED: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
+const NOISE_SCALED: &[u32] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+];
 /// Types made of octaves, each finer than the last.
-const NOISE_FRACTAL: &[u32] = &[NOISE_PERLIN, NOISE_LIQUID, NOISE_MARBLE, NOISE_STREAKS, NOISE_BLOCKS];
-
-/// What Perlin noise shows: its clouds, the folds between them, or the ridges along them.
-pub const PERLIN_STYLES: &[&str] = &["Clouds", "Billow", "Ridged"];
-/// What cells show: the distance to their middle, their borders, a flat color each, a
-/// tilted facet each, or a rounded stone each.
-pub const CELL_STYLES: &[&str] = &["Distance", "Edges", "Flat", "Facets", "Stones"];
+const NOISE_FRACTAL: &[u32] = &[
+    NOISE_PERLIN,
+    NOISE_SIMPLEX,
+    NOISE_VALUE,
+    NOISE_BILLOW,
+    NOISE_RIDGED,
+    NOISE_LIQUID,
+    NOISE_MARBLE,
+    NOISE_VEINS,
+    NOISE_STREAKS,
+    NOISE_BLOCKS,
+    NOISE_BLOTCHES,
+];
 
 pub static NOISE: NodeDef = NodeDef {
     id: "noise",
     name: "Noise",
     category: Category::Generators,
-    description: "Tileable procedural noises: clouds, swirls, marble, streaks, ripples, blocks, cells, spots, \
-                  scratches and white noise.",
-    keywords: "perlin fbm clouds billow ridged liquid warp swirl marble veins wood streaks anisotropic brushed \
-               ripples gabor fingerprint blocks pixel voronoi worley cells crystal facets mosaic edges cracks \
-               stones spots dirt scratches fibers fur hair white random grain",
+    description: "Tileable procedural noises: clouds, ridges, swirls, marble, wood, veins, streaks, flow, fibers, \
+                  scratches, ripples, Turing patterns, raindrops, caustics, cells, cracks, crystals, mosaic, stones, \
+                  scales, blocks, Truchet tiles, mazes, spots, blotches, craters and white noise.",
+    keywords: "perlin simplex value fbm clouds billow ridged liquid warp swirl marble wood veins streaks flow \
+               fibers fur hair scratches ripples gabor turing reaction raindrops rain caustics voronoi worley cells cracks \
+               crystal mosaic stones scales blocks truchet maze spots dirt blotches craters white random grain",
     inputs: NO_SOCKETS,
     outputs: GRAY_OUT,
     params: &[
-        choice("type", "Type", 0, NOISE_TYPES).pictured(),
-        choice("perlin_style", "Style", 0, PERLIN_STYLES).pictured().when("type", &[NOISE_PERLIN]),
-        choice("cell_style", "Style", 0, CELL_STYLES).pictured().when("type", &[NOISE_CELLS]),
+        choice("type", "Type", 0, NOISE_TYPES).pictured().searched(NOISE_WORDS),
         int("scale", "Scale", 8, 1, 128)
             .bounded()
             .tip("Number of noise cells across the image (an integer, so it tiles).")
@@ -205,39 +285,52 @@ pub static NOISE: NodeDef = NodeDef {
             .tip("How strong each finer layer is compared to the one before.")
             .when("type", NOISE_FRACTAL),
         float("distortion", "Distortion", 1.0, 0.0, 4.0)
-            .tip("How far the noise is pushed around.")
-            .when("type", &[NOISE_LIQUID, NOISE_MARBLE]),
+            .tip("How strongly the pattern is bent: how far it swirls, how much the cracks wobble, how sharply \
+                  the light gathers.")
+            .when("type", &[NOISE_LIQUID, NOISE_MARBLE, NOISE_CAUSTICS, NOISE_CRACKS]),
         int("stretch", "Stretch", 8, 1, 32)
             .at_least(1.0)
-            .tip("How many times longer the streaks are than they are tall.")
-            .when("type", &[NOISE_STREAKS]),
+            .tip("How many times longer than tall the streaks, or the knots of the grain, are.")
+            .when("type", &[NOISE_STREAKS, NOISE_WOOD]),
+        int("rings", "Rings", 12, 1, 64)
+            .clamped(1.0, 256.0)
+            .tip("How close together the rings of the grain are.")
+            .when("type", &[NOISE_WOOD]),
         angle("angle", "Angle", 0.0, -180.0, 180.0)
-            .tip("Which way the ripples run.")
-            .when("type", &[NOISE_RIPPLES]),
+            .tip("Which way the flow, the fibers or the ripples run.")
+            .when("type", &[NOISE_FLOW, NOISE_FIBERS, NOISE_RIPPLES]),
         float("spread", "Spread", 1.0, 0.0, 1.0)
             .bounded()
-            .tip("0 keeps every ripple running the same way; 1 lets them curl like a fingerprint.")
-            .when("type", &[NOISE_RIPPLES]),
+            .tip("0 keeps them all running the same way; 1 lets them turn a long way from it.")
+            .when("type", &[NOISE_FLOW, NOISE_FIBERS, NOISE_RIPPLES]),
         float("jitter", "Jitter", 1.0, 0.0, 1.0)
             .bounded()
             .tip("0 puts every cell's point in its middle (a regular grid), 1 anywhere in the cell.")
-            .when("type", &[NOISE_CELLS]),
+            .when("type", &[NOISE_CELLS, NOISE_CRACKS, NOISE_CRYSTAL, NOISE_MOSAIC, NOISE_STONES, NOISE_SCALES]),
         float("density", "Density", 0.5, 0.0, 1.0)
             .bounded()
             .tip("How much of the image is covered.")
-            .when("type", &[NOISE_SPOTS]),
+            .when("type", &[NOISE_TURING, NOISE_RAINDROPS, NOISE_SPOTS, NOISE_BLOTCHES, NOISE_CRATERS]),
         float("line_density", "Density", 0.15, 0.0, 1.0)
             .bounded()
-            .tip("How many lines there are: few for scratches, many for fibers or fur.")
-            .when("type", &[NOISE_SCRATCHES]),
+            .tip("How many lines there are.")
+            .when("type", &[NOISE_FIBERS, NOISE_SCRATCHES]),
         float("length", "Length", 2.0, 0.1, 6.0)
             .clamped(0.01, 6.0)
-            .tip("How long the lines are, in cells.")
-            .when("type", &[NOISE_SCRATCHES]),
+            .tip("How long the lines, or the streaks of the flow, are.")
+            .when("type", &[NOISE_FLOW, NOISE_FIBERS, NOISE_SCRATCHES]),
         pixels("width", "Width", 1.5, 0.0, 16.0)
             .at_least(0.0)
             .tip("How wide the lines are in the middle (they get thinner towards their ends).")
-            .when("type", &[NOISE_SCRATCHES]),
+            .when("type", &[NOISE_FIBERS, NOISE_SCRATCHES]),
+        pixels("line_width", "Width", 3.0, 0.0, 16.0)
+            .at_least(0.0)
+            .tip("How wide the lines are.")
+            .when("type", &[NOISE_VEINS, NOISE_CRACKS]),
+        float("thickness", "Thickness", 0.25, 0.0, 1.0)
+            .bounded()
+            .tip("How thick the tubes or corridors are, as a share of a cell.")
+            .when("type", &[NOISE_TRUCHET, NOISE_MAZE]),
         int("seed", "Seed", 0, 0, 9999).bounded(),
         boolean("invert", "Invert", false),
     ],
