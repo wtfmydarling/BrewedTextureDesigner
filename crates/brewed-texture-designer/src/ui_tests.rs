@@ -1121,14 +1121,16 @@ fn the_3d_view_draws_in_real_time() {
 /// or how long a change has been computed when it takes long; and the GPU memory.
 #[test]
 fn the_status_bar_says_what_happens_now() {
-    use brewed_texture_engine::{EvalReport, Event};
+    use brewed_texture_engine::{EvalReport, Event, Memory};
     use std::time::{Duration, Instant};
     let mut w = harness!(view::toolbar::status_bar, 1680.0, 24.0);
     let shown = |w: &mut Harness, text: &str| !texts(w, text).is_empty();
     let nodes = w.app.graph().nodes.len();
     // What the engine tells after two changes that computed three nodes each.
     let report = EvalReport { recomputed: 3, image_nodes: 17 };
-    w.send(Message::Engine(Event::Memory(344 * 1024 * 1024)));
+    let mb = |n: u64| n * 1024 * 1024;
+    let memory = Memory { shown: mb(64), shown_images: 5, kept: mb(16), scratch: mb(264), files: 0 };
+    w.send(Message::Engine(Event::Memory(memory)));
     w.send(Message::Engine(Event::Finished { revision: 1, report, millis: 7.0 }));
     w.send(Message::Engine(Event::Finished { revision: 1, report, millis: 9.0 }));
     assert!(shown(&mut w, &format!("{nodes} nodes · 3 recomputed · 8.0 ms")), "the average of the last second");

@@ -1,7 +1,7 @@
 //! 3D material preview: the graph's outputs (by their Usage) on a sphere, cube, plane or
 //! cylinder, lit with a physically based model. Height displaces the vertices; the maps are
-//! the images of the nodes the outputs show, with their mips, sampled directly on the GPU
-//! and read as each output shows its image (the engine's `widen` and `as_output`).
+//! the images the outputs write, in their channels and at their bit depths, with their
+//! mips, sampled directly on the GPU (one channel read as gray, with the engine's `widen`).
 //!
 //! Left drag orbits, right drag moves the light, the wheel zooms.
 
@@ -191,18 +191,17 @@ pub fn map_names(app: &App) -> Vec<&'static str> {
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let mut maps: [Option<wgpu::TextureView>; 7] = Default::default();
-    let (mut gray, mut formats) = (0u32, 0u32);
+    let mut gray = 0u32;
     for img in &app.res.materials {
         if let Some(s) = slot(app, img) {
             maps[s] = Some(img.view.clone());
             if img.gray {
                 gray |= 1 << s;
             }
-            formats |= (img.format & 7) << (s * 3);
         }
     }
     let missing = maps.iter().all(Option::is_none);
-    let scene = Scene { camera: app.ui.preview.view3d, maps, gray, formats, realtime: app.ui.realtime };
+    let scene = Scene { camera: app.ui.preview.view3d, maps, gray, realtime: app.ui.realtime };
     let mut layers: Vec<Element<'_, Message>> = vec![shader_widget(scene).width(Length::Fill).height(Length::Fill).into()];
     if missing {
         layers.push(
@@ -237,8 +236,6 @@ pub struct Scene {
     maps: [Option<wgpu::TextureView>; 7],
     /// The maps that are one channel (gray), as bits.
     gray: u32,
-    /// The format each map's output shows it as, three bits a map.
-    formats: u32,
     /// Draw frame after frame, rather than only when something changes.
     realtime: bool,
 }
@@ -322,7 +319,7 @@ impl shader::Program<Message> for Scene {
     }
 
     fn draw(&self, _state: &DragState, _cursor: mouse::Cursor, _bounds: Rectangle) -> Primitive {
-        Primitive { camera: self.camera, maps: self.maps.clone(), gray: self.gray, formats: self.formats }
+        Primitive { camera: self.camera, maps: self.maps.clone(), gray: self.gray }
     }
 
     fn mouse_interaction(&self, state: &DragState, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
@@ -341,7 +338,6 @@ pub struct Primitive {
     camera: Camera,
     maps: [Option<wgpu::TextureView>; 7],
     gray: u32,
-    formats: u32,
 }
 
 // ---------------------------------------------------------------------------- math
@@ -548,7 +544,7 @@ struct U {
     eye: vec4<f32>,
     light: vec4<f32>,
     params: vec4<f32>,   // displacement, texture repeat, _, _
-    flags: vec4<u32>,    // present maps (bits), sRGB target, gray maps (bits), formats (3 bits a map)
+    flags: vec4<u32>,    // present maps (bits), sRGB target, gray maps (bits), _
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -582,12 +578,10 @@ fn has(bit: u32) -> bool {
     return (u.flags.x & (1u << bit)) != 0u;
 }
 
-// A map as its output shows it (a map of one channel is gray), from 0 to 1 as it is
-// exported.
+// A map as its output writes it (a map of one channel is gray), from 0 to 1.
 fn read_map(c: vec4<f32>, bit: u32) -> vec4<f32> {
     let gray = (u.flags.z & (1u << bit)) != 0u;
-    let format = (u.flags.w >> (bit * 3u)) & 7u;
-    return clamp(as_output(widen(c, gray), format), vec4<f32>(0.0), vec4<f32>(1.0));
+    return clamp(widen(c, gray), vec4<f32>(0.0), vec4<f32>(1.0));
 }
 
 @vertex
@@ -898,7 +892,7 @@ impl shader::Primitive for Primitive {
             eye: [eye[0], eye[1], eye[2], 1.0],
             light: [light[0], light[1], light[2], 1.0],
             params: [c.displacement, c.tiling, 0.0, 0.0],
-            flags: [present, u32::from(pipeline.srgb), self.gray, self.formats],
+            flags: [present, u32::from(pipeline.srgb), self.gray, 0],
         };
         queue.write_buffer(&pipeline.uniforms, 0, bytemuck::bytes_of(&u));
         let view = |i: usize| self.maps[i].as_ref().unwrap_or(&pipeline.defaults[i]);

@@ -15,14 +15,14 @@ use brewed_texture_core::eval::Evaluation;
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::graph::{Graph, NodeId};
 
-use crate::engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Keep, Thumbnail};
+use crate::engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Keep, Memory, Thumbnail};
 use crate::export;
 use crate::gpu::Gpu;
 use crate::simd::ImageStats;
 
-/// How long the engine waits with nothing to do before it lets go of its scratch images:
-/// while changes keep coming (a slider dragged) they are reused, once they stop they only
-/// take memory.
+/// How long the engine waits with nothing to do before it settles (see [`Engine::settle`]):
+/// while changes keep coming (a slider dragged) its scratch images and what the last change
+/// read are used again, once they stop they only take memory.
 const IDLE: Duration = Duration::from_millis(500);
 
 /// One file to write.
@@ -92,8 +92,8 @@ pub enum Event {
         rgba: Option<[f32; 4]>,
     },
     Choices(ChoicePictures),
-    /// GPU memory the engine's images take now, in bytes (sent when it changes).
-    Memory(u64),
+    /// GPU memory the engine's images take now (sent when it changes).
+    Memory(Memory),
     Exported(Result<PathBuf, String>),
     GpuErrors(Vec<String>),
 }
@@ -163,7 +163,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
     let mut preview: Option<NodeId> = None;
     let mut materials: Vec<NodeId> = Vec::new();
     // The GPU memory the front end was last told of (`None`: not yet, or it forgot).
-    let mut memory: Option<u64> = None;
+    let mut memory: Option<Memory> = None;
     loop {
         // Wait for work; poll while files are being decoded in the background.
         let first = if engine.bitmaps_loading() {
@@ -176,7 +176,8 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
             match rx.recv_timeout(IDLE) {
                 Ok(r) => Some(r),
                 Err(RecvTimeoutError::Timeout) => {
-                    engine.gpu.clear_pool();
+                    // Nothing changes: all that stays is what the views show.
+                    engine.settle();
                     report_memory(&engine, &mut memory, &emit);
                     match rx.recv() {
                         Ok(r) => Some(r),
@@ -309,8 +310,8 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
 
 /// Tell the front end how much GPU memory the engine's images take, when that is not what it
 /// was last told.
-fn report_memory(engine: &Engine, reported: &mut Option<u64>, emit: &Emit) {
-    let now = engine.memory();
+fn report_memory(engine: &Engine, reported: &mut Option<Memory>, emit: &Emit) {
+    let now = engine.memory_report();
     if *reported != Some(now) {
         *reported = Some(now);
         (emit)(Event::Memory(now));

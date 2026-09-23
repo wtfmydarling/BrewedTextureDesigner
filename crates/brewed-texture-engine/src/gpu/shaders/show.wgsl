@@ -1,5 +1,6 @@
-// How a node's image is shown: by the kernels, which read their inputs through it, and by
-// the designer's 2D and 3D views, which sample the node images themselves.
+// How a node's image is read and written: the kernels read their inputs through `widen`, and
+// so do the designer's 2D and 3D views, which sample the node images themselves; an output
+// writes its image through `as_output`.
 
 // A grayscale image is one channel: it is shown as gray (the channel in red, green and
 // blue), and opaque.
@@ -7,7 +8,7 @@ fn widen(c: vec4<f32>, gray: bool) -> vec4<f32> {
     return select(c, vec4<f32>(c.r, c.r, c.r, 1.0), gray);
 }
 
-// What an output shows of an image in each of its formats
+// What an output writes of an image in each of its formats
 // (brewed_texture_core::nodes::OUTPUT_FORMATS: RGBA, RGB, RG, R, G, B, A).
 fn as_output(c: vec4<f32>, format: u32) -> vec4<f32> {
     switch format {

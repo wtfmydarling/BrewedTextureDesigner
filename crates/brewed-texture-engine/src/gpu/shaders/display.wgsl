@@ -6,9 +6,8 @@ struct Params {
     // How a thumbnail shows its image: 0 RGBA over a checkerboard, 1 RGB, 2 R, 3 G, 4 B, 5 A.
     mode: u32,
     checker: f32,
-    // The format of the output the image is shown as (0, RGBA, for every other node).
-    format: u32,
     pad0: u32,
+    pad1: u32,
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -48,7 +47,7 @@ fn thumbnail(@builtin(global_invocation_id) gid: vec3<u32>) {
             acc = acc + widen(sample_bilinear(in0, uv, 0u), GRAY0);
         }
     }
-    let c = as_output(acc / f32(n * n), P.format);
+    let c = acc / f32(n * n);
     let cp = out_uv(gid.xy, size) * P.checker;
     textureStore(out_tex, vec2<i32>(gid.xy), display_color(c, cp));
 }

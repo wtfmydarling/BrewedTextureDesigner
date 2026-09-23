@@ -1,7 +1,7 @@
 //! Draws the 2D view: the node's own image, with its mips, sampled directly on the GPU with
-//! a small render pipeline inside iced's render pass and shown as the node shows it (the
-//! engine's `widen` and `as_output`), with channel isolation, a checkerboard for
-//! transparency and repeated copies for the tiling preview.
+//! a small render pipeline inside iced's render pass (one channel shown as gray, with the
+//! engine's `widen`), with channel isolation, a checkerboard for transparency and repeated
+//! copies for the tiling preview.
 
 use iced::widget::shader::{self, Viewport};
 use iced::{Rectangle, mouse};
@@ -17,8 +17,7 @@ struct U {
     channel: u32,         // 0 RGBA, 1 RGB, 2 R, 3 G, 4 B, 5 A
     background: vec4<f32>,// what is behind the image
     flags: u32,           // 1 tile x, 2 tile y, 4 sRGB target, 8 nearest, 16 one channel (gray)
-    format: u32,          // the format of the output it is shown as, 0 as it is
-    pad1: u32, pad2: u32,
+    pad0: u32, pad1: u32, pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -96,7 +95,7 @@ fn fs(in: V) -> @location(0) vec4<f32> {
     } else {
         c = textureSampleLevel(tex, smooth_sampler, q, lod);
     }
-    c = as_output(widen(c, (u.flags & 16u) != 0u), u.format);
+    c = widen(c, (u.flags & 16u) != 0u);
     let cell = vec2<i32>(floor(in.wp * u.size / max(u.checker, 1.0)));
     let check = select(vec3<f32>(0.22), vec3<f32>(0.32), ((cell.x + cell.y) & 1) == 1);
     var rgb = c.rgb;
@@ -121,8 +120,7 @@ struct Uniforms {
     channel: u32,
     background: [f32; 4],
     flags: u32,
-    format: u32,
-    pad: [u32; 2],
+    pad: [u32; 3],
 }
 
 /// What the 2D view shows (built by the view every frame).
@@ -130,8 +128,6 @@ pub struct Scene {
     pub image: Option<(wgpu::TextureView, [u32; 2])>,
     /// The image is one channel: gray.
     pub gray: bool,
-    /// The format of the output it is shown as, 0 as it is.
-    pub format: u32,
     /// Image rectangle relative to the widget, in logical pixels.
     pub rect: Rectangle,
     pub channel: u32,
@@ -142,7 +138,6 @@ pub struct Scene {
 pub struct Primitive {
     image: Option<wgpu::TextureView>,
     gray: bool,
-    format: u32,
     rect: Rectangle,
     channel: u32,
     tile: [bool; 2],
@@ -159,7 +154,6 @@ impl shader::Program<Message> for Scene {
         Primitive {
             image: self.image.as_ref().map(|(view, _)| view.clone()),
             gray: self.gray,
-            format: self.format,
             rect: self.rect,
             channel: self.channel,
             tile: self.tile,
@@ -344,8 +338,7 @@ impl shader::Primitive for Primitive {
             channel: self.channel,
             background: [bg.r, bg.g, bg.b, 1.0],
             flags,
-            format: self.format,
-            pad: [0; 2],
+            pad: [0; 3],
         };
         queue.write_buffer(&pipeline.uniforms, 0, bytemuck::bytes_of(&u));
         pipeline.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {

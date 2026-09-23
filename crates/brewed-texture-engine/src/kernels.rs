@@ -69,6 +69,7 @@ pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
         "levels" | "histogram_scan" | "invert" | "grayscale" | "hsl" | "posterize" => adjust,
         "gradient_map" => gradient_map,
         "channel_shuffle" => channel_shuffle,
+        "output" => output,
         _ => return None,
     };
     Some(f)
@@ -302,9 +303,7 @@ struct EmbossU {
 pub struct DisplayU {
     pub mode: u32,
     pub checker: f32,
-    /// The format of the output an image is shown as (0 shows it as it is).
-    pub format: u32,
-    pub pad: u32,
+    pub pad: [u32; 2],
 }
 
 #[repr(C)]
@@ -769,23 +768,13 @@ fn channel_shuffle(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-/// Pass the first input through unchanged (bypassed nodes).
-pub fn passthrough(
-    gpu: &Gpu,
-    encoder: &mut wgpu::CommandEncoder,
-    input: Option<&GpuImage>,
-    output: &GpuImage,
-    tiling: u32,
-) -> Result<(), String> {
-    match input {
-        Some(img) => gpu.run(encoder, "resample", bytes(&BlurU::copy(tiling)), &[img], output),
-        None => gpu.run(encoder, "uniform_color", bytes(&ColorU { color: [0.0; 4] }), &[], output),
-    }
-}
-
-/// Fill with transparent black (after an error, so downstream nodes still work).
-pub fn clear(gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, output: &GpuImage) -> Result<(), String> {
-    gpu.run(encoder, "uniform_color", bytes(&ColorU { color: [0.0; 4] }), &[], output)
+/// An output: what arrives at it as it writes it, in its channels and at its bit depth (the
+/// format of its image, see [`crate::gpu::output_format`]). Drawn by a render pass, which
+/// writes the formats a kernel cannot.
+fn output(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let img = input(cx.inputs, 0, &cx.gpu.black);
+    cx.gpu.encode_show(cx.encoder, img, cx.output, cx.params.u("format"))?;
+    Ok(None)
 }
 
 // ------------------------------------------------------------------ blur
@@ -947,10 +936,7 @@ mod tests {
     #[test]
     fn every_image_node_has_a_kernel() {
         for kind in NodeKind::ALL {
-            if *kind == NodeKind::OUTPUT {
-                // An output shows what arrives at it.
-                assert!(kernel_for(*kind).is_none());
-            } else if kind.def().has_image() {
+            if kind.def().has_image() {
                 assert!(kernel_for(*kind).is_some(), "no kernel for {}", kind.def().name);
             } else {
                 assert!(kernel_for(*kind).is_none(), "value node {} has a kernel", kind.def().name);

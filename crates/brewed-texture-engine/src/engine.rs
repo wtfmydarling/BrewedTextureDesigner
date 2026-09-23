@@ -12,6 +12,10 @@
 //! takes its texture. Computed again with the same key, a node keeps its version, so nothing
 //! after it is recomputed for it.
 //!
+//! An output makes the image it writes: what arrives at it, in its channels and at its bit
+//! depth. That is what the views show of it and what is exported, and all that stays of
+//! the graph's work once nothing changes (see [`Engine::settle`]).
+//!
 //! The engine is single threaded; [`crate::service`] runs it on a background thread.
 
 use std::collections::hash_map::DefaultHasher;
@@ -25,7 +29,7 @@ use brewed_texture_core::eval::{Evaluation, VarSource};
 use brewed_texture_core::graph::{Graph, Node, NodeId, input_socket_key};
 use brewed_texture_core::nodes::{ImageKind, NodeKind, PIXEL_MATH_BUILTINS, image_kind};
 
-use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, Gpu, GpuImage, Readback, format_of, work_format};
+use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, Gpu, GpuImage, Readback, format_of, output_format, work_format};
 use crate::kernels::{self, DisplayU, ExecCtx, PixelVar};
 use crate::simd::{self, ImageStats};
 
@@ -39,16 +43,16 @@ pub const CHOICE_RES: u32 = 256;
 /// What the engine knows about one node.
 #[derive(Default)]
 pub struct NodeState {
-    /// Its image, while something reads it (see [`Keep`]). An output or a bypassed node has
-    /// none of its own: it shows the image of its `producer`.
+    /// Its image, while something reads it (see [`Keep`]). A bypassed node has none of its
+    /// own: it shows the image of its `producer`.
     image: Option<GpuImage>,
-    /// For an output or a bypassed node, the node whose image arrives at it (through other
-    /// outputs and bypassed nodes).
+    /// For a bypassed node, the node whose image arrives at it (through other bypassed
+    /// nodes).
     producer: Option<NodeId>,
     /// Grayscale or color; `None` while the node makes no image.
     kind: Option<ImageKind>,
-    /// How the node shows its image: as the format of an output, or as it is (0).
-    shown_as: u32,
+    /// The size of its image (of the image it shows, for a bypassed node).
+    size: [u32; 2],
     /// Bumped whenever the image changes.
     pub version: u64,
     key: u64,
@@ -65,6 +69,28 @@ pub struct ImageReport {
     pub warning: Option<String>,
     /// Grayscale or color (none while the node has no image).
     pub kind: Option<ImageKind>,
+}
+
+/// GPU memory the engine's images take, by what they are for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Memory {
+    /// The images the 2D and 3D views show, with their mips.
+    pub shown: u64,
+    /// How many images that is.
+    pub shown_images: usize,
+    /// Images kept for the next change and those asked about (kept as [`Keep::Read`], they
+    /// go once nothing changes for a moment); every other image, kept as [`Keep::All`].
+    pub kept: u64,
+    /// Scratch images the last change worked in, kept for the next one.
+    pub scratch: u64,
+    /// Loaded files and baked gradients.
+    pub files: u64,
+}
+
+impl Memory {
+    pub fn total(&self) -> u64 {
+        self.shown + self.kept + self.scratch + self.files
+    }
 }
 
 /// What an evaluation did.
@@ -97,9 +123,8 @@ pub struct ChoicePictures {
     pub pictures: Arc<Vec<Vec<u8>>>,
 }
 
-/// What a view shows of a node: the image itself, with its mips, which the 2D and 3D views
-/// sample directly (no copy), and how the node shows it (`widen` and `as_output` of
-/// [`crate::gpu::SHOW_WGSL`]).
+/// What a view shows of a node: its image itself, with its mips, which the 2D and 3D views
+/// sample directly (no copy). An output's image is what the output writes.
 #[derive(Clone, Debug)]
 pub struct DisplayImage {
     pub node: NodeId,
@@ -109,10 +134,8 @@ pub struct DisplayImage {
     /// The texture size the image stands for (a uniform color is one pixel, shown as big as
     /// any other image).
     pub size: [u32; 2],
-    /// One channel: a grayscale image, which reads as its red.
+    /// One channel, which is shown as gray (`widen` of [`crate::gpu::SHOW_WGSL`]).
     pub gray: bool,
-    /// The format of the output it is shown as, 0 when it is shown as it is.
-    pub format: u32,
 }
 
 enum BitmapEntry {
@@ -145,21 +168,21 @@ pub enum Keep {
     /// Every node's: for a caller that reads whichever image it likes (tests, tools).
     #[default]
     All,
-    /// Only those something reads: the node the 2D view shows, what arrives at the outputs
-    /// the 3D view uses, the nodes asked about, and what the last change read from outside
-    /// itself (the next change of the same kind reads it again). The others live while the
-    /// evaluation that makes them needs them.
+    /// Only those something reads: the node the 2D view shows, the outputs the 3D view uses,
+    /// the nodes asked about, and what the last change read from outside itself (the next
+    /// change of the same kind reads it again), until the engine settles. The others live
+    /// while the evaluation that makes them needs them.
     Read,
 }
 
 /// What an evaluation found about an image node before computing anything.
 struct Plan {
     node_kind: NodeKind,
-    /// An output or a bypassed node: it shows the image of what arrives at it.
-    alias: bool,
     /// Its key changed: it has a new version, and its image has to be computed.
     changed: bool,
-    kind: ImageKind,
+    /// The format of the image it computes; `None` when it computes none (a bypassed node, an
+    /// output nothing arrives at).
+    format: Option<wgpu::TextureFormat>,
     size: [u32; 2],
     /// The node whose image arrives at each input.
     inputs: Vec<Option<NodeId>>,
@@ -180,6 +203,31 @@ impl Plan {
             _ => None,
         }))
     }
+}
+
+/// The image nodes of `order` (an order that has each after the nodes it reads) in the order
+/// to compute them in: chain by chain, each node nothing reads (an output, say) right after
+/// what it reads that is not computed yet. A chain is done with, and its images go back to
+/// the pool, before the next one starts; in the order of the graph, all the outputs come
+/// last, and every image before them waits for them.
+fn by_chains(order: &[NodeId], plans: &HashMap<NodeId, Plan>) -> Vec<NodeId> {
+    fn visit(id: NodeId, plans: &HashMap<NodeId, Plan>, done: &mut HashSet<NodeId>, out: &mut Vec<NodeId>) {
+        let Some(plan) = plans.get(&id) else { return };
+        if !done.insert(id) {
+            return;
+        }
+        for read in plan.reads() {
+            visit(read, plans, done, out);
+        }
+        out.push(id);
+    }
+    let read: HashSet<NodeId> = plans.values().flat_map(Plan::reads).collect();
+    let mut done = HashSet::new();
+    let mut out = Vec::with_capacity(order.len());
+    for &id in order.iter().filter(|id| !read.contains(id)) {
+        visit(id, plans, &mut done, &mut out);
+    }
+    out
 }
 
 /// A Pixel Math variable, as planned: the image of a node is read when it is computed.
@@ -290,27 +338,41 @@ impl Engine {
         self.gpu.clear_pool();
     }
 
-    /// GPU memory the engine's images take: the images kept (with the mips of those the views
-    /// show), baked gradients, loaded files and the scratch images kept for reuse.
+    /// GPU memory the engine's images take, in all (see [`Engine::memory_report`]).
     pub fn memory(&self) -> u64 {
+        self.memory_report().total()
+    }
+
+    /// GPU memory the engine's images take, by what they are for.
+    pub fn memory_report(&self) -> Memory {
+        let shown = self.shown();
         let mut seen: Vec<wgpu::Texture> = Vec::new();
-        let images = self
-            .states
-            .values()
-            .filter_map(|s| s.image.as_ref())
-            .chain(self.luts.values().map(|l| &l.image))
-            .chain(self.bitmaps.values().filter_map(|b| match b {
-                BitmapEntry::Ready { image, .. } => Some(image),
-                _ => None,
-            }));
-        let mut total = 0;
-        for image in images {
-            if !seen.contains(&image.texture) {
-                seen.push(image.texture.clone());
-                total += image.bytes();
+        let mut once = |image: &GpuImage| {
+            if seen.contains(&image.texture) {
+                return 0;
+            }
+            seen.push(image.texture.clone());
+            image.bytes()
+        };
+        let mut memory = Memory { scratch: self.gpu.pool_bytes(), ..Memory::default() };
+        for (id, state) in &self.states {
+            let Some(image) = &state.image else { continue };
+            let bytes = once(image);
+            if shown.contains(id) {
+                memory.shown += bytes;
+                memory.shown_images += 1;
+            } else {
+                memory.kept += bytes;
             }
         }
-        total + self.gpu.pool_bytes()
+        let files = self.luts.values().map(|l| &l.image).chain(self.bitmaps.values().filter_map(|b| match b {
+            BitmapEntry::Ready { image, .. } => Some(image),
+            _ => None,
+        }));
+        for image in files {
+            memory.files += once(image);
+        }
+        memory
     }
 
     /// Block until the GPU finished everything submitted so far.
@@ -421,11 +483,12 @@ impl Engine {
                 plans.insert(id, plan);
             }
         }
+        let order = by_chains(&order, &plans);
 
         // 2. What to compute, from the last node back: a node that changed, and a node whose
         //    image is needed and not there, by a node computed after it or by what reads it
-        //    once this evaluation is done. An output or a bypassed node computes nothing, but
-        //    a changed one reads what arrives at it for its thumbnail.
+        //    once this evaluation is done. A bypassed node computes nothing, but a changed one
+        //    reads what arrives at it for its thumbnail, and one that is needed needs it.
         let wanted: HashSet<NodeId> = match self.keep {
             Keep::All => order.iter().copied().collect(),
             Keep::Read => self.preview.iter().chain(&self.materials).chain(&self.asked).copied().collect(),
@@ -434,8 +497,10 @@ impl Engine {
         let mut runs: HashSet<NodeId> = HashSet::new();
         for &id in order.iter().rev() {
             let plan = &plans[&id];
-            let run = plan.changed || (!plan.alias && needed.contains(&id) && self.states.get(&id).is_none_or(|s| s.image.is_none()));
-            if run || (plan.alias && needed.contains(&id)) {
+            let makes = plan.format.is_some();
+            let missing = self.states.get(&id).is_none_or(|s| s.image.is_none());
+            let run = plan.changed || (makes && needed.contains(&id) && missing);
+            if run || (!makes && needed.contains(&id)) {
                 needed.extend(plan.reads());
             }
             if run {
@@ -463,7 +528,7 @@ impl Engine {
                 *readers.entry(read).or_default() += 1;
             }
         }
-        let shown: HashSet<NodeId> = self.preview.iter().chain(&self.materials).map(|id| self.producer(*id)).collect();
+        let shown = self.shown();
         let mut encoder = self.gpu.encoder();
         let mut report = EvalReport { image_nodes: order.len(), ..EvalReport::default() };
         for &id in &order {
@@ -471,9 +536,9 @@ impl Engine {
                 continue;
             }
             let plan = &plans[&id];
-            if !plan.alias {
+            if let Some(format) = plan.format {
                 let Some(ne) = eval.node(id) else { continue };
-                self.compute(id, plan, &ne.params, ne.error(), shown.contains(&id), &mut encoder);
+                self.compute(id, plan, format, &ne.params, ne.error(), shown.contains(&id), &mut encoder);
                 report.recomputed += 1;
             }
             if plan.changed {
@@ -503,10 +568,14 @@ impl Engine {
         report
     }
 
-    /// The node whose image `node` shows: itself, or, for an output or a bypassed node, what
-    /// arrives at it.
+    /// The node whose image `node` shows: itself, or, for a bypassed node, what arrives at it.
     fn producer(&self, node: NodeId) -> NodeId {
         self.states.get(&node).and_then(|s| s.producer).unwrap_or(node)
+    }
+
+    /// The nodes whose images the 2D and 3D views show.
+    fn shown(&self) -> HashSet<NodeId> {
+        self.preview.iter().chain(&self.materials).map(|id| self.producer(*id)).collect()
     }
 
     /// Let go of a node's image: it goes back to the pool, for the next image of its size.
@@ -532,16 +601,33 @@ impl Engine {
         self.preview = node;
     }
 
-    /// The outputs the 3D view uses: what arrives at them is read, and stays.
+    /// The outputs the 3D view uses: their images are read, and stay.
     pub fn set_materials(&mut self, nodes: &[NodeId]) {
         self.materials = nodes.to_vec();
     }
 
     /// Nodes whose images are read after the next evaluation (their statistics, a pixel of
     /// them, their export): each is computed if it is not there, and stays until an
-    /// evaluation that is not asked for it.
+    /// evaluation that is not asked for it, or until the engine settles.
     pub fn ask(&mut self, nodes: Vec<NodeId>) {
         self.asked = nodes;
+    }
+
+    /// Nothing has changed for a while: let go of everything the next change would have read
+    /// and that the views do not show (kept as [`Keep::Read`]), and of the scratch images. What
+    /// stays is what the views show, whatever was changed before.
+    pub fn settle(&mut self) {
+        if self.keep == Keep::Read {
+            self.boundary.clear();
+            self.asked.clear();
+            let shown = self.shown();
+            let others: Vec<NodeId> =
+                self.states.iter().filter(|(id, s)| s.image.is_some() && !shown.contains(id)).map(|(id, _)| *id).collect();
+            for id in others {
+                self.release(id);
+            }
+        }
+        self.gpu.clear_pool();
     }
 
     /// Whether an evaluation has to run for all of `nodes` to have images.
@@ -563,9 +649,10 @@ impl Engine {
         params.hash_into(&mut hasher);
 
         // What arrives at the inputs: an image of the node it comes from (made by the node
-        // behind it, through outputs and bypassed nodes), and the version of that node.
+        // behind it, through bypassed nodes), and the version of that node.
         let mut inputs: Vec<Option<NodeId>> = Vec::with_capacity(d.inputs.len());
         let mut input_kinds: Vec<Option<ImageKind>> = Vec::with_capacity(d.inputs.len());
+        let mut input_sizes: Vec<Option<[u32; 2]>> = Vec::with_capacity(d.inputs.len());
         for s in d.inputs {
             let from = graph.link_into(node.id, &input_socket_key(s.key)).map(|l| l.from);
             match from.and_then(|f| self.states.get(&f).filter(|st| st.kind.is_some()).map(|st| (f, st))) {
@@ -573,11 +660,13 @@ impl Engine {
                     (1u8, f.0, st.version).hash(&mut hasher);
                     inputs.push(Some(st.producer.unwrap_or(f)));
                     input_kinds.push(st.kind);
+                    input_sizes.push(Some(st.size));
                 }
                 None => {
                     0u8.hash(&mut hasher);
                     inputs.push(None);
                     input_kinds.push(None);
+                    input_sizes.push(None);
                 }
             }
         }
@@ -649,23 +738,27 @@ impl Engine {
             }
         }
 
-        // An output shows what arrives at it, and a bypassed node passes it on: neither makes an
-        // image of its own.
-        let shown_as = if node.kind == NodeKind::OUTPUT { params.u("format") } else { 0 };
-        let alias = node.kind == NodeKind::OUTPUT || (node.bypass && !d.inputs.is_empty());
-        let (kind, size) = if alias {
-            (input_kinds.first().copied().flatten(), resolution)
+        // A bypassed node passes on what arrives at it, and makes no image of its own. An output
+        // makes the image it writes: what arrives at it (nothing, when nothing does), in its
+        // channels and at its bit depth, as big as that is. Any other node makes a grayscale
+        // or a color image as big as the texture size; but a uniform color is the same
+        // everywhere, and one pixel of it is all of it.
+        let alias = node.bypass && !d.inputs.is_empty();
+        let arriving = input_kinds.first().copied().flatten();
+        let arriving_size = input_sizes.first().copied().flatten().unwrap_or(resolution);
+        let (kind, size, format) = if alias {
+            (arriving, arriving_size, None)
+        } else if node.kind == NodeKind::OUTPUT {
+            (arriving, arriving_size, arriving.map(|k| output_format(params.u("format"), params.u("bit_depth"), k)))
         } else {
-            // A grayscale or a color image, as big as the texture size; but a uniform color is
-            // the same everywhere, and one pixel of it is all of it.
             let kind = match &bitmap {
                 Some(file) => file.kind(),
                 None => image_kind(node.kind, params, &input_kinds),
             };
             let size = if node.kind == NodeKind::UNIFORM_COLOR { [1, 1] } else { resolution };
-            (kind, size).hash(&mut hasher);
-            (Some(kind), size)
+            (Some(kind), size, Some(format_of(kind)))
         };
+        (size, format).hash(&mut hasher);
         let key = hasher.finish();
 
         let version = self.next_version + 1;
@@ -673,7 +766,7 @@ impl Engine {
         let changed = state.version == 0 || state.key != key;
         state.key = key;
         state.kind = kind;
-        state.shown_as = shown_as;
+        state.size = size;
         state.producer = if alias { inputs.first().copied().flatten() } else { None };
         if alias {
             state.error = None;
@@ -682,32 +775,31 @@ impl Engine {
         if changed {
             state.version = version;
         }
-        // An image that stayed from before and does not fit any more is let go of (an output or
-        // a bypassed node has none of its own).
-        let fits = !alias && state.image.as_ref().is_none_or(|img| img.size() == size && kind.is_some_and(|k| img.format() == format_of(k)));
+        // An image that stayed from before and does not fit any more is let go of.
+        let fits = state.image.as_ref().is_none_or(|img| img.size() == size && Some(img.format()) == format);
         if changed {
             self.next_version = version;
         }
         if !fits {
             self.release(node.id);
         }
-        let kind = kind.unwrap_or(ImageKind::Color);
-        Some(Plan { node_kind: node.kind, alias, changed, kind, size, inputs, vars, bitmap, lut, error, warning })
+        Some(Plan { node_kind: node.kind, changed, format, size, inputs, vars, bitmap, lut, error, warning })
     }
 
-    /// Compute a node's image (see [`Engine::evaluate`]): into its own image when it has one
-    /// that fits, else into one from the pool; with mips when a view shows it.
+    /// Compute a node's image in `format` (see [`Engine::evaluate`]): into its own image when
+    /// it has one that fits, else into one from the pool; with mips when a view shows it.
+    #[allow(clippy::too_many_arguments)]
     fn compute(
         &mut self,
         id: NodeId,
         plan: &Plan,
+        format: wgpu::TextureFormat,
         params: &brewed_texture_core::eval::Params,
         cpu_error: Option<&str>,
         shown: bool,
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let [w, h] = plan.size;
-        let format = format_of(plan.kind);
         let mipped = shown && w.max(h) > 1;
         let own = self.states.get(&id).and_then(|s| s.image.clone());
         let image = match own {
@@ -721,8 +813,9 @@ impl Engine {
         };
         let target = if mipped { image.level(0) } else { image.clone() };
         // Kernels write what every device can store to: a grayscale image is computed in 32
-        // bits and stored in 16.
-        let work = (work_format(format) != format).then(|| self.gpu.take_scratch(w, h, work_format(format)));
+        // bits and stored in 16. An output is drawn by a render pass, which writes any format.
+        let drawn = plan.node_kind == NodeKind::OUTPUT;
+        let work = (!drawn && work_format(format) != format).then(|| self.gpu.take_scratch(w, h, work_format(format)));
         let output = work.as_ref().unwrap_or(&target);
 
         let inputs: Vec<Option<GpuImage>> = plan.inputs.iter().map(|i| i.and_then(|i| self.image(i).cloned())).collect();
@@ -770,7 +863,7 @@ impl Engine {
         if let Some(e) = &error {
             log::debug!("node {}: {e}", id.0);
             // Leave a transparent image so downstream nodes still work.
-            let _ = kernels::clear(&self.gpu, encoder, output);
+            self.gpu.encode_clear(encoder, output);
         }
         if let Some(work) = work {
             if let Err(e) = self.gpu.encode_store(encoder, &work, &target) {
@@ -794,10 +887,9 @@ impl Engine {
     /// Record the thumbnail of a node that changed, from its image as it is now (before the
     /// image goes back to the pool); [`Engine::render_thumbnails`] reads it back.
     fn encode_thumbnail(&mut self, id: NodeId, encoder: &mut wgpu::CommandEncoder) {
-        let Some(state) = self.states.get(&id) else { return };
-        let (version, shown_as) = (state.version, state.shown_as);
+        let Some(version) = self.version(id) else { return };
         let Some(image) = self.image(id).cloned() else { return };
-        let params = DisplayU { mode: 0, checker: 8.0, format: shown_as, pad: 0 };
+        let params = DisplayU { mode: 0, checker: 8.0, pad: [0; 2] };
         let thumb = self.gpu.take_scratch(THUMB_SIZE, THUMB_SIZE, COLOR_FORMAT);
         if self.gpu.run(encoder, "thumbnail", bytemuck::bytes_of(&params), &[&image], &thumb).is_err() {
             self.gpu.recycle(thumb);
@@ -864,7 +956,7 @@ impl Engine {
         let choice = params.values.iter().position(|(k, _)| k == key)?;
         let inputs: Vec<Option<GpuImage>> = vec![None; d.inputs.len()];
 
-        let display = DisplayU { mode: 0, checker: 8.0, format: 0, pad: 0 };
+        let display = DisplayU { mode: 0, checker: 8.0, pad: [0; 2] };
         let input_kinds: Vec<Option<ImageKind>> = vec![None; inputs.len()];
         let mut encoder = self.gpu.encoder();
         let mut jobs = Vec::with_capacity(options);
@@ -886,7 +978,7 @@ impl Engine {
                 pixel_vars: &[],
             };
             if kernel(&mut cx).is_err() {
-                let _ = kernels::clear(&self.gpu, &mut encoder, &picture);
+                self.gpu.encode_clear(&mut encoder, &picture);
             }
             let thumb = self.gpu.take_scratch(THUMB_SIZE, THUMB_SIZE, COLOR_FORMAT);
             let _ = self.gpu.run(&mut encoder, "thumbnail", bytemuck::bytes_of(&display), &[&picture], &thumb);
@@ -919,11 +1011,10 @@ impl Engine {
     // ------------------------------------------------------------------ what the views show
 
     /// What the views show of `node`: the image of the node that makes it (itself, or what
-    /// arrives at an output or a bypassed node), with the mips a view samples it with, and how
-    /// the node shows it. `None` when there is no image.
+    /// arrives at a bypassed node), with the mips a view samples it with. `None` when there
+    /// is no image.
     fn display(&mut self, node: NodeId) -> Option<DisplayImage> {
-        let state = self.states.get(&node)?;
-        let (version, format) = (state.version, state.shown_as);
+        let version = self.version(node)?;
         let producer = self.producer(node);
         self.ensure_mips(producer);
         let image = self.image(producer)?.clone();
@@ -931,7 +1022,7 @@ impl Engine {
             self.given.push(image.texture.clone());
         }
         let size = self.last_resolution;
-        Some(DisplayImage { node, version, size, gray: image.is_gray(), format, texture: image.texture, view: image.view })
+        Some(DisplayImage { node, version, size, gray: image.is_gray(), texture: image.texture, view: image.view })
     }
 
     /// Give a node's image the mips a view samples it with: the same image, in a texture that
@@ -989,17 +1080,16 @@ impl Engine {
 
     /// RGBA pixels of what a node shows, at the texture size (blocking): a grayscale image
     /// reads as gray and opaque, an image smaller than the texture (a uniform color) is
-    /// spread over it, and an output reads as its format shows its image.
+    /// spread over it, and an output reads as it writes its image.
     pub fn read_image(&self, node: NodeId) -> Result<(u32, u32, Vec<f32>), String> {
         let image = self.image(node).ok_or("The node has no image")?;
-        let shown_as = self.states.get(&node).map_or(0, |s| s.shown_as);
         let size = self.last_resolution;
-        if image.size() == size && shown_as == 0 {
+        if image.size() == size {
             return Ok((size[0], size[1], self.gpu.read_image_blocking(image)?));
         }
         let full = self.gpu.take_scratch(size[0], size[1], COLOR_FORMAT);
         let mut encoder = self.gpu.encoder();
-        let copied = self.gpu.encode_show(&mut encoder, image, &full, shown_as);
+        let copied = self.gpu.encode_show(&mut encoder, image, &full, 0);
         self.gpu.queue.submit(Some(encoder.finish()));
         let pixels = copied.and_then(|()| self.gpu.read_image_blocking(&full));
         self.gpu.recycle(full);
@@ -1031,24 +1121,10 @@ impl Engine {
         match rb.poll() {
             Some(Ok(())) => {
                 let px = rb.to_f32();
-                let shown_as = self.states.get(&node).map_or(0, |s| s.shown_as);
-                (px.len() >= 4).then(|| as_output([px[0], px[1], px[2], px[3]], shown_as))
+                (px.len() >= 4).then(|| [px[0], px[1], px[2], px[3]])
             }
             _ => None,
         }
-    }
-}
-
-/// What an output in `format` shows of a pixel (the same as `as_output` of common.wgsl).
-fn as_output(c: [f32; 4], format: u32) -> [f32; 4] {
-    match format {
-        1 => [c[0], c[1], c[2], 1.0],
-        2 => [c[0], c[1], 0.0, 1.0],
-        3 => [c[0], c[0], c[0], 1.0],
-        4 => [c[1], c[1], c[1], 1.0],
-        5 => [c[2], c[2], c[2], 1.0],
-        6 => [c[3], c[3], c[3], 1.0],
-        _ => c,
     }
 }
 

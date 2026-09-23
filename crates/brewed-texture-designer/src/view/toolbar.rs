@@ -250,13 +250,23 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
 
     // The engine is there once it started, or once it said anything.
     let engine = app.engine.is_some() || app.res.finished_revision > 0;
+    let m = app.res.memory;
     let memory = reading(
-        format!("VRAM {}", megabytes(app.res.memory)),
-        "GPU memory the images take, at the texture size (grayscale ones in one channel): those the \
-         2D and 3D views show, with their mips; those the last change read, which the next change \
-         of the same kind reads again; and the scratch images kept for reuse while changes keep \
-         coming. Every other image lives only while the change that computes it needs it."
-            .into(),
+        format!("VRAM {}", megabytes(m.total())),
+        format!(
+            "GPU memory the images take, at the texture size:\n\
+             {} the 2D and 3D views show: {} with their mips (an output's in its channels and \
+             at its bit depth)\n\
+             {} kept for the next change (what the last one read)\n\
+             {} scratch images of the last change, for the next one\n\
+             {} files and gradients\n\
+             Half a second after the last change, only what the views show stays.",
+            megabytes(m.shown),
+            count(m.shown_images, "image"),
+            megabytes(m.kept),
+            megabytes(m.scratch),
+            megabytes(m.files),
+        ),
     );
 
     let gpu = if app.engine.is_none() {

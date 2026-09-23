@@ -301,8 +301,8 @@ pub struct Results {
     /// it computed again. Changes that computed nothing (moving a node, say) are not among
     /// them.
     pub updates: VecDeque<(Instant, f32, usize)>,
-    /// GPU memory the engine's images take, in bytes.
-    pub memory: u64,
+    /// GPU memory the engine's images take.
+    pub memory: brewed_texture_engine::Memory,
     pub evaluated_revision: u64,
     /// The last revision the GPU is done with.
     pub finished_revision: u64,
@@ -1392,14 +1392,22 @@ impl App {
                 if self.apply(edit)
                     && let Some([w, h]) = large
                 {
-                    // What the image nodes keep at most: 2 bytes a pixel of a grayscale image, 8 of
-                    // a color one (an output keeps what arrives at it, no image of its own).
+                    // What the image nodes take at most, all at once: 2 bytes a pixel of a
+                    // grayscale image, 8 of a color one, and what an output writes.
+                    use brewed_texture_core::nodes::ImageKind;
                     let graph = self.graph();
-                    let nodes: Vec<NodeId> =
-                        graph.nodes.iter().filter(|n| n.def().has_image() && n.kind != NodeKind::OUTPUT).map(|n| n.id).collect();
+                    let nodes: Vec<&brewed_texture_core::graph::Node> = graph.nodes.iter().filter(|n| n.def().has_image()).collect();
                     let per_pixel: u64 = nodes
                         .iter()
-                        .map(|id| if view::graph::made_kind(self, *id) == Some(brewed_texture_core::nodes::ImageKind::Gray) { 2 } else { 8 })
+                        .map(|n| {
+                            let kind = view::graph::made_kind(self, n.id).unwrap_or(ImageKind::Color);
+                            let format = if n.kind == NodeKind::OUTPUT {
+                                brewed_texture_engine::gpu::output_format(n.enum_value("format"), n.enum_value("bit_depth"), kind)
+                            } else {
+                                brewed_texture_engine::gpu::format_of(kind)
+                            };
+                            u64::from(format.block_copy_size(None).unwrap_or(8))
+                        })
                         .sum();
                     let gb = (w as u64 * h as u64 * per_pixel) as f64 / (1u64 << 30) as f64;
                     let images = nodes.len();

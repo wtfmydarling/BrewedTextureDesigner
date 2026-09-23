@@ -31,8 +31,9 @@ pub const GRAY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 pub const GRAY_WORK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 const WORKGROUP: u32 = 8;
 
-/// How a node's image is shown (`widen`, `as_output`): the WGSL the kernels read their
-/// inputs with, for the views that sample the node images to show them the same way.
+/// How a node's image is read (`widen`) and an output writes it (`as_output`): the WGSL the
+/// kernels read their inputs with, for the views that sample the node images to read them
+/// the same way.
 pub const SHOW_WGSL: &str = include_str!("shaders/show.wgsl");
 /// What every kernel starts with: [`SHOW_WGSL`] and the kernels' shared helpers.
 pub const COMMON_WGSL: &str = concat!(include_str!("shaders/show.wgsl"), include_str!("shaders/common.wgsl"));
@@ -58,6 +59,29 @@ pub fn format_of(kind: ImageKind) -> wgpu::TextureFormat {
 /// The format a kernel writes an image of `format` in.
 pub fn work_format(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
     if format == GRAY_FORMAT { GRAY_WORK_FORMAT } else { format }
+}
+
+/// The format an output keeps the image it writes in, from its format (see
+/// [`brewed_texture_core::nodes::OUTPUT_FORMATS`]) and bit depth (see [`crate::export`]),
+/// and what arrives at it: the channels it writes, one, two or four (a device has no
+/// textures of three: RGB is kept with an opaque alpha), of 8 bits, or of half floats, which
+/// hold all a node's image has for 16 bits and 32. What arrives gray is one channel in any
+/// format but RG.
+pub fn output_format(format: u32, bit_depth: u32, arriving: ImageKind) -> wgpu::TextureFormat {
+    use wgpu::TextureFormat as F;
+    let channels = match (format, arriving) {
+        (2, _) => 2,
+        (0 | 1, ImageKind::Color) => 4,
+        _ => 1,
+    };
+    match (channels, bit_depth == crate::export::DEPTH_8) {
+        (1, true) => F::R8Unorm,
+        (1, false) => F::R16Float,
+        (2, true) => F::Rg8Unorm,
+        (2, false) => F::Rg16Float,
+        (_, true) => F::Rgba8Unorm,
+        (_, false) => F::Rgba16Float,
+    }
 }
 
 /// How the format is named in WGSL.
@@ -194,9 +218,9 @@ impl GpuImage {
     pub fn format(&self) -> wgpu::TextureFormat {
         self.texture.format()
     }
-    /// One channel: a grayscale image, stored or being computed.
+    /// One channel: a grayscale image, or what an output writes of a single channel.
     pub fn is_gray(&self) -> bool {
-        matches!(self.format(), GRAY_FORMAT | GRAY_WORK_FORMAT)
+        self.format().components() == 1
     }
     pub fn kind(&self) -> ImageKind {
         if self.is_gray() { ImageKind::Gray } else { ImageKind::Color }
@@ -435,6 +459,22 @@ impl Gpu {
         self.blit(encoder, "show", BlitU { format, pad: 0, size }, src, dst)
     }
 
+    /// Record clearing `image` (its top level) to transparent black, whatever its format.
+    pub fn encode_clear(&self, encoder: &mut wgpu::CommandEncoder, image: &GpuImage) {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &image.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+    }
+
     /// Record storing a grayscale image a kernel computed (in [`GRAY_WORK_FORMAT`]) into
     /// `image` (in [`GRAY_FORMAT`]).
     pub fn encode_store(&self, encoder: &mut wgpu::CommandEncoder, work: &GpuImage, image: &GpuImage) -> Result<(), String> {
@@ -581,6 +621,12 @@ impl Gpu {
     /// GPU memory the scratch images kept for reuse take.
     pub fn pool_bytes(&self) -> u64 {
         self.pool.borrow().iter().map(|(img, _)| img.bytes()).sum()
+    }
+
+    /// The scratch images kept for reuse (for measurements).
+    #[cfg(test)]
+    pub(crate) fn pooled(&self) -> Vec<GpuImage> {
+        self.pool.borrow().iter().map(|(img, _)| img.clone()).collect()
     }
 
     /// Upload tightly packed RGBA f32 pixels to a color image (converted to half floats
@@ -1014,18 +1060,14 @@ impl Readback {
         out
     }
 
-    /// Pixels as RGBA f32 whatever they are stored as: a grayscale image is gray in red,
-    /// green and blue, and opaque.
+    /// Pixels as RGBA f32 whatever they are stored as: one channel is gray in red, green and
+    /// blue, and opaque; two are red and green, with no blue, opaque (as a shader reads them).
     pub fn to_f32(&self) -> Vec<f32> {
         let bytes = self.bytes();
-        match self.format {
-            wgpu::TextureFormat::R32Float => {
-                bytemuck::cast_slice::<u8, f32>(&bytes).iter().flat_map(|v| [*v, *v, *v, 1.0]).collect()
-            }
-            wgpu::TextureFormat::R16Float => {
-                let mut gray = vec![0.0f32; bytes.len() / 2];
-                crate::simd::f16_to_f32(bytemuck::cast_slice(&bytes), &mut gray);
-                gray.iter().flat_map(|v| [*v, *v, *v, 1.0]).collect()
+        let values: Vec<f32> = match self.format {
+            wgpu::TextureFormat::R32Float => bytemuck::cast_slice::<u8, f32>(&bytes).to_vec(),
+            wgpu::TextureFormat::R8Unorm | wgpu::TextureFormat::Rg8Unorm | wgpu::TextureFormat::Rgba8Unorm => {
+                bytes.iter().map(|b| f32::from(*b) / 255.0).collect()
             }
             _ => {
                 // Half floats, expanded with SIMD on all cores.
@@ -1034,6 +1076,11 @@ impl Readback {
                 crate::simd::f16_to_f32(half, &mut out);
                 out
             }
+        };
+        match self.format.components() {
+            1 => values.iter().flat_map(|v| [*v, *v, *v, 1.0]).collect(),
+            2 => values.as_chunks::<2>().0.iter().flat_map(|[r, g]| [*r, *g, 0.0, 1.0]).collect(),
+            _ => values,
         }
     }
 }

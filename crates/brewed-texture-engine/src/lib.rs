@@ -19,7 +19,7 @@ pub mod tools;
 #[cfg(test)]
 mod tests;
 
-pub use engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Keep, Thumbnail};
+pub use engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Keep, Memory, Thumbnail};
 pub use gpu::Gpu;
 pub use service::{EngineService, Event, ExportJob, Request};
 

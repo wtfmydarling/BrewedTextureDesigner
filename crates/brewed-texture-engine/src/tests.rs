@@ -150,20 +150,49 @@ fn blur_preserves_mean_with_tiling() {
     assert!((mean(&out) - a).abs() < 0.01);
 }
 
+/// An output writes the channels of its format at its bit depth: one channel for a single
+/// one, two for RG, four for RGB and RGBA; 8 bits hold a value to the nearest of 255 steps,
+/// where 16 keep it.
 #[test]
-fn output_format_single_channel() {
+fn outputs_write_their_channels_at_their_bit_depth() {
+    use wgpu::TextureFormat as F;
     let Some(mut e) = engine() else { return };
     let mut g = graph();
     let c = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
-    set(&mut g, c, "color", ParamValue::Color([0.25, 0.5, 0.75, 0.5]));
+    set(&mut g, c, "color", ParamValue::Color([0.25, 0.6, 0.75, 0.4]));
     let o = g.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
     g.connect(c, "o:output", o, "i:input").unwrap();
+    // A uniform color is one pixel, and so is what an output writes of it: that pixel, as
+    // the output keeps it.
+    let written = |e: &mut Engine, g: &Graph| {
+        evaluate_blocking(e, g);
+        let image = e.image(o).expect("the output's image");
+        assert_eq!(image.size(), [1, 1]);
+        let px = e.gpu.read_image_blocking(image).unwrap();
+        ([px[0], px[1], px[2], px[3]], image.format())
+    };
+    let step = |v: f32| (v * 255.0).round() / 255.0;
     set(&mut g, o, "format", ParamValue::Enum(4)); // G
-    let data = eval_read(&mut e, &g, o);
-    assert_eq!(pixel(&data, 5, 5), [0.5, 0.5, 0.5, 1.0]);
+    assert_eq!(written(&mut e, &g), ([step(0.6), step(0.6), step(0.6), 1.0], F::R8Unorm));
     set(&mut g, o, "format", ParamValue::Enum(2)); // RG
+    assert_eq!(written(&mut e, &g), ([step(0.25), step(0.6), 0.0, 1.0], F::Rg8Unorm));
+    set(&mut g, o, "format", ParamValue::Enum(1)); // RGB
+    assert_eq!(written(&mut e, &g), ([step(0.25), step(0.6), step(0.75), 1.0], F::Rgba8Unorm));
+    set(&mut g, o, "bit_depth", ParamValue::Enum(1)); // 16 bit
+    let (px, format) = written(&mut e, &g);
+    assert_eq!(format, F::Rgba16Float);
+    for (v, w) in px.iter().zip([0.25, 0.6, 0.75, 1.0]) {
+        assert!(close(*v, w, 1e-3), "{px:?}");
+    }
+    // Spread over the texture size, as it is exported.
     let data = eval_read(&mut e, &g, o);
-    assert_eq!(pixel(&data, 5, 5), [0.25, 0.5, 0.0, 1.0]);
+    assert!(close(pixel(&data, 5, 5)[1], 0.6, 1e-3));
+    // What arrives gray is one channel in RGB too.
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    g.connect(noise, "o:output", o, "i:input").unwrap();
+    evaluate_blocking(&mut e, &g);
+    assert_eq!(e.image(o).unwrap().format(), F::R16Float);
+    assert_eq!(e.image(o).unwrap().size(), [RES, RES]);
 }
 
 #[test]
@@ -694,8 +723,9 @@ fn pictures_of_the_options() {
 
 /// Kept as the app keeps them, an image lives while something reads it: a node no other node
 /// takes and no view shows keeps only its thumbnail, an image read only inside an evaluation
-/// goes back to the pool once it is read, and what the last change read from outside itself
-/// stays for the next change of the same kind.
+/// goes back to the pool once it is read, what the last change read from outside itself
+/// stays for the next change of the same kind, and once the engine settles only what the
+/// views show stays.
 #[test]
 fn images_live_while_something_reads_them() {
     let Some(mut e) = engine() else { return };
@@ -714,19 +744,20 @@ fn images_live_while_something_reads_them() {
     for id in [alone, noise, blur, out] {
         assert!(thumbs.iter().any(|t| t.node == id), "every node drew its thumbnail");
     }
-    // Only what arrives at the output stays, with the mips the 3D view samples it with.
-    assert!(e.image(alone).is_none() && e.image(noise).is_none());
-    let shown = e.image(out).expect("the output shows the blur").clone();
-    assert!(e.image(blur).is_some_and(|b| b.texture == shown.texture));
+    // Only what the output writes stays, with the mips the 3D view samples it with: a gray
+    // 8-bit image, one byte a pixel.
+    assert!(e.image(alone).is_none() && e.image(noise).is_none() && e.image(blur).is_none());
+    let shown = e.image(out).expect("the output's image").clone();
+    assert_eq!(shown.format(), wgpu::TextureFormat::R8Unorm);
     assert!(shown.texture.mip_level_count() > 1);
     e.gpu.clear_pool();
-    assert_eq!(e.memory(), shown.bytes(), "one grayscale image and its mips");
+    assert_eq!(e.memory(), shown.bytes(), "one image of one byte a pixel, and its mips");
 
-    // A change of the noise computes it and the blur again; the noise goes back to the pool
-    // once the blur has read it.
+    // A change of the noise computes it, the blur and the output again; the noise goes back
+    // to the pool once the blur has read it.
     set(&mut g, noise, "seed", ParamValue::Int(3));
     evaluate_blocking(&mut e, &g);
-    assert_eq!(e.report.recomputed, 2);
+    assert_eq!(e.report.recomputed, 3);
     assert_eq!(e.render_thumbnails().len(), 3, "the noise, the blur and the output changed");
     assert!(e.image(noise).is_none());
     // A change of the blur reads the noise: it is computed again, as it was (its version
@@ -734,14 +765,14 @@ fn images_live_while_something_reads_them() {
     let version = e.version(noise);
     set(&mut g, blur, "radius", ParamValue::Float(3.0));
     evaluate_blocking(&mut e, &g);
-    assert_eq!(e.report.recomputed, 2);
+    assert_eq!(e.report.recomputed, 3);
     assert_eq!(e.version(noise), version);
     assert!(e.image(noise).is_some());
     let thumbs = e.render_thumbnails();
     assert!(thumbs.iter().all(|t| t.node != noise), "no new thumbnail of what did not change");
     set(&mut g, blur, "radius", ParamValue::Float(4.0));
     evaluate_blocking(&mut e, &g);
-    assert_eq!(e.report.recomputed, 1, "the noise was there");
+    assert_eq!(e.report.recomputed, 2, "the noise was there");
     assert_eq!(e.render_thumbnails().len(), 2, "the blur and the output changed");
     // Shown in the 2D view, a node is computed and stays.
     e.set_preview(Some(alone));
@@ -749,6 +780,12 @@ fn images_live_while_something_reads_them() {
     assert_eq!(e.report.recomputed, 1);
     assert!(e.image(alone).is_some());
     assert!(e.render_thumbnails().is_empty(), "nothing changed");
+    // Nothing changes for a while: what the next change of the blur would have read goes.
+    e.settle();
+    assert!(e.image(noise).is_none());
+    assert!(e.image(alone).is_some() && e.image(out).is_some());
+    let memory = e.memory_report();
+    assert_eq!((memory.shown_images, memory.kept, memory.scratch), (2, 0, 0));
     // Deleted, a node lets go of its image.
     g.remove_nodes(&[alone]);
     e.set_preview(None);
@@ -787,6 +824,60 @@ fn a_texture_a_view_was_given_is_not_taken_by_another_image() {
     assert!(taken.iter().all(|t| t.texture != shown.texture));
 }
 
+/// What the demo takes while an input value is dragged, and once nothing changes (prints).
+#[test]
+#[ignore = "a measurement"]
+fn demo_memory_while_changing() {
+    let Some(mut e) = engine() else { return };
+    let (mut g, preview) = brewed_texture_core::demo::graph();
+    g.resolution = [2048, 2048];
+    let outputs: Vec<NodeId> = g.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
+    e.set_keep(crate::engine::Keep::Read);
+    e.set_preview(preview);
+    e.set_materials(&outputs);
+    let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
+    let show = |e: &Engine, g: &Graph, what: &str| {
+        println!("{what}: {:.0} MB, of which {:.0} MB scratch", mb(e.memory()), mb(e.gpu.pool_bytes()));
+        for n in &g.nodes {
+            if let Some(img) = e.image(n.id) {
+                println!("  kept  {:<18} {:?} x{}: {:.1} MB", n.def().name, img.format(), img.texture.mip_level_count(), mb(img.bytes()));
+            }
+        }
+        for img in e.gpu.pooled() {
+            println!("  pool  {:?} {:?} x{}: {:.1} MB", img.size(), img.format(), img.texture.mip_level_count(), mb(img.bytes()));
+        }
+    };
+    evaluate_blocking(&mut e, &g);
+    e.prepare_preview(preview);
+    e.prepare_materials(&outputs);
+    e.render_thumbnails();
+    e.settle();
+    show(&e, &g, "opened");
+    let wear = g.variables.iter().position(|v| v.name == "wear").unwrap();
+    for keep_pool in [true, false, true, false] {
+        let mut total = 0.0;
+        for step in 0..20 {
+            g.variables[wear].value = Value::Float(0.5 + step as f32 * 0.01);
+            if !keep_pool {
+                e.gpu.clear_pool();
+            }
+            let started = std::time::Instant::now();
+            evaluate_blocking(&mut e, &g);
+            e.prepare_preview(preview);
+            e.prepare_materials(&outputs);
+            e.render_thumbnails();
+            e.wait_idle();
+            if step > 0 {
+                total += started.elapsed().as_secs_f64() * 1000.0;
+            }
+        }
+        println!("keep pool {keep_pool}: {} recomputed, {:.2} ms a step", e.report.recomputed, total / 19.0);
+    }
+    show(&e, &g, "after dragging wear");
+    e.settle();
+    show(&e, &g, "half a second later");
+}
+
 /// What the demo takes in GPU memory at 2048×2048, as the app shows it (prints).
 #[test]
 #[ignore = "a measurement"]
@@ -805,13 +896,13 @@ fn demo_memory() {
     e.wait_idle();
     let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
     println!("demo at 2048x2048: {:.0} MB, of which {:.0} MB scratch images", mb(e.memory()), mb(e.gpu.pool_bytes()));
-    e.gpu.trim_pool();
-    e.gpu.trim_pool();
-    println!("without scratch images: {:.0} MB", mb(e.memory()));
-    // The images that stay (an output shows the image of the node before it).
-    for n in g.nodes.iter().filter(|n| n.kind != NodeKind::OUTPUT) {
+    e.settle();
+    println!("settled: {:.0} MB", mb(e.memory()));
+    // The images that stay.
+    for n in &g.nodes {
         if let Some(img) = e.image(n.id) {
-            println!("  {:<20} {:?}, {} mips: {:.1} MB", n.def().name, img.format(), img.texture.mip_level_count(), mb(img.bytes()));
+            let name = if n.kind == NodeKind::OUTPUT { n.text("name").to_string() } else { n.def().name.to_string() };
+            println!("  {name:<20} {:?}, {} mips: {:.1} MB", img.format(), img.texture.mip_level_count(), mb(img.bytes()));
         }
     }
 }
@@ -867,10 +958,10 @@ fn grayscale_and_color_images() {
     assert!(e.gpu.take_errors().is_empty());
 }
 
-/// An output shows what arrives at it, as its format shows it, and keeps no image of its
-/// own; so does a bypassed node, which passes on what arrives at it.
+/// A bypassed node passes on what arrives at it and keeps no image of its own; an output
+/// keeps the image it writes.
 #[test]
-fn outputs_and_bypassed_nodes_share_their_input() {
+fn bypassed_nodes_share_their_input() {
     let Some(mut e) = engine() else { return };
     let mut g = graph();
     let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
@@ -880,7 +971,7 @@ fn outputs_and_bypassed_nodes_share_their_input() {
     g.connect(invert, "o:output", out, "i:input").unwrap();
     evaluate_blocking(&mut e, &g);
     let texture = |e: &Engine, id| e.image(id).map(|i| i.texture.clone());
-    assert_eq!(texture(&e, out), texture(&e, invert), "the output is its input");
+    assert!(texture(&e, out).is_some() && texture(&e, out) != texture(&e, invert), "the output writes an image of its own");
     // (Without the scratch images, which go once nothing changes.)
     e.gpu.clear_pool();
     let memory = e.memory();
@@ -888,7 +979,6 @@ fn outputs_and_bypassed_nodes_share_their_input() {
     g.node_mut(invert).unwrap().bypass = true;
     evaluate_blocking(&mut e, &g);
     assert_eq!(texture(&e, invert), texture(&e, noise), "a bypassed node is its input");
-    assert_eq!(texture(&e, out), texture(&e, noise));
     e.gpu.clear_pool();
     assert!(e.memory() < memory, "{} is not less than {memory}", e.memory());
     // Back again: the node makes an image of its own, and does not write into its input's.
@@ -897,12 +987,17 @@ fn outputs_and_bypassed_nodes_share_their_input() {
     evaluate_blocking(&mut e, &g);
     assert_ne!(texture(&e, invert), texture(&e, noise));
     assert_eq!(e.read_image(noise).unwrap().2, before, "the input was written into");
+    // The output writes 8 bits: to the nearest of 255 steps.
     let inverted = e.read_image(out).unwrap().2;
-    assert!(close(pixel(&inverted, 9, 9)[0], 1.0 - pixel(&before, 9, 9)[0], 2e-3));
+    assert!(close(pixel(&inverted, 9, 9)[0], 1.0 - pixel(&before, 9, 9)[0], 3e-3));
 }
 
+/// Kept as the app keeps them, once nothing changes the demo keeps the images its outputs
+/// write for the views and nothing else, the same whatever was changed before: each in its
+/// output's channels and at its bit depth, with its mips.
 #[test]
-fn the_demo_keeps_only_what_is_read() {
+fn the_demo_settles_on_what_its_outputs_write() {
+    use wgpu::TextureFormat as F;
     let Some(mut e) = engine() else { return };
     let (mut g, preview) = brewed_texture_core::demo::graph();
     g.resolution = [512, 512];
@@ -914,9 +1009,25 @@ fn the_demo_keeps_only_what_is_read() {
     evaluate_blocking(&mut e, &g);
     assert!(e.prepare_preview(preview).is_some());
     assert!(e.prepare_materials(&outputs).is_some_and(|m| m.len() == outputs.len()));
-    // As the engine is once nothing changes for a moment: without its scratch images.
-    e.gpu.clear_pool();
-    let mb = e.memory() as f64 / (1024.0 * 1024.0);
-    // 802 MB at 2048 was 50 MB at 512; 117 MB at 2048 is 7.3 at 512.
-    assert!(mb < 7.5, "the demo takes {mb:.1} MB at 512");
+    e.settle();
+    let settled = e.memory_report();
+    assert_eq!((settled.shown_images, settled.kept, settled.scratch), (outputs.len(), 0, 0));
+    // Base color and normal in RGB of 8 bits (kept with alpha), the height in one channel of
+    // 16, roughness and occlusion in one of 8.
+    let formats: Vec<F> = outputs.iter().map(|o| e.image(*o).unwrap().format()).collect();
+    assert_eq!(formats, [F::Rgba8Unorm, F::Rgba8Unorm, F::R16Float, F::R8Unorm, F::R8Unorm]);
+    let mb = settled.total() as f64 / (1024.0 * 1024.0);
+    // 64 MB at 2048: 48 of maps, 16 of mips.
+    assert!(mb < 4.1, "the demo takes {mb:.1} MB at 512");
+    // Dragging an input value keeps what the next step reads; settled again, the same.
+    let wear = g.variables.iter().position(|v| v.name == "wear").unwrap();
+    for value in [0.6, 0.65, 0.55] {
+        g.variables[wear].value = Value::Float(value);
+        evaluate_blocking(&mut e, &g);
+        e.prepare_preview(preview);
+        e.prepare_materials(&outputs);
+    }
+    assert!(e.memory_report().kept > 0);
+    e.settle();
+    assert_eq!(e.memory_report(), settled);
 }
