@@ -258,7 +258,7 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
              {} the 2D and 3D views show: {} with their mips (an output's in its channels and \
              at its bit depth)\n\
              {} kept for the next change (what the last one read)\n\
-             {} scratch images of the last change, for the next one\n\
+             {} scratch images, kept while changes keep coming (a slider dragged)\n\
              {} files and gradients\n\
              Half a second after the last change, only what the views show stays.",
             megabytes(m.shown),

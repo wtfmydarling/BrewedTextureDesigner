@@ -81,7 +81,8 @@ pub struct Memory {
     /// Images kept for the next change and those asked about (kept as [`Keep::Read`], they
     /// go once nothing changes for a moment); every other image, kept as [`Keep::All`].
     pub kept: u64,
-    /// Scratch images the last change worked in, kept for the next one.
+    /// Scratch images the last change worked in, kept for the next one while changes keep
+    /// coming.
     pub scratch: u64,
     /// Loaded files and baked gradients.
     pub files: u64,
@@ -517,7 +518,7 @@ impl Engine {
         }
         let kept: HashSet<NodeId> = match self.keep {
             Keep::All => order.iter().copied().collect(),
-            Keep::Read => wanted.iter().map(|id| self.producer(*id)).chain(self.boundary.iter().copied()).collect(),
+            Keep::Read => self.kept(),
         };
 
         // 3. Compute, in order. Each image goes back to the pool (for the next image of its
@@ -558,11 +559,7 @@ impl Engine {
         }
 
         // 4. Let go of what stayed from before and does not stay any more.
-        let stale: Vec<NodeId> =
-            self.states.iter().filter(|(id, s)| s.image.is_some() && !kept.contains(id)).map(|(id, _)| *id).collect();
-        for id in stale {
-            self.release(id);
-        }
+        self.sweep();
         self.gpu.queue.submit(Some(encoder.finish()));
         self.report = report;
         report
@@ -613,20 +610,35 @@ impl Engine {
         self.asked = nodes;
     }
 
+    /// The nodes whose images stay, kept as [`Keep::Read`]: what the views show, what is asked
+    /// about, and what the last change read from outside itself.
+    fn kept(&self) -> HashSet<NodeId> {
+        let read = self.preview.iter().chain(&self.materials).chain(&self.asked);
+        read.map(|id| self.producer(*id)).chain(self.boundary.iter().copied()).collect()
+    }
+
+    /// Let go of the images that no longer stay (kept as [`Keep::Read`]): what a view stopped
+    /// showing, what is not asked about any more. An evaluation does it itself; this is for
+    /// a view that moved on to an image that is there, which needs no evaluation.
+    pub fn sweep(&mut self) {
+        if self.keep == Keep::All {
+            return;
+        }
+        let kept = self.kept();
+        let stale: Vec<NodeId> =
+            self.states.iter().filter(|(id, s)| s.image.is_some() && !kept.contains(id)).map(|(id, _)| *id).collect();
+        for id in stale {
+            self.release(id);
+        }
+    }
+
     /// Nothing has changed for a while: let go of everything the next change would have read
     /// and that the views do not show (kept as [`Keep::Read`]), and of the scratch images. What
     /// stays is what the views show, whatever was changed before.
     pub fn settle(&mut self) {
-        if self.keep == Keep::Read {
-            self.boundary.clear();
-            self.asked.clear();
-            let shown = self.shown();
-            let others: Vec<NodeId> =
-                self.states.iter().filter(|(id, s)| s.image.is_some() && !shown.contains(id)).map(|(id, _)| *id).collect();
-            for id in others {
-                self.release(id);
-            }
-        }
+        self.boundary.clear();
+        self.asked.clear();
+        self.sweep();
         self.gpu.clear_pool();
     }
 

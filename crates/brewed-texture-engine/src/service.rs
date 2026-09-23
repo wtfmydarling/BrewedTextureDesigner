@@ -21,8 +21,9 @@ use crate::gpu::Gpu;
 use crate::simd::ImageStats;
 
 /// How long the engine waits with nothing to do before it settles (see [`Engine::settle`]):
-/// while changes keep coming (a slider dragged) its scratch images and what the last change
-/// read are used again, once they stop they only take memory.
+/// while changes keep coming (a slider dragged) what the last change read from outside itself
+/// is read again, once they stop it only takes memory. (The scratch images go as soon as no
+/// change is waiting.)
 const IDLE: Duration = Duration::from_millis(500);
 
 /// One file to write.
@@ -164,9 +165,13 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
     let mut materials: Vec<NodeId> = Vec::new();
     // The GPU memory the front end was last told of (`None`: not yet, or it forgot).
     let mut memory: Option<Memory> = None;
+    // A request that came while the last round was at work: the next round starts with it.
+    let mut waiting: Option<Request> = None;
     loop {
         // Wait for work; poll while files are being decoded in the background.
-        let first = if engine.bitmaps_loading() {
+        let first = if let Some(request) = waiting.take() {
+            Some(request)
+        } else if engine.bitmaps_loading() {
             match rx.recv_timeout(Duration::from_millis(25)) {
                 Ok(r) => Some(r),
                 Err(RecvTimeoutError::Timeout) => None,
@@ -257,6 +262,9 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         {
             (emit)(Event::Materials(set));
         }
+        // A view that moved on to an image that was there needed no evaluation: what it showed
+        // before goes now.
+        engine.sweep();
         if let Some((revision, report, started)) = evaluated {
             // Also waits for the GPU, which throttles the loop to the GPU's pace.
             let thumbs = engine.render_thumbnails();
@@ -267,6 +275,13 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
             engine.wait_idle();
             let millis = started.elapsed().as_secs_f32() * 1000.0;
             (emit)(Event::Finished { revision, report, millis });
+            // The scratch images the evaluation worked in serve the next change if one is
+            // already coming (a slider being dragged); after anything else (a node shown, a
+            // single change) they only take memory.
+            waiting = rx.try_recv().ok();
+            if waiting.is_none() {
+                engine.gpu.clear_pool();
+            }
             // Now, not after whatever else this round does (the pictures of the options take
             // a while when they are drawn first).
             report_memory(&engine, &mut memory, &emit);
@@ -302,8 +317,16 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         if !errors.is_empty() {
             (emit)(Event::GpuErrors(errors));
         }
-        // What this round did not use, the next is unlikely to.
-        engine.gpu.trim_pool();
+        // What this round did not use, the next is unlikely to; and with nothing coming, none
+        // of it is.
+        if waiting.is_none() {
+            waiting = rx.try_recv().ok();
+        }
+        if waiting.is_some() {
+            engine.gpu.trim_pool();
+        } else {
+            engine.gpu.clear_pool();
+        }
         report_memory(&engine, &mut memory, &emit);
     }
 }

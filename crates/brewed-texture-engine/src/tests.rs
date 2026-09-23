@@ -834,6 +834,9 @@ struct App {
     preview: Option<NodeId>,
     shown: Option<crate::engine::DisplayImage>,
     materials: Vec<crate::engine::DisplayImage>,
+    /// The memory the last round worked in: what stays, and the scratch images of its
+    /// evaluation (at most what was alive at once), and how long it took.
+    at_work: (u64, f64),
 }
 
 impl App {
@@ -841,18 +844,20 @@ impl App {
         let (mut g, preview) = brewed_texture_core::demo::graph();
         g.resolution = [resolution, resolution];
         let outputs = g.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
-        let mut app = App { e, g, outputs, preview, shown: None, materials: Vec::new() };
+        let mut app = App { e, g, outputs, preview, shown: None, materials: Vec::new(), at_work: (0, 0.0) };
         app.e.set_keep(crate::engine::Keep::Read);
         app.round(true);
         app
     }
 
     /// One round of the engine thread: an evaluation when the graph changed or what the views
-    /// read is not there, then what the views are given and the thumbnails.
+    /// read is not there, then what the views are given and the thumbnails. Nothing waits
+    /// after it (a single change, a node shown), so the scratch images go.
     fn round(&mut self, changed: bool) {
         self.e.set_preview(self.preview);
         self.e.set_materials(&self.outputs);
         let read: Vec<NodeId> = self.preview.iter().chain(&self.outputs).copied().collect();
+        let started = std::time::Instant::now();
         if changed || self.e.missing(&read) {
             evaluate_blocking(&mut self.e, &self.g);
         }
@@ -862,8 +867,10 @@ impl App {
         if let Some(materials) = self.e.prepare_materials(&self.outputs) {
             self.materials = materials;
         }
+        self.e.sweep();
         self.e.render_thumbnails();
-        self.e.gpu.trim_pool();
+        self.at_work = (self.e.memory(), started.elapsed().as_secs_f64() * 1000.0);
+        self.e.gpu.clear_pool();
     }
 
     /// A double click on a node: the 2D view shows it.
@@ -885,9 +892,10 @@ impl App {
     }
 }
 
-/// Showing one node after another in the 2D view leaves nothing behind: once nothing changes,
-/// what stays is what the outputs write for the 3D view and the image of the node the 2D view
-/// shows, whatever was shown or changed before.
+/// Showing one node after another in the 2D view leaves nothing behind, and takes nothing
+/// more than it shows: as soon as a node is shown, what stays is what the outputs write for
+/// the 3D view and the image of that node, whatever was shown or changed before. (The chain
+/// up to the node is computed again, in scratch images that go at once.)
 #[test]
 fn showing_node_after_node_leaves_nothing_behind() {
     let Some(e) = engine() else { return };
@@ -901,7 +909,6 @@ fn showing_node_after_node_leaves_nothing_behind() {
     for round in 0..2 {
         for &node in &image_nodes {
             app.show(node);
-            app.wait();
             let m = app.e.memory_report();
             let own = if app.outputs.contains(&node) { 0 } else { app.e.image(node).expect("the node shown").bytes() };
             let name = app.g.node(node).unwrap().def().name;
@@ -982,11 +989,11 @@ fn demo_memory_while_showing_nodes() {
     let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
     let allocated = |app: &App| {
         app.e.wait_idle();
-        app.e.gpu.device.generate_allocator_report().map(|r| mb(r.total_allocated_bytes))
+        app.e.gpu.device.generate_allocator_report().map(|r| (mb(r.total_allocated_bytes), mb(r.total_reserved_bytes)))
     };
     let line = |app: &App, what: &str| {
         let m = app.e.memory_report();
-        let gpu = allocated(app).map_or(String::new(), |a| format!(", the allocator {a:.0} MB"));
+        let gpu = allocated(app).map_or(String::new(), |(a, r)| format!(", the allocator {a:.0} MB ({r:.0} reserved)"));
         println!("{what:<28} {:>4.0} MB: shown {:.0} ({}), kept {:.0}, scratch {:.0}{gpu}", mb(m.total()), mb(m.shown), m.shown_images, mb(m.kept), mb(m.scratch));
     };
     println!("{}", app.e.gpu.adapter_info);
@@ -1003,6 +1010,7 @@ fn demo_memory_while_showing_nodes() {
             app.show(node);
             if round == 0 {
                 line(&app, name);
+                println!("  {:<26} at most {:.0} MB for {:.1} ms", "at work", mb(app.at_work.0), app.at_work.1);
             }
             app.wait();
             if round == 0 {
