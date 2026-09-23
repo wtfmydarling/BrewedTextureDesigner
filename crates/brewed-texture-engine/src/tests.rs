@@ -1025,6 +1025,59 @@ fn demo_memory_while_showing_nodes() {
     line(&app, "back to basecolor");
 }
 
+/// What a step of a dragged input value of the demo costs at 2048×2048, on Vulkan (what the
+/// app runs on here) and DX12: with the scratch images and what the step reads kept from the
+/// step before, without the scratch images, and without either (prints).
+#[test]
+#[ignore = "a measurement"]
+fn drag_step_costs() {
+    for backend in [wgpu::Backends::VULKAN, wgpu::Backends::DX12] {
+        let Ok(gpu) = Gpu::headless_on(backend) else { continue };
+        println!("{}", gpu.adapter_info);
+        let mut app = App::demo(Engine::new(gpu), 2048);
+        app.wait();
+        let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
+        for (keep_scratch, keep_read) in [(true, true), (false, true), (false, false), (true, true), (false, true), (false, false)] {
+            let mut times = Vec::new();
+            let mut memory = 0;
+            for step in 0..40 {
+                let v = app.g.variables.iter().position(|v| v.name == "wear").unwrap();
+                app.g.variables[v].value = Value::Float(0.5 + (step % 20) as f32 * 0.01);
+                let started = std::time::Instant::now();
+                app.e.set_preview(app.preview);
+                app.e.set_materials(&app.outputs);
+                evaluate_blocking(&mut app.e, &app.g);
+                if let Some(shown) = app.e.prepare_preview(app.preview) {
+                    app.shown = shown;
+                }
+                if let Some(materials) = app.e.prepare_materials(&app.outputs) {
+                    app.materials = materials;
+                }
+                app.e.sweep();
+                app.e.render_thumbnails();
+                app.e.wait_idle();
+                if !keep_scratch {
+                    app.e.gpu.clear_pool();
+                }
+                if !keep_read {
+                    app.e.settle();
+                }
+                memory = memory.max(app.e.memory());
+                if step > 0 {
+                    times.push(started.elapsed().as_secs_f64() * 1000.0);
+                }
+            }
+            let average = times.iter().sum::<f64>() / times.len() as f64;
+            let worst = times.iter().copied().fold(0.0, f64::max);
+            println!(
+                "  scratch kept {keep_scratch:<5} read kept {keep_read:<5}: {average:5.2} ms a step, {worst:5.2} at worst, {:.0} MB between steps",
+                mb(memory)
+            );
+            app.wait();
+        }
+    }
+}
+
 /// What the demo takes in GPU memory at 2048×2048, as the app shows it (prints).
 #[test]
 #[ignore = "a measurement"]
