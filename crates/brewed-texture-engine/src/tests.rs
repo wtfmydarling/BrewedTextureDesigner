@@ -824,6 +824,98 @@ fn a_texture_a_view_was_given_is_not_taken_by_another_image() {
     assert!(taken.iter().all(|t| t.texture != shown.texture));
 }
 
+/// The app's engine and views, as they run a graph: the 2D view shows one node, the 3D view
+/// the outputs with a usage, and each round goes as the engine thread goes (see
+/// `service::run`). The views hold what they were last given, as the app does.
+struct App {
+    e: Engine,
+    g: Graph,
+    outputs: Vec<NodeId>,
+    preview: Option<NodeId>,
+    shown: Option<crate::engine::DisplayImage>,
+    materials: Vec<crate::engine::DisplayImage>,
+}
+
+impl App {
+    fn demo(e: Engine, resolution: u32) -> App {
+        let (mut g, preview) = brewed_texture_core::demo::graph();
+        g.resolution = [resolution, resolution];
+        let outputs = g.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
+        let mut app = App { e, g, outputs, preview, shown: None, materials: Vec::new() };
+        app.e.set_keep(crate::engine::Keep::Read);
+        app.round(true);
+        app
+    }
+
+    /// One round of the engine thread: an evaluation when the graph changed or what the views
+    /// read is not there, then what the views are given and the thumbnails.
+    fn round(&mut self, changed: bool) {
+        self.e.set_preview(self.preview);
+        self.e.set_materials(&self.outputs);
+        let read: Vec<NodeId> = self.preview.iter().chain(&self.outputs).copied().collect();
+        if changed || self.e.missing(&read) {
+            evaluate_blocking(&mut self.e, &self.g);
+        }
+        if let Some(shown) = self.e.prepare_preview(self.preview) {
+            self.shown = shown;
+        }
+        if let Some(materials) = self.e.prepare_materials(&self.outputs) {
+            self.materials = materials;
+        }
+        self.e.render_thumbnails();
+        self.e.gpu.trim_pool();
+    }
+
+    /// A double click on a node: the 2D view shows it.
+    fn show(&mut self, node: NodeId) {
+        self.preview = Some(node);
+        self.round(false);
+    }
+
+    /// An input value set, as a slider sets it.
+    fn set_value(&mut self, name: &str, value: f32) {
+        let v = self.g.variables.iter().position(|v| v.name == name).unwrap();
+        self.g.variables[v].value = Value::Float(value);
+        self.round(true);
+    }
+
+    /// Half a second with nothing to do.
+    fn wait(&mut self) {
+        self.e.settle();
+    }
+}
+
+/// Showing one node after another in the 2D view leaves nothing behind: once nothing changes,
+/// what stays is what the outputs write for the 3D view and the image of the node the 2D view
+/// shows, whatever was shown or changed before.
+#[test]
+fn showing_node_after_node_leaves_nothing_behind() {
+    let Some(e) = engine() else { return };
+    let mut app = App::demo(e, 256);
+    app.wait();
+    let outputs = app.e.memory_report().shown;
+    app.set_value("wear", 0.7);
+    app.wait();
+    let image_nodes: Vec<NodeId> = app.g.nodes.iter().filter(|n| n.def().has_image()).map(|n| n.id).collect();
+    let mut first = Vec::new();
+    for round in 0..2 {
+        for &node in &image_nodes {
+            app.show(node);
+            app.wait();
+            let m = app.e.memory_report();
+            let own = if app.outputs.contains(&node) { 0 } else { app.e.image(node).expect("the node shown").bytes() };
+            let name = app.g.node(node).unwrap().def().name;
+            assert_eq!((m.shown, m.kept, m.scratch), (outputs + own, 0, 0), "{name}");
+            assert!(app.shown.as_ref().is_some_and(|d| d.node == node), "{name} is shown");
+            if round == 0 {
+                first.push(m);
+            } else {
+                assert_eq!(m, first[image_nodes.iter().position(|n| *n == node).unwrap()], "{name}, the second time");
+            }
+        }
+    }
+}
+
 /// What the demo takes while an input value is dragged, and once nothing changes (prints).
 #[test]
 #[ignore = "a measurement"]
@@ -876,6 +968,53 @@ fn demo_memory_while_changing() {
     show(&e, &g, "after dragging wear");
     e.settle();
     show(&e, &g, "half a second later");
+}
+
+/// Double clicks on every node of the demo at 2048×2048, as `showing_node_after_node_leaves_nothing_behind`
+/// makes them, with the memory the engine counts after each and, where the backend can say
+/// it (DX12), what its allocator holds (prints).
+#[test]
+#[ignore = "a measurement"]
+fn demo_memory_while_showing_nodes() {
+    let gpu = Gpu::headless_on(wgpu::Backends::DX12).or_else(|_| Gpu::headless());
+    let Ok(gpu) = gpu else { return };
+    let mut app = App::demo(Engine::new(gpu), 2048);
+    let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
+    let allocated = |app: &App| {
+        app.e.wait_idle();
+        app.e.gpu.device.generate_allocator_report().map(|r| mb(r.total_allocated_bytes))
+    };
+    let line = |app: &App, what: &str| {
+        let m = app.e.memory_report();
+        let gpu = allocated(app).map_or(String::new(), |a| format!(", the allocator {a:.0} MB"));
+        println!("{what:<28} {:>4.0} MB: shown {:.0} ({}), kept {:.0}, scratch {:.0}{gpu}", mb(m.total()), mb(m.shown), m.shown_images, mb(m.kept), mb(m.scratch));
+    };
+    println!("{}", app.e.gpu.adapter_info);
+    app.wait();
+    line(&app, "opened");
+    app.set_value("wear", 0.7);
+    line(&app, "wear 0.7");
+    app.wait();
+    line(&app, "  half a second later");
+    let image_nodes: Vec<NodeId> = app.g.nodes.iter().filter(|n| n.def().has_image()).map(|n| n.id).collect();
+    for round in 0..2 {
+        for &node in &image_nodes {
+            let name = app.g.node(node).unwrap().def().name;
+            app.show(node);
+            if round == 0 {
+                line(&app, name);
+            }
+            app.wait();
+            if round == 0 {
+                line(&app, "  half a second later");
+            }
+        }
+        line(&app, &format!("after round {}", round + 1));
+    }
+    let basecolor = app.outputs[0];
+    app.show(basecolor);
+    app.wait();
+    line(&app, "back to basecolor");
 }
 
 /// What the demo takes in GPU memory at 2048×2048, as the app shows it (prints).

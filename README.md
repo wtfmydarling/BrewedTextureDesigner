@@ -176,7 +176,7 @@ Output хранит то, что он записывает: свой вход в
 ## Проверка
 
 ```bash
-cargo test --workspace                                            # 139 тестов
+cargo test --workspace                                            # 140 тестов
 cargo test --workspace -- --ignored                               # живые тесты пипетки и захвата указателя (нужен рабочий стол)
 cargo run --release -- --bench                                    # замеры GPU и SIMD
 cargo run --release -- --contact-sheet sheet.png                  # все ядра на одной картинке

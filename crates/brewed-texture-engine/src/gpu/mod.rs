@@ -355,11 +355,13 @@ impl Gpu {
 
     /// Create a device without a window (tests, command line tools).
     pub fn headless() -> Result<Gpu, String> {
+        Self::headless_on(wgpu::Backends::PRIMARY)
+    }
+
+    /// [`Gpu::headless`] on one of `backends`.
+    pub fn headless_on(backends: wgpu::Backends) -> Result<Gpu, String> {
         pollster::block_on(async {
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::PRIMARY,
-                ..Default::default()
-            });
+            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor { backends, ..Default::default() });
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::HighPerformance,
