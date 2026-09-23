@@ -1,6 +1,6 @@
 // Thumbnails of images. Values are shown as stored, like in Substance Designer: 0.5 is mid
-// gray (base colors are authored in display space). The views' copies are drawn by
-// blit.wgsl.
+// gray (base colors are authored in display space). The views sample the images themselves
+// (see show.wgsl).
 
 struct Params {
     // How a thumbnail shows its image: 0 RGBA over a checkerboard, 1 RGB, 2 R, 3 G, 4 B, 5 A.

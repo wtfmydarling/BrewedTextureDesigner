@@ -3,7 +3,7 @@
 //!
 //! * [`gpu`]: device wrapper, WGSL kernels, image pool, readbacks
 //! * [`kernels`]: the GPU implementation of every image node type
-//! * [`engine`]: incremental evaluation, thumbnails, display copies, readbacks
+//! * [`engine`]: incremental evaluation, thumbnails, the images the views show, readbacks
 //! * [`service`]: the engine on a background thread with a request / event protocol
 //! * [`simd`]: `wide::f32x8` + `rayon` kernels (quantization, half floats, histograms)
 //! * [`export`]: PNG / OpenEXR writing
@@ -19,7 +19,7 @@ pub mod tools;
 #[cfg(test)]
 mod tests;
 
-pub use engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Thumbnail};
+pub use engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Keep, Thumbnail};
 pub use gpu::Gpu;
 pub use service::{EngineService, Event, ExportJob, Request};
 

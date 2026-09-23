@@ -1,16 +1,16 @@
 //! GPU context: compute kernels, image allocation, dispatch and readback.
 //!
 //! A node image is a grayscale image, stored in one channel ([`GRAY_FORMAT`]), or a color
-//! image ([`COLOR_FORMAT`]); the views show 8-bit copies ([`GRAY_DISPLAY_FORMAT`],
-//! [`DISPLAY_FORMAT`]). Each kernel follows the same binding convention: `@binding(0)`
-//! uniform parameters, `@binding(1..=N)` input textures, `@binding(N+1)` the output storage
-//! texture (and, for the kernels that filter their inputs, a sampler after it). A kernel is
-//! written once and built for the images it is run on: the format of its output, and which
-//! of its inputs are grayscale (it reads those through `widen`, see common.wgsl).
+//! image ([`COLOR_FORMAT`]); the views sample the node images themselves, with their mips.
+//! Each kernel follows the same binding convention: `@binding(0)` uniform parameters,
+//! `@binding(1..=N)` input textures, `@binding(N+1)` the output storage texture (and, for
+//! the kernels that filter their inputs, a sampler after it). A kernel is written once and
+//! built for the images it is run on: the format of its output, and which of its inputs are
+//! grayscale (it reads those through `widen`, see show.wgsl).
 //!
 //! A compute kernel can only write the formats every device can store to, and one channel
-//! of 16 bits or 8 is not among them: a grayscale image is computed into
-//! [`GRAY_WORK_FORMAT`] and stored by a render pass, and so are the views' copies drawn
+//! of 16 bits is not among them: a grayscale image is computed into [`GRAY_WORK_FORMAT`]
+//! and stored by a render pass, and so are the mips of the images the views show drawn
 //! (blit.wgsl).
 
 use std::cell::RefCell;
@@ -29,14 +29,13 @@ pub const GRAY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 /// What kernels write a grayscale image into before it is stored: `r32float` is the one
 /// single-channel float format any device can write from a compute shader.
 pub const GRAY_WORK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
-/// What the 2D and 3D views show of a color image: a screen shows 8 bits a channel, and so
-/// do these copies. (Values are read from the node images.)
-pub const DISPLAY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-/// ... and of a grayscale image: one channel of 8 bits.
-pub const GRAY_DISPLAY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 const WORKGROUP: u32 = 8;
 
-pub const COMMON_WGSL: &str = include_str!("shaders/common.wgsl");
+/// How a node's image is shown (`widen`, `as_output`): the WGSL the kernels read their
+/// inputs with, for the views that sample the node images to show them the same way.
+pub const SHOW_WGSL: &str = include_str!("shaders/show.wgsl");
+/// What every kernel starts with: [`SHOW_WGSL`] and the kernels' shared helpers.
+pub const COMMON_WGSL: &str = concat!(include_str!("shaders/show.wgsl"), include_str!("shaders/common.wgsl"));
 const BLIT_WGSL: &str = include_str!("shaders/blit.wgsl");
 
 /// The parameters of blit.wgsl.
@@ -65,7 +64,6 @@ pub fn work_format(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
 pub(crate) fn wgsl_format(format: wgpu::TextureFormat) -> &'static str {
     match format {
         wgpu::TextureFormat::R32Float => "r32float",
-        wgpu::TextureFormat::Rgba8Unorm => "rgba8unorm",
         _ => "rgba16float",
     }
 }
@@ -196,9 +194,9 @@ impl GpuImage {
     pub fn format(&self) -> wgpu::TextureFormat {
         self.texture.format()
     }
-    /// One channel: a grayscale image, stored, being computed or shown.
+    /// One channel: a grayscale image, stored or being computed.
     pub fn is_gray(&self) -> bool {
-        matches!(self.format(), GRAY_FORMAT | GRAY_WORK_FORMAT | GRAY_DISPLAY_FORMAT)
+        matches!(self.format(), GRAY_FORMAT | GRAY_WORK_FORMAT)
     }
     pub fn kind(&self) -> ImageKind {
         if self.is_gray() { ImageKind::Gray } else { ImageKind::Color }
@@ -418,8 +416,14 @@ impl Gpu {
         format: u32,
     ) -> Result<(), String> {
         self.encode_show(encoder, src, &dst.level(0), format)?;
-        for level in 1..dst.texture.mip_level_count() {
-            self.blit(encoder, "mip", BlitU::default(), &dst.level(level - 1), &dst.level(level))?;
+        self.encode_mips(encoder, dst)
+    }
+
+    /// Record the mip chain of `image` from its top level: each level the average of the four
+    /// pixels under each of its pixels on the level above.
+    pub fn encode_mips(&self, encoder: &mut wgpu::CommandEncoder, image: &GpuImage) -> Result<(), String> {
+        for level in 1..image.texture.mip_level_count() {
+            self.blit(encoder, "mip", BlitU::default(), &image.level(level - 1), &image.level(level))?;
         }
         Ok(())
     }
@@ -855,8 +859,8 @@ impl Gpu {
         Ok(())
     }
 
-    /// Run a kernel that filters its inputs, sampling them with the node's tiling. Only
-    /// color images can be filtered.
+    /// Run a kernel that filters its inputs, sampling them with the node's tiling. Images
+    /// being computed cannot be filtered (32-bit floats need a feature to be), stored ones can.
     pub fn run_filtered(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -866,10 +870,10 @@ impl Gpu {
         output: &GpuImage,
         tiling: u32,
     ) -> Result<(), String> {
-        if inputs.iter().any(|i| i.is_gray()) {
-            return Err(format!("'{kernel}' filters its inputs, which a grayscale image cannot be"));
+        if inputs.iter().any(|i| i.format() == GRAY_WORK_FORMAT) {
+            return Err(format!("'{kernel}' filters its inputs, which an image being computed cannot be"));
         }
-        let k = self.kernel_variant(kernel, output.format(), 0, 0)?;
+        let k = self.kernel_variant(kernel, output.format(), Self::gray_inputs(inputs), 0)?;
         self.dispatch(encoder, &k, params, inputs, output, output.size(), tiling);
         Ok(())
     }
@@ -1023,11 +1027,6 @@ impl Readback {
                 crate::simd::f16_to_f32(bytemuck::cast_slice(&bytes), &mut gray);
                 gray.iter().flat_map(|v| [*v, *v, *v, 1.0]).collect()
             }
-            wgpu::TextureFormat::R8Unorm => bytes.iter().flat_map(|b| {
-                let v = f32::from(*b) / 255.0;
-                [v, v, v, 1.0]
-            }).collect(),
-            wgpu::TextureFormat::Rgba8Unorm => bytes.iter().map(|b| f32::from(*b) / 255.0).collect(),
             _ => {
                 // Half floats, expanded with SIMD on all cores.
                 let half: &[u16] = bytemuck::cast_slice(&bytes);
@@ -1057,7 +1056,7 @@ mod tests {
             let name = src.name;
             // Every way the engine builds them: writing color images or computing grayscale
             // ones, from color or grayscale inputs, and every kind of image.
-            let gray_inputs: u8 = if src.filtered { 0 } else { ((1u16 << src.inputs) - 1) as u8 };
+            let gray_inputs = ((1u16 << src.inputs) - 1) as u8;
             for output in [COLOR_FORMAT, GRAY_WORK_FORMAT] {
                 for gray in [0, gray_inputs] {
                     for kind in 0..src.kinds {
@@ -1093,29 +1092,32 @@ mod tests {
         assert_eq!(&back[16..20], &[2.0, 2.0, 2.0, 1.0], "values past 1 stay what they are");
     }
 
-    /// A grayscale image a kernel computes in 32 bits is stored in 16, and the copy the views
-    /// show of it is one channel of 8 bits with its mips: render passes write the formats
-    /// compute kernels cannot.
+    /// A grayscale image a kernel computes in 32 bits is stored in 16, with the mips the views
+    /// sample it with: render passes write what compute kernels cannot.
     #[test]
-    fn grayscale_images_are_stored_and_shown_in_one_channel() {
+    fn grayscale_images_are_stored_in_one_channel_with_their_mips() {
         let Ok(gpu) = Gpu::headless() else { return };
+        let values = [0.0, 0.25, 0.5, 1.0, 0.125, 0.75, 1.5, 0.3];
         let work = gpu.create_image_as(4, 2, GRAY_WORK_FORMAT, "work");
-        gpu.upload_gray_f32(&work, &[0.0, 0.25, 0.5, 1.0, 0.125, 0.75, 1.5, 0.3]);
-        let stored = gpu.create_image_as(4, 2, GRAY_FORMAT, "stored");
-        let shown = gpu.create_image_with_mips(4, 2, GRAY_DISPLAY_FORMAT, "shown");
-        assert_eq!(shown.bytes(), 4 * 2 + 2 + 1, "one byte a pixel, on every level");
+        gpu.upload_gray_f32(&work, &values);
+        let stored = gpu.create_image_with_mips(4, 2, GRAY_FORMAT, "stored");
+        assert_eq!(stored.bytes(), (4 * 2 + 2 + 1) * 2, "two bytes a pixel, on every level");
+        let second = gpu.create_image(2, 1, "the second level");
         let mut encoder = gpu.encoder();
-        gpu.encode_store(&mut encoder, &work, &stored).expect("stored");
-        gpu.encode_copy_with_mips(&mut encoder, &stored, &shown, 0).expect("shown");
+        gpu.encode_store(&mut encoder, &work, &stored.level(0)).expect("stored");
+        gpu.encode_mips(&mut encoder, &stored).expect("mips");
+        gpu.encode_show(&mut encoder, &stored.level(1), &second, 0).expect("read");
         gpu.queue.submit(Some(encoder.finish()));
         let back = gpu.read_image_blocking(&stored).expect("the stored image");
-        let values: Vec<f32> = back.chunks(4).map(|p| p[0]).collect();
-        let expected = [0.0, 0.25, 0.5, 1.0, 0.125, 0.75, 1.5, 0.3];
-        for (v, e) in values.iter().zip(expected) {
-            assert!((v - e).abs() < 1e-3, "{values:?}");
+        let top: Vec<f32> = back.chunks(4).map(|p| p[0]).collect();
+        for (v, e) in top.iter().zip(values) {
+            assert!((v - e).abs() < 1e-3, "{top:?}");
         }
-        let top = gpu.read_image_blocking(&shown.level(0)).expect("the copy");
-        assert_eq!(&top[4..8], &[64.0 / 255.0, 64.0 / 255.0, 64.0 / 255.0, 1.0], "a quarter, in 8 bits");
-        assert_eq!(top[24], 1.0, "past 1 the copy is white");
+        // Each pixel of the next level is the average of the four under it.
+        let next = gpu.read_image_blocking(&second).expect("the second level");
+        let expected = [(0.0 + 0.25 + 0.125 + 0.75) / 4.0, (0.5 + 1.0 + 1.5 + 0.3) / 4.0];
+        for (p, e) in next.chunks(4).zip(expected) {
+            assert!((p[0] - e).abs() < 1e-3 && p[3] == 1.0, "{next:?}");
+        }
     }
 }

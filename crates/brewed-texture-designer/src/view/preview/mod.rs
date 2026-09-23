@@ -158,6 +158,7 @@ fn content_2d(app: &App) -> Element<'_, Message> {
     let scene = render::Scene {
         image: image.map(|img| (img.view.clone(), img.size)),
         gray: image.is_some_and(|img| img.gray),
+        format: image.map_or(0, |img| img.format),
         rect,
         channel: p.channel,
         tile: [p.show_tiling && tiling & 1 != 0, p.show_tiling && tiling & 2 != 0],

@@ -655,10 +655,11 @@ fn ambient_occlusion(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let p = cx.params;
     let (radius, intensity, depth) = (p.f("radius").max(0.5), p.f("intensity"), p.f("height"));
     // The input at every scale: a sample far from the pixel reads the whole patch of
-    // ground it stands for, from the level of that size.
+    // ground it stands for, from the level of that size. (A grayscale height map stays one
+    // channel.)
     let img = input(cx.inputs, 0, &cx.gpu.black).clone();
     let [w, h] = cx.output.size();
-    let heights = cx.gpu.take_scratch_with_mips(w, h, crate::gpu::COLOR_FORMAT);
+    let heights = cx.gpu.take_scratch_with_mips(w, h, crate::gpu::format_of(img.kind()));
     cx.gpu.encode_copy_with_mips(cx.encoder, &img, &heights, 0)?;
     let r = px_to_uv(radius, cx.output);
     let u = HeightU { radius_x: r[0], radius_y: r[1], intensity, depth, invert: 0, tiling: p.tiling(), pad: [0; 2] };

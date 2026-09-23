@@ -6,6 +6,12 @@
 //! so dragging a slider re-runs just the affected downstream chain. All work of one
 //! evaluation is recorded into a single command encoder and submitted once.
 //!
+//! An image lives while something reads it (see [`Keep`]): the views, the nodes asked about,
+//! and what the last change read from outside itself stay; every other image goes back to a
+//! pool as soon as the evaluation that made it is done with it, and a later image of its size
+//! takes its texture. Computed again with the same key, a node keeps its version, so nothing
+//! after it is recomputed for it.
+//!
 //! The engine is single threaded; [`crate::service`] runs it on a background thread.
 
 use std::collections::hash_map::DefaultHasher;
@@ -19,7 +25,7 @@ use brewed_texture_core::eval::{Evaluation, VarSource};
 use brewed_texture_core::graph::{Graph, Node, NodeId, input_socket_key};
 use brewed_texture_core::nodes::{ImageKind, NodeKind, PIXEL_MATH_BUILTINS, image_kind};
 
-use crate::gpu::{COLOR_FORMAT, DISPLAY_FORMAT, GRAY_DISPLAY_FORMAT, GRAY_FORMAT, Gpu, GpuImage, format_of, work_format};
+use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, Gpu, GpuImage, Readback, format_of, work_format};
 use crate::kernels::{self, DisplayU, ExecCtx, PixelVar};
 use crate::simd::{self, ImageStats};
 
@@ -29,16 +35,18 @@ pub const LUT_SIZE: usize = 1024;
 /// The size the pictures of a node's options are drawn at before they are made into
 /// thumbnails: fine enough for their look, small enough to draw them all at once.
 pub const CHOICE_RES: u32 = 256;
-/// The formats of the output an image is shown as that show one channel of it (R, G, B, A).
-const ONE_CHANNEL: std::ops::RangeInclusive<u32> = 3..=6;
 
 /// What the engine knows about one node.
 #[derive(Default)]
 pub struct NodeState {
-    pub image: Option<GpuImage>,
-    /// The image is another node's: an output shows what arrives at it, and a bypassed node
-    /// passes it on. Before the node writes anything, it makes an image of its own.
-    aliased: bool,
+    /// Its image, while something reads it (see [`Keep`]). An output or a bypassed node has
+    /// none of its own: it shows the image of its `producer`.
+    image: Option<GpuImage>,
+    /// For an output or a bypassed node, the node whose image arrives at it (through other
+    /// outputs and bypassed nodes).
+    producer: Option<NodeId>,
+    /// Grayscale or color; `None` while the node makes no image.
+    kind: Option<ImageKind>,
     /// How the node shows its image: as the format of an output, or as it is (0).
     shown_as: u32,
     /// Bumped whenever the image changes.
@@ -47,10 +55,6 @@ pub struct NodeState {
     /// Problems found while computing the image (in addition to the CPU evaluation's).
     pub error: Option<String>,
     pub warning: Option<String>,
-    thumb_version: u64,
-    /// The image was let go of while nothing read it (see [`Engine::release_unread`]): it is
-    /// computed again when the node changes or something comes to read it.
-    released: bool,
 }
 
 /// Per-node result sent to front ends.
@@ -93,16 +97,22 @@ pub struct ChoicePictures {
     pub pictures: Arc<Vec<Vec<u8>>>,
 }
 
-/// A mip-mapped copy of a node image for display (2D and 3D views sample it directly).
+/// What a view shows of a node: the image itself, with its mips, which the 2D and 3D views
+/// sample directly (no copy), and how the node shows it (`widen` and `as_output` of
+/// [`crate::gpu::SHOW_WGSL`]).
 #[derive(Clone, Debug)]
 pub struct DisplayImage {
     pub node: NodeId,
     pub version: u64,
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
+    /// The texture size the image stands for (a uniform color is one pixel, shown as big as
+    /// any other image).
     pub size: [u32; 2],
-    /// One channel: the node shows a grayscale image (or one channel of a color one).
+    /// One channel: a grayscale image, which reads as its red.
     pub gray: bool,
+    /// The format of the output it is shown as, 0 when it is shown as it is.
+    pub format: u32,
 }
 
 enum BitmapEntry {
@@ -129,6 +139,56 @@ struct Lut {
     image: GpuImage,
 }
 
+/// Which images an engine keeps from one evaluation to the next.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Keep {
+    /// Every node's: for a caller that reads whichever image it likes (tests, tools).
+    #[default]
+    All,
+    /// Only those something reads: the node the 2D view shows, what arrives at the outputs
+    /// the 3D view uses, the nodes asked about, and what the last change read from outside
+    /// itself (the next change of the same kind reads it again). The others live while the
+    /// evaluation that makes them needs them.
+    Read,
+}
+
+/// What an evaluation found about an image node before computing anything.
+struct Plan {
+    node_kind: NodeKind,
+    /// An output or a bypassed node: it shows the image of what arrives at it.
+    alias: bool,
+    /// Its key changed: it has a new version, and its image has to be computed.
+    changed: bool,
+    kind: ImageKind,
+    size: [u32; 2],
+    /// The node whose image arrives at each input.
+    inputs: Vec<Option<NodeId>>,
+    /// Pixel Math's variables.
+    vars: Vec<Var>,
+    bitmap: Option<GpuImage>,
+    lut: Option<GpuImage>,
+    /// Problems found before computing anything.
+    error: Option<String>,
+    warning: Option<String>,
+}
+
+impl Plan {
+    /// The nodes whose images it reads.
+    fn reads(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.inputs.iter().flatten().copied().chain(self.vars.iter().filter_map(|v| match v {
+            Var::Image(from) => Some(*from),
+            _ => None,
+        }))
+    }
+}
+
+/// A Pixel Math variable, as planned: the image of a node is read when it is computed.
+enum Var {
+    Builtin(&'static str),
+    Image(NodeId),
+    Constant(f32),
+}
+
 pub struct Engine {
     pub gpu: Gpu,
     states: HashMap<NodeId, NodeState>,
@@ -138,15 +198,21 @@ pub struct Engine {
     bitmap_tx: Sender<DecodedBitmap>,
     bitmap_rx: Receiver<DecodedBitmap>,
     luts: HashMap<NodeId, Lut>,
-    /// The copies the views show, one per node shown however many views show it.
-    displays: HashMap<NodeId, DisplayImage>,
-    /// What the 2D view shows, and the version of it it was last given.
+    keep: Keep,
+    /// What the 2D view shows, and what of it it was last given.
     preview: Option<NodeId>,
-    preview_sent: Option<(NodeId, u64)>,
-    /// The outputs the 3D view uses, and the versions of them it was last given.
+    preview_sent: Option<(NodeId, u64, wgpu::Texture)>,
+    /// The outputs the 3D view uses, and what of them it was last given.
     materials: Vec<NodeId>,
-    materials_sent: Vec<(NodeId, u64)>,
-    /// The pictures of the options of a node's choice, as last drawn.
+    materials_sent: Vec<(NodeId, u64, wgpu::Texture)>,
+    /// Nodes whose images are read after the next evaluation (see [`Engine::ask`]).
+    asked: Vec<NodeId>,
+    /// The textures of the images the views were given (see [`Engine::release`]).
+    given: Vec<wgpu::Texture>,
+    /// What the last change read from outside itself (see [`Keep::Read`]).
+    boundary: HashSet<NodeId>,
+    /// Thumbnails the evaluations recorded, to read back (see [`Engine::render_thumbnails`]).
+    thumbnails: Vec<(NodeId, u64, GpuImage, Readback)>,
     /// Pictures of the options of choices, by node kind and parameter (see
     /// [`Engine::render_choices`]).
     choices: HashMap<(&'static str, String), Arc<Vec<Vec<u8>>>>,
@@ -166,11 +232,15 @@ impl Engine {
             bitmap_tx,
             bitmap_rx,
             luts: HashMap::new(),
-            displays: HashMap::new(),
+            keep: Keep::default(),
             preview: None,
             preview_sent: None,
             materials: Vec::new(),
             materials_sent: Vec::new(),
+            asked: Vec::new(),
+            given: Vec::new(),
+            boundary: HashSet::new(),
+            thumbnails: Vec::new(),
             choices: HashMap::new(),
             last_resolution: [0, 0],
             report: EvalReport::default(),
@@ -181,8 +251,14 @@ impl Engine {
         self.states.get(&id)
     }
 
+    /// What `id` shows now: its own image, or the image of what arrives at an output or a
+    /// bypassed node. `None` while nothing reads it (see [`Keep`]).
     pub fn image(&self, id: NodeId) -> Option<&GpuImage> {
-        self.states.get(&id).and_then(|s| s.image.as_ref())
+        let state = self.states.get(&id)?;
+        match state.producer {
+            Some(producer) => self.states.get(&producer)?.image.as_ref(),
+            None => state.image.as_ref(),
+        }
     }
 
     pub fn version(&self, id: NodeId) -> Option<u64> {
@@ -192,10 +268,7 @@ impl Engine {
     pub fn reports(&self) -> HashMap<NodeId, ImageReport> {
         self.states
             .iter()
-            .map(|(id, s)| {
-                let kind = s.image.as_ref().map(GpuImage::kind);
-                (*id, ImageReport { version: s.version, error: s.error.clone(), warning: s.warning.clone(), kind })
-            })
+            .map(|(id, s)| (*id, ImageReport { version: s.version, error: s.error.clone(), warning: s.warning.clone(), kind: s.kind }))
             .collect()
     }
 
@@ -204,25 +277,21 @@ impl Engine {
         self.bitmaps.values().any(|b| matches!(b, BitmapEntry::Loading))
     }
 
-    fn bump(&mut self) -> u64 {
-        self.next_version += 1;
-        self.next_version
-    }
-
     /// Drop every cached result (new document, device change ...).
     pub fn reset(&mut self) {
         self.states.clear();
         self.luts.clear();
-        self.displays.clear();
         self.preview_sent = None;
         self.materials_sent.clear();
+        self.given.clear();
+        self.boundary.clear();
+        self.thumbnails.clear();
         self.choices.clear();
         self.gpu.clear_pool();
     }
 
-    /// GPU memory the engine's images take: every node's image, the copies the views show,
-    /// baked gradients, loaded files and the scratch images kept for reuse. An image two
-    /// nodes share (an output and what arrives at it) is counted once.
+    /// GPU memory the engine's images take: the images kept (with the mips of those the views
+    /// show), baked gradients, loaded files and the scratch images kept for reuse.
     pub fn memory(&self) -> u64 {
         let mut seen: Vec<wgpu::Texture> = Vec::new();
         let images = self
@@ -239,12 +308,6 @@ impl Engine {
             if !seen.contains(&image.texture) {
                 seen.push(image.texture.clone());
                 total += image.bytes();
-            }
-        }
-        for display in self.displays.values() {
-            if !seen.contains(&display.texture) {
-                seen.push(display.texture.clone());
-                total += crate::gpu::texture_bytes(&display.texture);
             }
         }
         total + self.gpu.pool_bytes()
@@ -319,14 +382,19 @@ impl Engine {
     pub fn evaluate(&mut self, graph: &Graph, eval: &Evaluation) -> EvalReport {
         self.receive_bitmaps();
 
-        // Forget nodes that were deleted.
+        // Forget nodes that were deleted, and let go of their images.
         let alive: HashSet<NodeId> = graph.nodes.iter().map(|n| n.id).collect();
-        self.states.retain(|id, _| alive.contains(id));
+        let gone: Vec<NodeId> = self.states.keys().filter(|id| !alive.contains(id)).copied().collect();
+        for id in gone {
+            self.release(id);
+            self.states.remove(&id);
+        }
         self.luts.retain(|id, _| alive.contains(id));
-        self.displays.retain(|id, _| alive.contains(id));
+        self.boundary.retain(|id| alive.contains(id));
         for id in &eval.cyclic {
+            self.release(*id);
             let state = self.states.entry(*id).or_default();
-            state.image = None;
+            state.kind = None;
             state.error = None;
         }
 
@@ -336,66 +404,156 @@ impl Engine {
             self.gpu.clear_pool();
             self.last_resolution = resolution;
         }
-        let mut encoder = self.gpu.encoder();
-        let mut report = EvalReport::default();
-        let read = self.read_nodes(graph);
+
+        // 1. What every image node will be, before anything is computed: its key, from its
+        //    parameters and the versions of what arrives at it, and the kind and size of its
+        //    image. A node whose key changed gets its new version now, so the keys of the
+        //    nodes after it see it.
+        let mut plans: HashMap<NodeId, Plan> = HashMap::new();
+        let mut order = Vec::new();
         for &id in &eval.order {
             let Some(node) = graph.node(id) else { continue };
             if !node.def().has_image() {
                 continue;
             }
-            report.image_nodes += 1;
-            if self.evaluate_image_node(graph, eval, node, resolution, read.contains(&id), &mut encoder) {
+            if let Some(plan) = self.plan(graph, eval, node, resolution) {
+                order.push(id);
+                plans.insert(id, plan);
+            }
+        }
+
+        // 2. What to compute, from the last node back: a node that changed, and a node whose
+        //    image is needed and not there, by a node computed after it or by what reads it
+        //    once this evaluation is done. An output or a bypassed node computes nothing, but
+        //    a changed one reads what arrives at it for its thumbnail.
+        let wanted: HashSet<NodeId> = match self.keep {
+            Keep::All => order.iter().copied().collect(),
+            Keep::Read => self.preview.iter().chain(&self.materials).chain(&self.asked).copied().collect(),
+        };
+        let mut needed = wanted.clone();
+        let mut runs: HashSet<NodeId> = HashSet::new();
+        for &id in order.iter().rev() {
+            let plan = &plans[&id];
+            let run = plan.changed || (!plan.alias && needed.contains(&id) && self.states.get(&id).is_none_or(|s| s.image.is_none()));
+            if run || (plan.alias && needed.contains(&id)) {
+                needed.extend(plan.reads());
+            }
+            if run {
+                runs.insert(id);
+            }
+        }
+
+        // What stays once this evaluation is done: what is wanted, and what the changed part of
+        // the graph read from outside itself, which the next change of the same kind (the
+        // same slider dragged on) reads again.
+        let changed: HashSet<NodeId> = order.iter().filter(|id| plans[*id].changed).copied().collect();
+        if !changed.is_empty() {
+            self.boundary = changed.iter().flat_map(|id| plans[id].reads()).filter(|r| !changed.contains(r)).collect();
+        }
+        let kept: HashSet<NodeId> = match self.keep {
+            Keep::All => order.iter().copied().collect(),
+            Keep::Read => wanted.iter().map(|id| self.producer(*id)).chain(self.boundary.iter().copied()).collect(),
+        };
+
+        // 3. Compute, in order. Each image goes back to the pool (for the next image of its
+        //    size) once the last node that reads it here has read it, unless it stays.
+        let mut readers: HashMap<NodeId, usize> = HashMap::new();
+        for id in &runs {
+            for read in plans[id].reads() {
+                *readers.entry(read).or_default() += 1;
+            }
+        }
+        let shown: HashSet<NodeId> = self.preview.iter().chain(&self.materials).map(|id| self.producer(*id)).collect();
+        let mut encoder = self.gpu.encoder();
+        let mut report = EvalReport { image_nodes: order.len(), ..EvalReport::default() };
+        for &id in &order {
+            if !runs.contains(&id) {
+                continue;
+            }
+            let plan = &plans[&id];
+            if !plan.alias {
+                let Some(ne) = eval.node(id) else { continue };
+                self.compute(id, plan, &ne.params, ne.error(), shown.contains(&id), &mut encoder);
                 report.recomputed += 1;
             }
+            if plan.changed {
+                self.encode_thumbnail(id, &mut encoder);
+            }
+            for read in plan.reads() {
+                let left = readers.entry(read).or_default();
+                *left = left.saturating_sub(1);
+                if *left == 0 && !kept.contains(&read) {
+                    self.release(read);
+                }
+            }
+            // A node nothing reads after it, and that does not stay, only needed its thumbnail.
+            if readers.get(&id).is_none_or(|n| *n == 0) && !kept.contains(&id) {
+                self.release(id);
+            }
+        }
+
+        // 4. Let go of what stayed from before and does not stay any more.
+        let stale: Vec<NodeId> =
+            self.states.iter().filter(|(id, s)| s.image.is_some() && !kept.contains(id)).map(|(id, _)| *id).collect();
+        for id in stale {
+            self.release(id);
         }
         self.gpu.queue.submit(Some(encoder.finish()));
         self.report = report;
         report
     }
 
-    /// The nodes whose images something reads: another node, or the 2D view.
-    fn read_nodes(&self, graph: &Graph) -> HashSet<NodeId> {
-        graph.links.iter().map(|l| l.from).chain(self.preview).collect()
+    /// The node whose image `node` shows: itself, or, for an output or a bypassed node, what
+    /// arrives at it.
+    fn producer(&self, node: NodeId) -> NodeId {
+        self.states.get(&node).and_then(|s| s.producer).unwrap_or(node)
     }
 
-    /// Let go of the images nothing reads (see [`Engine::read_nodes`]) once their thumbnails
-    /// are drawn: a node no other node takes and the 2D view does not show needs no more
-    /// than its thumbnail. Its image is computed again when the node changes or something
-    /// comes to read it.
-    pub fn release_unread(&mut self, graph: &Graph) {
-        let read = self.read_nodes(graph);
-        for (id, state) in &mut self.states {
-            if !state.aliased && state.image.is_some() && state.thumb_version == state.version && !read.contains(id) {
-                state.image = None;
-                state.released = true;
+    /// Let go of a node's image: it goes back to the pool, for the next image of its size.
+    /// Not an image a view was given: the view draws it until it is given another, which it
+    /// may not be yet, and keeps it until then; no other image may take its texture meanwhile.
+    fn release(&mut self, node: NodeId) {
+        let Some(image) = self.states.get_mut(&node).and_then(|s| s.image.take()) else { return };
+        match self.given.iter().position(|t| *t == image.texture) {
+            Some(i) => {
+                self.given.swap_remove(i);
             }
+            None => self.gpu.recycle(image),
         }
     }
 
-    /// Whether the image of `node` was let go of (see [`Engine::release_unread`]).
-    pub fn released(&self, node: NodeId) -> bool {
-        self.states.get(&node).is_some_and(|s| s.released)
+    /// Which images this engine keeps from one evaluation to the next (see [`Keep`]).
+    pub fn set_keep(&mut self, keep: Keep) {
+        self.keep = keep;
     }
 
-    /// Which node the 2D view shows: its image is read, and kept.
+    /// The node the 2D view shows: its image is read, and stays.
     pub fn set_preview(&mut self, node: Option<NodeId>) {
         self.preview = node;
     }
 
-    /// Returns true when the node was recomputed. `read` says whether something reads its
-    /// image.
-    fn evaluate_image_node(
-        &mut self,
-        graph: &Graph,
-        eval: &Evaluation,
-        node: &Node,
-        resolution: [u32; 2],
-        read: bool,
-        encoder: &mut wgpu::CommandEncoder,
-    ) -> bool {
+    /// The outputs the 3D view uses: what arrives at them is read, and stays.
+    pub fn set_materials(&mut self, nodes: &[NodeId]) {
+        self.materials = nodes.to_vec();
+    }
+
+    /// Nodes whose images are read after the next evaluation (their statistics, a pixel of
+    /// them, their export): each is computed if it is not there, and stays until an
+    /// evaluation that is not asked for it.
+    pub fn ask(&mut self, nodes: Vec<NodeId>) {
+        self.asked = nodes;
+    }
+
+    /// Whether an evaluation has to run for all of `nodes` to have images.
+    pub fn missing(&self, nodes: &[NodeId]) -> bool {
+        nodes.iter().any(|id| self.states.get(id).is_some_and(|s| s.kind.is_some()) && self.image(*id).is_none())
+    }
+
+    /// Plan one image node (see [`Engine::evaluate`]): what it reads, the kind and size of its
+    /// image, and its key; a new version when the key changed.
+    fn plan(&mut self, graph: &Graph, eval: &Evaluation, node: &Node, resolution: [u32; 2]) -> Option<Plan> {
         let d = node.def();
-        let Some(ne) = eval.node(node.id) else { return false };
+        let ne = eval.node(node.id)?;
         let params = &ne.params;
 
         let mut hasher = DefaultHasher::new();
@@ -404,20 +562,22 @@ impl Engine {
         node.bypass.hash(&mut hasher);
         params.hash_into(&mut hasher);
 
-        // Fixed inputs.
-        let mut inputs: Vec<Option<GpuImage>> = Vec::with_capacity(d.inputs.len());
+        // What arrives at the inputs: an image of the node it comes from (made by the node
+        // behind it, through outputs and bypassed nodes), and the version of that node.
+        let mut inputs: Vec<Option<NodeId>> = Vec::with_capacity(d.inputs.len());
+        let mut input_kinds: Vec<Option<ImageKind>> = Vec::with_capacity(d.inputs.len());
         for s in d.inputs {
-            let src = graph
-                .link_into(node.id, &input_socket_key(s.key))
-                .and_then(|l| self.states.get(&l.from).map(|st| (l.from, st)));
-            match src {
-                Some((from, st)) if st.image.is_some() => {
-                    (1u8, from.0, st.version).hash(&mut hasher);
-                    inputs.push(st.image.clone());
+            let from = graph.link_into(node.id, &input_socket_key(s.key)).map(|l| l.from);
+            match from.and_then(|f| self.states.get(&f).filter(|st| st.kind.is_some()).map(|st| (f, st))) {
+                Some((f, st)) => {
+                    (1u8, f.0, st.version).hash(&mut hasher);
+                    inputs.push(Some(st.producer.unwrap_or(f)));
+                    input_kinds.push(st.kind);
                 }
-                _ => {
+                None => {
                     0u8.hash(&mut hasher);
                     inputs.push(None);
+                    input_kinds.push(None);
                 }
             }
         }
@@ -461,103 +621,142 @@ impl Engine {
         }
 
         // Pixel Math variables.
-        let mut pixel_vars = Vec::new();
+        let mut vars = Vec::new();
         if d.is_pixel_expression() {
             for v in &ne.vars {
                 let var = match &v.source {
                     VarSource::Builtin => {
                         let b = PIXEL_MATH_BUILTINS.iter().copied().find(|b| *b == v.name).unwrap_or("u");
                         (2u8, b).hash(&mut hasher);
-                        PixelVar::Builtin(b)
+                        Var::Builtin(b)
                     }
-                    VarSource::Image(from) => match self.states.get(from).filter(|s| s.image.is_some()) {
+                    VarSource::Image(from) => match self.states.get(from).filter(|s| s.kind.is_some()) {
                         Some(st) => {
                             (1u8, from.0, st.version).hash(&mut hasher);
-                            PixelVar::Image(st.image.clone().expect("checked"))
+                            Var::Image(st.producer.unwrap_or(*from))
                         }
                         None => {
                             3u8.hash(&mut hasher);
-                            PixelVar::Constant(0.0)
+                            Var::Constant(0.0)
                         }
                     },
                     _ => {
                         (0u8, (v.value as f32).to_bits()).hash(&mut hasher);
-                        PixelVar::Constant(v.value as f32)
+                        Var::Constant(v.value as f32)
                     }
                 };
-                pixel_vars.push(var);
+                vars.push(var);
             }
         }
 
         // An output shows what arrives at it, and a bypassed node passes it on: neither makes an
         // image of its own.
         let shown_as = if node.kind == NodeKind::OUTPUT { params.u("format") } else { 0 };
-        if node.kind == NodeKind::OUTPUT || (node.bypass && !d.inputs.is_empty()) {
-            let key = hasher.finish();
-            if self.states.get(&node.id).is_some_and(|s| s.aliased && s.key == key) {
-                return false;
-            }
-            let version = self.bump();
-            let state = self.states.entry(node.id).or_default();
-            state.image = if ne.error().is_some() { None } else { inputs.first().cloned().flatten() };
-            state.aliased = true;
-            state.shown_as = shown_as;
-            state.version = version;
-            state.key = key;
+        let alias = node.kind == NodeKind::OUTPUT || (node.bypass && !d.inputs.is_empty());
+        let (kind, size) = if alias {
+            (input_kinds.first().copied().flatten(), resolution)
+        } else {
+            // A grayscale or a color image, as big as the texture size; but a uniform color is
+            // the same everywhere, and one pixel of it is all of it.
+            let kind = match &bitmap {
+                Some(file) => file.kind(),
+                None => image_kind(node.kind, params, &input_kinds),
+            };
+            let size = if node.kind == NodeKind::UNIFORM_COLOR { [1, 1] } else { resolution };
+            (kind, size).hash(&mut hasher);
+            (Some(kind), size)
+        };
+        let key = hasher.finish();
+
+        let version = self.next_version + 1;
+        let state = self.states.entry(node.id).or_default();
+        let changed = state.version == 0 || state.key != key;
+        state.key = key;
+        state.kind = kind;
+        state.shown_as = shown_as;
+        state.producer = if alias { inputs.first().copied().flatten() } else { None };
+        if alias {
             state.error = None;
             state.warning = None;
-            // Nothing was computed.
-            return false;
         }
+        if changed {
+            state.version = version;
+        }
+        // An image that stayed from before and does not fit any more is let go of (an output or
+        // a bypassed node has none of its own).
+        let fits = !alias && state.image.as_ref().is_none_or(|img| img.size() == size && kind.is_some_and(|k| img.format() == format_of(k)));
+        if changed {
+            self.next_version = version;
+        }
+        if !fits {
+            self.release(node.id);
+        }
+        let kind = kind.unwrap_or(ImageKind::Color);
+        Some(Plan { node_kind: node.kind, alias, changed, kind, size, inputs, vars, bitmap, lut, error, warning })
+    }
 
-        // What the node makes: a grayscale or a color image, as big as the texture size; but
-        // a uniform color is the same everywhere, and one pixel of it is all of it.
-        let input_kinds: Vec<Option<ImageKind>> = inputs.iter().map(|i| i.as_ref().map(GpuImage::kind)).collect();
-        let kind = match &bitmap {
-            Some(file) => file.kind(),
-            None => image_kind(node.kind, params, &input_kinds),
+    /// Compute a node's image (see [`Engine::evaluate`]): into its own image when it has one
+    /// that fits, else into one from the pool; with mips when a view shows it.
+    fn compute(
+        &mut self,
+        id: NodeId,
+        plan: &Plan,
+        params: &brewed_texture_core::eval::Params,
+        cpu_error: Option<&str>,
+        shown: bool,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        let [w, h] = plan.size;
+        let format = format_of(plan.kind);
+        let mipped = shown && w.max(h) > 1;
+        let own = self.states.get(&id).and_then(|s| s.image.clone());
+        let image = match own {
+            Some(img) if (img.texture.mip_level_count() > 1) == mipped => img,
+            other => {
+                if other.is_some() {
+                    self.release(id);
+                }
+                if mipped { self.gpu.take_scratch_with_mips(w, h, format) } else { self.gpu.take_scratch(w, h, format) }
+            }
         };
-        let format = format_of(kind);
-        let size = if node.kind == NodeKind::UNIFORM_COLOR { [1, 1] } else { resolution };
-        (kind, size).hash(&mut hasher);
-        let key = hasher.finish();
-        let own = self
-            .states
-            .get(&node.id)
-            .filter(|s| !s.aliased)
-            .and_then(|s| s.image.clone())
-            .filter(|img| img.size() == size && img.format() == format);
-        if own.is_some() && self.states.get(&node.id).is_some_and(|s| s.key == key) {
-            return false;
-        }
-        // An image let go of while nothing read it stays so while nothing does and the node
-        // is as it was.
-        if !read && self.states.get(&node.id).is_some_and(|s| s.released && s.key == key) {
-            return false;
-        }
-        let image = own.unwrap_or_else(|| self.gpu.create_image_as(size[0], size[1], format, d.name));
+        let target = if mipped { image.level(0) } else { image.clone() };
         // Kernels write what every device can store to: a grayscale image is computed in 32
         // bits and stored in 16.
-        let work = (work_format(format) != format).then(|| self.gpu.take_scratch(size[0], size[1], work_format(format)));
-        let output = work.as_ref().unwrap_or(&image);
+        let work = (work_format(format) != format).then(|| self.gpu.take_scratch(w, h, work_format(format)));
+        let output = work.as_ref().unwrap_or(&target);
 
+        let inputs: Vec<Option<GpuImage>> = plan.inputs.iter().map(|i| i.and_then(|i| self.image(i).cloned())).collect();
+        let pixel_vars: Vec<PixelVar> = plan
+            .vars
+            .iter()
+            .map(|v| match v {
+                Var::Builtin(b) => PixelVar::Builtin(b),
+                Var::Constant(c) => PixelVar::Constant(*c),
+                Var::Image(from) => match self.image(*from) {
+                    Some(img) => PixelVar::Image(img.clone()),
+                    None => PixelVar::Constant(0.0),
+                },
+            })
+            .collect();
+        let mut error = plan.error.clone();
+        let mut warning = plan.warning.clone();
         if error.is_none() {
-            let result = match kernels::kernel_for(node.kind) {
+            let result = match kernels::kernel_for(plan.node_kind) {
                 Some(kernel) => {
                     let mut cx = ExecCtx {
-                        kind: node.kind,
+                        kind: plan.node_kind,
                         gpu: &self.gpu,
                         encoder: &mut *encoder,
                         params,
                         inputs: &inputs,
                         output,
-                        bitmap: bitmap.as_ref(),
-                        lut: lut.as_ref(),
+                        bitmap: plan.bitmap.as_ref(),
+                        lut: plan.lut.as_ref(),
                         pixel_vars: &pixel_vars,
                     };
                     kernel(&mut cx)
                 }
-                None => Err(format!("No GPU kernel for '{}'", d.name)),
+                None => Err(format!("No GPU kernel for '{}'", plan.node_kind.def().name)),
             };
             match result {
                 Ok(w) => {
@@ -569,57 +768,57 @@ impl Engine {
             }
         }
         if let Some(e) = &error {
-            log::debug!("node {} ({}): {e}", node.id.0, d.name);
+            log::debug!("node {}: {e}", id.0);
             // Leave a transparent image so downstream nodes still work.
             let _ = kernels::clear(&self.gpu, encoder, output);
         }
         if let Some(work) = work {
-            if let Err(e) = self.gpu.encode_store(encoder, &work, &image) {
+            if let Err(e) = self.gpu.encode_store(encoder, &work, &target) {
                 error = error.or(Some(e));
             }
             self.gpu.recycle(work);
         }
+        if mipped && let Err(e) = self.gpu.encode_mips(encoder, &image) {
+            error = error.or(Some(e));
+        }
 
-        let version = self.bump();
-        let state = self.states.entry(node.id).or_default();
+        let state = self.states.entry(id).or_default();
         state.image = Some(image);
-        state.released = false;
-        state.aliased = false;
-        state.shown_as = shown_as;
-        state.version = version;
-        state.key = key;
         // Errors of the CPU evaluation are already reported by it.
-        state.error = error.filter(|e| ne.error() != Some(e.as_str()));
+        state.error = error.filter(|e| cpu_error != Some(e.as_str()));
         state.warning = warning;
-        true
     }
 
     // ------------------------------------------------------------------ thumbnails
 
-    /// Thumbnails of every node whose image changed since its last thumbnail. Blocks
-    /// until the GPU work and the readbacks are done.
-    pub fn render_thumbnails(&mut self) -> Vec<Thumbnail> {
-        let mut encoder = self.gpu.encoder();
-        let mut jobs = Vec::new();
-        for (id, state) in &mut self.states {
-            let Some(image) = &state.image else { continue };
-            if state.thumb_version == state.version {
-                continue;
-            }
-            let params = DisplayU { mode: 0, checker: 8.0, format: state.shown_as, pad: 0 };
-            let thumb = self.gpu.take_scratch(THUMB_SIZE, THUMB_SIZE, COLOR_FORMAT);
-            if self.gpu.run(&mut encoder, "thumbnail", bytemuck::bytes_of(&params), &[image], &thumb).is_err() {
-                self.gpu.recycle(thumb);
-                continue;
-            }
-            let readback = self.gpu.encode_readback(&mut encoder, &thumb);
-            state.thumb_version = state.version;
-            jobs.push((*id, state.version, thumb, readback));
+    /// Record the thumbnail of a node that changed, from its image as it is now (before the
+    /// image goes back to the pool); [`Engine::render_thumbnails`] reads it back.
+    fn encode_thumbnail(&mut self, id: NodeId, encoder: &mut wgpu::CommandEncoder) {
+        let Some(state) = self.states.get(&id) else { return };
+        let (version, shown_as) = (state.version, state.shown_as);
+        let Some(image) = self.image(id).cloned() else { return };
+        let params = DisplayU { mode: 0, checker: 8.0, format: shown_as, pad: 0 };
+        let thumb = self.gpu.take_scratch(THUMB_SIZE, THUMB_SIZE, COLOR_FORMAT);
+        if self.gpu.run(encoder, "thumbnail", bytemuck::bytes_of(&params), &[&image], &thumb).is_err() {
+            self.gpu.recycle(thumb);
+            return;
         }
+        let readback = self.gpu.encode_readback(encoder, &thumb);
+        // A thumbnail not read back yet is out of date.
+        if let Some(i) = self.thumbnails.iter().position(|(node, ..)| *node == id) {
+            let (_, _, old, _) = self.thumbnails.remove(i);
+            self.gpu.recycle(old);
+        }
+        self.thumbnails.push((id, version, thumb, readback));
+    }
+
+    /// The thumbnails of the nodes the evaluations since the last call changed. Blocks until
+    /// they are read back.
+    pub fn render_thumbnails(&mut self) -> Vec<Thumbnail> {
+        let jobs = std::mem::take(&mut self.thumbnails);
         if jobs.is_empty() {
             return Vec::new();
         }
-        self.gpu.queue.submit(Some(encoder.finish()));
         for (_, _, _, rb) in &jobs {
             rb.map();
         }
@@ -719,43 +918,45 @@ impl Engine {
 
     // ------------------------------------------------------------------ what the views show
 
-    /// Bring the copy the views show of `node` up to date: its image as the node shows it,
-    /// at the texture size, 8 bits a channel (one channel when it shows one), with mips.
-    /// `None` when the node has no image.
+    /// What the views show of `node`: the image of the node that makes it (itself, or what
+    /// arrives at an output or a bypassed node), with the mips a view samples it with, and how
+    /// the node shows it. `None` when there is no image.
     fn display(&mut self, node: NodeId) -> Option<DisplayImage> {
         let state = self.states.get(&node)?;
-        let source = state.image.clone()?;
-        let (version, shown_as) = (state.version, state.shown_as);
+        let (version, format) = (state.version, state.shown_as);
+        let producer = self.producer(node);
+        self.ensure_mips(producer);
+        let image = self.image(producer)?.clone();
+        if !self.given.contains(&image.texture) {
+            self.given.push(image.texture.clone());
+        }
         let size = self.last_resolution;
-        // What shows one channel is copied into one: a quarter of the memory.
-        let gray = source.is_gray() || ONE_CHANNEL.contains(&shown_as);
-        if let Some(d) = self.displays.get(&node)
-            && d.version == version
-            && d.size == size
-            && d.gray == gray
-        {
-            return Some(d.clone());
-        }
-        let format = if gray { GRAY_DISPLAY_FORMAT } else { DISPLAY_FORMAT };
-        let target = match self.displays.get(&node).filter(|d| d.size == size && d.gray == gray) {
-            Some(d) => GpuImage { texture: d.texture.clone(), view: d.view.clone() },
-            None => self.gpu.create_image_with_mips(size[0], size[1], format, "display"),
-        };
-        let mut encoder = self.gpu.encoder();
-        if let Err(e) = self.gpu.encode_copy_with_mips(&mut encoder, &source, &target, shown_as) {
-            log::error!("display copy: {e}");
-            return None;
-        }
-        self.gpu.queue.submit(Some(encoder.finish()));
-        let display = DisplayImage { node, version, texture: target.texture, view: target.view, size, gray };
-        self.displays.insert(node, display.clone());
-        Some(display)
+        Some(DisplayImage { node, version, size, gray: image.is_gray(), format, texture: image.texture, view: image.view })
     }
 
-    /// Forget the copies no view shows any more.
-    fn prune_displays(&mut self) {
-        let (preview, materials) = (self.preview, &self.materials);
-        self.displays.retain(|id, _| preview == Some(*id) || materials.contains(id));
+    /// Give a node's image the mips a view samples it with: the same image, in a texture that
+    /// has them.
+    fn ensure_mips(&mut self, id: NodeId) {
+        let Some(image) = self.states.get(&id).and_then(|s| s.image.clone()) else { return };
+        let [w, h] = image.size();
+        if image.texture.mip_level_count() > 1 || w.max(h) <= 1 {
+            return;
+        }
+        let mipped = self.gpu.take_scratch_with_mips(w, h, image.format());
+        let mut encoder = self.gpu.encoder();
+        encoder.copy_texture_to_texture(
+            image.texture.as_image_copy(),
+            mipped.texture.as_image_copy(),
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        if let Err(e) = self.gpu.encode_mips(&mut encoder, &mipped) {
+            log::error!("mips: {e}");
+        }
+        self.gpu.queue.submit(Some(encoder.finish()));
+        if let Some(state) = self.states.get_mut(&id) {
+            state.image = Some(mipped);
+        }
+        self.gpu.recycle(image);
     }
 
     /// What the 2D view shows of `node`. Returns it when it changed (`Some(None)` when there
@@ -763,8 +964,7 @@ impl Engine {
     pub fn prepare_preview(&mut self, node: Option<NodeId>) -> Option<Option<DisplayImage>> {
         self.preview = node;
         let shown = node.and_then(|n| self.display(n));
-        self.prune_displays();
-        let sent = shown.as_ref().map(|d| (d.node, d.version));
+        let sent = shown.as_ref().map(|d| (d.node, d.version, d.texture.clone()));
         if sent == self.preview_sent {
             return None;
         }
@@ -777,8 +977,7 @@ impl Engine {
     pub fn prepare_materials(&mut self, nodes: &[NodeId]) -> Option<Vec<DisplayImage>> {
         self.materials = nodes.to_vec();
         let shown: Vec<DisplayImage> = nodes.iter().filter_map(|n| self.display(*n)).collect();
-        self.prune_displays();
-        let sent: Vec<(NodeId, u64)> = shown.iter().map(|d| (d.node, d.version)).collect();
+        let sent: Vec<(NodeId, u64, wgpu::Texture)> = shown.iter().map(|d| (d.node, d.version, d.texture.clone())).collect();
         if sent == self.materials_sent {
             return None;
         }

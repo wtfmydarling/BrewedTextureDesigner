@@ -1,7 +1,7 @@
 // Render passes that write the images compute kernels cannot, in formats the device only
-// renders to: grayscale images stored as half floats, the views' 8-bit copies (one channel
-// for grayscale images) and their mip chains. One triangle covers the target, and each of
-// its pixels reads the source.
+// renders to: grayscale images stored as half floats, and mip chains (of the images the
+// views show, and of the height a kernel reads at every scale). One triangle covers the
+// target, and each of its pixels reads the source.
 
 struct Params {
     // The format of the output the image is shown as (0 for every other node).
@@ -26,8 +26,8 @@ fn store(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     return textureLoad(src, vec2<i32>(pos.xy), 0);
 }
 
-// The source as its node shows it, resampled to the target's size: the top level of a copy
-// for the views, or for a kernel that filters it.
+// The source as its node shows it, resampled to the target's size: an image read back as
+// its node shows it, or the top level of a copy a kernel filters.
 @fragment
 fn show(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let c = widen(read_input(src, vec2<u32>(pos.xy), P.size, 0u), GRAY0);

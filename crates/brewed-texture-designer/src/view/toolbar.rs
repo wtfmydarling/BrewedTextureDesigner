@@ -252,9 +252,10 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
     let engine = app.engine.is_some() || app.res.finished_revision > 0;
     let memory = reading(
         format!("VRAM {}", megabytes(app.res.memory)),
-        "GPU memory the images take: every image another node or a view reads, at the texture size \
-         (grayscale ones in one channel), the 8-bit copies the 2D and 3D views show, and the scratch \
-         images kept for reuse while changes keep coming."
+        "GPU memory the images take, at the texture size (grayscale ones in one channel): those the \
+         2D and 3D views show, with their mips; those the last change read, which the next change \
+         of the same kind reads again; and the scratch images kept for reuse while changes keep \
+         coming. Every other image lives only while the change that computes it needs it."
             .into(),
     );
 

@@ -15,7 +15,7 @@ use brewed_texture_core::eval::Evaluation;
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::graph::{Graph, NodeId};
 
-use crate::engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Thumbnail};
+use crate::engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Keep, Thumbnail};
 use crate::export;
 use crate::gpu::Gpu;
 use crate::simd::ImageStats;
@@ -69,8 +69,8 @@ pub enum Event {
         revision: u64,
         reports: HashMap<NodeId, ImageReport>,
     },
-    /// The GPU finished what a change asked for: its images, their copies for the views
-    /// and their thumbnails. `millis` is how long that took from the moment the engine
+    /// The GPU finished what a change asked for: its images, the mips of those the views
+    /// show and their thumbnails. `millis` is how long that took from the moment the engine
     /// started on the change.
     Finished {
         revision: u64,
@@ -114,7 +114,12 @@ impl EngineService {
         let name = adapter.clone();
         let thread = std::thread::Builder::new()
             .name("brewed-texture-engine".into())
-            .spawn(move || run(Engine::new(Gpu::new(device, queue, name)), rx, emit))
+            .spawn(move || {
+                // The front end reads the views' images and asks for others: only those stay.
+                let mut engine = Engine::new(Gpu::new(device, queue, name));
+                engine.set_keep(Keep::Read);
+                run(engine, rx, emit)
+            })
             .expect("spawn engine thread");
         EngineService { tx: Some(tx), thread: Some(thread), adapter }
     }
@@ -157,7 +162,8 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
     let mut current: Option<(u64, Arc<Graph>, Arc<Evaluation>)> = None;
     let mut preview: Option<NodeId> = None;
     let mut materials: Vec<NodeId> = Vec::new();
-    let mut memory = 0;
+    // The GPU memory the front end was last told of (`None`: not yet, or it forgot).
+    let mut memory: Option<u64> = None;
     loop {
         // Wait for work; poll while files are being decoded in the background.
         let first = if engine.bitmaps_loading() {
@@ -171,10 +177,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                 Ok(r) => Some(r),
                 Err(RecvTimeoutError::Timeout) => {
                     engine.gpu.clear_pool();
-                    if engine.memory() != memory {
-                        memory = engine.memory();
-                        (emit)(Event::Memory(memory));
-                    }
+                    report_memory(&engine, &mut memory, &emit);
                     match rx.recv() {
                         Ok(r) => Some(r),
                         Err(_) => break,
@@ -213,6 +216,8 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                 }
                 Request::Reset => {
                     engine.reset();
+                    // The front end forgets everything it was told with it.
+                    memory = None;
                     pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
                 }
             }
@@ -220,12 +225,16 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         if engine.receive_bitmaps() {
             pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
         }
-        // The node the 2D view shows is read: if its image was let go of, it is computed again.
-        if pending.preview_changed {
-            engine.set_preview(preview);
-            if preview.is_some_and(|node| engine.released(node)) {
-                pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
-            }
+        // What is read after this round: the views' nodes and the nodes asked about. Whatever
+        // of them has no image is computed, even if nothing changed.
+        engine.set_preview(preview);
+        engine.set_materials(&materials);
+        let asked: Vec<NodeId> =
+            pending.stats.iter().copied().chain(pending.probe.map(|(node, _)| node)).chain(pending.exports.iter().map(|j| j.node)).collect();
+        let read: Vec<NodeId> = preview.iter().chain(&materials).chain(&asked).copied().collect();
+        engine.ask(asked);
+        if engine.missing(&read) {
+            pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
         }
 
         let mut evaluated = None;
@@ -257,6 +266,9 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
             engine.wait_idle();
             let millis = started.elapsed().as_secs_f32() * 1000.0;
             (emit)(Event::Finished { revision, report, millis });
+            // Now, not after whatever else this round does (the pictures of the options take
+            // a while when they are drawn first).
+            report_memory(&engine, &mut memory, &emit);
         }
         for (kind, key) in pending.choices {
             if let Some(pictures) = engine.render_choices(kind, &key) {
@@ -289,15 +301,18 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         if !errors.is_empty() {
             (emit)(Event::GpuErrors(errors));
         }
-        // What nothing reads needs no more than its thumbnail, drawn by now.
-        if let Some((_, graph, _)) = &current {
-            engine.release_unread(graph);
-        }
         // What this round did not use, the next is unlikely to.
         engine.gpu.trim_pool();
-        if engine.memory() != memory {
-            memory = engine.memory();
-            (emit)(Event::Memory(memory));
-        }
+        report_memory(&engine, &mut memory, &emit);
+    }
+}
+
+/// Tell the front end how much GPU memory the engine's images take, when that is not what it
+/// was last told.
+fn report_memory(engine: &Engine, reported: &mut Option<u64>, emit: &Emit) {
+    let now = engine.memory();
+    if *reported != Some(now) {
+        *reported = Some(now);
+        (emit)(Event::Memory(now));
     }
 }

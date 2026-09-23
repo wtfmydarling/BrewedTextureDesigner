@@ -269,7 +269,7 @@ fn every_image_node_runs_with_defaults_in_every_tiling_mode() {
             }
             assert!(st.error.is_none(), "{name}: {:?}", st.error);
             assert!(ev.node(*id).unwrap().error().is_none(), "{name}");
-            assert!(st.image.is_some(), "{name}");
+            assert!(e.image(*id).is_some(), "{name}");
         }
     }
     assert!(e.gpu.take_errors().is_empty());
@@ -692,54 +692,99 @@ fn pictures_of_the_options() {
     assert!(e.gpu.take_errors().is_empty());
 }
 
-/// An image nothing reads is let go of once its thumbnail is drawn: a node no other node
-/// takes and the 2D view does not show needs no more than its thumbnail. It is computed again
-/// only when it changes or something comes to read it.
+/// Kept as the app keeps them, an image lives while something reads it: a node no other node
+/// takes and no view shows keeps only its thumbnail, an image read only inside an evaluation
+/// goes back to the pool once it is read, and what the last change read from outside itself
+/// stays for the next change of the same kind.
 #[test]
-fn images_nothing_reads_are_let_go_of() {
+fn images_live_while_something_reads_them() {
     let Some(mut e) = engine() else { return };
+    e.set_keep(crate::engine::Keep::Read);
     let mut g = graph();
     let alone = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
-    let read = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
     let blur = g.add_node(NodeKind::BLUR, [0.0, 0.0]);
-    g.connect(read, "o:output", blur, "i:input").unwrap();
+    let out = g.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+    g.connect(noise, "o:output", blur, "i:input").unwrap();
+    g.connect(blur, "o:output", out, "i:input").unwrap();
+    // The 3D view uses the output.
+    e.set_materials(&[out]);
     evaluate_blocking(&mut e, &g);
     let thumbs = e.render_thumbnails();
-    let before = e.memory();
-    e.release_unread(&g);
-    assert!(e.image(alone).is_none() && e.released(alone), "nothing reads it");
-    assert!(e.image(read).is_some(), "the blur reads it");
-    // The blur's own image is read by nothing either: its thumbnail is all that is left.
-    assert!(e.image(blur).is_none());
-    assert!(thumbs.iter().any(|t| t.node == alone), "its thumbnail was drawn first");
-    assert_eq!(before - e.memory(), 2 * RES as u64 * RES as u64 * 2, "two grayscale images of 2 bytes a pixel");
+    for id in [alone, noise, blur, out] {
+        assert!(thumbs.iter().any(|t| t.node == id), "every node drew its thumbnail");
+    }
+    // Only what arrives at the output stays, with the mips the 3D view samples it with.
+    assert!(e.image(alone).is_none() && e.image(noise).is_none());
+    let shown = e.image(out).expect("the output shows the blur").clone();
+    assert!(e.image(blur).is_some_and(|b| b.texture == shown.texture));
+    assert!(shown.texture.mip_level_count() > 1);
+    e.gpu.clear_pool();
+    assert_eq!(e.memory(), shown.bytes(), "one grayscale image and its mips");
 
-    // Another node's change does not compute it again.
-    set(&mut g, read, "seed", ParamValue::Int(4));
+    // A change of the noise computes it and the blur again; the noise goes back to the pool
+    // once the blur has read it.
+    set(&mut g, noise, "seed", ParamValue::Int(3));
     evaluate_blocking(&mut e, &g);
-    assert!(e.image(alone).is_none(), "computed for nothing");
-    // Its own change does, for its thumbnail, and then it is let go of again.
-    set(&mut g, alone, "seed", ParamValue::Int(4));
+    assert_eq!(e.report.recomputed, 2);
+    assert_eq!(e.render_thumbnails().len(), 3, "the noise, the blur and the output changed");
+    assert!(e.image(noise).is_none());
+    // A change of the blur reads the noise: it is computed again, as it was (its version
+    // stays, so nothing else is), and stays for the next change of the blur.
+    let version = e.version(noise);
+    set(&mut g, blur, "radius", ParamValue::Float(3.0));
     evaluate_blocking(&mut e, &g);
-    assert_eq!(e.report.recomputed, 1);
-    assert!(e.render_thumbnails().iter().any(|t| t.node == alone));
-    e.release_unread(&g);
-    assert!(e.image(alone).is_none());
-    // Shown in the 2D view, it is computed and kept.
+    assert_eq!(e.report.recomputed, 2);
+    assert_eq!(e.version(noise), version);
+    assert!(e.image(noise).is_some());
+    let thumbs = e.render_thumbnails();
+    assert!(thumbs.iter().all(|t| t.node != noise), "no new thumbnail of what did not change");
+    set(&mut g, blur, "radius", ParamValue::Float(4.0));
+    evaluate_blocking(&mut e, &g);
+    assert_eq!(e.report.recomputed, 1, "the noise was there");
+    assert_eq!(e.render_thumbnails().len(), 2, "the blur and the output changed");
+    // Shown in the 2D view, a node is computed and stays.
     e.set_preview(Some(alone));
     evaluate_blocking(&mut e, &g);
+    assert_eq!(e.report.recomputed, 1);
     assert!(e.image(alone).is_some());
-    e.render_thumbnails();
-    e.release_unread(&g);
-    assert!(e.image(alone).is_some(), "the 2D view reads it");
-    // Read by another node, it is too.
+    assert!(e.render_thumbnails().is_empty(), "nothing changed");
+    // Deleted, a node lets go of its image.
+    g.remove_nodes(&[alone]);
     e.set_preview(None);
-    let levels = g.add_node(NodeKind::LEVELS, [0.0, 0.0]);
-    g.connect(alone, "o:output", levels, "i:input").unwrap();
     evaluate_blocking(&mut e, &g);
-    e.render_thumbnails();
-    e.release_unread(&g);
-    assert!(e.image(alone).is_some(), "the levels read it");
+    assert!(e.image(alone).is_none() && e.state(alone).is_none());
+}
+
+/// A view samples the node image it was given until it is given another, which the engine
+/// cannot know it has been yet: let go of, that texture never goes back to the pool, where
+/// another image could take it and be drawn in the view in its place.
+#[test]
+fn a_texture_a_view_was_given_is_not_taken_by_another_image() {
+    let Some(mut e) = engine() else { return };
+    e.set_keep(crate::engine::Keep::Read);
+    let mut g = graph();
+    let a = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let b = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    set(&mut g, b, "seed", ParamValue::Int(7));
+    e.set_preview(Some(a));
+    evaluate_blocking(&mut e, &g);
+    let shown = e.prepare_preview(Some(a)).flatten().expect("the 2D view shows a");
+    assert!(shown.texture.mip_level_count() > 1, "with the mips the view samples it with");
+    // The view moves on to b, and a is let go of.
+    e.set_preview(Some(b));
+    evaluate_blocking(&mut e, &g);
+    let next = e.prepare_preview(Some(b)).flatten().expect("the 2D view shows b");
+    assert!(e.image(a).is_none());
+    assert!(next.texture != shown.texture);
+    // Nothing after takes it either.
+    for seed in 0..3 {
+        set(&mut g, b, "seed", ParamValue::Int(seed));
+        evaluate_blocking(&mut e, &g);
+    }
+    let [w, h] = [shown.texture.width(), shown.texture.height()];
+    let taken: Vec<_> = (0..40).map(|_| e.gpu.take_scratch_with_mips(w, h, shown.texture.format())).collect();
+    assert!(taken.iter().all(|t| t.texture != shown.texture));
 }
 
 /// What the demo takes in GPU memory at 2048×2048, as the app shows it (prints).
@@ -749,8 +794,11 @@ fn demo_memory() {
     let Some(mut e) = engine() else { return };
     let (mut g, preview) = brewed_texture_core::demo::graph();
     g.resolution = [2048, 2048];
-    evaluate_blocking(&mut e, &g);
     let outputs: Vec<NodeId> = g.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
+    e.set_keep(crate::engine::Keep::Read);
+    e.set_preview(preview);
+    e.set_materials(&outputs);
+    evaluate_blocking(&mut e, &g);
     e.prepare_preview(preview);
     e.prepare_materials(&outputs);
     e.render_thumbnails();
@@ -760,6 +808,12 @@ fn demo_memory() {
     e.gpu.trim_pool();
     e.gpu.trim_pool();
     println!("without scratch images: {:.0} MB", mb(e.memory()));
+    // The images that stay (an output shows the image of the node before it).
+    for n in g.nodes.iter().filter(|n| n.kind != NodeKind::OUTPUT) {
+        if let Some(img) = e.image(n.id) {
+            println!("  {:<20} {:?}, {} mips: {:.1} MB", n.def().name, img.format(), img.texture.mip_level_count(), mb(img.bytes()));
+        }
+    }
 }
 
 /// Grayscale images are stored in one channel, and what arrives at an input of the other
@@ -827,12 +881,15 @@ fn outputs_and_bypassed_nodes_share_their_input() {
     evaluate_blocking(&mut e, &g);
     let texture = |e: &Engine, id| e.image(id).map(|i| i.texture.clone());
     assert_eq!(texture(&e, out), texture(&e, invert), "the output is its input");
+    // (Without the scratch images, which go once nothing changes.)
+    e.gpu.clear_pool();
     let memory = e.memory();
 
     g.node_mut(invert).unwrap().bypass = true;
     evaluate_blocking(&mut e, &g);
     assert_eq!(texture(&e, invert), texture(&e, noise), "a bypassed node is its input");
     assert_eq!(texture(&e, out), texture(&e, noise));
+    e.gpu.clear_pool();
     assert!(e.memory() < memory, "{} is not less than {memory}", e.memory());
     // Back again: the node makes an image of its own, and does not write into its input's.
     let before = e.read_image(noise).unwrap().2;
@@ -844,21 +901,22 @@ fn outputs_and_bypassed_nodes_share_their_input() {
     assert!(close(pixel(&inverted, 9, 9)[0], 1.0 - pixel(&before, 9, 9)[0], 2e-3));
 }
 
-/// The demo at a texture size of 512: what it takes in GPU memory with what the views
-/// show, which was 2.4 times as much before grayscale images, outputs without copies of
-/// their own, 8-bit copies for the views and one-pixel uniform colors.
 #[test]
-fn the_demo_takes_a_quarter_of_what_it_did() {
+fn the_demo_keeps_only_what_is_read() {
     let Some(mut e) = engine() else { return };
     let (mut g, preview) = brewed_texture_core::demo::graph();
     g.resolution = [512, 512];
-    evaluate_blocking(&mut e, &g);
     let outputs: Vec<NodeId> = g.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
-    e.prepare_preview(preview);
-    e.prepare_materials(&outputs);
+    // As the app runs it.
+    e.set_keep(crate::engine::Keep::Read);
+    e.set_preview(preview);
+    e.set_materials(&outputs);
+    evaluate_blocking(&mut e, &g);
+    assert!(e.prepare_preview(preview).is_some());
+    assert!(e.prepare_materials(&outputs).is_some_and(|m| m.len() == outputs.len()));
     // As the engine is once nothing changes for a moment: without its scratch images.
     e.gpu.clear_pool();
     let mb = e.memory() as f64 / (1024.0 * 1024.0);
-    // 802 MB at 2048 was 50 MB at 512; 219 MB at 2048 is 13.7 at 512.
-    assert!(mb < 14.0, "the demo takes {mb:.1} MB at 512");
+    // 802 MB at 2048 was 50 MB at 512; 117 MB at 2048 is 7.3 at 512.
+    assert!(mb < 7.5, "the demo takes {mb:.1} MB at 512");
 }
