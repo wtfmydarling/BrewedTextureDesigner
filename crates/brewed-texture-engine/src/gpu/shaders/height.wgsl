@@ -8,17 +8,16 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var in0: texture_2d<f32>;
-@group(0) @binding(2) var out_tex: texture_storage_2d<rgba16float, write>;
 
 fn h(uv: vec2<f32>) -> f32 {
     return luminance(widen(sample_bilinear(in0, uv, P.tiling), GRAY0).rgb);
 }
 
 // Negative Laplacian at the given scale: ridges bright, valleys dark, flat = 0.5.
-@compute @workgroup_size(8, 8, 1)
-fn curvature(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn curvature(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let uv = out_uv(gid.xy, size);
     let r = vec2<f32>(P.radius_x, P.radius_y);
     let c = h(uv);
@@ -26,14 +25,14 @@ fn curvature(@builtin(global_invocation_id) gid: vec3<u32>) {
             + h(uv + vec2<f32>(0.0, r.y)) + h(uv - vec2<f32>(0.0, r.y));
     let diagonal = h(uv + r) + h(uv - r) + h(uv + vec2<f32>(r.x, -r.y)) + h(uv + vec2<f32>(-r.x, r.y));
     let lap = (sum + 0.5 * diagonal) / 6.0 - c;
-    textureStore(out_tex, vec2<i32>(gid.xy), gray(clamp(0.5 - lap * P.intensity, 0.0, 1.0)));
+    return gray(clamp(0.5 - lap * P.intensity, 0.0, 1.0));
 }
 
 // Sobel gradient magnitude.
-@compute @workgroup_size(8, 8, 1)
-fn edge_detect(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn edge_detect(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let uv = out_uv(gid.xy, size);
     let rx = vec2<f32>(P.radius_x, 0.0);
     let ry = vec2<f32>(0.0, P.radius_y);
@@ -49,5 +48,5 @@ fn edge_detect(@builtin(global_invocation_id) gid: vec3<u32>) {
     let gy = (bl + 2.0 * b + br) - (tl + 2.0 * t + tr);
     var e = clamp(length(vec2<f32>(gx, gy)) * 0.25 * P.intensity, 0.0, 1.0);
     if (P.invert != 0u) { e = 1.0 - e; }
-    textureStore(out_tex, vec2<i32>(gid.xy), gray(e));
+    return gray(e);
 }

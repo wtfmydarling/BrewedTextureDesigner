@@ -8,7 +8,6 @@ struct Params {
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var in0: texture_2d<f32>;
 @group(0) @binding(2) var lut: texture_2d<f32>;
-@group(0) @binding(3) var out_tex: texture_storage_2d<rgba16float, write>;
 
 // 0 luminance, 1 red, 2 green, 3 blue, 4 alpha, 5 average
 fn pick(c: vec4<f32>) -> f32 {
@@ -22,10 +21,10 @@ fn pick(c: vec4<f32>) -> f32 {
     }
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let c = widen(read_input(in0, gid.xy, size, P.tiling), GRAY0);
     let n = i32(textureDimensions(lut).x);
     // The table holds n samples from t = 0 to t = 1 (both included).
@@ -33,5 +32,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i0 = i32(floor(x));
     let i1 = min(i0 + 1, n - 1);
     let col = mix(widen(textureLoad(lut, vec2<i32>(i0, 0), 0), GRAY1), widen(textureLoad(lut, vec2<i32>(i1, 0), 0), GRAY1), x - f32(i0));
-    textureStore(out_tex, vec2<i32>(gid.xy), vec4<f32>(col.rgb, select(col.a, col.a * c.a, P.keep_alpha != 0u)));
+    return vec4<f32>(col.rgb, select(col.a, col.a * c.a, P.keep_alpha != 0u));
 }

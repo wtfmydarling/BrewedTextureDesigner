@@ -29,7 +29,7 @@ use brewed_texture_core::eval::{Evaluation, VarSource};
 use brewed_texture_core::graph::{Graph, Node, NodeId, input_socket_key};
 use brewed_texture_core::nodes::{ImageKind, NodeKind, PIXEL_MATH_BUILTINS, image_kind};
 
-use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, Gpu, GpuImage, Readback, format_of, output_format, work_format};
+use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, Gpu, GpuImage, Readback, format_of, output_format};
 use crate::kernels::{self, DisplayU, ExecCtx, PixelVar};
 use crate::simd::{self, ImageStats};
 
@@ -444,6 +444,7 @@ impl Engine {
     /// same graph (values and effective parameters).
     pub fn evaluate(&mut self, graph: &Graph, eval: &Evaluation) -> EvalReport {
         self.receive_bitmaps();
+        self.gpu.start_use();
 
         // Forget nodes that were deleted, and let go of their images.
         let alive: HashSet<NodeId> = graph.nodes.iter().map(|n| n.id).collect();
@@ -529,7 +530,12 @@ impl Engine {
                 *readers.entry(read).or_default() += 1;
             }
         }
-        let shown = self.shown();
+        // With mips: what the views show, and what a node that reads its input at every scale
+        // (ambient occlusion) reads, which it samples as it is rather than a copy of it.
+        let mut mipped = self.shown();
+        for id in runs.iter().filter(|id| kernels::reads_at_every_scale(plans[*id].node_kind)) {
+            mipped.extend(plans[id].inputs.iter().flatten());
+        }
         let mut encoder = self.gpu.encoder();
         let mut report = EvalReport { image_nodes: order.len(), ..EvalReport::default() };
         for &id in &order {
@@ -539,7 +545,7 @@ impl Engine {
             let plan = &plans[&id];
             if let Some(format) = plan.format {
                 let Some(ne) = eval.node(id) else { continue };
-                self.compute(id, plan, format, &ne.params, ne.error(), shown.contains(&id), &mut encoder);
+                self.compute(id, plan, format, &ne.params, ne.error(), mipped.contains(&id), &mut encoder);
                 report.recomputed += 1;
             }
             if plan.changed {
@@ -629,6 +635,22 @@ impl Engine {
             self.states.iter().filter(|(id, s)| s.image.is_some() && !kept.contains(id)).map(|(id, _)| *id).collect();
         for id in stale {
             self.release(id);
+        }
+    }
+
+    /// Keep the scratch images the next change is likely to need when one is `coming` (a
+    /// slider being dragged): those the last round used, the smallest first, as many as fit in
+    /// the memory of six grayscale images of the texture size. A new image costs its
+    /// allocation whatever its size and then some for each byte: small ones are worth keeping,
+    /// and a color image of the texture size is made again, for the memory it would take in
+    /// between. With no change coming, none of them is kept.
+    pub fn keep_scratch(&self, coming: bool) {
+        if coming {
+            let [w, h] = self.last_resolution;
+            let gray = u64::from(w) * u64::from(h) * u64::from(GRAY_FORMAT.block_copy_size(None).unwrap_or(2));
+            self.gpu.trim_pool(6 * gray);
+        } else {
+            self.gpu.clear_pool();
         }
     }
 
@@ -799,7 +821,8 @@ impl Engine {
     }
 
     /// Compute a node's image in `format` (see [`Engine::evaluate`]): into its own image when
-    /// it has one that fits, else into one from the pool; with mips when a view shows it.
+    /// it has one that fits, else into one from the pool; with mips when `mips` (a view shows
+    /// it, or a node reads it at every scale).
     #[allow(clippy::too_many_arguments)]
     fn compute(
         &mut self,
@@ -808,11 +831,11 @@ impl Engine {
         format: wgpu::TextureFormat,
         params: &brewed_texture_core::eval::Params,
         cpu_error: Option<&str>,
-        shown: bool,
+        mips: bool,
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let [w, h] = plan.size;
-        let mipped = shown && w.max(h) > 1;
+        let mipped = mips && w.max(h) > 1;
         let own = self.states.get(&id).and_then(|s| s.image.clone());
         let image = match own {
             Some(img) if (img.texture.mip_level_count() > 1) == mipped => img,
@@ -823,12 +846,7 @@ impl Engine {
                 if mipped { self.gpu.take_scratch_with_mips(w, h, format) } else { self.gpu.take_scratch(w, h, format) }
             }
         };
-        let target = if mipped { image.level(0) } else { image.clone() };
-        // Kernels write what every device can store to: a grayscale image is computed in 32
-        // bits and stored in 16. An output is drawn by a render pass, which writes any format.
-        let drawn = plan.node_kind == NodeKind::OUTPUT;
-        let work = (!drawn && work_format(format) != format).then(|| self.gpu.take_scratch(w, h, work_format(format)));
-        let output = work.as_ref().unwrap_or(&target);
+        let output = if mipped { image.level(0) } else { image.clone() };
 
         let inputs: Vec<Option<GpuImage>> = plan.inputs.iter().map(|i| i.and_then(|i| self.image(i).cloned())).collect();
         let pixel_vars: Vec<PixelVar> = plan
@@ -854,7 +872,7 @@ impl Engine {
                         encoder: &mut *encoder,
                         params,
                         inputs: &inputs,
-                        output,
+                        output: &output,
                         bitmap: plan.bitmap.as_ref(),
                         lut: plan.lut.as_ref(),
                         pixel_vars: &pixel_vars,
@@ -875,13 +893,7 @@ impl Engine {
         if let Some(e) = &error {
             log::debug!("node {}: {e}", id.0);
             // Leave a transparent image so downstream nodes still work.
-            self.gpu.encode_clear(encoder, output);
-        }
-        if let Some(work) = work {
-            if let Err(e) = self.gpu.encode_store(encoder, &work, &target) {
-                error = error.or(Some(e));
-            }
-            self.gpu.recycle(work);
+            self.gpu.encode_clear(encoder, &output);
         }
         if mipped && let Err(e) = self.gpu.encode_mips(encoder, &image) {
             error = error.or(Some(e));
@@ -976,7 +988,7 @@ impl Engine {
         for option in 0..options {
             params.values[choice].1 = brewed_texture_core::ParamValue::Enum(option as u32);
             // Drawn as the node draws itself, in the kind of image it makes with the option.
-            let format = work_format(format_of(image_kind(kind, &params, &input_kinds)));
+            let format = format_of(image_kind(kind, &params, &input_kinds));
             let picture = self.gpu.take_scratch(CHOICE_RES, CHOICE_RES, format);
             let mut cx = ExecCtx {
                 kind,

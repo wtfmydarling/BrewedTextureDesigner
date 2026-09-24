@@ -6,12 +6,11 @@ struct Params {
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
-@group(0) @binding(1) var out_tex: texture_storage_2d<rgba16float, write>;
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
 
     let rep = max(P.repeat, 1.0);
     let g = out_uv(gid.xy, size) * rep;     // grid coordinates, one cell per copy
@@ -42,5 +41,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
     if (P.invert != 0u) { v = 1.0 - v; }
-    textureStore(out_tex, vec2<i32>(gid.xy), gray(clamp(v, 0.0, 1.0)));
+    return gray(clamp(v, 0.0, 1.0));
 }

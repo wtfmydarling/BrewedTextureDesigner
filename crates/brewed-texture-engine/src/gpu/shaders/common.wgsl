@@ -1,10 +1,9 @@
 // ---------------------------------------------------------------------------
-// Shared helpers, prepended to every node kernel.
+// Shared helpers, prepended to every kernel.
 //
 // Conventions:
-//   * a color image is rgba16float, a grayscale one r16float (one channel), which a kernel
-//     writes as r32float; uv in [0, 1] with texel centers at (i + 0.5) / size and y
-//     pointing down (row 0 is the top);
+//   * a color image is rgba16float, a grayscale one r16float (one channel); uv in [0, 1]
+//     with texel centers at (i + 0.5) / size and y pointing down (row 0 is the top);
 //   * `tiling` is a bit set: bit 0 = wrap horizontally, bit 1 = wrap vertically;
 //   * angles given by the user are degrees, counter-clockwise on screen.
 // ---------------------------------------------------------------------------
@@ -26,6 +25,29 @@ override GRAY3: bool = false;
 // Each kind is a pipeline of its own, with only the code of its kind: the compiler drops the
 // rest, and one kind builds in a fraction of the time all of them together would take.
 override KIND: u32 = 0u;
+
+// A kernel draws its image: one triangle covers it, and the kernel's fragment entry computes
+// each of its pixels on its own and returns it. A render pass writes any format a device
+// renders to, where a compute shader could store to only a few: a grayscale image is
+// written as it is kept, one channel of 16 bits.
+
+// The size of the image being drawn (in the buffer of the parameters, after them).
+@group(0) @binding(15) var<uniform> TARGET: vec4<u32>;
+
+@vertex
+fn cover(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+}
+
+// The pixel a fragment is computed for, from the top left.
+fn pixel(at: vec4<f32>) -> vec3<u32> {
+    return vec3<u32>(vec2<u32>(at.xy), 0u);
+}
+
+fn target_size() -> vec2<u32> {
+    return TARGET.xy;
+}
 
 fn tile_x(t: u32) -> bool { return (t & 1u) != 0u; }
 fn tile_y(t: u32) -> bool { return (t & 2u) != 0u; }

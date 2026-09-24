@@ -12,7 +12,6 @@ struct Params {
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
-@group(0) @binding(1) var out_tex: texture_storage_2d<rgba16float, write>;
 
 // The types, in the order of the node's menu (brewed_texture_core::nodes::NOISE_TYPES); white
 // noise comes after them. Each is the KIND of a pipeline of its own.
@@ -756,10 +755,10 @@ fn craters(p: vec2<f32>, period: vec2<i32>, seed: u32) -> f32 {
 
 // ------------------------------------------------------------------
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let uv = out_uv(gid.xy, size);
     let scale = max(P.scale, 1);
     let base = vec2<i32>(scale, scale);
@@ -883,5 +882,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     v = clamp(v, 0.0, 1.0);
     if (P.invert != 0u) { v = 1.0 - v; }
-    textureStore(out_tex, vec2<i32>(gid.xy), gray(v));
+    return gray(v);
 }

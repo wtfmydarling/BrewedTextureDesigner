@@ -23,7 +23,7 @@ use crate::simd::ImageStats;
 /// How long the engine waits with nothing to do before it settles (see [`Engine::settle`]):
 /// while changes keep coming (a slider dragged) what the last change read from outside itself
 /// is read again, once they stop it only takes memory. (The scratch images go as soon as no
-/// change is waiting.)
+/// change is waiting, see [`Engine::keep_scratch`].)
 const IDLE: Duration = Duration::from_millis(500);
 
 /// One file to write.
@@ -276,12 +276,10 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
             let millis = started.elapsed().as_secs_f32() * 1000.0;
             (emit)(Event::Finished { revision, report, millis });
             // The scratch images the evaluation worked in serve the next change if one is
-            // already coming (a slider being dragged); after anything else (a node shown, a
-            // single change) they only take memory.
+            // already coming (a slider being dragged), as many of them as are worth their
+            // memory; after anything else (a node shown, a single change) they only take it.
             waiting = rx.try_recv().ok();
-            if waiting.is_none() {
-                engine.gpu.clear_pool();
-            }
+            engine.keep_scratch(waiting.is_some());
             // Now, not after whatever else this round does (the pictures of the options take
             // a while when they are drawn first).
             report_memory(&engine, &mut memory, &emit);
@@ -322,11 +320,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         if waiting.is_none() {
             waiting = rx.try_recv().ok();
         }
-        if waiting.is_some() {
-            engine.gpu.trim_pool();
-        } else {
-            engine.gpu.clear_pool();
-        }
+        engine.keep_scratch(waiting.is_some());
         report_memory(&engine, &mut memory, &emit);
     }
 }

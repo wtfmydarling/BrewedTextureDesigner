@@ -9,16 +9,15 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var pattern_tex: texture_2d<f32>;
-@group(0) @binding(2) var out_tex: texture_storage_2d<rgba16float, write>;
 
 // The grid is made of "lines" (rows, or columns with `vertical`). Line j is shifted along
 // its own direction by `offset * j` tiles. The shift is not wrapped to [0, 1): with an
 // offset of one tile every line moves by a whole tile, so the per-tile random values move
 // along with the tiles instead of looking exactly like no offset at all.
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
 
     let nx = max(P.x_amount, 1);
     let ny = max(P.y_amount, 1);
@@ -94,5 +93,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
-    textureStore(out_tex, vec2<i32>(gid.xy), vec4<f32>(acc, 1.0));
+    return vec4<f32>(acc, 1.0);
 }

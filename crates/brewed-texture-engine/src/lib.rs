@@ -1,5 +1,5 @@
-//! Brewed Texture Designer, the engine: evaluates graphs on the GPU (wgpu compute shaders) and does the CPU
-//! side pixel work with multithreaded SIMD.
+//! Brewed Texture Designer, the engine: evaluates graphs on the GPU (WGSL kernels drawn with
+//! wgpu) and does the CPU side pixel work with multithreaded SIMD.
 //!
 //! * [`gpu`]: device wrapper, WGSL kernels, image pool, readbacks
 //! * [`kernels`]: the GPU implementation of every image node type

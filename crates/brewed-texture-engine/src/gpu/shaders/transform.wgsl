@@ -7,7 +7,6 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var in0: texture_2d<f32>;
-@group(0) @binding(2) var out_tex: texture_storage_2d<rgba16float, write>;
 
 // Inverse transform: destination uv -> source uv. Rotation happens in a space with
 // square pixels so that non-square images rotate without shearing.
@@ -40,10 +39,10 @@ fn transformed(dest: vec2<f32>, aspect: f32) -> vec4<f32> {
     return widen(sample_bilinear(in0, suv, P.tiling), GRAY0);
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let fsize = vec2<f32>(size);
     let aspect = fsize.x / fsize.y;
     // Supersample when the image is scaled down to avoid aliasing.
@@ -55,5 +54,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             acc = acc + transformed((vec2<f32>(gid.xy) + sub) / fsize, aspect);
         }
     }
-    textureStore(out_tex, vec2<i32>(gid.xy), acc / f32(n * n));
+    return acc / f32(n * n);
 }

@@ -9,28 +9,27 @@ struct Params {
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var in0: texture_2d<f32>;
 @group(0) @binding(2) var map_tex: texture_2d<f32>;
-@group(0) @binding(3) var out_tex: texture_storage_2d<rgba16float, write>;
 
 fn map_value(uv: vec2<f32>) -> f32 {
     return luminance(widen(sample_bilinear(map_tex, uv, P.tiling), GRAY1).rgb);
 }
 
 // Moves every pixel along dir by the brightness of the map.
-@compute @workgroup_size(8, 8, 1)
-fn directional_warp(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn directional_warp(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let uv = out_uv(gid.xy, size);
     let src = uv - vec2<f32>(P.dir_x, P.dir_y) * map_value(uv);
-    textureStore(out_tex, vec2<i32>(gid.xy), widen(sample_bilinear(in0, src, P.tiling), GRAY0));
+    return widen(sample_bilinear(in0, src, P.tiling), GRAY0);
 }
 
 // Follows the slope of the map downhill (uphill for a negative amount) and blurs,
 // or takes the minimum / maximum of, the input along that path.
-@compute @workgroup_size(8, 8, 1)
-fn slope_blur(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn slope_blur(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let n = max(P.samples, 1);
     let step_len = P.amount / f32(n);
     let e = 1.0 / vec2<f32>(max(textureDimensions(map_tex), vec2<u32>(2u)));
@@ -55,5 +54,5 @@ fn slope_blur(@builtin(global_invocation_id) gid: vec3<u32>) {
     var o = acc / f32(n + 1);
     if (P.mode == 1u) { o = lo; }
     if (P.mode == 2u) { o = hi; }
-    textureStore(out_tex, vec2<i32>(gid.xy), o);
+    return o;
 }

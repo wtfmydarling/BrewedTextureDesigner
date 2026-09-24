@@ -2,8 +2,8 @@
 //!
 //! [`kernel_for`] maps a node type to the function that records its GPU work. Every
 //! function reads the node's effective parameters from the [`ExecCtx`], binds its inputs
-//! and dispatches one or more compute kernels (see `gpu/shaders`). Adding an image node
-//! type means adding its definition in `brewed-texture-core` and one function here.
+//! and draws with one or more kernels (see `gpu/shaders`). Adding an image node type means
+//! adding its definition in `brewed-texture-core` and one function here.
 
 use bytemuck::{Pod, Zeroable};
 
@@ -41,6 +41,12 @@ pub struct ExecCtx<'a> {
 
 /// Records the work of one node; returns a warning for the UI, if any.
 pub type KernelFn = fn(&mut ExecCtx) -> Result<Option<String>, String>;
+
+/// Whether a node of `kind` reads its first input at every scale, through its mips: the
+/// engine gives that input mips when it computes it.
+pub fn reads_at_every_scale(kind: NodeKind) -> bool {
+    kind == NodeKind::AMBIENT_OCCLUSION
+}
 
 /// The GPU implementation of an image node type.
 pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
@@ -654,16 +660,25 @@ fn ambient_occlusion(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let p = cx.params;
     let (radius, intensity, depth) = (p.f("radius").max(0.5), p.f("intensity"), p.f("height"));
     // The input at every scale: a sample far from the pixel reads the whole patch of
-    // ground it stands for, from the level of that size. (A grayscale height map stays one
+    // ground it stands for, from the level of that size. The engine computes the input with
+    // its mips (see `reads_at_every_scale`); one that was there without them (or of another
+    // size) is copied into an image that has them. (A grayscale height map stays one
     // channel.)
     let img = input(cx.inputs, 0, &cx.gpu.black).clone();
     let [w, h] = cx.output.size();
-    let heights = cx.gpu.take_scratch_with_mips(w, h, crate::gpu::format_of(img.kind()));
-    cx.gpu.encode_copy_with_mips(cx.encoder, &img, &heights, 0)?;
+    let heights = (img.texture.mip_level_count() == 1 || img.size() != [w, h])
+        .then(|| {
+            let heights = cx.gpu.take_scratch_with_mips(w, h, crate::gpu::format_of(img.kind()));
+            cx.gpu.encode_copy_with_mips(cx.encoder, &img, &heights, 0).map(|()| heights)
+        })
+        .transpose()?;
     let r = px_to_uv(radius, cx.output);
     let u = HeightU { radius_x: r[0], radius_y: r[1], intensity, depth, invert: 0, tiling: p.tiling(), pad: [0; 2] };
-    let result = cx.gpu.run_filtered(cx.encoder, "ambient_occlusion", bytes(&u), &[&heights], cx.output, p.tiling());
-    cx.gpu.recycle(heights);
+    let read = heights.as_ref().unwrap_or(&img);
+    let result = cx.gpu.run_filtered(cx.encoder, "ambient_occlusion", bytes(&u), &[read], cx.output, p.tiling());
+    if let Some(heights) = heights {
+        cx.gpu.recycle(heights);
+    }
     result.map(|()| None)
 }
 
@@ -889,11 +904,6 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     for i in 0..images.len() {
         source.push_str(&format!("@group(0) @binding({}) var t{i}: texture_2d<f32>;\n", i + 1));
     }
-    source.push_str(&format!(
-        "@group(0) @binding({}) var out_tex: texture_storage_2d<{}, write>;\n",
-        images.len() + 1,
-        crate::gpu::wgsl_format(cx.output.format())
-    ));
     source.push_str(
         "fn chan(c: vec4<f32>) -> f32 {\n\
              switch P.channel {\n\
@@ -904,10 +914,10 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
                  default: { return luminance(c.rgb); }\n\
              }\n\
          }\n\
-         @compute @workgroup_size(8, 8, 1)\n\
-         fn main(@builtin(global_invocation_id) gid: vec3<u32>) {\n\
-             let size = textureDimensions(out_tex);\n\
-             if (gid.x >= size.x || gid.y >= size.y) { return; }\n\
+         @fragment\n\
+         fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {\n\
+             let gid = pixel(at);\n\
+             let size = target_size();\n\
              let uv = out_uv(gid.xy, size);\n",
     );
     for (i, image) in images.iter().enumerate() {
@@ -915,7 +925,7 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         source.push_str(&format!("    let img{i} = chan(widen(read_input(t{i}, gid.xy, size, P.tiling), {gray}));\n"));
     }
     source.push_str(&format!(
-        "    let r = {body};\n    textureStore(out_tex, vec2<i32>(gid.xy), vec4<f32>(r, r, r, 1.0));\n}}\n"
+        "    let r = {body};\n    return vec4<f32>(r, r, r, 1.0);\n}}\n"
     ));
 
     let kernel = cx.gpu.dynamic_kernel(&source, images.len(), cx.output.format())?;

@@ -1,6 +1,6 @@
 [package]
 name = "brewed-texture-engine"
-description = "GPU (wgpu compute) evaluation of Brewed Texture Designer graphs, multithreaded SIMD pixel kernels and export"
+description = "GPU (wgpu) evaluation of Brewed Texture Designer graphs, multithreaded SIMD pixel kernels and export"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1037,7 +1037,13 @@ fn drag_step_costs() {
         let mut app = App::demo(Engine::new(gpu), 2048);
         app.wait();
         let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
-        for (keep_scratch, keep_read) in [(true, true), (false, true), (false, false), (true, true), (false, true), (false, false)] {
+        let all = u64::MAX;
+        let mb_ = 1024 * 1024;
+        // What the engine keeps while a slider is dragged (six grayscale images, 48 MB at
+        // 2048), against keeping all of them, less and none.
+        let engine = 48 * mb_;
+        let budgets = [(all, true), (engine, true), (24 * mb_, true), (0, true), (0, false), (engine, true)];
+        for (budget, keep_read) in budgets {
             let mut times = Vec::new();
             let mut memory = 0;
             for step in 0..40 {
@@ -1056,9 +1062,7 @@ fn drag_step_costs() {
                 app.e.sweep();
                 app.e.render_thumbnails();
                 app.e.wait_idle();
-                if !keep_scratch {
-                    app.e.gpu.clear_pool();
-                }
+                app.e.gpu.trim_pool(budget);
                 if !keep_read {
                     app.e.settle();
                 }
@@ -1069,13 +1073,131 @@ fn drag_step_costs() {
             }
             let average = times.iter().sum::<f64>() / times.len() as f64;
             let worst = times.iter().copied().fold(0.0, f64::max);
+            let kept = if budget == all { "all".to_string() } else { format!("{} MB", budget / mb_) };
             println!(
-                "  scratch kept {keep_scratch:<5} read kept {keep_read:<5}: {average:5.2} ms a step, {worst:5.2} at worst, {:.0} MB between steps",
+                "  scratch kept {kept:<6} read kept {keep_read:<5}: {average:5.2} ms a step, {worst:5.2} at worst, \
+                 {:.0} MB between steps",
                 mb(memory)
             );
             app.wait();
         }
     }
+}
+
+/// What a new 2048×2048 image costs, by its format: made, written once and let go of, on
+/// Vulkan and DX12 (prints).
+#[test]
+#[ignore = "a measurement"]
+fn image_allocation_costs() {
+    use wgpu::TextureFormat as F;
+    for backend in [wgpu::Backends::VULKAN, wgpu::Backends::DX12] {
+        let Ok(gpu) = Gpu::headless_on(backend) else { continue };
+        println!("{}", gpu.adapter_info);
+        let formats =
+            [(F::R8Unorm, 1), (F::R16Float, 1), (F::Rgba8Unorm, 1), (F::Rgba16Float, 1), (F::Rgba16Float, 12)];
+        for (format, mips) in formats {
+            let mut made = 0.0;
+            let mut reused = 0.0;
+            let kept = gpu.create_image_raw_for_tests(2048, 2048, mips, format);
+            for i in 0..21 {
+                let started = std::time::Instant::now();
+                let image = gpu.create_image_raw_for_tests(2048, 2048, mips, format);
+                let mut encoder = gpu.encoder();
+                gpu.encode_clear(&mut encoder, &image.level(0));
+                gpu.queue.submit(Some(encoder.finish()));
+                drop(image);
+                let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+                if i > 0 {
+                    made += started.elapsed().as_secs_f64() * 1000.0;
+                }
+                let started = std::time::Instant::now();
+                let mut encoder = gpu.encoder();
+                gpu.encode_clear(&mut encoder, &kept.level(0));
+                gpu.queue.submit(Some(encoder.finish()));
+                let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+                if i > 0 {
+                    reused += started.elapsed().as_secs_f64() * 1000.0;
+                }
+            }
+            let mb = kept.bytes() as f64 / (1024.0 * 1024.0);
+            println!("  {format:?} x{mips} ({mb:.1} MB): new {:.2} ms, reused {:.2} ms", made / 20.0, reused / 20.0);
+        }
+    }
+}
+
+/// The engine thread, as the app runs it, while an input value of the demo is dragged faster
+/// than it computes: the memory it reports as it goes, the most of it, and what it settles
+/// on (in MB).
+fn drag_through_the_service(resolution: u32, steps: usize) -> Option<(Vec<f64>, f64)> {
+    use crate::service::{EngineService, Event, Request};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    let gpu = Gpu::headless().ok()?;
+    let reports: Arc<Mutex<Vec<crate::engine::Memory>>> = Arc::default();
+    let finished = Arc::new(Mutex::new(0u64));
+    let (sink, done) = (reports.clone(), finished.clone());
+    let emit: crate::service::Emit = Arc::new(move |event| match event {
+        Event::Memory(m) => sink.lock().unwrap().push(m),
+        Event::Finished { revision, .. } => *done.lock().unwrap() = revision,
+        _ => {}
+    });
+    let service = EngineService::spawn(gpu.device.clone(), gpu.queue.clone(), gpu.adapter_info.clone(), emit);
+    let (mut g, preview) = brewed_texture_core::demo::graph();
+    g.resolution = [resolution, resolution];
+    let outputs: Vec<NodeId> =
+        g.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
+    let wait_for = |revision: u64| {
+        let started = std::time::Instant::now();
+        while *finished.lock().unwrap() < revision && started.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    let send = |g: &Graph, revision: u64| {
+        let eval = brewed_texture_core::eval::evaluate(g);
+        service.send(Request::Evaluate { revision, graph: Arc::new(g.clone()), eval: Arc::new(eval) });
+    };
+    service.send(Request::Preview(preview));
+    service.send(Request::Materials(outputs));
+    send(&g, 1);
+    wait_for(1);
+    // Settled, and then dragged: a step every millisecond, far faster than a step computes.
+    std::thread::sleep(Duration::from_millis(700));
+    let wear = g.variables.iter().position(|v| v.name == "wear").unwrap();
+    let from = reports.lock().unwrap().len();
+    for step in 0..steps {
+        g.variables[wear].value = Value::Float(0.5 + step as f32 * 0.005);
+        send(&g, 2 + step as u64);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    wait_for(1 + steps as u64);
+    std::thread::sleep(Duration::from_millis(700));
+    drop(service);
+    let mb = |m: &crate::engine::Memory| m.total() as f64 / (1024.0 * 1024.0);
+    let reports = reports.lock().unwrap();
+    let during: Vec<f64> = reports[from..reports.len() - 1].iter().map(mb).collect();
+    Some((during, mb(reports.last().unwrap())))
+}
+
+/// While an input value is dragged, the engine keeps no more than the views' images, what the
+/// next step reads and its budget of scratch images (six grayscale images of the texture
+/// size); once the drag is over it settles on the views' images again.
+#[test]
+fn dragging_keeps_memory_to_its_budget() {
+    let Some((during, settled)) = drag_through_the_service(512, 40) else { return };
+    // At 512: 4 MB the maps with their mips, 0.5 the two images the next step reads, 3 of
+    // scratch images at most (and 0.1 of thumbnails, gradients).
+    let most = during.iter().copied().fold(0.0, f64::max);
+    assert!(most < 7.8, "{most:.1} MB while dragging: {during:.1?}");
+    assert!(settled < 4.1, "settled on {settled:.1} MB");
+}
+
+/// The same at 2048×2048, as the app opens the demo (prints).
+#[test]
+#[ignore = "a measurement"]
+fn demo_memory_through_the_service() {
+    let Some((during, settled)) = drag_through_the_service(2048, 60) else { return };
+    println!("while dragging: {during:.0?}");
+    println!("the most: {:.0} MB; settled: {settled:.0} MB", during.iter().copied().fold(0.0, f64::max));
 }
 
 /// What the demo takes in GPU memory at 2048×2048, as the app shows it (prints).

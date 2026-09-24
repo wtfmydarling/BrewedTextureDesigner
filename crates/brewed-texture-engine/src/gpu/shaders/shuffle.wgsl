@@ -6,7 +6,6 @@ struct Params {
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var a_tex: texture_2d<f32>;
 @group(0) @binding(2) var b_tex: texture_2d<f32>;
-@group(0) @binding(3) var out_tex: texture_storage_2d<rgba16float, write>;
 
 // 0..3 = channel of A, 4..7 = channel of B, 8 = zero, 9 = one
 fn pick(src: u32, a: vec4<f32>, b: vec4<f32>) -> f32 {
@@ -24,12 +23,12 @@ fn pick(src: u32, a: vec4<f32>, b: vec4<f32>) -> f32 {
     }
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let a = widen(read_input(a_tex, gid.xy, size, P.tiling), GRAY0);
     let b = widen(read_input(b_tex, gid.xy, size, P.tiling), GRAY1);
     let o = vec4<f32>(pick(P.red, a, b), pick(P.green, a, b), pick(P.blue, a, b), pick(P.alpha, a, b));
-    textureStore(out_tex, vec2<i32>(gid.xy), o);
+    return o;
 }

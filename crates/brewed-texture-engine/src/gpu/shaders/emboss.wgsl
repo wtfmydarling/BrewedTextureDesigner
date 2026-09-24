@@ -9,16 +9,15 @@ struct Params {
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var height_tex: texture_2d<f32>;
 @group(0) @binding(2) var color_tex: texture_2d<f32>;
-@group(0) @binding(3) var out_tex: texture_storage_2d<rgba16float, write>;
 
 fn h(p: vec2<i32>) -> f32 {
     return luminance(widen(fetch(height_tex, p, P.tiling), GRAY0).rgb);
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let in_size = vec2<f32>(textureDimensions(height_tex));
     let p = vec2<i32>((vec2<f32>(gid.xy) + 0.5) / vec2<f32>(size) * in_size);
     let dx = (h(p + vec2<i32>(1, 0)) - h(p - vec2<i32>(1, 0))) * 0.5 * in_size.x / 1024.0;
@@ -29,8 +28,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let shade = max(dot(n, light), 0.0) / max(light.z, 1e-3);
     if (P.mode == 1u) {
         let c = widen(read_input(color_tex, gid.xy, size, P.tiling), GRAY1);
-        textureStore(out_tex, vec2<i32>(gid.xy), vec4<f32>(c.rgb * shade, c.a));
+        return vec4<f32>(c.rgb * shade, c.a);
     } else {
-        textureStore(out_tex, vec2<i32>(gid.xy), gray(clamp(0.5 * shade, 0.0, 1.0)));
+        return gray(clamp(0.5 * shade, 0.0, 1.0));
     }
 }

@@ -7,7 +7,6 @@ struct Params {
 @group(0) @binding(1) var fg_tex: texture_2d<f32>;
 @group(0) @binding(2) var bg_tex: texture_2d<f32>;
 @group(0) @binding(3) var mask_tex: texture_2d<f32>;
-@group(0) @binding(4) var out_tex: texture_storage_2d<rgba16float, write>;
 
 fn dodge(a: f32, b: f32) -> f32 {
     if (b >= 1.0) { return 1.0; }
@@ -53,10 +52,10 @@ fn blend_channel(mode: u32, a: f32, b: f32) -> f32 {
     }
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let fg = widen(read_input(fg_tex, gid.xy, size, P.tiling), GRAY0);
     let bg = widen(read_input(bg_tex, gid.xy, size, P.tiling), GRAY1);
     let mask = widen(read_input(mask_tex, gid.xy, size, P.tiling), GRAY2).r;
@@ -77,5 +76,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
         alpha = clamp(alpha, 0.0, 1.0);
     }
-    textureStore(out_tex, vec2<i32>(gid.xy), vec4<f32>(rgb, alpha));
+    return vec4<f32>(rgb, alpha);
 }

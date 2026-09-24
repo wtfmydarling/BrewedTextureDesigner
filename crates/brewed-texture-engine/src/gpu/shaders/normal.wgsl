@@ -4,16 +4,15 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var in0: texture_2d<f32>;
-@group(0) @binding(2) var out_tex: texture_storage_2d<rgba16float, write>;
 
 fn h(p: vec2<i32>) -> f32 {
     return luminance(widen(fetch(in0, p, P.tiling), GRAY0).rgb);
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let in_size = vec2<f32>(textureDimensions(in0));
     let p = vec2<i32>((vec2<f32>(gid.xy) + 0.5) / vec2<f32>(size) * in_size);
 
@@ -32,5 +31,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let k = P.intensity / 64.0;
     var n = normalize(vec3<f32>(-dhdu * k, dhdv * k, 1.0));
     if (P.directx != 0u) { n.y = -n.y; }
-    textureStore(out_tex, vec2<i32>(gid.xy), vec4<f32>(n * 0.5 + 0.5, 1.0));
+    return vec4<f32>(n * 0.5 + 0.5, 1.0);
 }

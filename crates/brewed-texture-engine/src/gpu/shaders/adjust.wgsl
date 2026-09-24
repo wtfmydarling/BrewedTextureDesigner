@@ -9,7 +9,6 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var in0: texture_2d<f32>;
-@group(0) @binding(2) var out_tex: texture_storage_2d<rgba16float, write>;
 
 // f0 in_low, f1 in_high, f2 gamma, f3 out_low, f4 out_high, flag = clamp
 fn levels_channel(x: f32) -> f32 {
@@ -114,10 +113,10 @@ fn posterize(c: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(q, c.a);
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let c = widen(read_input(in0, gid.xy, size, P.tiling), GRAY0);
     var o = c;
     switch P.op {
@@ -128,5 +127,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         case 4u: { o = histogram_scan(c); }
         default: { o = posterize(c); }
     }
-    textureStore(out_tex, vec2<i32>(gid.xy), o);
+    return o;
 }

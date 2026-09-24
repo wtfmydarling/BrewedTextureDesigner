@@ -12,7 +12,6 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var in0: texture_2d<f32>;
-@group(0) @binding(2) var out_tex: texture_storage_2d<rgba16float, write>;
 
 fn checker(p: vec2<f32>) -> vec3<f32> {
     let c = (i32(floor(p.x)) + i32(floor(p.y))) & 1;
@@ -34,10 +33,10 @@ fn display_color(c: vec4<f32>, checker_pos: vec2<f32>) -> vec4<f32> {
 
 // Small node thumbnail: supersampled box filter of the whole image, composited over a
 // checkerboard so transparency is visible.
-@compute @workgroup_size(8, 8, 1)
-fn thumbnail(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let size = textureDimensions(out_tex);
-    if (gid.x >= size.x || gid.y >= size.y) { return; }
+@fragment
+fn thumbnail(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let size = target_size();
     let n = 4;
     var acc = vec4<f32>(0.0);
     for (var sy = 0; sy < n; sy++) {
@@ -49,5 +48,5 @@ fn thumbnail(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let c = acc / f32(n * n);
     let cp = out_uv(gid.xy, size) * P.checker;
-    textureStore(out_tex, vec2<i32>(gid.xy), display_color(c, cp));
+    return display_color(c, cp);
 }
