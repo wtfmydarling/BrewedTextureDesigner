@@ -27,7 +27,8 @@ use std::time::Instant;
 
 use brewed_texture_core::eval::{Evaluation, VarSource};
 use brewed_texture_core::graph::{Graph, Node, NodeId, input_socket_key};
-use brewed_texture_core::nodes::{ImageKind, NodeKind, PIXEL_MATH_BUILTINS, image_kind};
+use brewed_texture_core::nodes::{ImageKind, NodeKind, PIXEL_MATH_BUILTINS, Role, image_kind};
+use brewed_texture_core::types::DataType;
 
 use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, Gpu, GpuImage, Readback, StoredImage, format_of, output_format};
 use crate::kernels::{self, DisplayU, ExecCtx, PixelVar};
@@ -565,7 +566,8 @@ impl Engine {
                 self.compute(id, plan, format, &ne.params, ne.error(), mipped.contains(&id), &mut encoder);
                 report.recomputed += 1;
             }
-            if plan.changed {
+            // Nodes laid out from graphs used as nodes are not on the canvas: no thumbnails.
+            if plan.changed && !id.is_inner() {
                 self.encode_thumbnail(id, &mut encoder);
             }
             for read in plan.reads() {
@@ -700,12 +702,18 @@ impl Engine {
         params.hash_into(&mut hasher);
 
         // What arrives at the inputs: an image of the node it comes from (made by the node
-        // behind it, through bypassed nodes), and the version of that node.
-        let mut inputs: Vec<Option<NodeId>> = Vec::with_capacity(d.inputs.len());
-        let mut input_kinds: Vec<Option<ImageKind>> = Vec::with_capacity(d.inputs.len());
-        let mut input_sizes: Vec<Option<[u32; 2]>> = Vec::with_capacity(d.inputs.len());
-        for s in d.inputs {
-            let from = graph.link_into(node.id, &input_socket_key(s.key)).map(|l| l.from);
+        // behind it, through bypassed nodes), and the version of that node. A graph used as a
+        // node is laid out in the graph before it comes here (see
+        // `brewed_texture_core::package::flatten`): what arrives at it is what it shows.
+        let fixed: Vec<String> = match d.role {
+            Role::Instance => graph.input_sockets(node).into_iter().filter(|s| s.ty == DataType::Image).map(|s| s.key).collect(),
+            _ => d.inputs.iter().map(|s| input_socket_key(s.key)).collect(),
+        };
+        let mut inputs: Vec<Option<NodeId>> = Vec::with_capacity(fixed.len());
+        let mut input_kinds: Vec<Option<ImageKind>> = Vec::with_capacity(fixed.len());
+        let mut input_sizes: Vec<Option<[u32; 2]>> = Vec::with_capacity(fixed.len());
+        for key in &fixed {
+            let from = graph.link_into(node.id, key).map(|l| l.from);
             match from.and_then(|f| self.states.get(&f).filter(|st| st.kind.is_some()).map(|st| (f, st))) {
                 Some((f, st)) => {
                     (1u8, f.0, st.version).hash(&mut hasher);
@@ -789,12 +797,12 @@ impl Engine {
             }
         }
 
-        // A bypassed node passes on what arrives at it, and makes no image of its own. An output
-        // makes the image it writes: what arrives at it (nothing, when nothing does), in its
-        // channels and at its bit depth, as big as that is. Any other node makes a grayscale
-        // or a color image as big as the texture size; but a uniform color is the same
-        // everywhere, and one pixel of it is all of it.
-        let alias = node.bypass && !d.inputs.is_empty();
+        // A bypassed node passes on what arrives at it, and makes no image of its own; so does a
+        // graph used as a node. An output makes the image it writes: what arrives at it
+        // (nothing, when nothing does), in its channels and at its bit depth, as big as that
+        // is. Any other node makes a grayscale or a color image as big as the texture size;
+        // but a uniform color is the same everywhere, and one pixel of it is all of it.
+        let alias = (node.bypass && !fixed.is_empty()) || d.role == Role::Instance;
         let arriving = input_kinds.first().copied().flatten();
         let arriving_size = input_sizes.first().copied().flatten().unwrap_or(resolution);
         let (kind, size, format) = if alias {
@@ -806,7 +814,8 @@ impl Engine {
                 Some(file) => file.kind(),
                 None => image_kind(node.kind, params, &input_kinds),
             };
-            let size = if node.kind == NodeKind::UNIFORM_COLOR { [1, 1] } else { resolution };
+            let uniform = node.kind == NodeKind::UNIFORM_COLOR || node.kind == NodeKind::IMAGE_INPUT;
+            let size = if uniform { [1, 1] } else { resolution };
             (Some(kind), size, Some(format_of(kind)))
         };
         (size, format).hash(&mut hasher);

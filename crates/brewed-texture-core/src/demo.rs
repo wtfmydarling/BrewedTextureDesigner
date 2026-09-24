@@ -7,21 +7,34 @@
 //! change it, save it over itself, and the next build opens with that.
 
 use crate::graph::{Graph, NodeId};
+use crate::package::Package;
 use crate::project;
 
 /// The demo project, as it is in `assets/demo.brewtex`.
 const DEMO: &str = include_str!("../assets/demo.brewtex");
 
-/// The demo graph, and the node it shows in the 2D view first.
-pub fn graph() -> (Graph, Option<NodeId>) {
-    match project::from_json(DEMO) {
-        Ok(loaded) => (loaded.graph, loaded.view.preview),
+/// What the graph of the demo is called.
+pub const NAME: &str = "Brick Wall";
+
+/// The demo as a package, and the node it shows in the 2D view first.
+pub fn package() -> (Package, Option<NodeId>) {
+    match project::from_json(DEMO, None, NAME) {
+        Ok(loaded) => {
+            let preview = loaded.view().preview;
+            (loaded.package, preview)
+        }
         Err(e) => {
             // The tests read the file; a build that cannot starts empty rather than not at all.
             log::error!("the demo graph cannot be read: {e}");
-            (Graph::default(), None)
+            (Package::new(NAME, Graph::default()), None)
         }
     }
+}
+
+/// The demo graph, and the node it shows in the 2D view first.
+pub fn graph() -> (Graph, Option<NodeId>) {
+    let (package, preview) = package();
+    (Graph::clone(&package.graphs[0].graph), preview)
 }
 
 #[cfg(test)]
@@ -32,7 +45,7 @@ mod tests {
 
     #[test]
     fn demo_graph_is_valid() {
-        let loaded = project::from_json(DEMO).expect("assets/demo.brewtex is a project");
+        let loaded = project::from_json(DEMO, None, NAME).expect("assets/demo.brewtex is a project");
         assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
         let (g, preview) = graph();
         assert!(preview.is_some_and(|id| g.node(id).is_some()), "the demo shows one of its nodes");

@@ -187,10 +187,10 @@ fn evaluate_node(graph: &Graph, node: &Node, results: &Evaluation) -> NodeEval {
 
     // Effective parameters.
     let mut values = Vec::with_capacity(node.params.len());
-    for pd in d.all_params() {
+    for pd in node.param_defs() {
         let Some(slot) = node.param(pd.key) else { continue };
         let mut value = slot.value.clone();
-        if slot.exposed && pd.can_expose() && node.param_visible(pd) {
+        if slot.exposed && pd.can_expose() && node.param_visible(&pd) {
             match linked_value(graph, results, node.id, &param_socket_key(pd.key)) {
                 Some((_, Some(v))) => match slot.value.from_driven(&v, pd.enum_options().len()) {
                     Some(pv) => {
@@ -236,6 +236,9 @@ fn evaluate_node(graph: &Graph, node: &Node, results: &Evaluation) -> NodeEval {
                 pixel_vars(graph, node, results, &mut e);
             }
         }
+        // What a graph used as a node makes is laid out in the graph before it is computed
+        // (see [`crate::package::flatten`]): here it only has its parameters.
+        Role::Instance => {}
     }
     if let Some(v) = e.value
         && !v.is_finite()

@@ -28,7 +28,7 @@ pub use output::{
     OUTPUT_FORMATS, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL,
     USAGE_ROUGHNESS, output_format_channels,
 };
-pub use values::DEFAULT_MATH_EXPRESSION;
+pub use values::{DEFAULT_MATH_EXPRESSION, IMAGE_INPUT_KINDS};
 
 // ---------------------------------------------------------------------------- categories
 
@@ -40,6 +40,9 @@ pub enum Category {
     Effects,
     Adjustments,
     Output,
+    /// Graphs used as nodes (see [`Role::Instance`]): none of them is in the library, the
+    /// packages are.
+    Graphs,
 }
 
 impl Category {
@@ -60,6 +63,7 @@ impl Category {
             Category::Effects => "Height & Normal",
             Category::Adjustments => "Adjustments",
             Category::Output => "Output",
+            Category::Graphs => "Graphs",
         }
     }
 }
@@ -195,12 +199,14 @@ pub enum ParamKind {
     },
 }
 
+/// A parameter of a node: of a node type (`'static`), or of a graph used as a node, whose
+/// parameters are the graph's input values (see [`crate::instance`]).
 #[derive(Clone, Copy, Debug)]
-pub struct ParamDef {
-    pub key: &'static str,
-    pub label: &'static str,
+pub struct ParamDef<'a> {
+    pub key: &'a str,
+    pub label: &'a str,
     pub kind: ParamKind,
-    pub tooltip: &'static str,
+    pub tooltip: &'a str,
     /// Only shown (and only has a socket) while the enum parameter `.0` has one of the
     /// values `.1`. If that enum is itself exposed, its value is only known at evaluation
     /// time, so the parameter stays visible.
@@ -221,8 +227,8 @@ pub struct ParamDef {
     pub words: &'static [&'static str],
 }
 
-impl ParamDef {
-    pub(crate) const fn new(key: &'static str, label: &'static str, kind: ParamKind) -> Self {
+impl<'a> ParamDef<'a> {
+    pub(crate) const fn new(key: &'a str, label: &'a str, kind: ParamKind) -> Self {
         let exposable = matches!(
             kind,
             ParamKind::Float { .. }
@@ -276,7 +282,7 @@ impl ParamDef {
         self
     }
 
-    pub(crate) const fn tip(mut self, tooltip: &'static str) -> Self {
+    pub(crate) const fn tip(mut self, tooltip: &'a str) -> Self {
         self.tooltip = tooltip;
         self
     }
@@ -379,30 +385,30 @@ impl ParamDef {
     }
 }
 
-pub(crate) const fn float(key: &'static str, label: &'static str, default: f32, min: f32, max: f32) -> ParamDef {
+pub(crate) const fn float(key: &'static str, label: &'static str, default: f32, min: f32, max: f32) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Float { default, min, max, log: false, suffix: "" })
 }
-pub(crate) const fn float_log(key: &'static str, label: &'static str, default: f32, min: f32, max: f32) -> ParamDef {
+pub(crate) const fn float_log(key: &'static str, label: &'static str, default: f32, min: f32, max: f32) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Float { default, min, max, log: true, suffix: "" })
 }
 /// A length in pixels of a 1024 px image; scaled with the resolution so the look does
 /// not depend on it.
-pub(crate) const fn pixels(key: &'static str, label: &'static str, default: f32, min: f32, max: f32) -> ParamDef {
+pub(crate) const fn pixels(key: &'static str, label: &'static str, default: f32, min: f32, max: f32) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Float { default, min, max, log: false, suffix: " px" })
 }
-pub(crate) const fn angle(key: &'static str, label: &'static str, default: f32, min: f32, max: f32) -> ParamDef {
+pub(crate) const fn angle(key: &'static str, label: &'static str, default: f32, min: f32, max: f32) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Float { default, min, max, log: false, suffix: "°" })
 }
-pub(crate) const fn int(key: &'static str, label: &'static str, default: i32, min: i32, max: i32) -> ParamDef {
+pub(crate) const fn int(key: &'static str, label: &'static str, default: i32, min: i32, max: i32) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Int { default, min, max })
 }
-pub(crate) const fn boolean(key: &'static str, label: &'static str, default: bool) -> ParamDef {
+pub(crate) const fn boolean(key: &'static str, label: &'static str, default: bool) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Bool { default })
 }
-pub(crate) const fn vec2(key: &'static str, label: &'static str, default: [f32; 2], min: f32, max: f32) -> ParamDef {
+pub(crate) const fn vec2(key: &'static str, label: &'static str, default: [f32; 2], min: f32, max: f32) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Vec2 { default, min, max })
 }
-pub(crate) const fn color(key: &'static str, label: &'static str, default: [f32; 4]) -> ParamDef {
+pub(crate) const fn color(key: &'static str, label: &'static str, default: [f32; 4]) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Color { default })
 }
 pub(crate) const fn choice(
@@ -410,24 +416,24 @@ pub(crate) const fn choice(
     label: &'static str,
     default: u32,
     options: &'static [&'static str],
-) -> ParamDef {
+) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Enum { default, options })
 }
-pub(crate) const fn text(key: &'static str, label: &'static str, default: &'static str) -> ParamDef {
+pub(crate) const fn text(key: &'static str, label: &'static str, default: &'static str) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Text { default })
 }
-pub(crate) const fn file(key: &'static str, label: &'static str, extensions: &'static [&'static str]) -> ParamDef {
+pub(crate) const fn file(key: &'static str, label: &'static str, extensions: &'static [&'static str]) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::File { extensions })
 }
-pub(crate) const fn expression(key: &'static str, label: &'static str, default: &'static str, pixel: bool) -> ParamDef {
+pub(crate) const fn expression(key: &'static str, label: &'static str, default: &'static str, pixel: bool) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Expression { default, pixel })
 }
-pub(crate) const fn gradient(key: &'static str, label: &'static str, default: &'static [(f32, [f32; 4])]) -> ParamDef {
+pub(crate) const fn gradient(key: &'static str, label: &'static str, default: &'static [(f32, [f32; 4])]) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Gradient { default })
 }
 
 /// The tiling parameter every node carries (always first in the parameter list).
-pub const TILING_PARAM: ParamDef = choice("tiling", "Tiling", Tiling::Both as u32, &Tiling::LABELS).fixed().tip(
+pub const TILING_PARAM: ParamDef<'static> = choice("tiling", "Tiling", Tiling::Both as u32, &Tiling::LABELS).fixed().tip(
     "How the node treats the image borders: a tiling axis wraps around the edge, so \
      filters and generators produce seamless results; without tiling, filters clamp to the \
      edge and generators leave the outside empty.",
@@ -440,6 +446,9 @@ pub fn image_kind(kind: NodeKind, params: &crate::eval::Params, inputs: &[Option
         // Tiles of a shape are grayscale; tiles of an image are what the image is.
         let image = params.u("pattern") == TILE_PATTERN_IMAGE && inputs.first() == Some(&Some(ImageKind::Color));
         return if image { ImageKind::Color } else { ImageKind::Gray };
+    }
+    if kind == NodeKind::IMAGE_INPUT {
+        return if params.u("kind") == 1 { ImageKind::Color } else { ImageKind::Gray };
     }
     kind.def().output_kind(inputs)
 }
@@ -457,6 +466,9 @@ pub enum Role {
     Variable(DataType),
     /// A graph output: an image that can be exported.
     Output,
+    /// A graph used as a node: its sockets and parameters are the graph's image inputs,
+    /// outputs and input values (see [`crate::instance`]), and it shows its first output.
+    Instance,
 }
 
 pub struct NodeDef {
@@ -470,12 +482,12 @@ pub struct NodeDef {
     /// Fixed input sockets.
     pub inputs: &'static [SocketDef],
     pub outputs: &'static [SocketDef],
-    pub params: &'static [ParamDef],
+    pub params: &'static [ParamDef<'static>],
     pub role: Role,
 }
 
 impl NodeDef {
-    pub fn param(&self, key: &str) -> Option<&'static ParamDef> {
+    pub fn param(&self, key: &str) -> Option<&'static ParamDef<'static>> {
         if key == TILING_PARAM.key {
             return Some(&TILING_PARAM);
         }
@@ -483,13 +495,13 @@ impl NodeDef {
     }
 
     /// All parameters, the common tiling parameter first.
-    pub fn all_params(&self) -> impl Iterator<Item = &'static ParamDef> + use<> {
+    pub fn all_params(&self) -> impl Iterator<Item = &'static ParamDef<'static>> + use<> {
         std::iter::once(&TILING_PARAM).chain(self.params.iter())
     }
 
     /// Does the node produce an image (thumbnail, 2D view, meaningful tiling)?
     pub fn has_image(&self) -> bool {
-        matches!(self.role, Role::Image | Role::Output)
+        matches!(self.role, Role::Image | Role::Output | Role::Instance)
     }
 
     pub fn is_value_node(&self) -> bool {
@@ -497,7 +509,7 @@ impl NodeDef {
     }
 
     /// The expression parameter of Math / Pixel Math nodes.
-    pub fn expression_param(&self) -> Option<&'static ParamDef> {
+    pub fn expression_param(&self) -> Option<&'static ParamDef<'static>> {
         self.params.iter().find(|p| matches!(p.kind, ParamKind::Expression { .. }))
     }
 
@@ -587,7 +599,7 @@ impl NodeKind {
     }
 
     pub fn from_id(id: &str) -> Option<NodeKind> {
-        NodeKind::ALL.iter().copied().find(|k| k.id() == id)
+        NodeKind::ALL.iter().copied().chain([NodeKind::GRAPH_INSTANCE]).find(|k| k.id() == id)
     }
 
     /// Input node type reading a variable of type `ty`.
@@ -604,6 +616,7 @@ impl NodeKind {
     pub const MATH: NodeKind = NodeKind(&values::MATH);
     pub const COMPOSE_VEC2: NodeKind = NodeKind(&values::COMPOSE_VEC2);
     pub const COMPOSE_COLOR: NodeKind = NodeKind(&values::COMPOSE_COLOR);
+    pub const IMAGE_INPUT: NodeKind = NodeKind(&values::IMAGE_INPUT);
     // Generators.
     pub const UNIFORM_COLOR: NodeKind = NodeKind(&generators::UNIFORM_COLOR);
     pub const SHAPE: NodeKind = NodeKind(&generators::SHAPE);
@@ -639,6 +652,9 @@ impl NodeKind {
     pub const POSTERIZE: NodeKind = NodeKind(&adjustments::POSTERIZE);
     // Output.
     pub const OUTPUT: NodeKind = NodeKind(&output::OUTPUT);
+    /// A graph used as a node (see [`crate::instance`]). Not in [`NodeKind::ALL`]: it is made
+    /// from a graph, not from the library.
+    pub const GRAPH_INSTANCE: NodeKind = NodeKind(&values::GRAPH_INSTANCE);
 
     /// Every node type, in library order.
     pub const ALL: &'static [NodeKind] = &[
@@ -650,6 +666,7 @@ impl NodeKind {
         NodeKind::MATH,
         NodeKind::COMPOSE_VEC2,
         NodeKind::COMPOSE_COLOR,
+        NodeKind::IMAGE_INPUT,
         NodeKind::UNIFORM_COLOR,
         NodeKind::SHAPE,
         NodeKind::TILE_GENERATOR,
@@ -752,6 +769,7 @@ mod tests {
                 Role::Variable(ty) => assert_eq!(d.outputs[0].ty, ty),
                 Role::Output => assert!(d.outputs.is_empty()),
                 Role::Value => assert!(!d.outputs.is_empty()),
+                Role::Instance => unreachable!("graphs used as nodes are not in the library"),
             }
             assert!(!d.description.is_empty(), "{} has no description", d.name);
         }
@@ -780,6 +798,10 @@ mod tests {
         assert_eq!(kind(NodeKind::TILE_GENERATOR, &[Some(Color)]), Gray);
         assert_eq!(kind(NodeKind::OUTPUT, &[Some(Color)]), Color);
         assert_eq!(kind(NodeKind::BLUR, &[None]), Gray, "nothing arriving is grayscale");
+        // An image input is what it says it takes.
+        assert_eq!(kind(NodeKind::IMAGE_INPUT, &[]), Gray);
+        let color = crate::eval::Params { values: vec![("kind".into(), ParamValue::Enum(1))] };
+        assert_eq!(image_kind(NodeKind::IMAGE_INPUT, &color, &[]), Color);
     }
 
     #[test]

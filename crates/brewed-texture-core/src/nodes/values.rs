@@ -112,3 +112,40 @@ pub static COMPOSE_COLOR: NodeDef = NodeDef {
     ],
     role: Role::Value,
 };
+
+/// What an Image Input takes, in the order of its "kind" parameter.
+pub const IMAGE_INPUT_KINDS: &[&str] = &["Grayscale", "Color"];
+
+pub static IMAGE_INPUT: NodeDef = NodeDef {
+    id: "image_input",
+    name: "Image Input",
+    category: Category::Values,
+    description: "An image the graph takes. Used as a node in another graph, the graph gets an input of \
+                  this name; on its own, and while nothing arrives there, it sees the default color.",
+    keywords: "input image subgraph instance socket parameter",
+    inputs: NO_SOCKETS,
+    outputs: IMAGE_OUT,
+    params: &[
+        text("name", "Name", "input").tip("The name of the input the graph has as a node in another graph."),
+        choice("kind", "Kind", 0, IMAGE_INPUT_KINDS)
+            .fixed()
+            .tip("What the graph takes: an image that arrives is made grayscale or color."),
+        color("default", "Default", [0.5, 0.5, 0.5, 1.0]).tip("What the graph sees here while nothing arrives."),
+    ],
+    role: Role::Image,
+};
+
+/// A graph used as a node. Its sockets and parameters are not those of a node type but those
+/// of the graph (see [`crate::instance`]).
+pub static GRAPH_INSTANCE: NodeDef = NodeDef {
+    id: "graph_instance",
+    name: "Graph",
+    category: Category::Graphs,
+    description: "A graph used as a node: its image inputs, outputs and input values are the node's. \
+                  Changed where it is, it changes everywhere it is used.",
+    keywords: "subgraph instance graph package",
+    inputs: NO_SOCKETS,
+    outputs: NO_SOCKETS,
+    params: &[],
+    role: Role::Instance,
+};

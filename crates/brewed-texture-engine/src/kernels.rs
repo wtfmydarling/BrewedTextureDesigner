@@ -52,6 +52,7 @@ pub fn reads_at_every_scale(kind: NodeKind) -> bool {
 pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
     let f: KernelFn = match kind.id() {
         "uniform_color" => uniform_color,
+        "image_input" => image_input,
         "shape" => shape,
         "tile_generator" => tile_generator,
         "gradient" => gradient,
@@ -350,6 +351,20 @@ fn direction(deg: f32) -> [f32; 2] {
 
 fn uniform_color(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     cx.gpu.run(cx.encoder, "uniform_color", bytes(&ColorU { color: cx.params.color("color") }), &[], cx.output)?;
+    Ok(None)
+}
+
+/// What an Image Input is while nothing arrives at it (and what the graph sees on its own):
+/// its default color, made what it takes.
+fn image_input(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let c = cx.params.color("default");
+    let color = if cx.output.is_gray() {
+        let l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+        [l, l, l, c[3]]
+    } else {
+        c
+    };
+    cx.gpu.run(cx.encoder, "uniform_color", bytes(&ColorU { color }), &[], cx.output)?;
     Ok(None)
 }
 

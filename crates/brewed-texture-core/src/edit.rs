@@ -3,6 +3,7 @@
 //! [`crate::Document`] records edits for undo / redo.
 
 use crate::gradient::Gradient;
+use crate::instance::Instance;
 use crate::graph::{Clipboard, CommentId, Graph, Link, MAX_RESOLUTION, MIN_RESOLUTION, NodeId, SocketRef, coordinate};
 use crate::nodes::{NodeKind, Role};
 use crate::types::{DataType, ParamValue, Value, can_connect};
@@ -22,6 +23,11 @@ pub enum Edit {
     /// Add an Input node reading an existing variable.
     AddVariableNode {
         name: String,
+        pos: [f32; 2],
+    },
+    /// Add a node that uses a graph (see [`crate::instance`]).
+    AddInstance {
+        instance: Instance,
         pos: [f32; 2],
     },
     /// Add a node and connect it to the socket a link was dragged from.
@@ -196,7 +202,7 @@ fn node_exists(graph: &Graph, id: NodeId) -> Result<(), String> {
 
 fn set_param(graph: &mut Graph, node: NodeId, key: &str, value: ParamValue) -> Result<bool, String> {
     let n = graph.node(node).ok_or("The node no longer exists")?;
-    let pd = n.def().param(key).ok_or_else(|| format!("Unknown parameter '{key}'"))?;
+    let pd = n.param_def(key).ok_or_else(|| format!("Unknown parameter '{key}'"))?;
     if !pd.accepts(&value) {
         return Err(format!("Wrong value type for '{}'", pd.label));
     }
@@ -220,9 +226,11 @@ impl Edit {
     /// Short description for the Edit menu ("Undo Move").
     pub fn label(&self) -> &'static str {
         match self {
-            Edit::AddNode { .. } | Edit::AddNodeWith { .. } | Edit::AddVariableNode { .. } | Edit::AddNodeConnected { .. } => {
-                "Add Node"
-            }
+            Edit::AddNode { .. }
+            | Edit::AddNodeWith { .. }
+            | Edit::AddVariableNode { .. }
+            | Edit::AddInstance { .. }
+            | Edit::AddNodeConnected { .. } => "Add Node",
             Edit::RemoveNodes(_) => "Delete",
             Edit::RemoveLink(_) | Edit::Disconnect { .. } | Edit::DisconnectInputs(_) => "Disconnect",
             Edit::MoveNodes { .. } => "Move",
@@ -295,6 +303,10 @@ impl Edit {
             Edit::AddVariableNode { name, pos } => {
                 let id = graph.add_variable_node(&name, pos).ok_or_else(|| format!("No variable named '{name}'"))?;
                 EditResult::created(vec![id])
+            }
+            Edit::AddInstance { mut instance, pos } => {
+                instance.interface.normalize();
+                EditResult::created(vec![graph.add_instance(instance, pos)])
             }
             Edit::AddNodeConnected { kind, pos, socket } => {
                 let info = graph.socket(&socket).ok_or("The socket the link came from no longer exists")?;
@@ -374,7 +386,7 @@ impl Edit {
                 // Validate everything first so a failure changes nothing.
                 for id in &nodes {
                     let n = graph.node(*id).ok_or("A node no longer exists")?;
-                    let pd = n.def().param(&key).ok_or_else(|| format!("{} has no '{key}'", n.def().name))?;
+                    let pd = n.param_def(&key).ok_or_else(|| format!("{} has no '{key}'", n.def().name))?;
                     if !pd.accepts(&value) || n.is_exposed(&key) {
                         return Err(format!("'{}' cannot be set on {}", pd.label, n.def().name));
                     }

@@ -6,6 +6,7 @@ pub mod choices;
 pub mod context_menu;
 pub mod dialogs;
 pub mod editors;
+pub mod explorer;
 pub mod frames;
 pub mod graph;
 pub mod inputs;
@@ -25,6 +26,7 @@ use crate::style;
 pub fn root(app: &App) -> Element<'_, Message> {
     let grid = pane_grid(&app.ui.panes, |_, pane, _| {
         let body: Element<'_, Message> = match pane {
+            Pane::Explorer => explorer::view(app),
             Pane::Library => library::view(app),
             Pane::Graph => column![toolbar::graph_header(app), graph::view(app)].into(),
             Pane::View3D => preview::view_3d(app),

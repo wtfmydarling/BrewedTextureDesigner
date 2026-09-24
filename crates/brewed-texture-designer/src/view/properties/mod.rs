@@ -38,7 +38,7 @@ impl std::fmt::Display for Choice {
     }
 }
 
-fn set(node: NodeId, key: &'static str, value: ParamValue) -> Message {
+fn set(node: NodeId, key: &str, value: ParamValue) -> Message {
     Message::Edit(Edit::SetParam { node, key: key.to_string(), value })
 }
 
@@ -157,7 +157,9 @@ fn messages(app: &App, node: &Node) -> Element<'static, Message> {
     let mut list = column![].spacing(4);
     let eval = app.eval.node(node.id);
     let report = app.res.reports.get(&node.id);
-    let errors = eval.map(|e| e.errors.clone()).unwrap_or_default().into_iter().chain(report.and_then(|r| r.error.clone()));
+    // What went wrong inside the graph a node uses is the node's too.
+    let inner = app.res.inner.get(&node.id).cloned();
+    let errors = eval.map(|e| e.errors.clone()).unwrap_or_default().into_iter().chain(report.and_then(|r| r.error.clone())).chain(inner);
     for e in errors {
         list = list.push(container(text(e).size(style::SMALL)).padding(6).width(Length::Fill).style(style::message_box(style::ERROR)));
     }
@@ -202,13 +204,30 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
             tooltip::Position::Left,
         ));
     }
+    let kind = match &node.instance {
+        Some(instance) => {
+            let from = instance.graph.package.as_deref().map_or_else(|| "this package".to_string(), brewed_texture_core::package::file_name);
+            format!("Graph · {from}")
+        }
+        None => format!("{} · {}", d.name, d.category.name()),
+    };
     let mut col = column![
         head,
-        text(format!("{} · {}", d.name, d.category.name())).size(style::SMALL).color(style::TEXT_FAINT),
+        text(kind).size(style::SMALL).color(style::TEXT_FAINT),
         text(d.description).size(style::SMALL).color(style::TEXT_DIM),
         messages(app, node),
     ]
     .spacing(6);
+    if node.instance.is_some() {
+        col = col.push(
+            row![
+                button(text("Open Reference").size(style::SMALL)).padding([4, 10]).style(style::button).on_press(Message::OpenReference(id)),
+                text("Edit the graph it uses").size(style::SMALL).color(style::TEXT_FAINT),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        );
+    }
 
     if let Role::Variable(_) = d.role {
         col = col.push(variable_section(app, node));
@@ -216,12 +235,15 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
 
     col = col.push(section("Parameters"));
     let mut index = 0;
-    for pd in d.all_params() {
-        if !node.param_visible(pd) || matches!(pd.kind, ParamKind::Expression { .. }) {
+    for pd in node.param_defs() {
+        if !node.param_visible(&pd) || matches!(pd.kind, ParamKind::Expression { .. }) {
             continue;
         }
         col = col.push(param_row(app, node, pd, index));
         index += 1;
+    }
+    if index == 0 && node.instance.is_some() {
+        col = col.push(text("The graph has no input values: its Input nodes are its parameters.").size(style::SMALL).color(style::TEXT_FAINT));
     }
 
     // Node specific sections.
@@ -323,7 +345,7 @@ fn source_link<'a>(from: NodeId, label: String) -> Element<'a, Message> {
     )
 }
 
-fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &'a ParamDef, slot_value: &'a ParamValue) -> Element<'a, Message> {
+fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value: &'a ParamValue) -> Element<'a, Message> {
     let eval = app.eval.node(node.id);
     let ty = slot_value.socket_type().unwrap_or(brewed_texture_core::DataType::Float);
     let color = style::type_color(ty);
@@ -365,7 +387,7 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &'a ParamDef, slot_value:
 }
 
 /// A parameter value as a few words, for the hint that offers to put it back.
-fn shown(pd: &ParamDef, value: &ParamValue) -> String {
+fn shown(pd: &ParamDef<'_>, value: &ParamValue) -> String {
     match value {
         ParamValue::Enum(i) => pd.enum_options().get(*i as usize).map_or_else(|| i.to_string(), |s| s.to_string()),
         ParamValue::Color(c) => brewed_texture_core::Value::Color(*c).display(),
@@ -376,7 +398,7 @@ fn shown(pd: &ParamDef, value: &ParamValue) -> String {
     }
 }
 
-fn param_row<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, index: usize) -> Element<'a, Message> {
+fn param_row<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, index: usize) -> Element<'a, Message> {
     let id = node.id;
     let Some(slot) = node.param(pd.key) else { return space().into() };
     let d = node.def();
@@ -404,13 +426,13 @@ fn param_row<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, index: usi
     } else if changed {
         format!("{}
 
-Changed — middle-click the row to put {} back", pd.tooltip, shown(pd, &default))
+Changed — middle-click the row to put {} back", pd.tooltip, shown(&pd, &default))
     } else {
         pd.tooltip.to_string()
     };
     let label = tip(caption, hint, tooltip::Position::Top);
     let editor: Element<'a, Message> = if exposed {
-        locked_editor(app, node, pd, &slot.value)
+        locked_editor(app, node, &pd, &slot.value)
     } else if not_applicable {
         container(text(Tiling::LABELS[node.enum_value("tiling") as usize % 4]).size(style::SMALL).color(style::TEXT_FAINT))
             .padding([4, 6])
@@ -444,7 +466,7 @@ Changed — middle-click the row to put {} back", pd.tooltip, shown(pd, &default
     mouse_area(row).on_middle_press(Message::Edits(vec![back])).into()
 }
 
-fn editor<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, value: &'a ParamValue) -> Element<'a, Message> {
+fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamValue) -> Element<'a, Message> {
     let id = node.id;
     let key = pd.key;
     // Most parameters may be dragged past their slider; the few that would mean nothing
@@ -498,7 +520,10 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, value: &'a Pa
             let open = app.ui.color_picker == Some(ColorTarget::Param(id, key.to_string()));
             swatch(*c, open, Message::ColorPicker(Some(ColorTarget::Param(id, key.to_string()))))
         }
-        (ParamKind::Enum { .. }, ParamValue::Enum(v)) if pd.pictured => crate::view::choices::field(app, node, pd, *v),
+        // (Only a node type's choices have pictures.)
+        (ParamKind::Enum { .. }, ParamValue::Enum(v)) if pd.pictured && node.def().param(key).is_some() => {
+            crate::view::choices::field(app, node, node.def().param(key).expect("checked"), *v)
+        }
         (ParamKind::Enum { options, .. }, ParamValue::Enum(v)) => {
             let choices: Vec<Choice> = options.iter().enumerate().map(|(i, l)| Choice { index: i as u32, label: l }).collect();
             let selected = choices.get(*v as usize).cloned();
@@ -552,7 +577,7 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, value: &'a Pa
 }
 
 /// Gradient editor with its tools and the selected stop.
-fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'static str, g: &'a Gradient) -> Element<'a, Message> {
+fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'a str, g: &'a Gradient) -> Element<'a, Message> {
     let id = node.id;
     let selected = app.ui.gradient_stop.get(&(id, key.to_string())).copied().filter(|i| *i < g.stops.len());
     let editor = gradient_editor(

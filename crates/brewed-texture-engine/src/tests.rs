@@ -401,6 +401,69 @@ fn bypass_passes_the_input_through() {
     assert_eq!(pixel(&src, 33, 44), pixel(&out, 33, 44));
 }
 
+/// A graph used as a node computes what its nodes compute in the graph that uses it: laid out
+/// there (see `brewed_texture_core::package::flatten`), pixel for pixel, the node showing its
+/// first output. What arrives at a grayscale Image Input is made grayscale; an input nothing
+/// arrives at is its default color.
+#[test]
+fn a_graph_used_as_a_node_computes_what_its_nodes_do() {
+    use brewed_texture_core::package::{Library, Package, flatten};
+    use brewed_texture_core::{GraphRef, Instance, Interface};
+    use std::sync::Arc;
+
+    struct One(Package);
+    impl Library for One {
+        fn package(&self, path: Option<&str>) -> Option<&Package> {
+            path.is_none().then_some(&self.0)
+        }
+    }
+
+    let Some(mut e) = engine() else { return };
+    // The graph used: blurs what arrives, by an input value.
+    let mut soft = graph();
+    let input = soft.add_node(NodeKind::IMAGE_INPUT, [0.0, 0.0]);
+    let blur = soft.add_node(NodeKind::BLUR, [200.0, 0.0]);
+    let out = soft.add_node(NodeKind::OUTPUT, [400.0, 0.0]);
+    let radius = soft.add_node(NodeKind::FLOAT_INPUT, [0.0, 200.0]);
+    soft.bind_variable(radius, "radius").unwrap();
+    soft.variable_mut("radius").unwrap().max = Value::Float(40.0);
+    soft.set_exposed(blur, "radius", true).unwrap();
+    soft.connect(input, "o:output", blur, "i:input").unwrap();
+    soft.connect(radius, "o:value", blur, "p:radius").unwrap();
+    soft.connect(blur, "o:output", out, "i:input").unwrap();
+
+    // The graph that uses it: a noise at its input, its radius at 12.
+    let mut package = Package::new("Main", graph());
+    let used = package.add_graph("Soft", soft);
+    let main = package.first();
+    let interface = Interface::of(&package.graph(used).unwrap().graph);
+    let instance = Instance { graph: GraphRef { package: None, graph: used, name: "Soft".into() }, interface };
+    let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let node = g.add_instance(instance.clone(), [200.0, 0.0]);
+    let alone = g.add_instance(instance, [200.0, 300.0]);
+    g.node_mut(node).unwrap().param_mut("radius").unwrap().value = ParamValue::Float(12.0);
+    g.connect(noise, "o:output", node, "i:input").unwrap();
+    let flat = flatten(&One(package), None, main).unwrap();
+    assert!(flat.problems.is_empty(), "{:?}", flat.problems);
+    let got = eval_read(&mut e, &flat.graph, node);
+
+    // The same nodes, in one graph.
+    let mut same = graph();
+    let n = same.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let gray = same.add_node(NodeKind::GRAYSCALE, [0.0, 0.0]);
+    let b = same.add_node(NodeKind::BLUR, [0.0, 0.0]);
+    set(&mut same, b, "radius", ParamValue::Float(12.0));
+    same.connect(n, "o:output", gray, "i:input").unwrap();
+    same.connect(gray, "o:output", b, "i:input").unwrap();
+    let want = eval_read(&mut e, &same, b);
+    assert_eq!(got, want);
+
+    // Nothing arrives at the other: it blurs the input's default gray (0.5), which stays 0.5.
+    let flat_again = eval_read(&mut e, &flat.graph, alone);
+    assert!(flat_again.chunks(4).all(|p| close(p[0], 0.5, 1e-3)), "{:?}", pixel(&flat_again, 7, 7));
+}
+
 #[test]
 fn readbacks_and_preview() {
     let Some(mut e) = engine() else { return };

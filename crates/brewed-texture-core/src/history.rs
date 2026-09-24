@@ -1,34 +1,39 @@
-//! Undo / redo with snapshots of the graph.
+//! Undo / redo with snapshots of the document.
 //!
-//! The graph is small (parameters, positions, links), so storing the state before each
-//! step is cheap and makes undo exact for every kind of edit. Consecutive edits with the
+//! A graph is small (parameters, positions, links), and a package shares its graphs with its
+//! snapshots until an edit changes one (see [`crate::package::GraphEntry`]), so storing the
+//! state before each step is cheap and makes undo exact for every kind of edit. Consecutive edits with the
 //! same merge key (a slider drag, typing into one field) collapse into one step until
 //! [`History::seal`] is called or the user pauses.
 
 use std::time::{Duration, Instant};
 
 use crate::edit::MergeKey;
-use crate::graph::Graph;
 
 const MAX_STEPS: usize = 256;
 const MERGE_WINDOW: Duration = Duration::from_millis(1500);
 
-struct Step {
+struct Step<T> {
     /// The state to go back to.
-    state: Graph,
+    state: T,
     label: &'static str,
 }
 
-#[derive(Default)]
-pub struct History {
-    undo: Vec<Step>,
-    redo: Vec<Step>,
+pub struct History<T> {
+    undo: Vec<Step<T>>,
+    redo: Vec<Step<T>>,
     last_key: Option<MergeKey>,
     last_time: Option<Instant>,
     sealed: bool,
 }
 
-impl History {
+impl<T> Default for History<T> {
+    fn default() -> Self {
+        History { undo: Vec::new(), redo: Vec::new(), last_key: None, last_time: None, sealed: false }
+    }
+}
+
+impl<T: Clone> History<T> {
     /// Would an edit with `key` be merged into the current step?
     pub fn would_merge(&self, key: Option<&MergeKey>, now: Instant) -> bool {
         !self.sealed
@@ -39,7 +44,7 @@ impl History {
     }
 
     /// Record a new step whose undo restores `before`.
-    pub fn push(&mut self, before: Graph, label: &'static str, key: Option<MergeKey>, now: Instant) {
+    pub fn push(&mut self, before: T, label: &'static str, key: Option<MergeKey>, now: Instant) {
         self.undo.push(Step { state: before, label });
         if self.undo.len() > MAX_STEPS {
             self.undo.remove(0);
@@ -79,14 +84,14 @@ impl History {
     }
 
     /// Step back: `current` is kept for redo, the previous state is returned.
-    pub fn undo(&mut self, current: &Graph) -> Option<Graph> {
+    pub fn undo(&mut self, current: &T) -> Option<T> {
         let step = self.undo.pop()?;
         self.redo.push(Step { state: current.clone(), label: step.label });
         self.sealed = true;
         Some(step.state)
     }
 
-    pub fn redo(&mut self, current: &Graph) -> Option<Graph> {
+    pub fn redo(&mut self, current: &T) -> Option<T> {
         let step = self.redo.pop()?;
         self.undo.push(Step { state: current.clone(), label: step.label });
         self.sealed = true;

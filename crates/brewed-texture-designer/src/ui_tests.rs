@@ -11,7 +11,10 @@ use iced::{Color, Element, Pixels, Point, Size, mouse, window};
 use iced_runtime::user_interface::{Cache, UserInterface};
 use brewed_texture_core::{Edit, NodeKind, ParamValue};
 
-use crate::app::{App, ColorTarget, Dialog, DragPayload, GraphMessage, Message, PendingAction, ScreenPick, SelectMode, StartupOptions};
+use crate::app::{
+    App, ColorTarget, ContextMenu, ContextTarget, Dialog, DragPayload, ExplorerMessage, GraphMessage, Message, PendingAction, ScreenPick,
+    SelectMode, StartupOptions,
+};
 use crate::picker::{PickTarget, Shot};
 use crate::view;
 use crate::view::properties::expression::editor_id;
@@ -1152,11 +1155,12 @@ fn the_status_bar_says_what_happens_now() {
 /// does not fit (another program's, or a broken file) gives way to the first one.
 #[test]
 fn the_panels_come_back_as_they_were() {
-    let saved = [0.2, 0.7, 0.55, 0.5, 0.3];
+    let saved = [0.2, 0.45, 0.7, 0.55, 0.5, 0.3];
     assert_eq!(crate::app::splits_of(&crate::app::panes(&saved)), saved.to_vec());
     let first = crate::app::splits_of(&crate::app::panes(&[]));
     assert_eq!(first.len(), saved.len());
-    for broken in [&[0.5][..], &[0.2, 0.7, 0.55, 0.5, 1.5], &[0.2, 0.7, 0.55, 0.5, 0.3, 0.4]] {
+    // (Five splits: the layout of a version without the Explorer.)
+    for broken in [&[0.5][..], &[0.2, 0.7, 0.55, 0.5, 0.3], &[0.2, 0.45, 0.7, 0.55, 0.5, 1.5], &[0.2, 0.45, 0.7, 0.55, 0.5, 0.3, 0.4]] {
         assert_eq!(crate::app::splits_of(&crate::app::panes(broken)), first, "{broken:?}");
     }
     // Resized in the window, a panel is saved where it was left.
@@ -1185,7 +1189,10 @@ fn stays_inside(message: &Message) -> bool {
         | Message::Host(_)
         | Message::Quit
         | Message::SaveThen(_)
-        | Message::Proceed(PendingAction::Open | PendingAction::Quit) => false,
+        | Message::Proceed(PendingAction::Quit)
+        | Message::Explorer(
+            ExplorerMessage::Save(_) | ExplorerMessage::SaveAs(_) | ExplorerMessage::LinkFiles(_) | ExplorerMessage::Locate(..),
+        ) => false,
         Message::FromMenu(inner) => stays_inside(inner),
         _ => true,
     }
@@ -1633,7 +1640,8 @@ fn far_away_nodes_are_drawn() {
         c.size = [3e38, f32::MAX];
     }
     let path = std::env::temp_dir().join(format!("brewed-far-{}.brewtex", std::process::id()));
-    brewed_texture_core::project::save(&path, &g, &Default::default()).expect("a file");
+    let package = brewed_texture_core::Package::new("Far", g.clone());
+    brewed_texture_core::project::save(&path, &package, &Default::default(), package.first()).expect("a file");
     w.send(Message::Proceed(PendingAction::OpenPath(path.clone())));
     let _ = std::fs::remove_file(&path);
     assert_eq!(w.app.graph().nodes.len(), g.nodes.len(), "the file opens");
@@ -1665,4 +1673,189 @@ fn far_away_nodes_are_drawn() {
         assert!(g.nodes.iter().flat_map(|n| n.pos).all(|p| p.abs() <= far), "after {what}");
         assert!(g.comments.iter().flat_map(|c| c.pos.into_iter().chain(c.size)).all(|p| p.abs() <= far), "after {what}");
     }
+}
+
+// ---------------------------------------------------------------------------- packages
+
+/// A folder of its own for a test's files.
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("brewed-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a folder");
+    dir
+}
+
+/// The keys of the packages open in the Explorer.
+fn package_keys(app: &App) -> Vec<u64> {
+    app.packages().into_iter().map(|(k, _)| k).collect()
+}
+
+/// Packages in the Explorer: the demo saved, a new package beside it using the demo's graph
+/// as a node, both saved and opened again, "Open Reference" bringing the demo's package back
+/// to the Explorer, and the demo's file moved: its user says so, and follows it once told
+/// where it is.
+#[test]
+fn packages_and_graphs_used_as_nodes() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let dir = scratch("packages");
+    let wall = dir.join("wall.brewtex");
+    w.send(Message::SavePicked(Some(wall.clone())));
+    let wall_key = w.app.doc_key;
+    let wall_graph = w.app.doc.current();
+    // A new package goes beside the saved one.
+    w.send(Message::New);
+    assert_eq!(package_keys(&w.app).len(), 2);
+    assert_ne!(w.app.doc_key, wall_key);
+    // The wall, dragged onto the new package's graph, is a node of it.
+    let name = w.app.package_doc(wall_key).unwrap().entry().name.clone();
+    let payload = DragPayload::Graph { key: wall_key, graph: wall_graph, name: name.clone() };
+    w.send(Message::Graph(GraphMessage::Drop { payload, graph_pos: [0.0, 0.0] }));
+    let node = w.app.graph().nodes.first().expect("a node that uses the wall").clone();
+    let instance = node.instance.as_ref().expect("it uses a graph");
+    assert_eq!(instance.graph.package.as_deref(), Some(wall.display().to_string().as_str()));
+    assert_eq!(crate::view::graph::node_title(&node), name);
+    // Its outputs are the wall's.
+    let outputs = w.app.graph().output_sockets(&node).len();
+    assert_eq!(outputs, w.app.package_doc(wall_key).unwrap().graph().nodes_of(NodeKind::OUTPUT).count());
+    assert!(w.app.eval.node(node.id).is_some_and(|e| e.errors.is_empty()), "{:?}", w.app.eval.node(node.id));
+    // Saved beside it, it says where the wall is relative to itself.
+    let uses = dir.join("uses.brewtex");
+    w.send(Message::SavePicked(Some(uses.clone())));
+    let text = std::fs::read_to_string(&uses).expect("saved");
+    assert!(text.contains("\"package\": \"wall.brewtex\""), "{text}");
+    draw_frame(&mut w, std::time::Instant::now());
+
+    // Opened again on its own, it finds the wall without the wall in the Explorer.
+    for key in package_keys(&w.app) {
+        w.send(Message::Explorer(ExplorerMessage::Close(key)));
+    }
+    assert_eq!(package_keys(&w.app).len(), 1);
+    w.send(Message::OpenPicked(Some(uses.clone())));
+    assert_eq!(package_keys(&w.app).len(), 1, "the empty package made room");
+    assert!(w.app.ui.dialog.is_none());
+    let node = w.app.graph().nodes[0].id;
+    assert!(w.app.eval.node(node).is_some_and(|e| e.errors.is_empty()));
+    // Open Reference: the wall's package comes to the Explorer, its graph edited.
+    w.send(Message::OpenReference(node));
+    assert_eq!(package_keys(&w.app).len(), 2);
+    assert_eq!(w.app.doc.path(), Some(&wall));
+    assert_eq!(w.app.doc.entry().name, name);
+    draw_frame(&mut w, std::time::Instant::now());
+
+    // The wall moves: its user asks where it is, and follows it once told.
+    let moved = dir.join("moved");
+    std::fs::create_dir_all(&moved).expect("a folder");
+    std::fs::rename(&wall, moved.join("wall.brewtex")).expect("moved");
+    for key in package_keys(&w.app) {
+        w.send(Message::Explorer(ExplorerMessage::Close(key)));
+    }
+    w.send(Message::OpenPicked(Some(uses.clone())));
+    let node = w.app.graph().nodes[0].id;
+    assert!(w.app.eval.node(node).is_some_and(|e| e.error().is_some_and(|e| e.contains("cannot be found"))));
+    let Some(Dialog::Missing(missing)) = w.app.ui.dialog.clone() else { panic!("the missing file is asked for: {:?}", w.app.ui.dialog) };
+    assert_eq!(missing.items.len(), 1);
+    draw_frame(&mut w, std::time::Instant::now());
+    // Another package than the one that was there is not taken for it.
+    let other = dir.join("other.brewtex");
+    let package = brewed_texture_core::Package::new("Other", brewed_texture_core::Graph::default());
+    brewed_texture_core::project::save(&other, &package, &Default::default(), package.first()).expect("a file");
+    let old = missing.items[0].path.clone();
+    w.send(Message::Explorer(ExplorerMessage::Located(missing.key, old.clone(), Some(other))));
+    let Some(Dialog::Missing(still)) = &w.app.ui.dialog else { panic!("still asked for") };
+    assert!(still.note.as_ref().is_some_and(|n| n.contains("has no graph")), "{:?}", still.note);
+    w.send(Message::Explorer(ExplorerMessage::Located(missing.key, old, Some(moved.join("wall.brewtex")))));
+    assert!(w.app.ui.dialog.is_none());
+    assert!(w.app.doc.is_dirty(), "it says where the wall is now");
+    assert!(w.app.eval.node(node).is_some_and(|e| e.errors.is_empty()), "{:?}", w.app.eval.node(node));
+    // Undo: it says where the wall was again.
+    w.send(Message::Undo);
+    assert!(w.app.eval.node(node).is_some_and(|e| e.error().is_some()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Nodes of the demo made a graph of their own: the graph appears in the package, a node
+/// that uses it takes their place with nothing wrong, the new graph opens from the Explorer
+/// and is renamed there (the node follows), and undo puts everything back.
+#[test]
+fn nodes_made_a_graph_of_their_own() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let kinds = [NodeKind::BLEND, NodeKind::LEVELS, NodeKind::BLUR];
+    let chosen: Vec<_> = w.app.graph().nodes.iter().filter(|n| kinds.contains(&n.kind)).map(|n| n.id).collect();
+    w.app.ui.selection = chosen.iter().copied().collect();
+    w.send(Message::MakeSubgraph);
+    assert_eq!(w.app.doc.package().graphs.len(), 2);
+    let node = *w.app.ui.selection.first().expect("the new node is selected");
+    let graph = w.app.graph().node(node).and_then(|n| n.instance.as_ref()).expect("a node that uses the graph").graph.graph;
+    assert!(chosen.iter().all(|id| !w.app.graph().contains(*id)));
+    assert!(w.app.eval.node(node).is_some_and(|e| e.errors.is_empty()), "{:?}", w.app.eval.node(node));
+    for out in w.app.graph().nodes_of(NodeKind::OUTPUT) {
+        assert!(w.app.graph().link_into(out.id, "i:input").is_some());
+    }
+    draw_frame(&mut w, std::time::Instant::now());
+    // The new graph, renamed in the Explorer: the node is called what it is called.
+    let key = w.app.doc_key;
+    w.send(Message::Explorer(ExplorerMessage::StartRename(key, graph)));
+    w.send(Message::Explorer(ExplorerMessage::RenameText("Worn Bricks".into())));
+    draw_frame(&mut w, std::time::Instant::now());
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    assert_eq!(crate::view::graph::node_title(w.app.graph().node(node).unwrap()), "Worn Bricks");
+    // Opened from the Explorer, edited on its own; back, the node is where it was.
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, graph)));
+    assert_eq!(w.app.doc.current(), graph);
+    assert!(w.app.graph().nodes_of(NodeKind::BLEND).next().is_some());
+    draw_frame(&mut w, std::time::Instant::now());
+    let first = w.app.doc.package().first();
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, first)));
+    assert!(w.app.graph().contains(node));
+    // Undo, twice: the name, then the new graph.
+    w.send(Message::Undo);
+    w.send(Message::Undo);
+    assert_eq!(w.app.doc.package().graphs.len(), 1);
+    assert!(chosen.iter().all(|id| w.app.graph().contains(*id)));
+}
+
+/// The Explorer's rows and context menus, drawn with several packages, files that are there
+/// and one that is not, and every menu of it open in turn.
+#[test]
+fn the_explorer_and_its_menus() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let dir = scratch("explorer");
+    let picture = dir.join("bricks.png");
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 100, 50, 255])).save(&picture).expect("a picture");
+    let key = w.app.doc_key;
+    let gone = dir.join("gone.ttf");
+    w.send(Message::Explorer(ExplorerMessage::FilesPicked(key, vec![picture.clone(), gone.clone(), dir.join("notes.txt")])));
+    assert_eq!(w.app.doc.package().resources.len(), 2, "a picture and a font; not a text");
+    w.send(Message::LoadDemo);
+    w.send(Message::Explorer(ExplorerMessage::NewGraph(w.app.doc_key)));
+    assert!(w.app.ui.renaming_graph.is_some(), "a new graph is named first");
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    let graph = w.app.doc.current();
+    let targets = [
+        ContextTarget::Package(key),
+        ContextTarget::GraphItem(w.app.doc_key, graph),
+        ContextTarget::ResourceItem(key, picture.display().to_string()),
+        ContextTarget::ResourceItem(key, gone.display().to_string()),
+    ];
+    for target in targets {
+        w.app.ui.context = Some(ContextMenu { at: Point::new(120.0, 200.0), target });
+        draw_frame(&mut w, std::time::Instant::now());
+        assert_eq!(broken(&w.app), None);
+    }
+    w.app.ui.context = None;
+    // The picture, double-clicked in the Explorer, is a Bitmap node reading it.
+    w.send(Message::Explorer(ExplorerMessage::Toggle(key)));
+    let bitmap = brewed_texture_core::ResourceKind::Bitmap;
+    w.send(Message::Explorer(ExplorerMessage::AddResourceNode(picture.display().to_string(), bitmap, None)));
+    let read = w.app.graph().nodes_of(NodeKind::BITMAP).next().map(|n| n.text("path").to_string());
+    assert_eq!(read, Some(picture.display().to_string()));
+    // (A graph of an untitled package cannot be used in another: it has no file to be found by.)
+    let untitled = w.app.doc_key;
+    w.send(Message::New);
+    let payload = DragPayload::Graph { key: untitled, graph, name: "Graph".into() };
+    w.send(Message::Graph(GraphMessage::Drop { payload, graph_pos: [0.0, 0.0] }));
+    assert!(w.app.graph().nodes.is_empty());
+    assert!(w.app.ui.status.as_ref().is_some_and(|s| s.text.contains("Save")));
+    draw_frame(&mut w, std::time::Instant::now());
+    let _ = std::fs::remove_dir_all(&dir);
 }

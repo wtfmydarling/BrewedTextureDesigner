@@ -110,6 +110,8 @@ pub fn category_color(c: Category) -> Color {
         Category::Effects => rgb(56, 160, 170),
         Category::Adjustments => rgb(148, 110, 198),
         Category::Output => rgb(200, 86, 86),
+        // A graph used as a node: of none of the kinds, and any of them.
+        Category::Graphs => gray(168),
     }
 }
 

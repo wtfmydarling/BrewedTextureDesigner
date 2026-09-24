@@ -1,9 +1,11 @@
-//! Modal dialogs: unsaved changes, keyboard shortcuts, about.
+//! Modal dialogs: unsaved changes, files a package cannot find, keyboard shortcuts, about.
 
-use iced::widget::{button, center, column, container, mouse_area, opaque, row, space, text};
+use iced::widget::{button, center, column, container, mouse_area, opaque, row, scrollable, space, text};
 use iced::{Alignment, Element, Length};
+use brewed_texture_core::package::{MissingKind, file_name};
 
-use crate::app::{App, Dialog, Message, PendingAction};
+use crate::app::{App, Dialog, ExplorerMessage, Message, MissingFiles, PendingAction};
+use crate::icons::{Icon, icon};
 use crate::style;
 
 fn dialog_box<'a>(content: impl Into<Element<'a, Message>>, width: f32) -> Element<'a, Message> {
@@ -20,9 +22,10 @@ fn modal<'a>(content: Element<'a, Message>, dismiss: Option<Message>) -> Element
 
 fn action_text(action: &PendingAction) -> &'static str {
     match action {
-        PendingAction::New => "starting a new graph",
-        PendingAction::Open | PendingAction::OpenPath(_) => "opening another graph",
-        PendingAction::LoadDemo => "loading the demo graph",
+        PendingAction::New => "starting a new package",
+        PendingAction::OpenPath(_) => "opening another package",
+        PendingAction::LoadDemo => "loading the demo",
+        PendingAction::Close(_) => "closing it",
         PendingAction::Quit => "quitting",
     }
 }
@@ -49,7 +52,9 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
     ("Ctrl+O / Ctrl+N", "Open / new"),
     ("Ctrl+E", "Export all outputs"),
-    ("Drop a file on the window", "Open a .brewtex graph, or add an image as a Bitmap node"),
+    ("Drop a file on the window", "Open a .brewtex package, add an image as a Bitmap node, link vector graphics or a font"),
+    ("Explorer", "Double-click a graph to edit it; drag a graph onto another to use it as a node"),
+    ("Ctrl+G", "Make the selected nodes a graph of their own, used in their place"),
     ("Eyedropper", "Click it, then click anywhere on the screen; for a gradient, drag across the colors"),
     ("Esc", "Close menus, cancel picking from the screen or a rename"),
     ("Number fields", "Drag to change (Shift fine, Ctrl snaps), click to type; expressions like 2*pi work"),
@@ -87,6 +92,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             .spacing(14);
             modal(dialog_box(body, 440.0), None)
         }
+        Dialog::Missing(missing) => missing_files(app, missing),
         Dialog::Shortcuts => {
             let mut table = column![].spacing(4);
             for (keys, what) in SHORTCUTS {
@@ -140,4 +146,64 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             modal(dialog_box(body, 440.0), Some(Message::Dialog(None)))
         }
     }
+}
+
+/// The files a package names that are not there, each with a button to say where it is now.
+fn missing_files<'a>(app: &'a App, missing: &'a MissingFiles) -> Element<'a, Message> {
+    let title = app.package_doc(missing.key).map_or_else(|| "The package".to_string(), |d| format!("\"{}\"", d.title()));
+    let mut list = column![].spacing(8);
+    for item in &missing.items {
+        let (which, what) = match item.what {
+            MissingKind::Package => (Icon::Package, format!("Package of the graph(s) {}", item.graphs.join(", "))),
+            MissingKind::Resource(kind) => (
+                match kind {
+                    brewed_texture_core::ResourceKind::Bitmap => Icon::Image,
+                    brewed_texture_core::ResourceKind::Svg => Icon::Vector,
+                    brewed_texture_core::ResourceKind::Font => Icon::Font,
+                },
+                kind.name().to_string(),
+            ),
+        };
+        list = list.push(
+            row![
+                icon(which, 16.0, style::TEXT_DIM),
+                column![
+                    text(file_name(&item.path)).size(style::TEXT_SIZE).font(style::bold()),
+                    text(&item.path).size(style::SMALL).color(style::TEXT_FAINT),
+                    text(what).size(style::SMALL).color(style::TEXT_DIM),
+                ]
+                .spacing(2)
+                .width(Length::Fill),
+                button(text("Locate…").size(style::TEXT_SIZE))
+                    .padding([5, 12])
+                    .style(style::button)
+                    .on_press(Message::Explorer(ExplorerMessage::Locate(missing.key, item.path.clone()))),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        );
+    }
+    let mut body = column![
+        text("Missing files").size(18).font(style::bold()),
+        text(format!(
+            "{title} uses files that are not where it says. Say where each one is now: the package says so from \
+             then on, and the others that were in the same folder are looked for next to it."
+        ))
+        .size(style::TEXT_SIZE)
+        .color(style::TEXT_DIM),
+    ]
+    .spacing(12);
+    if let Some(note) = &missing.note {
+        body = body.push(container(text(note).size(style::SMALL)).padding(6).width(Length::Fill).style(style::message_box(style::WARNING)));
+    }
+    body = body.push(scrollable(list).height(Length::Shrink).style(style::scrollable));
+    body = body.push(
+        row![
+            text("Left missing, they show nothing.").size(style::SMALL).color(style::TEXT_FAINT),
+            space().width(Length::Fill),
+            button(text("Leave Missing").size(style::TEXT_SIZE)).padding([6, 14]).style(style::button).on_press(Message::Dialog(None)),
+        ]
+        .align_y(Alignment::Center),
+    );
+    modal(dialog_box(body, 580.0), None)
 }

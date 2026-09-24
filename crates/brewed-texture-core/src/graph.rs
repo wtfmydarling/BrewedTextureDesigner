@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::nodes::{NodeDef, NodeKind, PIXEL_MATH_BUILTINS, ParamDef, ParamKind, Role, Slot, TILING_PARAM};
+use crate::instance::{Instance, InstanceParam, Interface, param_value};
+use crate::nodes::{ImageKind, NodeDef, NodeKind, PIXEL_MATH_BUILTINS, ParamDef, ParamKind, Role, Slot, TILING_PARAM};
 use crate::types::{DataType, ParamValue, Tiling, Value, can_connect};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -101,6 +102,10 @@ pub struct Node {
     /// Image nodes: pass the first input through unchanged.
     #[serde(default, skip_serializing_if = "is_false")]
     pub bypass: bool,
+    /// A graph used as a node: which graph, and what it is as a node (see
+    /// [`crate::instance`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<Box<Instance>>,
 }
 
 impl Node {
@@ -110,11 +115,82 @@ impl Node {
             .all_params()
             .map(|p| ParamSlot { key: p.key.to_string(), value: p.default_value(), exposed: p.exposed_by_default })
             .collect();
-        Node { id, kind, pos: pos.map(coordinate), params, variable: None, var_values: BTreeMap::new(), bypass: false }
+        Node { id, kind, pos: pos.map(coordinate), params, variable: None, var_values: BTreeMap::new(), bypass: false, instance: None }
+    }
+
+    /// A node that uses a graph: its parameters are the graph's input values, at the values
+    /// they have in the graph.
+    pub fn of_graph(id: NodeId, instance: Instance, pos: [f32; 2]) -> Node {
+        let params = instance
+            .interface
+            .params
+            .iter()
+            .map(|p| ParamSlot { key: p.name.clone(), value: param_value(p.value), exposed: false })
+            .collect();
+        Node {
+            id,
+            kind: NodeKind::GRAPH_INSTANCE,
+            pos: pos.map(coordinate),
+            params,
+            variable: None,
+            var_values: BTreeMap::new(),
+            bypass: false,
+            instance: Some(Box::new(instance)),
+        }
     }
 
     pub fn def(&self) -> &'static NodeDef {
         self.kind.def()
+    }
+
+    /// The description of the parameter `key`: of the node type, or of the input value of the
+    /// graph the node uses.
+    pub fn param_def(&self, key: &str) -> Option<ParamDef<'_>> {
+        match &self.instance {
+            Some(instance) => instance.interface.param(key).map(InstanceParam::def),
+            None => self.def().param(key).copied(),
+        }
+    }
+
+    /// The descriptions of all the node's parameters, in order: the tiling first for a node
+    /// type, the input values of its graph for a graph used as a node.
+    pub fn param_defs(&self) -> Vec<ParamDef<'_>> {
+        match &self.instance {
+            Some(instance) => instance.interface.params.iter().map(InstanceParam::def).collect(),
+            None => self.def().all_params().copied().collect(),
+        }
+    }
+
+    /// Bring a node that uses a graph in line with what the graph is now: its name, and its
+    /// sockets and parameters. Parameters that are gone go, new ones come with their value in
+    /// the graph, and the others keep theirs (held to their new range). Links to sockets that
+    /// are gone wait for them (see [`Graph::prune_links`]). True if anything changed.
+    pub fn set_interface(&mut self, name: &str, interface: Interface) -> bool {
+        let Some(instance) = &mut self.instance else { return false };
+        if instance.interface == interface && instance.graph.name == name {
+            return false;
+        }
+        let old = std::mem::take(&mut self.params);
+        self.params = interface
+            .params
+            .iter()
+            .map(|p| {
+                let def = p.def();
+                match old.iter().find(|s| s.key == p.name) {
+                    Some(slot) if def.accepts(&slot.value) => {
+                        ParamSlot { key: p.name.clone(), value: def.sanitize(slot.value.clone()), exposed: slot.exposed }
+                    }
+                    other => ParamSlot {
+                        key: p.name.clone(),
+                        value: param_value(p.value),
+                        exposed: other.is_some_and(|s| s.exposed),
+                    },
+                }
+            })
+            .collect();
+        instance.graph.name = name.to_string();
+        instance.interface = interface;
+        true
     }
 
     pub fn param(&self, key: &str) -> Option<&ParamSlot> {
@@ -195,19 +271,34 @@ impl Node {
     /// Bring the parameter list in line with the node definition (after loading a file
     /// written by another version, or hand-edited JSON).
     pub fn normalize(&mut self) {
+        if self.kind != NodeKind::GRAPH_INSTANCE {
+            self.instance = None;
+        }
+        if let Some(instance) = &mut self.instance {
+            instance.interface.normalize();
+        }
         let old = std::mem::take(&mut self.params);
-        self.params = self
-            .def()
-            .all_params()
-            .map(|p| match old.iter().find(|s| s.key == p.key) {
-                Some(slot) => ParamSlot {
-                    key: p.key.to_string(),
-                    value: p.sanitize(slot.value.clone()),
-                    exposed: slot.exposed && p.can_expose(),
-                },
-                None => ParamSlot { key: p.key.to_string(), value: p.default_value(), exposed: p.exposed_by_default },
-            })
-            .collect();
+        let params: Vec<ParamSlot> = {
+            let defs: Vec<ParamDef<'_>> = match &self.instance {
+                Some(instance) => instance.interface.params.iter().map(InstanceParam::def).collect(),
+                None => self.kind.def().all_params().copied().collect(),
+            };
+            let value = |p: &ParamDef<'_>| match &self.instance {
+                Some(instance) => instance.interface.param(p.key).map_or_else(|| p.default_value(), |i| param_value(i.value)),
+                None => p.default_value(),
+            };
+            defs.iter()
+                .map(|p| match old.iter().find(|s| s.key == p.key) {
+                    Some(slot) => ParamSlot {
+                        key: p.key.to_string(),
+                        value: p.sanitize(slot.value.clone()),
+                        exposed: slot.exposed && p.can_expose(),
+                    },
+                    None => ParamSlot { key: p.key.to_string(), value: value(p), exposed: p.exposed_by_default },
+                })
+                .collect()
+        };
+        self.params = params;
         if self.variable_type().is_none() {
             self.variable = None;
         }
@@ -333,6 +424,11 @@ pub struct Clipboard {
     pub links: Vec<Link>,
     #[serde(default)]
     pub variables: Vec<Variable>,
+    /// The file of the package the nodes were copied from: pasted in another package, the
+    /// nodes that use graphs of their own package find them there (see
+    /// [`Clipboard::use_package`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
 }
 
 impl Clipboard {
@@ -344,6 +440,19 @@ impl Clipboard {
 
     pub fn from_text(text: &str) -> Option<Clipboard> {
         serde_json::from_str(text.trim().strip_prefix(Clipboard::MAGIC)?).ok()
+    }
+
+    /// Have the nodes that use graphs of the package they were copied from say which file
+    /// that is: they are pasted in another package.
+    pub fn use_package(&mut self) {
+        let Some(path) = self.package.clone() else { return };
+        for node in &mut self.nodes {
+            if let Some(instance) = &mut node.instance
+                && instance.graph.package.is_none()
+            {
+                instance.graph.package = Some(path.clone());
+            }
+        }
     }
 
     /// Top-left corner of the copied nodes.
@@ -462,8 +571,8 @@ impl Graph {
     pub fn add_node(&mut self, kind: NodeKind, pos: [f32; 2]) -> NodeId {
         let id = NodeId(self.alloc_id());
         let mut node = Node::new(id, kind, pos);
-        if kind == NodeKind::OUTPUT {
-            let name = self.unique_output_name("output");
+        if kind == NodeKind::OUTPUT || kind == NodeKind::IMAGE_INPUT {
+            let name = self.unique_port_name(kind, if kind == NodeKind::OUTPUT { "output" } else { "input" });
             if let Some(p) = node.param_mut("name") {
                 p.value = ParamValue::Text(name);
             }
@@ -495,7 +604,20 @@ impl Graph {
     }
 
     pub fn unique_output_name(&self, base: &str) -> String {
-        unique_name(base, |name| self.nodes.iter().any(|n| n.kind == NodeKind::OUTPUT && n.text("name") == name))
+        self.unique_port_name(NodeKind::OUTPUT, base)
+    }
+
+    /// A name no Output (or Image Input, by `kind`) of the graph has: the name of a socket of
+    /// the graph used as a node.
+    pub fn unique_port_name(&self, kind: NodeKind, base: &str) -> String {
+        unique_name(base, |name| self.nodes.iter().any(|n| n.kind == kind && n.text("name") == name))
+    }
+
+    /// Add a node that uses a graph (see [`crate::instance`]).
+    pub fn add_instance(&mut self, instance: Instance, pos: [f32; 2]) -> NodeId {
+        let id = NodeId(self.alloc_id());
+        self.nodes.push(Node::of_graph(id, instance, pos));
+        id
     }
 
     // ------------------------------------------------------------------ variables
@@ -600,20 +722,39 @@ impl Graph {
     /// parameters, then expression variables.
     pub fn input_sockets(&self, node: &Node) -> Vec<SocketInfo> {
         let d = node.def();
-        let mut out: Vec<SocketInfo> = d
-            .inputs
-            .iter()
-            .map(|s| SocketInfo {
-                key: input_socket_key(s.key),
-                label: s.label.to_string(),
-                ty: s.ty,
-                slot: s.slot,
-                kind: SocketKind::Input,
-            })
-            .collect();
-        for pd in d.all_params() {
+        let mut out: Vec<SocketInfo> = match &node.instance {
+            // The image inputs of the graph the node uses.
+            Some(instance) => instance
+                .interface
+                .inputs
+                .iter()
+                .map(|p| SocketInfo {
+                    key: input_socket_key(&p.name),
+                    label: p.name.clone(),
+                    ty: DataType::Image,
+                    slot: match p.kind {
+                        Some(ImageKind::Gray) => Slot::Gray,
+                        Some(ImageKind::Color) => Slot::Color,
+                        None => Slot::Any,
+                    },
+                    kind: SocketKind::Input,
+                })
+                .collect(),
+            None => d
+                .inputs
+                .iter()
+                .map(|s| SocketInfo {
+                    key: input_socket_key(s.key),
+                    label: s.label.to_string(),
+                    ty: s.ty,
+                    slot: s.slot,
+                    kind: SocketKind::Input,
+                })
+                .collect(),
+        };
+        for pd in node.param_defs() {
             let Some(slot) = node.param(pd.key) else { continue };
-            if !slot.exposed || !pd.can_expose() || !node.param_visible(pd) {
+            if !slot.exposed || !pd.can_expose() || !node.param_visible(&pd) {
                 continue;
             }
             if let Some(ty) = slot.value.socket_type() {
@@ -635,6 +776,21 @@ impl Graph {
     }
 
     pub fn output_sockets(&self, node: &Node) -> Vec<SocketInfo> {
+        if let Some(instance) = &node.instance {
+            // The outputs of the graph the node uses.
+            return instance
+                .interface
+                .outputs
+                .iter()
+                .map(|p| SocketInfo {
+                    key: output_socket_key(&p.name),
+                    label: p.name.clone(),
+                    ty: DataType::Image,
+                    slot: Slot::Any,
+                    kind: SocketKind::Output,
+                })
+                .collect();
+        }
         node.def()
             .outputs
             .iter()
@@ -726,7 +882,7 @@ impl Graph {
 
     pub fn set_exposed(&mut self, node: NodeId, key: &str, exposed: bool) -> Result<(), String> {
         let n = self.node(node).ok_or("The node does not exist")?;
-        let pd = n.def().param(key).ok_or("Unknown parameter")?;
+        let pd = n.param_def(key).ok_or("Unknown parameter")?;
         if exposed && !pd.can_expose() {
             return Err(format!("'{}' cannot be exposed", pd.label));
         }
@@ -748,19 +904,14 @@ impl Graph {
         let mut keep: Vec<Link> = Vec::with_capacity(self.links.len());
         for l in &self.links {
             let (Some(from), Some(to)) = (self.node(l.from), self.node(l.to)) else { continue };
-            let Some(out) = self.output_sockets(from).into_iter().find(|s| s.key == l.from_socket) else { continue };
-            let ok = match self.input_sockets(to).into_iter().find(|s| s.key == l.to_socket) {
-                Some(inp) => can_connect(out.ty, inp.ty),
-                None => {
-                    if l.to_socket.starts_with("v:") {
-                        to.is_expression_node()
-                    } else if let Some(key) = l.to_socket.strip_prefix("p:") {
-                        // Exposed but hidden by `visible_if`.
-                        let pd = to.def().param(key);
-                        pd.is_some_and(|pd| to.is_exposed(key) && !to.param_visible(pd))
-                    } else {
-                        false
-                    }
+            let out = self.output_sockets(from).into_iter().find(|s| s.key == l.from_socket);
+            let inp = self.input_sockets(to).into_iter().find(|s| s.key == l.to_socket);
+            let ok = match (out, inp) {
+                (Some(out), Some(inp)) => can_connect(out.ty, inp.ty),
+                (out, inp) => {
+                    // An output of a graph used as a node that its graph does not have now.
+                    let out_waits = out.is_some() || (from.instance.is_some() && l.from_socket.starts_with("o:"));
+                    out_waits && (inp.is_some() || dormant_input(to, &l.to_socket))
                 }
             };
             if ok && !keep.iter().any(|k| k.to == l.to && k.to_socket == l.to_socket) {
@@ -773,6 +924,10 @@ impl Graph {
     /// Is the link currently attached to a visible socket (dormant links are not)?
     pub fn is_link_live(&self, link: &Link) -> bool {
         self.input_socket(link.to, &link.to_socket).is_some()
+            && self.node(link.from).is_some_and(|n| {
+                // The outputs of a node type are always there; a graph's may not be now.
+                n.instance.is_none() || self.output_sockets(n).iter().any(|s| s.key == link.from_socket)
+            })
     }
 
     /// Links attached to visible sockets. Dormant links (kept for an expression variable
@@ -814,7 +969,8 @@ impl Graph {
     /// Repair a graph that was loaded from disk.
     pub fn normalize(&mut self) {
         let mut seen = HashSet::new();
-        self.nodes.retain(|n| seen.insert(n.id));
+        // A graph used as a node says which graph; one that does not is nothing.
+        self.nodes.retain(|n| seen.insert(n.id) && (n.kind != NodeKind::GRAPH_INSTANCE || n.instance.is_some()));
         for n in &mut self.nodes {
             n.normalize();
         }
@@ -851,7 +1007,7 @@ impl Graph {
                 variables.push(v.clone());
             }
         }
-        Clipboard { nodes, links, variables }
+        Clipboard { nodes, links, variables, package: None }
     }
 
     /// Paste nodes, offsetting their positions by `offset`. Variables that already exist
@@ -887,8 +1043,8 @@ impl Graph {
             copy.pos = [n.pos[0] + offset[0], n.pos[1] + offset[1]];
             copy.variable = n.variable.as_ref().map(|v| var_map.get(v).cloned().unwrap_or_else(|| v.clone()));
             copy.normalize();
-            if copy.kind == NodeKind::OUTPUT {
-                let name = self.unique_output_name(copy.text("name"));
+            if copy.kind == NodeKind::OUTPUT || copy.kind == NodeKind::IMAGE_INPUT {
+                let name = self.unique_port_name(copy.kind, copy.text("name"));
                 if let Some(p) = copy.param_mut("name") {
                     p.value = ParamValue::Text(name);
                 }
@@ -939,9 +1095,33 @@ impl Graph {
         self.nodes.iter().filter(move |n| n.kind == kind)
     }
 
-    /// Params of `node` that hold a value of `kind` (used by editors of special kinds).
-    pub fn param_def(&self, node: NodeId, key: &str) -> Option<&'static ParamDef> {
-        self.node(node)?.def().param(key)
+    /// The description of a parameter of `node` (see [`Node::param_def`]).
+    pub fn param_def(&self, node: NodeId, key: &str) -> Option<ParamDef<'_>> {
+        self.node(node)?.param_def(key)
+    }
+
+    /// The nodes that use a graph (see [`crate::instance`]).
+    pub fn instances(&self) -> impl Iterator<Item = &Node> {
+        self.nodes.iter().filter(|n| n.instance.is_some())
+    }
+}
+
+/// Whether a link to the input `key` of `to`, which is not there now, waits for it rather
+/// than going: a variable of an expression being typed, a parameter hidden by another's value,
+/// or a socket of a graph used as a node that the graph does not have now (its package file
+/// cannot be found, or it changed).
+fn dormant_input(to: &Node, key: &str) -> bool {
+    if key.starts_with("v:") {
+        return to.is_expression_node();
+    }
+    if key.starts_with("i:") {
+        return to.instance.is_some();
+    }
+    let Some(key) = key.strip_prefix("p:") else { return false };
+    match &to.instance {
+        Some(instance) => instance.interface.param(key).is_none(),
+        // Exposed but hidden by `visible_if`.
+        None => to.def().param(key).is_some_and(|pd| to.is_exposed(key) && !to.param_visible(pd)),
     }
 }
 

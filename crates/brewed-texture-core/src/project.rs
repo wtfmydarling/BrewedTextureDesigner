@@ -1,17 +1,27 @@
-//! Project files (`.brewtex`, JSON).
+//! Project files (`.brewtex`, JSON): a package (see [`crate::package`]).
+//!
+//! A file holds the package's graphs, each with where its view was, the graph that was being
+//! edited and the files the package uses. Paths are written relative to the file wherever
+//! they can be (see [`crate::package::relative_path`]): a project moved or copied with its
+//! files keeps finding them. Files of version 1 held one graph; they are read as a package of
+//! that graph.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 use crate::graph::{Graph, NodeId};
+use crate::instance::GraphId;
+use crate::package::{GraphEntry, Package, Resource, relative_path, resolve_path};
 
 pub const FILE_EXTENSION: &str = "brewtex";
 const FORMAT: &str = "brewed-texture-designer";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
-/// View settings stored with the document (not part of undo).
+/// View settings stored with a graph (not part of undo).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ViewState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -22,29 +32,89 @@ pub struct ViewState {
     pub graph_zoom: Option<f32>,
 }
 
+impl ViewState {
+    fn is_empty(&self) -> bool {
+        *self == ViewState::default()
+    }
+}
+
 #[derive(Serialize, Deserialize)]
-struct ProjectFile {
-    format: String,
-    version: u32,
+struct FileGraph {
+    id: GraphId,
+    name: String,
     graph: Graph,
+    #[serde(default, skip_serializing_if = "ViewState::is_empty")]
+    view: ViewState,
+}
+
+#[derive(Serialize)]
+struct FileGraphOut<'a> {
+    id: GraphId,
+    name: &'a str,
+    graph: &'a Graph,
+    #[serde(skip_serializing_if = "ViewState::is_empty")]
+    view: ViewState,
+}
+
+#[derive(Deserialize)]
+struct ProjectFile {
+    #[serde(default)]
+    graphs: Vec<FileGraph>,
+    #[serde(default)]
+    resources: Vec<Resource>,
+    #[serde(default)]
+    open: Option<GraphId>,
+    /// Version 1: the one graph, and where its view was.
+    #[serde(default)]
+    graph: Option<Graph>,
     #[serde(default)]
     view: ViewState,
 }
 
+#[derive(Serialize)]
+struct ProjectOut<'a> {
+    format: &'a str,
+    version: u32,
+    graphs: Vec<FileGraphOut<'a>>,
+    #[serde(skip_serializing_if = "<[Resource]>::is_empty")]
+    resources: &'a [Resource],
+    open: GraphId,
+}
+
 /// A loaded project and what was adjusted while loading it.
 pub struct Loaded {
-    pub graph: Graph,
-    pub view: ViewState,
+    pub package: Package,
+    /// Where the view of each graph was.
+    pub views: HashMap<GraphId, ViewState>,
+    /// The graph that was being edited.
+    pub open: GraphId,
     pub notes: Vec<String>,
 }
 
-pub fn to_json(graph: &Graph, view: &ViewState) -> Result<String, String> {
-    let file = ProjectFile { format: FORMAT.into(), version: VERSION, graph: graph.clone(), view: view.clone() };
+impl Loaded {
+    /// The view of the graph that was being edited.
+    pub fn view(&self) -> ViewState {
+        self.views.get(&self.open).cloned().unwrap_or_default()
+    }
+}
+
+/// The file of `package`, which is (or will be) in `dir`: paths relative to `dir`.
+pub fn to_json(package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId, dir: Option<&Path>) -> Result<String, String> {
+    let mut package = package.clone();
+    if let Some(dir) = dir {
+        package.map_paths(|p| relative_path(p, dir));
+    }
+    let graphs = package
+        .graphs
+        .iter()
+        .map(|g| FileGraphOut { id: g.id, name: &g.name, graph: &g.graph, view: views.get(&g.id).cloned().unwrap_or_default() })
+        .collect();
+    let file = ProjectOut { format: FORMAT, version: VERSION, graphs, resources: &package.resources, open };
     serde_json::to_string_pretty(&file).map_err(|e| e.to_string())
 }
 
-pub fn save(path: &Path, graph: &Graph, view: &ViewState) -> Result<(), String> {
-    let json = to_json(graph, view)?;
+pub fn save(path: &Path, package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId) -> Result<(), String> {
+    let json = to_json(package, views, open, path.parent())?;
     // Write next to the target and rename, so a crash never leaves half a file.
     let tmp = path.with_extension("tmp-save");
     std::fs::write(&tmp, json).map_err(|e| format!("Cannot write {}: {e}", tmp.display()))?;
@@ -61,10 +131,13 @@ pub fn load(path: &Path) -> Result<Loaded, String> {
     if text.trim().is_empty() {
         return Err(format!("{} is empty", path.display()));
     }
-    from_json(&text)
+    let name = path.file_stem().map_or_else(|| "Graph".to_string(), |s| s.to_string_lossy().to_string());
+    from_json(&text, path.parent(), &name)
 }
 
-pub fn from_json(text: &str) -> Result<Loaded, String> {
+/// Read a project that is in `dir`: its relative paths are taken from there. `name` is what
+/// the one graph of a file of version 1 is called.
+pub fn from_json(text: &str, dir: Option<&Path>, name: &str) -> Result<Loaded, String> {
     let json: Json = serde_json::from_str(text).map_err(|e| format!("Not a valid project file: {e}"))?;
     let mut notes = Vec::new();
     if json.get("format").and_then(Json::as_str) != Some(FORMAT) {
@@ -75,43 +148,91 @@ pub fn from_json(text: &str) -> Result<Loaded, String> {
         notes.push(format!("The file was written by a newer version (format {version}); some data may be lost"));
     }
     let file: ProjectFile = serde_json::from_value(json).map_err(|e| format!("Cannot read the project: {e}"))?;
-    let mut graph = file.graph;
-    let links_before = graph.links.len();
-    graph.normalize();
-    if graph.links.len() < links_before {
-        notes.push(format!("{} invalid link(s) were removed", links_before - graph.links.len()));
+    let mut views = HashMap::new();
+    let mut entries: Vec<GraphEntry> = if !file.graphs.is_empty() {
+        file.graphs
+            .into_iter()
+            .map(|g| {
+                views.entry(g.id).or_insert(g.view);
+                GraphEntry { id: g.id, name: g.name, graph: Arc::new(g.graph) }
+            })
+            .collect()
+    } else if let Some(graph) = file.graph {
+        views.insert(GraphId(1), file.view);
+        vec![GraphEntry { id: GraphId(1), name: name.to_string(), graph: Arc::new(graph) }]
+    } else {
+        return Err("The project has no graph".into());
+    };
+    for entry in &mut entries {
+        let graph = Arc::make_mut(&mut entry.graph);
+        let links_before = graph.links.len();
+        graph.normalize();
+        if graph.links.len() < links_before {
+            notes.push(format!("{}: {} invalid link(s) were removed", entry.name, links_before - graph.links.len()));
+        }
     }
-    let mut view = file.view;
-    view.preview = view.preview.filter(|id| graph.contains(*id));
-    Ok(Loaded { graph, view, notes })
+    let mut package = Package::from_parts(entries, file.resources);
+    if let Some(dir) = dir {
+        package.map_paths(|p| resolve_path(p, dir));
+    }
+    views.retain(|id, _| package.graph(*id).is_some());
+    for (id, view) in &mut views {
+        let graph = &package.graph(*id).expect("kept above").graph;
+        view.preview = view.preview.filter(|n| graph.contains(*n));
+    }
+    let open = file.open.filter(|id| package.graph(*id).is_some()).unwrap_or_else(|| package.first());
+    Ok(Loaded { package, views, open, notes })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn demo() -> (Package, HashMap<GraphId, ViewState>, GraphId) {
+        let (package, preview) = crate::demo::package();
+        let open = package.first();
+        let views = [(open, ViewState { preview, graph_pan: Some([1.0, 2.0]), graph_zoom: Some(0.8) })].into_iter().collect();
+        (package, views, open)
+    }
+
     #[test]
     fn roundtrip() {
-        let (graph, preview) = crate::demo::graph();
-        let view = ViewState { preview, graph_pan: Some([1.0, 2.0]), graph_zoom: Some(0.8) };
-        let json = to_json(&graph, &view).unwrap();
-        let loaded = from_json(&json).unwrap();
-        assert_eq!(loaded.graph, graph);
-        assert_eq!(loaded.view, view);
+        let (mut package, views, open) = demo();
+        let second = package.add_graph("Second", Graph::default());
+        let json = to_json(&package, &views, second, None).unwrap();
+        let loaded = from_json(&json, None, "x").unwrap();
+        assert_eq!(loaded.package, package);
+        assert_eq!(loaded.views[&open], views[&open]);
+        assert_eq!(loaded.open, second);
         assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
-        assert!(from_json("{}").is_err());
-        assert!(from_json("not json").is_err());
+        assert!(from_json("{}", None, "x").is_err());
+        assert!(from_json("not json", None, "x").is_err());
+    }
+
+    /// A file of version 1 is a package of its one graph, named after the file.
+    #[test]
+    fn a_file_of_one_graph() {
+        let (graph, preview) = crate::demo::graph();
+        let v1 = serde_json::json!({ "format": FORMAT, "version": 1, "graph": graph, "view": { "preview": preview } });
+        let loaded = from_json(&v1.to_string(), None, "wall").unwrap();
+        assert_eq!(loaded.package.graphs.len(), 1);
+        assert_eq!(loaded.package.graphs[0].name, "wall");
+        assert_eq!(*loaded.package.graphs[0].graph, graph);
+        assert_eq!(loaded.view().preview, preview);
     }
 
     /// What is wrong with a graph, if anything: what the editor and the engine count on.
     fn whole(g: &Graph) -> Result<(), String> {
         let mut ids = std::collections::HashSet::new();
         for n in &g.nodes {
-            if !ids.insert(n.id) || n.id.0 >= g.next_id {
+            if !ids.insert(n.id) || n.id.0 >= g.next_id || n.id.is_inner() {
                 return Err(format!("node id {:?} taken twice, or not below {}", n.id, g.next_id));
             }
             if !n.pos.iter().all(|p| p.abs() <= crate::graph::MAX_COORD) {
                 return Err(format!("{} at {:?}", n.def().name, n.pos));
+            }
+            if (n.kind == crate::NodeKind::GRAPH_INSTANCE) != n.instance.is_some() {
+                return Err(format!("{} with {:?}", n.def().name, n.instance));
             }
         }
         for c in &g.comments {
@@ -182,12 +303,40 @@ mod tests {
         }
     }
 
+    /// An absolute path, on every system.
+    fn somewhere(parts: &[&str]) -> String {
+        let mut path = std::env::temp_dir().join("brewed_fixture");
+        for p in parts {
+            path.push(p);
+        }
+        path.display().to_string()
+    }
+
+    /// A package of the demo and a graph that uses it, with a file and a font.
+    fn a_package() -> Package {
+        let (mut package, _) = crate::demo::package();
+        let wall = package.first();
+        let instance = crate::instance::Instance {
+            graph: crate::instance::GraphRef { package: None, graph: wall, name: package.graphs[0].name.clone() },
+            interface: crate::instance::Interface::of(&package.graphs[0].graph),
+        };
+        let mut g = Graph::default();
+        g.add_instance(instance, [0.0, 0.0]);
+        let bitmap = g.add_node(crate::NodeKind::BITMAP, [0.0, 300.0]);
+        g.node_mut(bitmap).unwrap().param_mut("path").unwrap().value = crate::ParamValue::Text(somewhere(&["tex", "a.png"]));
+        package.add_graph("Uses it", g);
+        package.sync_resources();
+        package.resources.push(Resource { path: somewhere(&["fonts", "b.ttf"]), kind: crate::package::ResourceKind::Font });
+        package
+    }
+
     /// Files and pastes mangled at random load whole, or say why they do not.
     #[test]
     fn mangled_files_and_pastes_come_out_whole() {
         use crate::graph::Clipboard;
-        let (demo, preview) = crate::demo::graph();
-        let file = to_json(&demo, &ViewState { preview, ..Default::default() }).unwrap();
+        let package = a_package();
+        let demo = Graph::clone(&package.graphs[0].graph);
+        let file = to_json(&package, &HashMap::new(), package.first(), None).unwrap();
         let file: Json = serde_json::from_str(&file).unwrap();
         let ids: Vec<_> = demo.nodes.iter().map(|n| n.id).collect();
         let clip = demo.copy_nodes(&ids).to_text();
@@ -205,9 +354,16 @@ mod tests {
                 let mut at = seed as usize % parts(&c);
                 mangle(&mut c, &mut at, (seed >> 20) as usize);
             }
-            if let Ok(l) = from_json(&f.to_string()) {
+            if let Ok(l) = from_json(&f.to_string(), None, "x") {
                 loaded += 1;
-                whole(&l.graph).unwrap_or_else(|e| panic!("file of round {round}: {e}"));
+                let p = &l.package;
+                assert!(!p.graphs.is_empty(), "file of round {round}: no graph");
+                assert!(p.graph(l.open).is_some(), "file of round {round}: open {:?}", l.open);
+                let mut names = std::collections::HashSet::new();
+                for g in &p.graphs {
+                    assert!(names.insert(g.name.clone()) && !g.name.trim().is_empty(), "file of round {round}: {:?}", g.name);
+                    whole(&g.graph).unwrap_or_else(|e| panic!("file of round {round}: {e}"));
+                }
             }
             if let Some(clip) = Clipboard::from_text(&format!("{}{c}", Clipboard::MAGIC)) {
                 let mut g = demo.clone();
@@ -223,11 +379,27 @@ mod tests {
     #[test]
     fn save_and_load_file() {
         let dir = std::env::temp_dir().join(format!("brewed_project_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("textures")).unwrap();
         let path = dir.join("a.brewtex");
-        let (graph, _) = crate::demo::graph();
-        save(&path, &graph, &ViewState::default()).unwrap();
-        assert_eq!(load(&path).unwrap().graph, graph);
+        // Files next to the project are written relative to it, and found again from wherever
+        // it is.
+        let mut package = a_package();
+        let texture = dir.join("textures").join("a.png").display().to_string();
+        package = {
+            let mut p = package;
+            p.map_paths(|x| if x.ends_with("a.png") { texture.clone() } else { x.to_string() });
+            p
+        };
+        save(&path, &package, &HashMap::new(), package.first()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"textures/a.png\""), "relative: {text}");
+        assert_eq!(load(&path).unwrap().package, package);
+        let moved = dir.join("moved");
+        std::fs::create_dir_all(moved.join("textures")).unwrap();
+        std::fs::copy(&path, moved.join("a.brewtex")).unwrap();
+        let there = load(&moved.join("a.brewtex")).unwrap().package;
+        let found: Vec<&str> = there.files().map(|(.., p)| p).collect();
+        assert_eq!(found, [moved.join("textures").join("a.png").display().to_string()]);
         // What is not a project says so.
         let not = |bytes: &[u8]| {
             std::fs::write(&path, bytes).unwrap();

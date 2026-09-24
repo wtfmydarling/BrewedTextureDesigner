@@ -2,8 +2,11 @@
 //!
 //! The UI never changes the graph itself: every user action becomes a
 //! [`brewed_texture_core::Edit`] applied to the [`Document`], which records undo steps. After every
-//! change the graph is evaluated on the CPU (values, effective parameters) and sent to the
-//! engine thread, which answers with images, thumbnails and reports as [`Event`]s.
+//! change the graph is evaluated on the CPU (values, effective parameters), every graph it uses
+//! is laid out in it (see [`packages`]), and it is sent to the engine thread, which answers
+//! with images, thumbnails and reports as [`Event`]s.
+
+mod packages;
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -15,8 +18,11 @@ use iced::{Point, Rectangle, Size, Subscription, Task, Theme, Vector, keyboard, 
 
 use brewed_texture_core::eval::{self, Evaluation};
 use brewed_texture_core::graph::{Clipboard, CommentId, Graph, Link, NodeId, SocketRef};
+use brewed_texture_core::package::{Missing, Package, ResourceKind};
 use brewed_texture_core::project::{self, ViewState};
-use brewed_texture_core::{Category, Document, Edit, NodeKind, ParamValue, Value};
+use brewed_texture_core::{Category, Document, Edit, GraphId, NodeKind, ParamValue, Value};
+
+pub use packages::OpenPackage;
 use brewed_texture_engine::{DisplayImage, EngineService, Event, ExportJob, ImageReport, Request};
 use brewed_texture_engine::simd::ImageStats;
 
@@ -54,6 +60,10 @@ pub struct StartupOptions {
 pub enum DragPayload {
     Node(NodeKind),
     Variable(String),
+    /// A graph of a package open in the Explorer: it becomes a node that uses it.
+    Graph { key: u64, graph: GraphId, name: String },
+    /// A file of a package: it becomes the node that reads it.
+    Resource { path: String, kind: ResourceKind },
 }
 
 impl DragPayload {
@@ -61,6 +71,8 @@ impl DragPayload {
         match self {
             DragPayload::Node(k) => k.def().name.to_string(),
             DragPayload::Variable(v) => format!("Input '{v}'"),
+            DragPayload::Graph { name, .. } => format!("Graph '{name}'"),
+            DragPayload::Resource { path, .. } => brewed_texture_core::package::file_name(path),
         }
     }
 }
@@ -104,6 +116,8 @@ pub struct PreviewState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Pane {
+    /// The packages open, their graphs and their files.
+    Explorer,
     Library,
     Graph,
     /// The model, on the left of the 2D view, as in the programs this one follows.
@@ -127,6 +141,12 @@ pub enum ContextTarget {
     Link(Link),
     Comment(CommentId),
     Canvas { graph_pos: [f32; 2] },
+    /// A package in the Explorer (by its key).
+    Package(u64),
+    /// A graph of a package in the Explorer.
+    GraphItem(u64, GraphId),
+    /// A file of a package in the Explorer.
+    ResourceItem(u64, String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -147,12 +167,15 @@ pub struct AddMenu {
     pub pending: Option<SocketRef>,
 }
 
+/// Something that discards the unsaved changes of a package: asked about first. `New`,
+/// `OpenPath` and `LoadDemo` put another package in place of the one being edited.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PendingAction {
     New,
-    Open,
     OpenPath(PathBuf),
     LoadDemo,
+    /// Close the package open in the Explorer as this key.
+    Close(u64),
     Quit,
 }
 
@@ -161,6 +184,20 @@ pub enum Dialog {
     Unsaved(PendingAction),
     About,
     Shortcuts,
+    /// Files a package names that are not there (see [`MissingFiles`]).
+    Missing(MissingFiles),
+}
+
+/// The files a package open in the Explorer names that are not there: they are looked for
+/// one by one, and the package says where they are from then on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MissingFiles {
+    /// The package's key in the Explorer.
+    pub key: u64,
+    pub items: Vec<Missing>,
+    /// What the last file found said (another package than the one that was there, others
+    /// found in the same folder).
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -280,6 +317,12 @@ pub struct Ui {
     /// Files dropped on the window in quick succession (time of the last, count), to
     /// lay the new nodes out in a column.
     pub drop_burst: Option<(Instant, u32)>,
+    /// Packages of the Explorer whose graphs and files are not shown.
+    pub explorer_collapsed: HashSet<u64>,
+    /// A graph being renamed in the Explorer: its package, itself, and the name typed.
+    pub renaming_graph: Option<(u64, GraphId, String)>,
+    /// Quitting: the packages whose unsaved changes go.
+    pub discarded: HashSet<u64>,
 }
 
 /// What the engine told us.
@@ -292,6 +335,9 @@ pub struct Results {
     pub stats: HashMap<NodeId, (u64, Arc<ImageStats>)>,
     pub stats_requested: HashMap<NodeId, u64>,
     pub probe: Option<(NodeId, [u32; 2], [f32; 4])>,
+    /// What went wrong inside the graphs the nodes use, by the node of the graph being edited
+    /// that uses them.
+    pub inner: HashMap<NodeId, String>,
     /// Pictures of what a node of a kind makes with each option of a choice, everything else
     /// as it is when the node is added, by node kind and parameter: drawn once for the kinds
     /// the graph has, and kept.
@@ -318,8 +364,33 @@ pub struct Results {
 }
 
 pub struct App {
+    /// The package being edited, whose graph `doc.graph()` is in the graph view.
     pub doc: Document,
+    /// Its key in the Explorer.
+    pub doc_key: u64,
+    /// The other packages open in the Explorer.
+    pub shelf: Vec<OpenPackage>,
+    next_key: u64,
+    /// Packages whose graphs are used but that are not open in the Explorer, read from their
+    /// files, by path.
+    deps: HashMap<String, Package>,
+    /// Package files that are used and could not be read.
+    unreadable: HashSet<String>,
+    /// Where the view of each graph was when another was edited, by package key and graph.
+    views: HashMap<(u64, GraphId), ViewState>,
     pub eval: Arc<Evaluation>,
+    /// What the engine computes: the graph being edited with the graphs it uses laid out in
+    /// it, and its evaluation.
+    flat: (Arc<Graph>, Arc<Evaluation>),
+    /// For each node laid out from a graph used as a node, the node of the graph being edited
+    /// that uses it.
+    owners: Arc<HashMap<NodeId, NodeId>>,
+    /// The package and the revision of it the evaluation is of: another package edited, or
+    /// another revision of it, is evaluated again.
+    seen: (u64, u64),
+    /// How many graphs were sent to the engine: the engine answers with the number of the one
+    /// it computed. (Revisions of one package would not do: another package may be at a
+    /// revision the engine was at already.)
     eval_revision: u64,
     pub engine: Option<EngineService>,
     events: Option<EventSource>,
@@ -420,6 +491,34 @@ pub enum AddMenuMessage {
     Close,
 }
 
+/// What is done in the Explorer.
+#[derive(Clone, Debug)]
+pub enum ExplorerMessage {
+    /// Show or hide what a package holds.
+    Toggle(u64),
+    OpenGraph(u64, GraphId),
+    NewGraph(u64),
+    DuplicateGraph(u64, GraphId),
+    DeleteGraph(u64, GraphId),
+    StartRename(u64, GraphId),
+    RenameText(String),
+    CommitRename,
+    Save(u64),
+    SaveAs(u64),
+    Close(u64),
+    /// Link files to a package (a file dialog).
+    LinkFiles(u64),
+    FilesPicked(u64, Vec<PathBuf>),
+    RemoveResource(u64, String),
+    /// Look for a file a package names that is not there (a file dialog).
+    Locate(u64, String),
+    Located(u64, String, Option<PathBuf>),
+    Context(ContextTarget),
+    /// Add the node that reads a file of a package (in the middle of the view, when no place
+    /// is given).
+    AddResourceNode(String, ResourceKind, Option<[f32; 2]>),
+}
+
 #[derive(Clone, Debug)]
 pub enum Message {
     PollGpu,
@@ -477,6 +576,12 @@ pub enum Message {
     FromMenu(Box<Message>),
     Context(Option<ContextMenu>),
     AddMenu(AddMenuMessage),
+    // packages
+    Explorer(ExplorerMessage),
+    /// Open the graph a node uses.
+    OpenReference(NodeId),
+    /// Put the selected nodes in a graph of their own, used in their place.
+    MakeSubgraph,
     // library & drag and drop
     LibrarySearch(String),
     LibraryToggle(Category),
@@ -554,7 +659,7 @@ fn main_window_settings(workspace: Option<&Workspace>) -> window::Settings {
 }
 
 /// Where the panels are split at first.
-const SPLITS: [f32; 5] = [0.125, 0.765, 0.6, 0.42, 0.34];
+const SPLITS: [f32; 6] = [0.13, 0.5, 0.765, 0.6, 0.42, 0.34];
 
 /// The panels, split where `splits` says (in the order the splits are made), or where they
 /// are at first when it does not say that.
@@ -568,12 +673,13 @@ pub(crate) fn panes(splits: &[f32]) -> pane_grid::State<Pane> {
     pane_grid::State::with_configuration(split(
         Axis::Vertical,
         r[0],
-        C::Pane(Pane::Library),
+        // The Explorer over the library, half and half, as in the programs this one follows.
+        split(Axis::Horizontal, r[1], C::Pane(Pane::Explorer), C::Pane(Pane::Library)),
         split(
             Axis::Vertical,
-            r[1],
-            split(Axis::Horizontal, r[2], C::Pane(Pane::Graph), split(Axis::Vertical, r[3], C::Pane(Pane::View3D), C::Pane(Pane::View2D))),
-            split(Axis::Horizontal, r[4], C::Pane(Pane::Inputs), C::Pane(Pane::Properties)),
+            r[2],
+            split(Axis::Horizontal, r[3], C::Pane(Pane::Graph), split(Axis::Vertical, r[4], C::Pane(Pane::View3D), C::Pane(Pane::View2D))),
+            split(Axis::Horizontal, r[5], C::Pane(Pane::Inputs), C::Pane(Pane::Properties)),
         ),
     ))
 }
@@ -607,11 +713,20 @@ fn find_kind(graph: &Graph, name: &str) -> Option<NodeId> {
 
 impl App {
     pub fn boot(opts: StartupOptions) -> (App, Task<Message>) {
-        let (graph, preview_node) = brewed_texture_core::demo::graph();
-        let eval = Arc::new(eval::evaluate(&graph));
+        let (package, preview_node) = brewed_texture_core::demo::package();
+        let eval = Arc::new(eval::evaluate(&package.graphs[0].graph));
         let mut app = App {
-            doc: Document::new(graph, None),
+            doc: Document::new(package, None),
+            doc_key: 1,
+            shelf: Vec::new(),
+            next_key: 1,
+            deps: HashMap::new(),
+            unreadable: HashSet::new(),
+            views: HashMap::new(),
             eval,
+            flat: (Arc::new(Graph::default()), Arc::new(Evaluation::default())),
+            owners: Arc::new(HashMap::new()),
+            seen: (0, 0),
             eval_revision: 0,
             engine: None,
             events: None,
@@ -668,6 +783,9 @@ impl App {
                 show_functions: false,
                 screen_pick: None,
                 drop_burst: None,
+                explorer_collapsed: HashSet::new(),
+                renaming_graph: None,
+                discarded: HashSet::new(),
             },
             opts: opts.clone(),
             window: None,
@@ -737,7 +855,7 @@ impl App {
             return format!("{} — pick from the screen", brewed_texture_core::APP_NAME);
         }
         let dirty = if self.doc.is_dirty() { " •" } else { "" };
-        format!("{}{dirty} — {}", self.doc.title(), brewed_texture_core::APP_NAME)
+        format!("{} — {}{dirty} — {}", self.doc.entry().name, self.doc.title(), brewed_texture_core::APP_NAME)
     }
 
     pub fn theme(&self, _window: window::Id) -> Theme {
@@ -854,12 +972,27 @@ impl App {
 
     /// Re-evaluate after document changes and keep the UI state consistent with the graph.
     fn refresh(&mut self) {
-        if self.doc.revision() == self.eval_revision {
+        if (self.doc_key, self.doc.revision()) == self.seen {
             return;
         }
+        // The nodes that use graphs follow what the graphs are now, in every open package.
+        self.sync_instances();
+        let mut evaluation = eval::evaluate(self.doc.graph());
+        // What the engine computes: every graph used laid out in the graph. What keeps a node
+        // that uses a graph from making it is that node's first problem.
+        let flat = self.flatten();
+        for (id, problem) in &flat.problems {
+            if let Some(ne) = evaluation.nodes.get_mut(id) {
+                ne.errors.insert(0, problem.clone());
+            }
+        }
+        self.eval = Arc::new(evaluation);
+        let flat_eval = Arc::new(eval::evaluate(&flat.graph));
+        self.flat = (Arc::new(flat.graph), flat_eval);
+        self.owners = Arc::new(flat.owners);
+        self.seen = (self.doc_key, self.doc.revision());
+        self.eval_revision += 1;
         let graph = self.doc.graph();
-        self.eval = Arc::new(eval::evaluate(graph));
-        self.eval_revision = self.doc.revision();
         self.ui.selection.retain(|id| graph.contains(*id));
         if self.ui.selected_link.as_ref().is_some_and(|l| !graph.links.contains(l)) {
             self.ui.selected_link = None;
@@ -882,11 +1015,7 @@ impl App {
             return;
         }
         self.res.busy_since.get_or_insert_with(Instant::now);
-        self.send(Request::Evaluate {
-            revision: self.doc.revision(),
-            graph: Arc::new(self.doc.graph().clone()),
-            eval: self.eval.clone(),
-        });
+        self.send(Request::Evaluate { revision: self.eval_revision, graph: self.flat.0.clone(), eval: self.flat.1.clone() });
         self.send(Request::Preview(self.ui.preview.node));
         self.send(Request::Materials(self.material_nodes()));
         self.ask_for_choices();
@@ -1124,13 +1253,20 @@ impl App {
         if ids.is_empty() {
             return Task::none();
         }
-        let clip = self.doc.graph().copy_nodes(&ids);
+        let mut clip = self.doc.graph().copy_nodes(&ids);
+        // Nodes that use graphs of this package find them from another package by its file.
+        clip.package = self.doc.key();
         let text = clip.to_text();
         self.ui.clipboard = Some(clip);
         iced::clipboard::write(text)
     }
 
-    fn paste_clipboard(&mut self, clip: Clipboard) {
+    fn paste_clipboard(&mut self, mut clip: Clipboard) {
+        // Pasted into another package, nodes that used graphs of their own package use them in
+        // that package's file.
+        if clip.package.is_some() && clip.package != self.doc.key() {
+            clip.use_package();
+        }
         let at = self.graph_pos_for_paste();
         self.apply(Edit::Paste { clipboard: clip, at });
         self.doc.seal();
@@ -1194,27 +1330,6 @@ impl App {
 
     // ------------------------------------------------------------------ files
 
-    fn open_path(&mut self, path: PathBuf) {
-        match project::load(&path) {
-            Ok(loaded) => {
-                let preview = loaded.view.preview.or_else(|| loaded.graph.nodes_of(NodeKind::OUTPUT).next().map(|n| n.id));
-                self.doc.replace(loaded.graph, Some(path.clone()));
-                self.after_document_change(preview);
-                if let (Some(pan), Some(zoom)) = (loaded.view.graph_pan, loaded.view.graph_zoom) {
-                    self.ui.graph_view.pan = Vector::new(pan[0], pan[1]);
-                    self.ui.graph_view.zoom = zoom.clamp(0.1, 3.0);
-                    self.ui.frame_request = false;
-                }
-                let mut msg = format!("Opened {}", path.display());
-                if !loaded.notes.is_empty() {
-                    msg.push_str(&format!(" ({})", loaded.notes.join("; ")));
-                }
-                self.set_status(msg, false);
-            }
-            Err(e) => self.set_status(e, true),
-        }
-    }
-
     fn after_document_change(&mut self, preview: Option<NodeId>) {
         // Node ids start over in the new document: forget everything that points at nodes
         // or variables of the old one.
@@ -1230,6 +1345,7 @@ impl App {
         self.ui.plot_var = 0;
         self.ui.drag = None;
         self.ui.press = None;
+        self.ui.renaming_graph = None;
         self.ui.frame_request = true;
         self.ui.preview.node = preview;
         self.ui.preview.fit = true;
@@ -1239,14 +1355,12 @@ impl App {
     }
 
     fn save_to(&mut self, path: PathBuf) -> bool {
-        let view = ViewState {
-            preview: self.ui.preview.node,
-            graph_pan: Some([self.ui.graph_view.pan.x, self.ui.graph_view.pan.y]),
-            graph_zoom: Some(self.ui.graph_view.zoom),
-        };
-        match project::save(&path, self.doc.graph(), &view) {
+        let path = PathBuf::from(packages::clean(&path));
+        let views = self.views_to_save();
+        match project::save(&path, self.doc.package(), &views, self.doc.current()) {
             Ok(()) => {
                 self.set_status(format!("Saved {}", path.display()), false);
+                self.saved_as(&path);
                 self.doc.mark_saved(path);
                 true
             }
@@ -1265,8 +1379,8 @@ impl App {
         Task::perform(
             blocking(move || {
                 let mut dialog = rfd::FileDialog::new()
-                    .set_title("Save graph")
-                    .add_filter(format!("{} graph", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION])
+                    .set_title("Save package")
+                    .add_filter(format!("{} package", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION])
                     .set_file_name(name);
                 if let Some(folder) = folder {
                     dialog = dialog.set_directory(folder);
@@ -1277,14 +1391,23 @@ impl App {
         )
     }
 
-    /// Run an action that would discard unsaved changes, asking first.
+    /// Run an action that would discard unsaved changes, asking first: about the package it
+    /// discards, or, quitting, about each package with unsaved changes in turn.
     fn guarded(&mut self, action: PendingAction) -> Task<Message> {
         self.close_popups();
-        if self.doc.is_dirty() {
-            self.ui.dialog = Some(Dialog::Unsaved(action));
-            Task::none()
-        } else {
-            self.proceed(action)
+        let asking = match &action {
+            PendingAction::Quit => self.dirty_packages().into_iter().find(|k| !self.ui.discarded.contains(k)),
+            PendingAction::Close(key) => self.package_doc(*key).filter(|d| d.is_dirty()).map(|_| *key),
+            _ => self.doc.is_dirty().then_some(self.doc_key),
+        };
+        match asking {
+            Some(key) => {
+                // The dialog is about the package being edited: that one.
+                self.activate(key, None);
+                self.ui.dialog = Some(Dialog::Unsaved(action));
+                Task::none()
+            }
+            None => self.proceed(action),
         }
     }
 
@@ -1292,31 +1415,41 @@ impl App {
         self.ui.dialog = None;
         match action {
             PendingAction::New => {
-                self.doc.replace(Graph::default(), None);
-                self.after_document_change(None);
+                let package = Package::new("Graph", Graph::default());
+                let open = package.first();
+                self.replace_package(package, None, HashMap::new(), open);
                 Task::none()
             }
             PendingAction::LoadDemo => {
-                let (g, p) = brewed_texture_core::demo::graph();
-                self.doc.replace(g, None);
-                self.after_document_change(p);
+                let (package, preview) = brewed_texture_core::demo::package();
+                let open = package.first();
+                let views = [(open, ViewState { preview, ..ViewState::default() })].into_iter().collect();
+                self.replace_package(package, None, views, open);
                 Task::none()
             }
             PendingAction::OpenPath(path) => {
                 self.open_path(path);
                 Task::none()
             }
-            PendingAction::Open => Task::perform(
-                blocking(|| {
-                    rfd::FileDialog::new()
-                        .set_title("Open graph")
-                        .add_filter(format!("{} graph", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION, "json"])
-                        .pick_file()
-                }),
-                |p| Message::OpenPicked(p.flatten()),
-            ),
+            PendingAction::Close(key) => {
+                self.close_package(key);
+                Task::none()
+            }
             PendingAction::Quit => self.quit(),
         }
+    }
+
+    /// The file dialog to open a package.
+    fn pick_package(&self) -> Task<Message> {
+        Task::perform(
+            blocking(|| {
+                rfd::FileDialog::new()
+                    .set_title("Open package")
+                    .add_filter(format!("{} package", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION, "json"])
+                    .pick_file()
+            }),
+            |p| Message::OpenPicked(p.flatten()),
+        )
     }
 
     /// Quit: save how the window is laid out (when the session keeps it), then go.
@@ -1476,10 +1609,28 @@ impl App {
                     self.set_status("Nothing to redo", false);
                 }
             }
-            Message::New => return self.guarded(PendingAction::New),
-            Message::Open => return self.guarded(PendingAction::Open),
-            Message::LoadDemo => return self.guarded(PendingAction::LoadDemo),
-            Message::Quit => return self.guarded(PendingAction::Quit),
+            // A new package, another one or the demo come to the Explorer: nothing is discarded.
+            Message::New => {
+                self.close_popups();
+                self.new_package();
+            }
+            Message::Open => {
+                self.close_popups();
+                return self.pick_package();
+            }
+            Message::LoadDemo => {
+                self.close_popups();
+                self.open_demo();
+            }
+            Message::Quit => {
+                self.ui.discarded.clear();
+                return self.guarded(PendingAction::Quit);
+            }
+            // "Don't Save": quitting, the next package with unsaved changes asks in its turn.
+            Message::Proceed(PendingAction::Quit) => {
+                self.ui.discarded.insert(self.doc_key);
+                return self.guarded(PendingAction::Quit);
+            }
             Message::Proceed(action) => return self.proceed(action),
             Message::SaveThen(action) => {
                 self.ui.dialog = None;
@@ -1488,7 +1639,7 @@ impl App {
             }
             Message::OpenPicked(path) => {
                 if let Some(path) = path {
-                    self.open_path(path);
+                    self.open_package(path);
                 }
             }
             Message::Save => {
@@ -1570,8 +1721,17 @@ impl App {
             Message::ExportNodePicked(_, None) => {}
             Message::Dialog(d) => {
                 self.close_popups();
+                if d.is_none() {
+                    self.ui.discarded.clear();
+                }
                 self.ui.dialog = d;
             }
+            Message::Explorer(msg) => return self.explorer_message(msg),
+            Message::OpenReference(node) => {
+                self.close_popups();
+                self.open_reference(node);
+            }
+            Message::MakeSubgraph => self.make_subgraph(),
             Message::Graph(msg) => return self.graph_message(msg),
             Message::SelectNode(id) => {
                 self.close_popups();
@@ -1799,6 +1959,8 @@ impl App {
 
     fn continue_after_save(&mut self) -> Task<Message> {
         match self.ui.after_save.take() {
+            // Quitting: the other packages with unsaved changes ask in their turn.
+            Some(PendingAction::Quit) => self.guarded(PendingAction::Quit),
             Some(action) => self.proceed(action),
             None => Task::none(),
         }
@@ -1808,6 +1970,10 @@ impl App {
         let edit = match payload {
             DragPayload::Node(kind) => Edit::AddNode { kind, pos },
             DragPayload::Variable(name) => Edit::AddVariableNode { name, pos },
+            other => {
+                self.add_package_payload(other, pos);
+                return;
+            }
         };
         self.apply(edit);
         self.doc.seal();
@@ -1859,6 +2025,15 @@ impl App {
     fn engine_event(&mut self, event: Event) -> Task<Message> {
         match event {
             Event::Evaluated { revision, reports } => {
+                // What went wrong inside a graph a node uses is that node's.
+                self.res.inner.clear();
+                let mut inner: Vec<(&NodeId, &ImageReport)> = reports.iter().filter(|(id, r)| id.is_inner() && r.error.is_some()).collect();
+                inner.sort_by_key(|(id, _)| **id);
+                for (id, report) in inner {
+                    if let (Some(owner), Some(e)) = (self.owners.get(id), &report.error) {
+                        self.res.inner.entry(*owner).or_insert_with(|| format!("Inside: {e}"));
+                    }
+                }
                 self.res.reports = reports;
                 self.res.evaluated_revision = revision;
                 self.request_stats();
@@ -1999,11 +2174,19 @@ impl App {
         Task::none()
     }
 
-    /// A file dropped on the window: a graph is opened, an image becomes a Bitmap node.
+    /// A file dropped on the window: a package is opened in the Explorer, an image becomes a
+    /// Bitmap node, vector graphics and fonts are linked to the package.
     fn file_dropped(&mut self, path: PathBuf) -> Task<Message> {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
         if ext == project::FILE_EXTENSION {
-            return self.guarded(PendingAction::OpenPath(path));
+            self.close_popups();
+            self.open_package(path);
+            return Task::none();
+        }
+        let path = PathBuf::from(packages::clean(&path));
+        if matches!(ResourceKind::of_path(&path.display().to_string()), Some(ResourceKind::Svg | ResourceKind::Font)) {
+            let key = self.doc_key;
+            return self.update_nested(Message::Explorer(ExplorerMessage::FilesPicked(key, vec![path])));
         }
         if file_extensions(NodeKind::BITMAP, "path").contains(&ext.as_str()) {
             self.close_popups();
@@ -2020,7 +2203,7 @@ impl App {
             }
             return Task::none();
         }
-        self.set_status(format!("Cannot use '{}': drop a graph or an image", path.display()), true);
+        self.set_status(format!("Cannot use '{}': drop a package, an image, vector graphics or a font", path.display()), true);
         Task::none()
     }
 
@@ -2041,10 +2224,11 @@ impl App {
                 self.close_popups();
             } else if self.ui.dialog.is_some() {
                 self.ui.dialog = None;
-            } else if self.ui.renaming_var.is_some() || self.ui.binding.is_some() {
-                // Typing a variable name: forget the text, the name stays as it was.
+            } else if self.ui.renaming_var.is_some() || self.ui.binding.is_some() || self.ui.renaming_graph.is_some() {
+                // Typing a name: forget the text, the name stays as it was.
                 self.ui.renaming_var = None;
                 self.ui.binding = None;
+                self.ui.renaming_graph = None;
             } else if self.ui.color_picker.is_some() {
                 self.ui.color_picker = None;
             }
@@ -2102,6 +2286,7 @@ impl App {
             _ if ctrl && char('v') => Message::Paste,
             _ if ctrl && char('d') => Message::Duplicate,
             _ if ctrl && char('a') => Message::SelectAll,
+            _ if ctrl && char('g') => Message::MakeSubgraph,
             _ if ctrl && char('b') => match self.ui.selection.iter().next() {
                 Some(id) => Message::ToggleBypass(*id),
                 None => return Task::none(),
@@ -2617,7 +2802,7 @@ impl App {
         if self.opts.screenshot.is_none() || self.screenshot_requested {
             return Task::none();
         }
-        let settled = self.res.evaluated_revision == self.doc.revision()
+        let settled = self.res.evaluated_revision == self.eval_revision
             && self.started.elapsed() > Duration::from_millis(2500)
             && (self.ui.preview.node.is_none() || self.res.preview.is_some())
             // The model wears the maps in every screenshot: they take longest to arrive.

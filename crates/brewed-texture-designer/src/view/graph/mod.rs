@@ -749,6 +749,8 @@ pub fn node_kind_title(node: &Node) -> String {
     match node.def().role {
         Role::Variable(_) => node.variable.clone().unwrap_or_else(|| node.def().name.to_string()),
         Role::Output => node.text("name").to_string(),
+        // The graph it uses.
+        Role::Instance => node.instance.as_ref().map_or_else(|| node.def().name.to_string(), |i| i.graph.name.clone()),
         _ => node.def().name.to_string(),
     }
 }
@@ -847,7 +849,10 @@ impl GraphCanvas<'_> {
         let d = node.def();
         let eval = app.eval.node(node.id);
         let report = app.res.reports.get(&node.id);
-        let error = eval.and_then(|e| e.error().map(str::to_string)).or_else(|| report.and_then(|r| r.error.clone()));
+        let error = eval
+            .and_then(|e| e.error().map(str::to_string))
+            .or_else(|| report.and_then(|r| r.error.clone()))
+            .or_else(|| app.res.inner.get(&node.id).cloned());
         let warning = eval
             .and_then(|e| e.warnings.first().cloned())
             .or_else(|| report.and_then(|r| r.warning.clone()));

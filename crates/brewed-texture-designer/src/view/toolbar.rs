@@ -7,7 +7,7 @@ use iced::widget::{button, column, container, image, pick_list, row, rule, space
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::Edit;
 
-use crate::app::{App, Dialog, MenuId, Message, PreviewMessage};
+use crate::app::{App, Dialog, ExplorerMessage, MenuId, Message, PreviewMessage};
 use crate::icons::{Icon, icon};
 use crate::style;
 use crate::view::tip;
@@ -60,16 +60,21 @@ fn menu<'a>(app: &'a App, id: MenuId, title: &'a str, items: Vec<Element<'a, Mes
     dropdown(title_button, menu_body(items), open).on_dismiss(Message::Menu(None)).into()
 }
 
-fn file_menu(_app: &App) -> Vec<Element<'_, Message>> {
+fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
+    let key = app.doc_key;
     vec![
-        item("New", "Ctrl+N", Some(Message::New)),
-        item("Open…", "Ctrl+O", Some(Message::Open)),
+        item("New Package", "Ctrl+N", Some(Message::New)),
+        item("New Graph", "", Some(Message::Explorer(ExplorerMessage::NewGraph(key)))),
+        item("Open Package…", "Ctrl+O", Some(Message::Open)),
+        item("Link Files…", "", Some(Message::Explorer(ExplorerMessage::LinkFiles(key)))),
+        separator(),
         item("Save", "Ctrl+S", Some(Message::Save)),
         item("Save As…", "Ctrl+Shift+S", Some(Message::SaveAs)),
+        item("Close Package", "", Some(Message::Explorer(ExplorerMessage::Close(key)))),
         separator(),
         item("Export Outputs…", "Ctrl+E", Some(Message::ExportAll)),
         separator(),
-        item("Load Demo Graph", "", Some(Message::LoadDemo)),
+        item("Open the Demo", "", Some(Message::LoadDemo)),
         separator(),
         item("Quit", "", Some(Message::Quit)),
     ]
@@ -99,6 +104,7 @@ fn edit_menu(app: &App) -> Vec<Element<'_, Message>> {
         separator(),
         item("Select All", "Ctrl+A", Some(Message::SelectAll)),
         item("Bypass Node", "Ctrl+B", bypass.map(Message::ToggleBypass)),
+        item("Make Subgraph", "Ctrl+G", sel(Message::MakeSubgraph)),
         item(if has_selection { "Frame Selection in a Comment" } else { "Add Comment" }, "C", Some(Message::AddComment)),
     ]
 }
@@ -126,7 +132,7 @@ fn help_menu(_app: &App) -> Vec<Element<'_, Message>> {
 pub fn menu_bar(app: &App) -> Element<'_, Message> {
     let logo = image(crate::brand::logo()).width(Length::Fixed(16.0)).height(Length::Fixed(16.0));
     let dirty = if app.doc.is_dirty() { "  •" } else { "" };
-    let document = text(format!("{}{dirty}", app.doc.title())).size(style::SMALL).color(style::TEXT_DIM);
+    let document = text(format!("{} — {}{dirty}", app.doc.title(), app.doc.entry().name)).size(style::SMALL).color(style::TEXT_DIM);
     container(
         row![
             container(logo).padding([0, 6]),

@@ -1,5 +1,6 @@
-//! A list row that reacts on mouse *press* (to start drag and drop) and on double
-//! click, highlighted while hovered.
+//! A list row that reacts on mouse *press* (to start drag and drop), on double click and on
+//! a right click (its context menu), highlighted while hovered, and while it is the one
+//! chosen.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Renderer as _};
@@ -14,11 +15,20 @@ pub struct Pressable<'a, Message> {
     content: Element<'a, Message>,
     on_press: Option<Message>,
     on_double_click: Option<Message>,
+    on_right_press: Option<Message>,
+    selected: bool,
     padding: Padding,
 }
 
 pub fn pressable<'a, Message>(content: impl Into<Element<'a, Message>>) -> Pressable<'a, Message> {
-    Pressable { content: content.into(), on_press: None, on_double_click: None, padding: Padding::from([3, 8]) }
+    Pressable {
+        content: content.into(),
+        on_press: None,
+        on_double_click: None,
+        on_right_press: None,
+        selected: false,
+        padding: Padding::from([3, 8]),
+    }
 }
 
 impl<Message> Pressable<'_, Message> {
@@ -28,6 +38,15 @@ impl<Message> Pressable<'_, Message> {
     }
     pub fn on_double_click(mut self, m: Message) -> Self {
         self.on_double_click = Some(m);
+        self
+    }
+    pub fn on_right_press(mut self, m: Message) -> Self {
+        self.on_right_press = Some(m);
+        self
+    }
+    /// Drawn as the row chosen (the graph being edited, say).
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
         self
     }
     pub fn padding(mut self, p: impl Into<Padding>) -> Self {
@@ -98,6 +117,13 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for Pressable<
             }
             shell.capture_event();
         }
+        if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) = event
+            && cursor.is_over(layout.bounds())
+            && let Some(m) = &self.on_right_press
+        {
+            shell.publish(m.clone());
+            shell.capture_event();
+        }
     }
 
     fn mouse_interaction(
@@ -127,14 +153,15 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for Pressable<
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        if cursor.is_over(layout.bounds()) {
+        let hovered = cursor.is_over(layout.bounds());
+        if hovered || self.selected {
             renderer.fill_quad(
                 renderer::Quad {
                     bounds: layout.bounds(),
                     border: Border { radius: 3.0.into(), ..Border::default() },
                     ..Default::default()
                 },
-                Background::Color(style::HOVER),
+                Background::Color(if hovered { style::HOVER } else { style::RAISED }),
             );
         }
         let child = layout.children().next().expect("padded layout has a child");
