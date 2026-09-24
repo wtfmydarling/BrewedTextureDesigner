@@ -3,7 +3,7 @@
 pub mod overlay;
 pub mod render;
 
-use iced::widget::{button, center, column, container, row, shader, space, stack, text};
+use iced::widget::{button, center, column, container, row, shader, stack, text};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::nodes::Role;
 
@@ -19,13 +19,14 @@ const CHANNELS: [&str; 6] = ["RGBA", "RGB", "R", "G", "B", "A"];
 fn toolbar_2d(app: &App) -> Element<'_, Message> {
     let p = &app.ui.preview;
     let node_name = p.node.and_then(|id| app.graph().node(id)).map(crate::view::graph::node_title);
+    // In a narrow view the name is cut short, and the buttons stay.
+    let name = match node_name {
+        Some(n) => text(n).size(style::TEXT_SIZE).color(style::TEXT),
+        None => text("double-click a node to show it here").size(style::SMALL).color(style::TEXT_DIM),
+    };
     let mut bar = row![
         icon(Icon::Image, 14.0, style::TEXT_DIM),
-        match node_name {
-            Some(n) => text(n).size(style::TEXT_SIZE).color(style::TEXT),
-            None => text("double-click a node to show it here").size(style::SMALL).color(style::TEXT_DIM),
-        },
-        space().width(Length::Fill),
+        container(name.wrapping(text::Wrapping::None)).width(Length::Fill).clip(true),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
@@ -64,7 +65,11 @@ fn toolbar_3d(app: &App) -> Element<'_, Message> {
     let rate = app.ui.frame_rate;
     // Digits in the monospaced font: they change every quarter of a second.
     let frames = crate::view::tip(
-        text(format!("{:.0} FPS · {:.1} ms", rate.fps, rate.frame_ms)).size(style::SMALL).font(style::mono()).color(style::TEXT_DIM),
+        text(format!("{:.0} FPS · {:.1} ms", rate.fps, rate.frame_ms))
+            .size(style::SMALL)
+            .font(style::mono())
+            .color(style::TEXT_DIM)
+            .wrapping(text::Wrapping::None),
         format!(
             "Frames the 3D view drew in the last second, and how long a frame took on average (the \
              longest {:.1} ms). View → Real-time Rendering draws it frame after frame; without it, it \
@@ -73,7 +78,9 @@ fn toolbar_3d(app: &App) -> Element<'_, Message> {
         ),
         Position::Bottom,
     );
-    let bar = row![icon(Icon::Cube, 14.0, style::TEXT_DIM), frames, space().width(Length::Fill), crate::view::view3d::toolbar(app)]
+    // In a narrow view the reading is cut short, and the tools stay.
+    let frames = container(frames).width(Length::Fill).clip(true);
+    let bar = row![icon(Icon::Cube, 14.0, style::TEXT_DIM), frames, crate::view::view3d::toolbar(app)]
         .spacing(6)
         .align_y(Alignment::Center);
     header(bar)

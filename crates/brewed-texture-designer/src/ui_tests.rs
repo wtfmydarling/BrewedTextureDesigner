@@ -1168,3 +1168,501 @@ fn the_panels_come_back_as_they_were() {
     w.send(Message::PaneResized(iced::widget::pane_grid::ResizeEvent { split, ratio: 0.25 }));
     assert_eq!(crate::app::splits_of(&w.app.ui.panes)[0], 0.25);
 }
+
+// ---------------------------------------------------------------------------- stress
+
+/// Whether a message the widgets make stays inside the app: a file dialog, the eyedropper
+/// (it looks at the screen) or quitting would reach the computer the test runs on.
+fn stays_inside(message: &Message) -> bool {
+    match message {
+        Message::Open
+        | Message::Save
+        | Message::SaveAs
+        | Message::ExportAll
+        | Message::ExportNode(_)
+        | Message::BrowseFile(..)
+        | Message::Pick(_)
+        | Message::Host(_)
+        | Message::Quit
+        | Message::SaveThen(_)
+        | Message::Proceed(PendingAction::Open | PendingAction::Quit) => false,
+        Message::FromMenu(inner) => stays_inside(inner),
+        _ => true,
+    }
+}
+
+/// One event, as the window gives it: to the widgets first, then, with whether they used it,
+/// to the app's event subscription (which only listens to some). The messages the widgets
+/// make go to the app, but not those that would reach outside the test.
+fn feed(w: &mut Harness, event: iced::Event) {
+    use iced::Event as E;
+    if let E::Mouse(mouse::Event::CursorMoved { position }) = event {
+        w.cursor = mouse::Cursor::Available(position);
+    }
+    let mut messages = Vec::new();
+    let cursor = w.cursor;
+    let statuses = w.frame(|ui, renderer| {
+        ui.update(std::slice::from_ref(&event), cursor, renderer, &mut clipboard::Null, &mut messages).1
+    });
+    for m in messages.into_iter().filter(stays_inside) {
+        w.send(m);
+    }
+    let status = statuses.first().copied().unwrap_or(iced::event::Status::Ignored);
+    let listened = matches!(
+        &event,
+        E::Keyboard(_)
+            | E::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::ButtonReleased(_))
+            | E::Window(window::Event::Resized(_) | window::Event::FileDropped(_))
+    );
+    if listened && let Some(window) = w.app.main_window() {
+        w.send(Message::Runtime(event, status, window));
+    }
+}
+
+/// A small generator of numbers for the monkey: the same seed, the same session.
+struct Dice(u64);
+
+impl Dice {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n.max(1)
+    }
+    fn chance(&mut self, percent: u64) -> bool {
+        self.below(100) < percent
+    }
+    fn float(&mut self, lo: f32, hi: f32) -> f32 {
+        lo + (self.below(1 << 24) as f32 / (1 << 24) as f32) * (hi - lo)
+    }
+}
+
+/// A key as the window reports it, with what it types when it types anything.
+fn key_event(
+    key: Key,
+    physical: keyboard::key::Physical,
+    modifiers: keyboard::Modifiers,
+    pressed: bool,
+) -> iced::Event {
+    let text = match (&key, modifiers.control()) {
+        (Key::Character(c), false) => Some(c.clone()),
+        _ => None,
+    };
+    iced::Event::Keyboard(if pressed {
+        keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: physical,
+            location: keyboard::Location::Standard,
+            modifiers,
+            text,
+            repeat: false,
+        }
+    } else {
+        keyboard::Event::KeyReleased {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: physical,
+            location: keyboard::Location::Standard,
+            modifiers,
+        }
+    })
+}
+
+/// Where the sockets of the graph's nodes are in the window: outputs, then inputs.
+fn sockets(w: &Harness) -> (Vec<Point>, Vec<Point>) {
+    let graph = w.app.graph();
+    let view = w.app.ui.graph_view;
+    let t = view::graph::layout::Transform { pan: view.pan, zoom: view.zoom };
+    let at = iced::Vector::new(view.bounds.x, view.bounds.y);
+    let (mut outputs, mut inputs) = (Vec::new(), Vec::new());
+    for node in &graph.nodes {
+        let l = view::graph::layout::layout(graph, node, &t, iced::Vector::ZERO);
+        outputs.extend(l.outputs.iter().map(|(_, p)| *p + at));
+        inputs.extend(l.inputs.iter().map(|(_, p)| *p + at));
+    }
+    (outputs, inputs)
+}
+
+/// The events of a left drag from `a` to `b` in `parts` moves.
+fn drag_events(a: Point, b: Point, parts: u64) -> Vec<iced::Event> {
+    let mut events = vec![
+        iced::Event::Mouse(mouse::Event::CursorMoved { position: a }),
+        iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+    ];
+    for i in 1..=parts.max(1) {
+        let t = i as f32 / parts.max(1) as f32;
+        events.push(iced::Event::Mouse(mouse::Event::CursorMoved {
+            position: Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t),
+        }));
+    }
+    events.push(iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)));
+    events
+}
+
+/// What is wrong with the app's state, if anything, once an event is handled.
+fn broken(app: &App) -> Option<String> {
+    let g = app.graph();
+    for n in &g.nodes {
+        if !n.pos.iter().all(|v| v.is_finite()) {
+            return Some(format!("node {} is at {:?}", n.id.0, n.pos));
+        }
+    }
+    for l in &g.links {
+        if g.node(l.from).is_none() || g.node(l.to).is_none() {
+            return Some(format!("a link from {} to {} has no node at an end", l.from.0, l.to.0));
+        }
+    }
+    let mut inputs = std::collections::HashSet::new();
+    for l in &g.links {
+        if !inputs.insert((l.to, l.to_socket.clone())) {
+            return Some(format!("two links go into {} {}", l.to.0, l.to_socket));
+        }
+    }
+    let v = app.ui.graph_view;
+    if !(v.zoom.is_finite() && v.zoom > 0.0 && v.pan.x.is_finite() && v.pan.y.is_finite()) {
+        return Some(format!("the graph view is at {:?} × {}", v.pan, v.zoom));
+    }
+    None
+}
+
+/// A monkey at the window: `steps` random moves, clicks, drags, wheel turns, keys and
+/// shortcuts, typing, window sizes and dropped files, over the whole interface as it is laid
+/// out, on the demo; every few steps a frame is drawn. It stops at the first panic or broken
+/// state, and says what it did last.
+fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
+    use keyboard::key::{Code, Named, Physical};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let Some(mut w) = Harness::new(Box::new(view::root), Size::new(1680.0, 1000.0)) else { return Ok(0) };
+    let mut dice = Dice(seed.max(1));
+    let mut log: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let files = std::env::temp_dir().join(format!("brewed-monkey-{seed}"));
+    let _ = std::fs::create_dir_all(&files);
+    let image = files.join("dropped.png");
+    image::RgbaImage::from_pixel(64, 32, image::Rgba([200, 100, 50, 255])).save(&image).expect("a picture to drop");
+    let broken_file = files.join("broken.png");
+    std::fs::write(&broken_file, b"not a picture").expect("a broken file");
+    let graph_file = files.join("graph.brewtex");
+    let start = std::time::Instant::now();
+    let letters = "abcdefghijklmnopqrstuvwxyz0123456789 .,-+*/()=";
+    let shortcut_keys: [(char, Code); 9] = [
+        ('z', Code::KeyZ),
+        ('y', Code::KeyY),
+        ('c', Code::KeyC),
+        ('x', Code::KeyX),
+        ('v', Code::KeyV),
+        ('d', Code::KeyD),
+        ('a', Code::KeyA),
+        ('b', Code::KeyB),
+        ('n', Code::KeyN),
+    ];
+    let named = [
+        Named::Enter,
+        Named::Escape,
+        Named::Tab,
+        Named::Backspace,
+        Named::Delete,
+        Named::ArrowLeft,
+        Named::ArrowRight,
+        Named::ArrowUp,
+        Named::ArrowDown,
+        Named::Home,
+        Named::End,
+        Named::PageUp,
+        Named::PageDown,
+        Named::Space,
+        Named::F1,
+    ];
+    for step in 0..steps {
+        let size = w.size;
+        let mut events: Vec<iced::Event> = Vec::new();
+        let mut direct: Vec<Message> = Vec::new();
+        let what: String;
+        let roll = dice.below(1000);
+        let here = w.cursor.position().unwrap_or(Point::ORIGIN);
+        let anywhere =
+            |dice: &mut Dice| Point::new(dice.float(-10.0, size.width + 10.0), dice.float(-10.0, size.height + 10.0));
+        let moved = |p: Point| iced::Event::Mouse(mouse::Event::CursorMoved { position: p });
+        match roll {
+            0..=299 => {
+                let p = if dice.chance(20) {
+                    Point::new(here.x + dice.float(-30.0, 30.0), here.y + dice.float(-30.0, 30.0))
+                } else {
+                    anywhere(&mut dice)
+                };
+                what = format!("move to {:.0},{:.0}", p.x, p.y);
+                events.push(moved(p));
+            }
+            300..=449 => {
+                let p = anywhere(&mut dice);
+                what = format!("click at {:.0},{:.0}", p.x, p.y);
+                events.extend([
+                    moved(p),
+                    iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                    iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                ]);
+            }
+            450..=499 => {
+                let p = anywhere(&mut dice);
+                what = format!("double click at {:.0},{:.0}", p.x, p.y);
+                for _ in 0..2 {
+                    events.extend([
+                        iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                        iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                    ]);
+                }
+                events.insert(0, moved(p));
+            }
+            500..=599 => {
+                let button = [mouse::Button::Left, mouse::Button::Left, mouse::Button::Middle, mouse::Button::Right]
+                    [dice.below(4) as usize];
+                let (a, b) = (anywhere(&mut dice), anywhere(&mut dice));
+                what = format!("{button:?} drag {:.0},{:.0} to {:.0},{:.0}", a.x, a.y, b.x, b.y);
+                events.push(moved(a));
+                events.push(iced::Event::Mouse(mouse::Event::ButtonPressed(button)));
+                let parts = 1 + dice.below(8);
+                for i in 1..=parts {
+                    let t = i as f32 / parts as f32;
+                    events.push(moved(Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)));
+                }
+                events.push(iced::Event::Mouse(mouse::Event::ButtonReleased(button)));
+            }
+            600..=629 => {
+                let p = anywhere(&mut dice);
+                what = format!("right click at {:.0},{:.0}", p.x, p.y);
+                events.extend([
+                    moved(p),
+                    iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)),
+                    iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right)),
+                ]);
+            }
+            630..=709 => {
+                let delta = if dice.chance(50) {
+                    mouse::ScrollDelta::Lines { x: 0.0, y: dice.float(-6.0, 6.0) }
+                } else {
+                    mouse::ScrollDelta::Pixels { x: dice.float(-200.0, 200.0), y: dice.float(-400.0, 400.0) }
+                };
+                what = format!("wheel {delta:?}");
+                events.push(iced::Event::Mouse(mouse::Event::WheelScrolled { delta }));
+            }
+            710..=829 => {
+                let c = letters.chars().nth(dice.below(letters.len() as u64) as usize).unwrap();
+                let shift = dice.chance(10);
+                let text = if shift { c.to_ascii_uppercase() } else { c }.to_string();
+                what = format!("type {text:?}");
+                let physical = Physical::Unidentified(keyboard::key::NativeCode::Unidentified);
+                let m = if shift { keyboard::Modifiers::SHIFT } else { keyboard::Modifiers::default() };
+                events.push(key_event(Key::Character(text.clone().into()), physical, m, true));
+                events.push(key_event(Key::Character(text.into()), physical, m, false));
+            }
+            830..=909 => {
+                let k = named[dice.below(named.len() as u64) as usize];
+                let m = [
+                    keyboard::Modifiers::default(),
+                    keyboard::Modifiers::default(),
+                    keyboard::Modifiers::SHIFT,
+                    keyboard::Modifiers::CTRL,
+                ][dice.below(4) as usize];
+                what = format!("{m:?} {k:?}");
+                let physical = Physical::Unidentified(keyboard::key::NativeCode::Unidentified);
+                events.push(key_event(Key::Named(k), physical, m, true));
+                events.push(key_event(Key::Named(k), physical, m, false));
+            }
+            910..=959 => {
+                let (c, code) = shortcut_keys[dice.below(shortcut_keys.len() as u64) as usize];
+                let m = if dice.chance(20) {
+                    keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT
+                } else {
+                    keyboard::Modifiers::CTRL
+                };
+                what = format!("{m:?} {c}");
+                events.push(key_event(Key::Character(c.to_string().into()), Physical::Code(code), m, true));
+                events.push(key_event(Key::Character(c.to_string().into()), Physical::Code(code), m, false));
+            }
+            960..=969 => {
+                let new = Size::new(dice.float(1000.0, 2560.0).round(), dice.float(640.0, 1440.0).round());
+                what = format!("window {new:?}");
+                w.size = new;
+                events.push(iced::Event::Window(window::Event::Resized(new)));
+            }
+            970..=979 => {
+                let path =
+                    [image.clone(), broken_file.clone(), files.join("missing.png"), files.clone(), graph_file.clone()]
+                        [dice.below(5) as usize]
+                        .clone();
+                what = format!("drop {}", path.display());
+                events.push(iced::Event::Window(window::Event::FileDropped(path)));
+            }
+            980..=984 => {
+                // On purpose: from an output to an input, from the library onto the graph, or
+                // along a field of the panels.
+                let (outputs, inputs) = sockets(&w);
+                let graph_area = w.app.ui.graph_view.bounds;
+                match dice.below(3) {
+                    0 if !outputs.is_empty() && !inputs.is_empty() => {
+                        let a = outputs[dice.below(outputs.len() as u64) as usize];
+                        let b = inputs[dice.below(inputs.len() as u64) as usize];
+                        what = format!("connect {:.0},{:.0} to {:.0},{:.0}", a.x, a.y, b.x, b.y);
+                        events.extend(drag_events(a, b, 1 + dice.below(4)));
+                    }
+                    1 => {
+                        let kinds = NodeKind::ALL;
+                        let kind = kinds[dice.below(kinds.len() as u64) as usize];
+                        let found = texts(&mut w, kind.def().name);
+                        match found.first() {
+                            Some(r) => {
+                                let to = Point::new(
+                                    dice.float(graph_area.x, graph_area.x + graph_area.width.max(1.0)),
+                                    dice.float(graph_area.y, graph_area.y + graph_area.height.max(1.0)),
+                                );
+                                what = format!("add {} at {:.0},{:.0}", kind.def().name, to.x, to.y);
+                                events.extend(drag_events(r.center(), to, 1 + dice.below(4)));
+                            }
+                            None => what = format!("{} not in the library", kind.def().name),
+                        }
+                    }
+                    _ => {
+                        let a = anywhere(&mut dice);
+                        let b = Point::new(a.x + dice.float(-300.0, 300.0), a.y + dice.float(-4.0, 4.0));
+                        what = format!("scrub {:.0},{:.0} by {:.0}", a.x, a.y, b.x - a.x);
+                        events.extend(drag_events(a, b, 2 + dice.below(10)));
+                    }
+                }
+            }
+            985..=989 => {
+                let message = match dice.below(6) {
+                    0 => Message::Undo,
+                    1 => Message::Redo,
+                    2 => Message::Proceed(PendingAction::LoadDemo),
+                    3 => Message::Proceed(PendingAction::New),
+                    4 => Message::SavePicked(Some(graph_file.clone())),
+                    _ => Message::Proceed(PendingAction::OpenPath(graph_file.clone())),
+                };
+                what = format!("{message:?}");
+                direct.push(message);
+            }
+            _ => {
+                what = "a frame".into();
+            }
+        }
+        if w.app.graph().nodes.len() < 4 && dice.chance(3) {
+            direct.insert(0, Message::Proceed(PendingAction::LoadDemo));
+        }
+        log.push_back(format!("{step}: {what}"));
+        if log.len() > 40 {
+            log.pop_front();
+        }
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            for e in events {
+                feed(&mut w, e);
+            }
+            for m in direct {
+                w.send(m);
+            }
+            if step % 4 == 0 {
+                draw_frame(&mut w, std::time::Instant::now());
+            }
+            broken(&w.app)
+        }));
+        let failure = match result {
+            Err(panic) => Some(format!(
+                "PANIC: {}",
+                panic
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_default()
+            )),
+            Ok(Some(state)) => Some(format!("BROKEN: {state}")),
+            Ok(None) => None,
+        };
+        if step % 5000 == 4999 {
+            w.snapshot(&format!("monkey_{seed}_{step}"));
+        }
+        if let Some(failure) = failure {
+            let _ = std::fs::remove_dir_all(&files);
+            return Err(format!(
+                "seed {seed}, step {step}: {failure}\nlast steps:\n{}",
+                log.iter().cloned().collect::<Vec<_>>().join("\n")
+            ));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&files);
+    println!(
+        "seed {seed}: {steps} steps in {:.1} s, {} nodes and {} links at the end",
+        start.elapsed().as_secs_f64(),
+        w.app.graph().nodes.len(),
+        w.app.graph().links.len()
+    );
+    Ok(steps)
+}
+
+/// The monkey on a few seeds (see `monkey`).
+#[test]
+#[ignore = "a stress test"]
+fn a_monkey_at_the_window() {
+    let steps: usize = std::env::var("BREWED_MONKEY_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(4000);
+    let seeds: Vec<u64> = match std::env::var("BREWED_MONKEY_SEEDS") {
+        Ok(s) => s.split(',').filter_map(|x| x.trim().parse().ok()).collect(),
+        Err(_) => (1..=8).collect(),
+    };
+    let mut failures = Vec::new();
+    for seed in seeds {
+        if let Err(e) = monkey(seed, steps) {
+            println!("{e}\n");
+            failures.push(seed);
+        }
+    }
+    assert!(failures.is_empty(), "the monkey broke the app with seeds {failures:?}");
+}
+
+/// A file can say a node is as far away as a float goes, or a comment as large: the graph
+/// frames them, zooms on them and draws them (the file is held to what can be drawn).
+#[test]
+fn far_away_nodes_are_drawn() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let (mut g, _) = brewed_texture_core::demo::graph();
+    for (i, n) in g.nodes.iter_mut().enumerate() {
+        n.pos = [if i % 2 == 0 { 3e38 } else { -3e38 }, i as f32 * 1e37];
+    }
+    for c in &mut g.comments {
+        c.pos = [-3e38, 1e30];
+        c.size = [3e38, f32::MAX];
+    }
+    let path = std::env::temp_dir().join(format!("brewed-far-{}.brewtex", std::process::id()));
+    brewed_texture_core::project::save(&path, &g, &Default::default()).expect("a file");
+    w.send(Message::Proceed(PendingAction::OpenPath(path.clone())));
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(w.app.graph().nodes.len(), g.nodes.len(), "the file opens");
+    let theme = crate::style::theme();
+    let middle = Point::new(800.0, 500.0);
+    let ids: Vec<_> = w.app.graph().nodes.iter().map(|n| n.id).collect();
+    let messages = [
+        Message::FrameAll,
+        Message::Graph(GraphMessage::ZoomAt { at: middle, factor: 1000.0 }),
+        Message::Graph(GraphMessage::ZoomAt { at: middle, factor: 0.0001 }),
+        Message::Graph(GraphMessage::PanBy(iced::Vector::new(1e6, -1e6))),
+        Message::SelectAll,
+        Message::Frame,
+        Message::Edit(Edit::Duplicate { ids, offset: [1e7, 1e7] }),
+        Message::FrameAll,
+    ];
+    for message in messages {
+        let what = format!("{message:?}").chars().take(80).collect::<String>();
+        w.send(message);
+        let cursor = w.cursor;
+        w.frame(|ui, renderer| {
+            let redraw = iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()));
+            let _ = ui.update(&[redraw], cursor, renderer, &mut clipboard::Null, &mut Vec::new());
+            ui.draw(renderer, &theme, &renderer::Style { text_color: Color::WHITE }, cursor);
+        });
+        assert_eq!(broken(&w.app), None, "after {what}");
+        let far = brewed_texture_core::graph::MAX_COORD;
+        let g = w.app.graph();
+        assert!(g.nodes.iter().flat_map(|n| n.pos).all(|p| p.abs() <= far), "after {what}");
+        assert!(g.comments.iter().flat_map(|c| c.pos.into_iter().chain(c.size)).all(|p| p.abs() <= far), "after {what}");
+    }
+}

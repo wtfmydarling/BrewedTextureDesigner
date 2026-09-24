@@ -135,6 +135,8 @@ pub fn toolbar(app: &App) -> Element<'_, Message> {
         pick_list(Shape::ALL, Some(cam.shape), move |shape| Message::Preview(PreviewMessage::Camera(Camera { shape, ..cam })))
             .text_size(style::SMALL)
             .padding([2, 6])
+            // As wide as its longest shape, however little room the view has: one line.
+            .width(Length::Fixed(112.0))
             .style(style::pick_list)
     ]
     .spacing(4)

@@ -43,6 +43,8 @@ pub struct StartupOptions {
     /// How the window was laid out last time: kept, and saved again on quitting. `None`
     /// starts from the defaults and saves nothing.
     pub workspace: Option<Workspace>,
+    /// Drive the app by itself, to find what breaks (see [`crate::autopilot`]).
+    pub autopilot: Option<crate::autopilot::Flight>,
 }
 
 // ---------------------------------------------------------------------------- ui state
@@ -330,6 +332,8 @@ pub struct App {
     screenshot_requested: bool,
     /// What the eyedropper needs to know about the app (its Wayland connection).
     host: eyedropper::Host,
+    /// The autopilot, when the app drives itself.
+    pilot: Option<crate::autopilot::Autopilot>,
 }
 
 // ---------------------------------------------------------------------------- messages
@@ -523,6 +527,8 @@ pub enum Message {
     /// What the eyedropper needs to know about the app, found once its window is open.
     Host(eyedropper::Host),
     Screenshot(window::Screenshot),
+    /// The autopilot's turn (see [`crate::autopilot`]).
+    Autopilot,
 }
 
 // ---------------------------------------------------------------------------- boot
@@ -668,6 +674,10 @@ impl App {
             started: Instant::now(),
             screenshot_requested: false,
             host: eyedropper::Host::default(),
+            pilot: opts.autopilot.and_then(|flight| {
+                let pilot = crate::autopilot::Autopilot::new(flight);
+                pilot.map_err(|e| log::error!("the autopilot cannot start: {e}")).ok()
+            }),
         };
         if let Some(path) = opts.open.clone() {
             app.open_path(path);
@@ -776,6 +786,9 @@ impl App {
         if aging {
             subs.push(iced::time::every(Duration::from_millis(200)).map(|_| Message::Tick));
         }
+        if self.pilot.as_ref().is_some_and(|p| !p.is_done()) {
+            subs.push(iced::time::every(Duration::from_millis(16)).map(|_| Message::Autopilot));
+        }
         // Until the main window shows: it does once it has drawn a frame, or a second after it
         // was shown cloaked whatever happens (should a system not draw a cloaked window).
         if !self.ui.shown {
@@ -800,7 +813,37 @@ impl App {
         } else {
             log::info!("{text}");
         }
+        if let Some(pilot) = &mut self.pilot {
+            pilot.status(&text, error);
+        }
         self.ui.status = Some(Status { text, error, at: Instant::now() });
+    }
+
+    /// Has the engine done all it was asked, every export too?
+    pub fn engine_idle(&self) -> bool {
+        self.engine.is_some()
+            && self.res.busy_since.is_none()
+            && self.res.finished_revision >= self.eval_revision
+            && self.res.exports_pending == 0
+    }
+
+    /// The autopilot's turn: what it does now, as the interface does it; once it has done
+    /// all it does, the app quits.
+    fn fly(&mut self) -> Task<Message> {
+        use crate::autopilot::{Turn, WindowChange};
+        let Some(mut pilot) = self.pilot.take() else { return Task::none() };
+        let turn = pilot.tick(self);
+        let done = pilot.is_done();
+        self.pilot = Some(pilot);
+        if done {
+            return self.hide_and_exit();
+        }
+        match (turn, self.window) {
+            (Some(Turn::Send(message)), _) => self.update(message),
+            (Some(Turn::Window(WindowChange::Resize(size))), Some(id)) => window::resize(id, size),
+            (Some(Turn::Window(WindowChange::Maximize(on))), Some(id)) => window::maximize(id, on),
+            _ => Task::none(),
+        }
     }
 
     fn send(&self, request: Request) {
@@ -1364,6 +1407,9 @@ impl App {
         match message {
             Message::PollGpu => {
                 if let Some(handles) = gpu::take() {
+                    if let Some(pilot) = &mut self.pilot {
+                        pilot.watch(handles.device.clone());
+                    }
                     let (service, source) = gpu::start_engine(handles, "GPU".into());
                     self.engine = Some(service);
                     self.events = Some(source);
@@ -1746,6 +1792,7 @@ impl App {
             Message::Pick(msg) => return self.pick_message(msg),
             Message::Host(host) => self.host = host,
             Message::Screenshot(shot) => return self.save_screenshot(shot),
+            Message::Autopilot => return self.fly(),
         }
         Task::none()
     }
@@ -1829,6 +1876,9 @@ impl App {
                     self.res.updates.push_back((Instant::now(), millis, report.recomputed));
                 }
                 self.age_readings();
+                if let Some(pilot) = &mut self.pilot {
+                    pilot.finished(millis, report.recomputed);
+                }
             }
             Event::Memory(bytes) => self.res.memory = bytes,
             Event::Choices(c) => {
@@ -1860,6 +1910,11 @@ impl App {
                 }
             }
             Event::GpuErrors(errors) => {
+                if let Some(pilot) = &mut self.pilot {
+                    for e in &errors {
+                        pilot.finding(format!("GPU error: {e}"));
+                    }
+                }
                 if let Some(e) = errors.last() {
                     self.set_status(format!("GPU error: {e}"), true);
                 }

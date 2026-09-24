@@ -133,7 +133,7 @@ pub const HEADER_H: f32 = 30.0;
 /// The strip at the top of a pane: its title, and tools on the right.
 pub fn pane_header<'a>(title: &str, tools: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(
-        row![caption(title), space().width(Length::Fill), tools.into()]
+        row![container(caption(title).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true), tools.into()]
             .spacing(8)
             .align_y(Alignment::Center)
             .height(Length::Fixed(HEADER_H)),

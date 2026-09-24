@@ -3,6 +3,7 @@
 //! Brewed Texture Designer: a GPU accelerated, node based procedural texture editor.
 
 mod app;
+mod autopilot;
 mod brand;
 mod eyedropper;
 mod gpu;
@@ -28,6 +29,7 @@ usage: brewed-texture-designer [FILE.brewtex]
        brewed-texture-designer --screenshot OUT.png [--scenario NAME] [--select KIND] [--preview KIND] [FILE]
        brewed-texture-designer --contact-sheet OUT.png [demo]
        brewed-texture-designer --bench
+       brewed-texture-designer --autopilot [MINUTES] [--seed N]
 
   --screenshot     start, wait until everything is computed, save a screenshot and quit
   --scenario       UI state for the screenshot: add-menu, file-menu, context-menu,
@@ -36,7 +38,11 @@ usage: brewed-texture-designer [FILE.brewtex]
   --select KIND    select the first node of this type (e.g. math, levels)
   --preview KIND   show the first node of this type in the 2D view
   --contact-sheet  render every node type (or the demo graph) into one image
-  --bench          measure GPU evaluation and the SIMD kernels";
+  --bench          measure GPU evaluation and the SIMD kernels
+  --autopilot      drive the app by itself: scenes (texture sizes, dragged values, every
+                   node, files, exports, the 3D view), then random steps for MINUTES (10
+                   by default); log what it does and what goes wrong, and quit
+  --seed N         the autopilot's random steps (the same seed, the same steps)";
 
 fn main() -> iced::Result {
     attach_console();
@@ -44,6 +50,7 @@ fn main() -> iced::Result {
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut options = StartupOptions::default();
+    let (mut flight, mut seed) = (None, 1);
     let mut i = 0;
     while i < args.len() {
         let value = |i: usize| args.get(i + 1).cloned();
@@ -95,6 +102,18 @@ fn main() -> iced::Result {
                 options.preview = value(i);
                 i += 1;
             }
+            "--autopilot" => {
+                // How long is optional.
+                let minutes = value(i).and_then(|m| m.parse::<f32>().ok());
+                if minutes.is_some() {
+                    i += 1;
+                }
+                flight = Some(minutes.unwrap_or(10.0));
+            }
+            "--seed" => {
+                seed = value(i).and_then(|s| s.parse().ok()).unwrap_or(seed);
+                i += 1;
+            }
             other if other.starts_with("--") => {
                 eprintln!("unknown option {other}\n\n{USAGE}");
                 std::process::exit(2);
@@ -104,9 +123,11 @@ fn main() -> iced::Result {
         i += 1;
     }
 
+    options.autopilot = flight.map(|minutes| autopilot::Flight { minutes, seed });
+
     // The layout of the last session, kept for the next one (not for screenshots, which
-    // show the program as it starts the first time).
-    if options.screenshot.is_none() {
+    // show the program as it starts the first time, nor for the autopilot).
+    if options.screenshot.is_none() && options.autopilot.is_none() {
         options.workspace = Some(workspace::Workspace::load());
     }
 

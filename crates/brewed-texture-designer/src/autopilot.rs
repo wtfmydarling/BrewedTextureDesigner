@@ -1,0 +1,1552 @@
+//! The autopilot: the app driving itself (`--autopilot [MINUTES] [--seed N]`), to find what
+//! breaks before a person does. In the real window, on the GPU and the engine thread as they
+//! are, it goes through scenes (the texture size up to 8192, dragging every input value and
+//! parameters, showing every node, adding every kind of node, typed values far past the
+//! sliders, undo and redo, saving and opening, broken files too, exporting and reading the
+//! files back, pictures for Bitmap nodes from one pixel to 4096², the 3D view, the pictures of
+//! the options), then does random things until its time is up, and quits. Everything it does
+//! goes to a log with the time and the engine's memory, and what went wrong is marked
+//! FINDING: whatever breaks can be followed back, and the same seed does the same things.
+//!
+//! It stays inside the app: no file dialog, no clipboard, no eyedropper; its files are in a
+//! folder of its own in the system's temporary folder.
+
+use std::collections::VecDeque;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use brewed_texture_core::graph::{input_socket_key, output_socket_key};
+use brewed_texture_core::{DataType, Edit, NodeId, NodeKind, ParamDef, ParamKind, ParamValue, SocketRef, Value};
+
+use crate::app::{App, DragPayload, GraphMessage, Message, PendingAction, PreviewMessage, SelectMode};
+use crate::view::view3d::{Camera, Move, Shape};
+
+/// How long the autopilot flies, and on which seed.
+#[derive(Clone, Copy, Debug)]
+pub struct Flight {
+    pub minutes: f32,
+    pub seed: u64,
+}
+
+/// What the autopilot does on its turn.
+pub enum Turn {
+    /// A message, as the interface sends it.
+    Send(Message),
+    /// The window changed, as a person changes it by its frame.
+    Window(WindowChange),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum WindowChange {
+    Resize(iced::Size),
+    Maximize(bool),
+}
+
+/// What the autopilot does next.
+enum Step {
+    /// A message, as the interface sends it.
+    Do(Message),
+    /// The window changed.
+    Window(WindowChange),
+    /// Wait until the engine has done all it was asked.
+    Wait,
+    /// Wait this long (the engine settles half a second after the last change).
+    Pause(Duration),
+    /// Write down where things are: the engine's memory.
+    Note(String),
+    /// Something to check about the app now: what is wrong, if anything.
+    Check(Check),
+}
+
+type Check = Box<dyn Fn(&App) -> Option<String>>;
+
+type Batch = Box<dyn FnMut(&App, &mut Dice) -> Option<Vec<Step>>>;
+
+/// A part of the flight: what to do next with the app as it is, `None` once it is over.
+struct Scene {
+    name: &'static str,
+    next: Batch,
+}
+
+/// Numbers for the autopilot's choices: the same seed, the same flight.
+pub struct Dice(u64);
+
+impl Dice {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n.max(1) as u64) as usize
+    }
+    fn chance(&mut self, percent: u64) -> bool {
+        self.next() % 100 < percent
+    }
+    fn float(&mut self, lo: f32, hi: f32) -> f32 {
+        lo + ((self.next() >> 40) as f32 / (1u64 << 24) as f32) * (hi - lo)
+    }
+}
+
+pub struct Autopilot {
+    flight: Flight,
+    dice: Dice,
+    started: Instant,
+    log: std::io::BufWriter<std::fs::File>,
+    scenes: VecDeque<Scene>,
+    scene: Option<Scene>,
+    steps: VecDeque<Step>,
+    waiting_since: Option<Instant>,
+    pause_until: Option<Instant>,
+    done: bool,
+    actions: u64,
+    findings: Vec<String>,
+    most_memory: u64,
+    /// When the autopilot last had its turn, and the longest the interface kept it waiting
+    /// between two turns in this scene (busy with what it was told, or drawing).
+    last_turn: Option<Instant>,
+    longest_wait: Duration,
+    /// The device the UI and the engine share, for what its allocator holds (where it says).
+    device: Option<brewed_texture_engine::wgpu::Device>,
+}
+
+/// A number of MB.
+fn mb(bytes: u64) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
+}
+
+impl Autopilot {
+    pub fn new(flight: Flight) -> Result<Autopilot, String> {
+        let folder = std::env::temp_dir().join(format!("brewed-autopilot-{}", flight.seed));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+        let file = std::fs::File::create(folder.join("autopilot.log")).map_err(|e| e.to_string())?;
+        make_files(&folder)?;
+        // A panic, wherever it happens, is written down with where it happened.
+        let panics = folder.join("panic.log");
+        let report = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let trace = std::backtrace::Backtrace::force_capture();
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&panics) {
+                let _ = writeln!(f, "{info}\n{trace}");
+            }
+            report(info);
+        }));
+        let mut pilot = Autopilot {
+            flight,
+            dice: Dice(flight.seed.max(1)),
+            started: Instant::now(),
+            log: std::io::BufWriter::new(file),
+            scenes: scenes(&folder),
+            scene: None,
+            steps: VecDeque::new(),
+            waiting_since: None,
+            pause_until: None,
+            done: false,
+            actions: 0,
+            findings: Vec::new(),
+            most_memory: 0,
+            last_turn: None,
+            longest_wait: Duration::ZERO,
+            device: None,
+        };
+        pilot.write(&format!(
+            "autopilot, seed {}, {} minutes, files in {}",
+            flight.seed,
+            flight.minutes,
+            folder.display()
+        ));
+        println!("autopilot: the log is {}", folder.join("autopilot.log").display());
+        Ok(pilot)
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.done
+    }
+
+    /// The device the UI and the engine share: its allocator's memory goes into the notes.
+    pub fn watch(&mut self, device: brewed_texture_engine::wgpu::Device) {
+        self.device = Some(device);
+    }
+
+    fn write(&mut self, line: &str) {
+        let t = self.started.elapsed().as_secs_f64();
+        let _ = writeln!(self.log, "[{t:9.3} s] {line}");
+        let _ = self.log.flush();
+    }
+
+    /// Something that went wrong.
+    pub fn finding(&mut self, what: String) {
+        self.write(&format!("FINDING: {what}"));
+        self.findings.push(what);
+    }
+
+    /// The status bar said something (errors are written down: some are what a scene
+    /// wants, such as a broken file refused).
+    pub fn status(&mut self, text: &str, error: bool) {
+        if error {
+            self.write(&format!("status error: {text}"));
+        }
+    }
+
+    /// The engine finished a change: how long it took.
+    pub fn finished(&mut self, millis: f32, recomputed: usize) {
+        if millis > 2000.0 {
+            self.finding(format!("a change took {millis:.0} ms ({recomputed} nodes)"));
+        }
+    }
+
+    /// What to do on this tick (nothing while it waits).
+    pub fn tick(&mut self, app: &App) -> Option<Turn> {
+        if self.done {
+            return None;
+        }
+        self.most_memory = self.most_memory.max(app.res.memory.total());
+        let now = Instant::now();
+        // Turns come every 16 ms while the interface is free: a longer wait is a moment it was
+        // not, which a person would feel.
+        if let Some(last) = self.last_turn.replace(now) {
+            let wait = now - last;
+            self.longest_wait = self.longest_wait.max(wait);
+            if wait > Duration::from_millis(1000) {
+                self.finding(format!("the interface did not answer for {} ms", wait.as_millis()));
+            } else if wait > Duration::from_millis(250) {
+                self.write(&format!("the interface was busy for {} ms", wait.as_millis()));
+            }
+        }
+        if let Some(since) = self.waiting_since {
+            if !app.engine_idle() {
+                if now - since > Duration::from_secs(90) {
+                    self.finding("the engine did not finish what it was asked in 90 s".into());
+                    self.waiting_since = None;
+                }
+                return None;
+            }
+            self.waiting_since = None;
+            // What the engine says once it finished (its memory, the views' images) comes
+            // right after: a moment for it.
+            self.pause_until = Some(now + Duration::from_millis(50));
+        }
+        if let Some(until) = self.pause_until {
+            if now < until {
+                return None;
+            }
+            self.pause_until = None;
+        }
+        loop {
+            let Some(step) = self.steps.pop_front() else {
+                if !self.next_batch(app) {
+                    self.done = true;
+                    self.summary(app);
+                    return None;
+                }
+                continue;
+            };
+            match step {
+                Step::Do(message) => {
+                    self.actions += 1;
+                    let text: String = format!("{message:?}").chars().take(160).collect();
+                    self.write(&format!("do {text}"));
+                    // One a tick: as fast as a person dragging.
+                    return Some(Turn::Send(message));
+                }
+                Step::Window(change) => {
+                    self.actions += 1;
+                    self.write(&format!("window {change:?}"));
+                    return Some(Turn::Window(change));
+                }
+                Step::Wait => {
+                    self.waiting_since = Some(now);
+                    return None;
+                }
+                Step::Pause(d) => {
+                    self.pause_until = Some(now + d);
+                    return None;
+                }
+                Step::Note(what) => {
+                    let m = app.res.memory;
+                    // What the device's allocator holds, UI and engine together (D3D12 says).
+                    let allocator = self.device.as_ref().and_then(|d| d.generate_allocator_report()).map_or_else(
+                        String::new,
+                        |r| format!(", allocator {:.1} MB of {:.1}", mb(r.total_allocated_bytes), mb(r.total_reserved_bytes)),
+                    );
+                    self.write(&format!(
+                        "NOTE {what}: {:.1} MB (views {:.1}, kept {:.1}, scratch {:.1}, files {:.1}), {} nodes{allocator}",
+                        mb(m.total()),
+                        mb(m.shown),
+                        mb(m.kept),
+                        mb(m.scratch),
+                        mb(m.files),
+                        app.graph().nodes.len()
+                    ));
+                }
+                Step::Check(check) => {
+                    if let Some(problem) = check(app) {
+                        self.finding(problem);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The next steps of the scene, or of the next scene; `false` once all are done.
+    fn next_batch(&mut self, app: &App) -> bool {
+        loop {
+            if let Some(scene) = &mut self.scene {
+                let over_time =
+                    scene.name == "random" && self.started.elapsed().as_secs_f32() > self.flight.minutes * 60.0;
+                if !over_time && let Some(steps) = (scene.next)(app, &mut self.dice) {
+                    self.steps.extend(steps);
+                    return true;
+                }
+                let name = scene.name;
+                let longest = std::mem::take(&mut self.longest_wait).as_millis();
+                self.write(&format!(
+                    "SCENE {name} over; the interface kept the autopilot waiting {longest} ms at most"
+                ));
+            }
+            match self.scenes.pop_front() {
+                Some(scene) => {
+                    self.write(&format!("SCENE {}", scene.name));
+                    self.scene = Some(scene);
+                }
+                None => {
+                    self.scene = None;
+                    return false;
+                }
+            }
+        }
+    }
+
+    fn summary(&mut self, app: &App) {
+        let lines = [
+            format!("{} actions in {:.1} min", self.actions, self.started.elapsed().as_secs_f64() / 60.0),
+            format!("the most memory the engine said it took: {:.0} MB", mb(self.most_memory)),
+            format!("at the end: {:.0} MB, {} nodes", mb(app.res.memory.total()), app.graph().nodes.len()),
+            format!("{} findings", self.findings.len()),
+        ];
+        for line in lines {
+            self.write(&line);
+            println!("autopilot: {line}");
+        }
+        for f in &self.findings {
+            println!("autopilot: FINDING {f}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------- the files
+
+/// The files the scenes use: pictures for Bitmap nodes (good ones of odd sizes and depths,
+/// and broken ones), broken graphs, and the folder exports go to.
+fn make_files(folder: &Path) -> Result<(), String> {
+    let e = |e: image::ImageError| e.to_string();
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255])).save(folder.join("one_pixel.png")).map_err(e)?;
+    image::RgbaImage::from_fn(17, 9, |x, y| image::Rgba([(x * 15) as u8, (y * 28) as u8, 128, 200]))
+        .save(folder.join("odd.png"))
+        .map_err(e)?;
+    image::RgbaImage::from_fn(4096, 4096, |x, y| image::Rgba([x as u8, y as u8, (x ^ y) as u8, 255]))
+        .save(folder.join("big.png"))
+        .map_err(e)?;
+    image::ImageBuffer::<image::Luma<u16>, _>::from_fn(1024, 1024, |x, y| image::Luma([((x * 64) ^ (y * 64)) as u16]))
+        .save(folder.join("gray16.png"))
+        .map_err(e)?;
+    image::Rgba32FImage::from_fn(256, 256, |x, y| image::Rgba([x as f32 / 64.0, y as f32 / 64.0, 0.5, 1.0]))
+        .save(folder.join("hdr.exr"))
+        .map_err(e)?;
+    let write = |name: &str, bytes: &[u8]| std::fs::write(folder.join(name), bytes).map_err(|e| e.to_string());
+    write("broken.png", b"\x89PNG\r\n\x1a\nnot really")?;
+    write("empty.png", b"")?;
+    write("text.png", b"just some text in a file called a picture")?;
+    write("broken.brewtex", b"{ \"format\": \"brewed\", \"graph\": [1, 2, ")?;
+    write("empty.brewtex", b"")?;
+    write("other.brewtex", b"{ \"hello\": \"world\" }")?;
+    std::fs::create_dir_all(folder.join("export")).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------- the scenes
+
+fn edit(e: Edit) -> Step {
+    Step::Do(Message::Edit(e))
+}
+
+fn preview(node: NodeId) -> Step {
+    Step::Do(Message::Graph(GraphMessage::Preview(node)))
+}
+
+/// The output the demo shows first, or the first output.
+fn home(app: &App) -> Option<NodeId> {
+    let g = app.graph();
+    g.nodes_of(NodeKind::OUTPUT)
+        .find(|n| n.text("name") == "basecolor")
+        .or_else(|| g.nodes_of(NodeKind::OUTPUT).next())
+        .map(|n| n.id)
+}
+
+/// Back to the demo as it opens, settled: it takes what it took when it opened, whatever was
+/// done before.
+fn back_home(what: &'static str) -> Vec<Step> {
+    vec![
+        Step::Do(Message::Proceed(PendingAction::LoadDemo)),
+        Step::Wait,
+        Step::Pause(Duration::from_millis(1200)),
+        Step::Note(format!("the demo again, settled, after {what}")),
+        Step::Check(Box::new(move |app: &App| {
+            let m = app.res.memory;
+            // The five maps it writes with their mips: 64 MB at 2048.
+            (m.kept + m.scratch > 0 || m.total() > 65 * 1024 * 1024).then(|| {
+                format!(
+                    "after {what}, the demo takes {:.1} MB (views {:.1}, kept {:.1}, scratch {:.1}, files {:.1}), not 64",
+                    mb(m.total()),
+                    mb(m.shown),
+                    mb(m.kept),
+                    mb(m.scratch),
+                    mb(m.files)
+                )
+            })
+        })),
+    ]
+}
+
+/// A value for a parameter: in its slider's range, or, `far`, what can be typed past it (up
+/// to its limits).
+fn value_for(pd: &ParamDef, dice: &mut Dice, far: bool) -> Option<ParamValue> {
+    let limit = |v: f32| pd.limits.map_or(v, |(lo, hi)| v.clamp(lo, hi));
+    Some(match pd.kind {
+        ParamKind::Float { min, max, .. } => {
+            let v = if far {
+                let span = (max - min).abs().max(1.0);
+                [max + span * 10.0, min - span * 10.0, 1e6, -1e6, 0.0][dice.below(5)]
+            } else {
+                dice.float(min, max)
+            };
+            ParamValue::Float(limit(v))
+        }
+        ParamKind::Int { min, max, .. } => {
+            let v = if far {
+                [max as f32 * 10.0 + 10.0, min as f32 - 100.0, 100_000.0][dice.below(3)]
+            } else {
+                dice.float(min as f32, max as f32).round()
+            };
+            ParamValue::Int(limit(v) as i32)
+        }
+        ParamKind::Vec2 { min, max, .. } => {
+            let mut v = || if far { [max * 10.0, min * 10.0, 1e5][dice.below(3)] } else { dice.float(min, max) };
+            ParamValue::Vec2([limit(v()), limit(v())])
+        }
+        ParamKind::Color { .. } => {
+            let mut c = || if far { dice.float(-10.0, 10.0) } else { dice.float(0.0, 1.0) };
+            ParamValue::Color([c(), c(), c(), c()])
+        }
+        ParamKind::Enum { options, .. } => ParamValue::Enum(dice.below(options.len()) as u32),
+        ParamKind::Bool { .. } => ParamValue::Bool(dice.chance(50)),
+        _ => return None,
+    })
+}
+
+/// A value on the way along a drag from one end of a range to the other and back (`t` from
+/// 0 to 1).
+fn swept(value: &Value, min: &Value, max: &Value, t: f32) -> Value {
+    let t = 1.0 - (2.0 * t - 1.0).abs();
+    match (value, min, max) {
+        (Value::Float(_), Value::Float(lo), Value::Float(hi)) => Value::Float(lo + (hi - lo) * t),
+        (Value::Int(_), Value::Int(lo), Value::Int(hi)) => Value::Int(lo + ((hi - lo) as f32 * t).round() as i32),
+        (Value::Vec2(_), Value::Vec2(lo), Value::Vec2(hi)) => {
+            Value::Vec2([lo[0] + (hi[0] - lo[0]) * t, lo[1] + (hi[1] - lo[1]) * t])
+        }
+        (Value::Color(_), _, _) => Value::Color([t, 1.0 - t, 0.5 * t, 1.0]),
+        (Value::Bool(_), _, _) => Value::Bool(t > 0.5),
+        (v, _, _) => *v,
+    }
+}
+
+/// The image nodes of the graph.
+fn image_nodes(app: &App) -> Vec<&brewed_texture_core::Node> {
+    app.graph().nodes.iter().filter(|n| n.def().has_image()).collect()
+}
+
+/// The scenes, in the order they are flown.
+fn scenes(folder: &Path) -> VecDeque<Scene> {
+    let mut scenes = VecDeque::new();
+    let once = |steps: Vec<Step>| -> Batch {
+        let mut steps = Some(steps);
+        Box::new(move |_: &App, _: &mut Dice| steps.take())
+    };
+
+    scenes.push_back(Scene {
+        name: "opening",
+        next: once(vec![Step::Wait, Step::Pause(Duration::from_millis(1500)), Step::Note("opened, settled".into())]),
+    });
+
+    let sizes = [256, 512, 1024, 2048, 4096, 8192, 16, 2048];
+    let mut i = 0;
+    scenes.push_back(Scene {
+        name: "texture sizes",
+        next: Box::new(move |_: &App, _: &mut Dice| {
+            let s = *sizes.get(i)?;
+            i += 1;
+            let mut steps = vec![
+                edit(Edit::SetResolution([s, s])),
+                Step::Do(Message::Seal),
+                Step::Wait,
+                Step::Note(format!("{s}x{s}")),
+            ];
+            if i == sizes.len() {
+                steps.extend(back_home("the texture sizes"));
+            }
+            Some(steps)
+        }),
+    });
+
+    let mut v = 0;
+    scenes.push_back(Scene {
+        name: "dragging the input values",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            let var = app.graph().variables.get(v)?.clone();
+            v += 1;
+            let mut steps: Vec<Step> = (0..=120)
+                .map(|k| {
+                    let value = swept(&var.value, &var.min, &var.max, k as f32 / 120.0);
+                    edit(Edit::SetVariable { name: var.name.clone(), value })
+                })
+                .collect();
+            steps.extend([Step::Do(Message::Seal), Step::Wait, Step::Note(format!("dragged {}", var.name))]);
+            if v == app.graph().variables.len() {
+                steps.extend(back_home("dragging the input values"));
+            }
+            Some(steps)
+        }),
+    });
+
+    let mut dragged = 0;
+    scenes.push_back(Scene {
+        name: "dragging parameters",
+        next: Box::new(move |app: &App, dice: &mut Dice| {
+            if dragged == 12 {
+                return None;
+            }
+            dragged += 1;
+            let nodes = image_nodes(app);
+            let node = *nodes.get(dice.below(nodes.len()))?;
+            let params: Vec<&ParamDef> = node
+                .def()
+                .params
+                .iter()
+                .filter(|p| {
+                    matches!(p.kind, ParamKind::Float { .. } | ParamKind::Int { .. }) && !node.is_exposed(p.key)
+                })
+                .collect();
+            let mut steps = Vec::new();
+            if let Some(pd) = params.get(dice.below(params.len())) {
+                let (id, key) = (node.id, pd.key.to_string());
+                steps.push(Step::Do(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace })));
+                for k in 0..=60 {
+                    let t = 1.0 - (2.0 * k as f32 / 60.0 - 1.0).abs();
+                    let value = match pd.kind {
+                        ParamKind::Float { min, max, .. } => ParamValue::Float(min + (max - min) * t),
+                        ParamKind::Int { min, max, .. } => {
+                            ParamValue::Int(min + ((max - min) as f32 * t).round() as i32)
+                        }
+                        _ => continue,
+                    };
+                    steps.push(edit(Edit::SetParam { node: id, key: key.clone(), value }));
+                }
+                steps.extend([
+                    Step::Do(Message::Seal),
+                    Step::Wait,
+                    Step::Note(format!("dragged {} {}", node.def().name, pd.key)),
+                ]);
+            }
+            if dragged == 12 {
+                steps.extend(back_home("dragging parameters"));
+            }
+            Some(steps)
+        }),
+    });
+
+    let mut shown = 0;
+    scenes.push_back(Scene {
+        name: "showing every node",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            let nodes = image_nodes(app);
+            if shown > nodes.len() {
+                return None;
+            }
+            shown += 1;
+            let Some(n) = nodes.get(shown - 1) else {
+                let mut steps: Vec<Step> = home(app).map(preview).into_iter().collect();
+                steps.extend(back_home("showing every node"));
+                return Some(steps);
+            };
+            let (id, name) = (n.id, n.def().name);
+            Some(vec![
+                preview(id),
+                Step::Wait,
+                Step::Note(format!("showing {name}")),
+                Step::Check(Box::new(move |app: &App| {
+                    if let Some(e) = app.res.reports.get(&id).and_then(|r| r.error.clone()) {
+                        return Some(format!("{name} of the demo: {e}"));
+                    }
+                    let showing = app.res.preview.as_ref().map(|p| p.node);
+                    (showing != Some(id)).then(|| format!("the 2D view shows {showing:?}, not {name} {id:?}"))
+                })),
+            ])
+        }),
+    });
+
+    let mut kind = 0;
+    let mut added: Vec<NodeId> = Vec::new();
+    scenes.push_back(Scene {
+        name: "every kind of node",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            let g = app.graph();
+            // What the last step added (the node with the highest id): connected, and shown.
+            if kind > 0
+                && let Some(new) = g.nodes.iter().map(|n| n.id).max_by_key(|id| id.0)
+                && !added.contains(&new)
+                && let Some(node) = g.node(new)
+            {
+                added.push(new);
+                let source = g.nodes.iter().find(|n| {
+                    n.kind != NodeKind::OUTPUT && n.def().has_image() && !n.def().outputs.is_empty() && n.id != new
+                });
+                let mut steps = Vec::new();
+                if let Some(source) = source {
+                    for s in node.def().inputs.iter().filter(|s| s.ty == DataType::Image) {
+                        steps.push(edit(Edit::Connect {
+                            a: SocketRef {
+                                node: source.id,
+                                key: output_socket_key(source.def().outputs[0].key),
+                                output: true,
+                            },
+                            b: SocketRef { node: new, key: input_socket_key(s.key), output: false },
+                        }));
+                    }
+                }
+                steps.push(Step::Do(Message::Seal));
+                if node.def().has_image() {
+                    // (A Bitmap has no file yet: it says so.)
+                    let expected = node.kind == NodeKind::BITMAP;
+                    let name = node.def().name;
+                    steps.extend([
+                        preview(new),
+                        Step::Wait,
+                        Step::Note(format!("added {name}")),
+                        Step::Check(Box::new(move |app: &App| {
+                            let error = app.res.reports.get(&new).and_then(|r| r.error.clone());
+                            error.filter(|_| !expected).map(|e| format!("a new {name}, connected: {e}"))
+                        })),
+                    ]);
+                }
+                return Some(steps);
+            }
+            let all = NodeKind::ALL;
+            if kind < all.len() {
+                let k = all[kind];
+                kind += 1;
+                return Some(vec![edit(Edit::AddNode { kind: k, pos: [200.0 * kind as f32, 1400.0] })]);
+            }
+            if kind == all.len() {
+                kind += 1;
+                let mut steps = vec![edit(Edit::RemoveNodes(added.clone())), Step::Do(Message::Seal), Step::Wait];
+                steps.extend(back_home("adding every kind of node"));
+                return Some(steps);
+            }
+            None
+        }),
+    });
+
+    let mut far = 0;
+    scenes.push_back(Scene {
+        name: "values typed far past the sliders",
+        next: Box::new(move |app: &App, dice: &mut Dice| {
+            if far == 40 {
+                return None;
+            }
+            far += 1;
+            let nodes: Vec<_> = image_nodes(app).into_iter().filter(|n| !n.def().params.is_empty()).collect();
+            let node = *nodes.get(dice.below(nodes.len()))?;
+            let params: Vec<&ParamDef> = node.def().params.iter().filter(|p| !node.is_exposed(p.key)).collect();
+            let mut steps = Vec::new();
+            if let Some(pd) = params.get(dice.below(params.len()))
+                && let Some(value) = value_for(pd, dice, true)
+            {
+                let text = format!("{} {} = {value:?}", node.def().name, pd.key);
+                steps.extend([
+                    preview(node.id),
+                    edit(Edit::SetParam { node: node.id, key: pd.key.into(), value }),
+                    Step::Do(Message::Seal),
+                    Step::Wait,
+                    Step::Note(text),
+                ]);
+            }
+            if far == 40 {
+                steps.extend(back_home("values typed far past the sliders"));
+            }
+            Some(steps)
+        }),
+    });
+
+    let mut storm = 0;
+    let mut nodes_before = 0;
+    scenes.push_back(Scene {
+        name: "undo and redo",
+        next: Box::new(move |app: &App, dice: &mut Dice| {
+            storm += 1;
+            match storm {
+                1 => {
+                    // Forty changes of every kind, to undo.
+                    let mut steps = Vec::new();
+                    let g = app.graph();
+                    for _ in 0..40 {
+                        let n = &g.nodes[dice.below(g.nodes.len())];
+                        match dice.below(3) {
+                            0 => steps.push(edit(Edit::MoveNodes {
+                                ids: vec![n.id],
+                                delta: [dice.float(-50.0, 50.0), dice.float(-50.0, 50.0)],
+                            })),
+                            1 => steps.push(edit(Edit::AddNode {
+                                kind: NodeKind::ALL[dice.below(NodeKind::ALL.len())],
+                                pos: [dice.float(0.0, 1000.0), -900.0],
+                            })),
+                            _ => {
+                                if let Some(pd) = n.def().params.first()
+                                    && let Some(v) = value_for(pd, dice, false)
+                                {
+                                    steps.push(edit(Edit::SetParam { node: n.id, key: pd.key.into(), value: v }));
+                                }
+                            }
+                        }
+                        steps.push(Step::Do(Message::Seal));
+                    }
+                    steps.push(Step::Wait);
+                    Some(steps)
+                }
+                2 => {
+                    nodes_before = app.graph().nodes.len();
+                    let mut steps: Vec<Step> = (0..150).map(|_| Step::Do(Message::Undo)).collect();
+                    steps.extend([Step::Wait, Step::Note("undone".into())]);
+                    Some(steps)
+                }
+                3 => {
+                    let before = nodes_before;
+                    let mut steps: Vec<Step> = (0..150).map(|_| Step::Do(Message::Redo)).collect();
+                    steps.extend([
+                        Step::Wait,
+                        Step::Note("redone".into()),
+                        Step::Check(Box::new(move |app: &App| {
+                            let now = app.graph().nodes.len();
+                            (now != before)
+                                .then(|| format!("undone and redone, the graph has {now} nodes, not {before}"))
+                        })),
+                    ]);
+                    steps.extend(back_home("undo and redo"));
+                    Some(steps)
+                }
+                _ => None,
+            }
+        }),
+    });
+
+    let saved = folder.join("saved.brewtex");
+    let files = folder.to_path_buf();
+    let mut filed = 0;
+    let mut counts = (0, 0);
+    scenes.push_back(Scene {
+        name: "saving and opening",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            filed += 1;
+            let open = |name: &str| Step::Do(Message::Proceed(PendingAction::OpenPath(files.join(name))));
+            match filed {
+                1 => {
+                    counts = (app.graph().nodes.len(), app.graph().links.len());
+                    Some(vec![
+                        Step::Do(Message::SavePicked(Some(saved.clone()))),
+                        Step::Do(Message::Proceed(PendingAction::New)),
+                        Step::Wait,
+                        Step::Note("saved, then a new graph".into()),
+                    ])
+                }
+                2 => {
+                    let expected = counts;
+                    Some(vec![
+                        Step::Do(Message::Proceed(PendingAction::OpenPath(saved.clone()))),
+                        Step::Wait,
+                        Step::Note("opened again".into()),
+                        Step::Check(Box::new(move |app: &App| {
+                            let now = (app.graph().nodes.len(), app.graph().links.len());
+                            (now != expected).then(|| {
+                                format!("opened again, the graph has {now:?} nodes and links, not {expected:?}")
+                            })
+                        })),
+                    ])
+                }
+                3 => {
+                    let expected = counts;
+                    Some(vec![
+                        open("broken.brewtex"),
+                        Step::Wait,
+                        open("empty.brewtex"),
+                        Step::Wait,
+                        open("other.brewtex"),
+                        Step::Wait,
+                        open("big.png"),
+                        Step::Wait,
+                        open("does-not-exist.brewtex"),
+                        Step::Wait,
+                        open(""),
+                        Step::Wait,
+                        Step::Note("broken files refused".into()),
+                        // Refused, they leave the graph that was open.
+                        Step::Check(Box::new(move |app: &App| {
+                            let now = (app.graph().nodes.len(), app.graph().links.len());
+                            (now != expected)
+                                .then(|| format!("broken files refused, the graph has {now:?}, not {expected:?}"))
+                        })),
+                    ])
+                }
+                4 => Some(back_home("saving and opening")),
+                _ => None,
+            }
+        }),
+    });
+
+    let export = folder.join("export");
+    let mut exported = 0;
+    scenes.push_back(Scene {
+        name: "exporting",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            exported += 1;
+            let outputs: Vec<NodeId> = app.graph().nodes_of(NodeKind::OUTPUT).map(|n| n.id).collect();
+            match exported {
+                1..=3 => {
+                    // Every format and bit depth somewhere among the outputs, over three rounds.
+                    let mut steps = Vec::new();
+                    for (i, id) in outputs.iter().enumerate() {
+                        let format = ((i + exported * 2) % 7) as u32;
+                        let depth = ((i + exported) % 3) as u32;
+                        steps.push(edit(Edit::SetParam {
+                            node: *id,
+                            key: "format".into(),
+                            value: ParamValue::Enum(format),
+                        }));
+                        steps.push(edit(Edit::SetParam {
+                            node: *id,
+                            key: "bit_depth".into(),
+                            value: ParamValue::Enum(depth),
+                        }));
+                    }
+                    let folder = export.join(exported.to_string());
+                    let _ = std::fs::create_dir_all(&folder);
+                    steps.extend([
+                        Step::Do(Message::Seal),
+                        Step::Wait,
+                        Step::Do(Message::ExportFolderPicked(Some(folder.clone()))),
+                        Step::Wait,
+                    ]);
+                    let wanted = outputs.len();
+                    steps.push(Step::Check(Box::new(move |_: &App| {
+                        let files: Vec<PathBuf> =
+                            std::fs::read_dir(&folder).ok()?.flatten().map(|e| e.path()).collect();
+                        if files.len() != wanted {
+                            return Some(format!(
+                                "{} files exported to {}, not {wanted}",
+                                files.len(),
+                                folder.display()
+                            ));
+                        }
+                        for f in &files {
+                            match image::open(f) {
+                                Ok(img) if img.width() == 2048 && img.height() == 2048 => {}
+                                Ok(img) => {
+                                    return Some(format!(
+                                        "{} is {}x{}, not 2048x2048",
+                                        f.display(),
+                                        img.width(),
+                                        img.height()
+                                    ));
+                                }
+                                Err(e) => return Some(format!("{} cannot be read back: {e}", f.display())),
+                            }
+                        }
+                        None
+                    })));
+                    steps.push(Step::Note("exported and read back".into()));
+                    Some(steps)
+                }
+                // Into a folder that is not there (gone since it was picked).
+                4 => Some(vec![
+                    Step::Do(Message::ExportFolderPicked(Some(export.join("gone").join("deeper")))),
+                    Step::Wait,
+                    Step::Note("exported into a folder that is not there".into()),
+                ]),
+                5 => Some(back_home("exporting")),
+                _ => None,
+            }
+        }),
+    });
+
+    let pictures = [
+        "one_pixel.png",
+        "odd.png",
+        "big.png",
+        "gray16.png",
+        "hdr.exr",
+        "broken.png",
+        "empty.png",
+        "text.png",
+        "missing.png",
+    ];
+    let pictures_folder = folder.to_path_buf();
+    let mut picture = 0;
+    scenes.push_back(Scene {
+        name: "files for Bitmap nodes",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            let n = pictures.len();
+            if picture < 2 * n {
+                let name = pictures[picture / 2];
+                picture += 1;
+                if picture % 2 == 1 {
+                    let path = pictures_folder.join(name).display().to_string();
+                    return Some(vec![
+                        edit(Edit::AddNodeWith {
+                            kind: NodeKind::BITMAP,
+                            pos: [0.0, 1600.0],
+                            params: vec![("path".into(), ParamValue::Text(path))],
+                        }),
+                        Step::Do(Message::Seal),
+                    ]);
+                }
+                // The Bitmap just added: shown, loaded again, and gone.
+                let Some(bitmap) = app.graph().nodes_of(NodeKind::BITMAP).map(|n| n.id).max_by_key(|id| id.0) else {
+                    return Some(vec![Step::Check(Box::new(move |_: &App| {
+                        Some(format!("no Bitmap node for {name}"))
+                    }))]);
+                };
+                return Some(vec![
+                    preview(bitmap),
+                    Step::Wait,
+                    Step::Pause(Duration::from_millis(300)),
+                    Step::Wait,
+                    Step::Do(Message::ReloadBitmap(bitmap)),
+                    Step::Pause(Duration::from_millis(300)),
+                    Step::Wait,
+                    Step::Note(format!("a Bitmap of {name}")),
+                    edit(Edit::RemoveNodes(vec![bitmap])),
+                    Step::Do(Message::Seal),
+                    Step::Wait,
+                ]);
+            }
+            if picture == 2 * n {
+                picture += 1;
+                return Some(back_home("files for Bitmap nodes"));
+            }
+            None
+        }),
+    });
+
+    let mut viewed = 0;
+    scenes.push_back(Scene {
+        name: "the 3D view",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            viewed += 1;
+            let cam = app.ui.preview.view3d;
+            let camera = |c: Camera| Step::Do(Message::Preview(PreviewMessage::Camera(c)));
+            let turn = |m: Move| Step::Do(Message::Preview(PreviewMessage::Move3d(m)));
+            match viewed {
+                1..=5 => {
+                    let shape = Shape::ALL[viewed - 1];
+                    let mut steps = vec![camera(Camera { shape, ..cam })];
+                    for k in 0..60 {
+                        steps.push(turn(Move::Orbit(iced::Vector::new(k as f32, 2.0))));
+                        if k % 10 == 0 {
+                            steps.push(turn(Move::Light(iced::Vector::new(-15.0, 3.0))));
+                            steps.push(turn(Move::Zoom(if k < 30 { 1.3 } else { 0.7 })));
+                        }
+                    }
+                    steps.push(Step::Note(format!("the 3D view on a {shape:?}")));
+                    Some(steps)
+                }
+                6 => Some(vec![
+                    camera(Camera { displacement: 1.0, tiling: 32.0, ..cam }),
+                    Step::Pause(Duration::from_millis(500)),
+                    camera(Camera { displacement: 0.0, tiling: 0.25, ..cam }),
+                    Step::Pause(Duration::from_millis(500)),
+                    turn(Move::Zoom(1e6)),
+                    turn(Move::Zoom(1e-6)),
+                    turn(Move::Pan(iced::Vector::new(1e6, -1e6))),
+                    Step::Pause(Duration::from_millis(300)),
+                    Step::Do(Message::ToggleRealtime),
+                    Step::Pause(Duration::from_millis(1000)),
+                    Step::Do(Message::ToggleRealtime),
+                    camera(Camera::default()),
+                    Step::Note("the 3D view, far heights and repeats".into()),
+                ]),
+                _ => None,
+            }
+        }),
+    });
+
+    let mut picked = 0;
+    scenes.push_back(Scene {
+        name: "the pictures of the options",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            let noise = app.graph().nodes_of(NodeKind::NOISE).next()?.id;
+            let options = NodeKind::NOISE.def().param("type")?.enum_options().len();
+            picked += 1;
+            match picked {
+                1 => Some(vec![preview(noise), Step::Do(Message::ChoiceMenu(Some((noise, "type")))), Step::Wait]),
+                n if n <= options + 1 => {
+                    Some(vec![Step::Do(Message::PickChoice(noise, "type", (n - 2) as u32)), Step::Wait])
+                }
+                n if n == options + 2 => {
+                    let mut steps = vec![Step::Do(Message::ChoiceMenu(None)), Step::Note("every type of noise".into())];
+                    steps.extend(back_home("the pictures of the options"));
+                    Some(steps)
+                }
+                _ => None,
+            }
+        }),
+    });
+
+    scenes.extend(more_scenes(folder));
+    scenes.push_back(Scene { name: "random", next: Box::new(random_steps) });
+    scenes.push_back(Scene { name: "the end", next: once(back_home("the random part")) });
+    scenes
+}
+
+/// Scenes of what happens at once, of large graphs and of odd names.
+fn more_scenes(folder: &Path) -> Vec<Scene> {
+    let mut scenes = Vec::new();
+    let seal = || Step::Do(Message::Seal);
+
+    // Documents changed, sizes changed and exports asked for while the engine is at work on
+    // the last change: nothing waits for anything.
+    let race = folder.join("export").join("race");
+    let _ = std::fs::create_dir_all(&race);
+    let saved = folder.join("saved.brewtex");
+    let mut raced = false;
+    scenes.push(Scene {
+        name: "changes that do not wait",
+        next: Box::new(move |app: &App, dice: &mut Dice| {
+            if std::mem::replace(&mut raced, true) {
+                return None;
+            }
+            let nodes = image_nodes(app);
+            let shown = nodes.get(dice.below(nodes.len())).map(|n| n.id);
+            let mut steps = vec![
+                edit(Edit::SetResolution([8192, 8192])),
+                seal(),
+                Step::Do(Message::Proceed(PendingAction::LoadDemo)),
+                edit(Edit::SetResolution([4096, 4096])),
+                seal(),
+            ];
+            steps.extend(shown.map(preview));
+            steps.extend([
+                Step::Do(Message::Proceed(PendingAction::New)),
+                Step::Do(Message::Proceed(PendingAction::OpenPath(saved.clone()))),
+                Step::Do(Message::Proceed(PendingAction::LoadDemo)),
+                edit(Edit::SetResolution([8192, 8192])),
+                seal(),
+                Step::Do(Message::ExportFolderPicked(Some(race.clone()))),
+                Step::Do(Message::Proceed(PendingAction::LoadDemo)),
+                Step::Do(Message::Undo),
+                Step::Do(Message::Redo),
+                edit(Edit::SetResolution([1024, 1024])),
+                seal(),
+                Step::Do(Message::ExportFolderPicked(Some(race.clone()))),
+                Step::Do(Message::Proceed(PendingAction::New)),
+                Step::Wait,
+                Step::Pause(Duration::from_millis(500)),
+                Step::Wait,
+                Step::Note("after changes that did not wait".into()),
+            ]);
+            // Whatever was exported is whole (an export of nodes that went with their document
+            // says so, and writes nothing).
+            let race = race.clone();
+            steps.push(Step::Check(Box::new(move |_: &App| {
+                let files: Vec<PathBuf> = std::fs::read_dir(&race).ok()?.flatten().map(|e| e.path()).collect();
+                files
+                    .iter()
+                    .find_map(|f| image::open(f).err().map(|e| format!("{} was exported broken: {e}", f.display())))
+            })));
+            steps.extend(back_home("changes that did not wait"));
+            Some(steps)
+        }),
+    });
+
+    // A Bitmap's file changed again and again, and loaded again, while it loads: what stays
+    // is the last file, and no other.
+    let files = folder.to_path_buf();
+    let mut stormed = 0;
+    scenes.push(Scene {
+        name: "a Bitmap changed while it loads",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            stormed += 1;
+            let path = |name: &str| ParamValue::Text(files.join(name).display().to_string());
+            match stormed {
+                1 => Some(vec![
+                    edit(Edit::AddNodeWith {
+                        kind: NodeKind::BITMAP,
+                        pos: [0.0, 1600.0],
+                        params: vec![("path".into(), path("big.png"))],
+                    }),
+                    seal(),
+                ]),
+                2 => {
+                    let bitmap = app.graph().nodes_of(NodeKind::BITMAP).map(|n| n.id).max_by_key(|id| id.0)?;
+                    let mut steps = vec![preview(bitmap)];
+                    for name in [
+                        "gray16.png",
+                        "big.png",
+                        "hdr.exr",
+                        "broken.png",
+                        "big.png",
+                        "missing.png",
+                        "odd.png",
+                        "big.png",
+                    ] {
+                        steps.push(edit(Edit::SetParam { node: bitmap, key: "path".into(), value: path(name) }));
+                        steps.push(seal());
+                        steps.push(Step::Do(Message::ReloadBitmap(bitmap)));
+                    }
+                    steps.extend([
+                        Step::Do(Message::ReloadBitmap(bitmap)),
+                        Step::Do(Message::ReloadBitmap(bitmap)),
+                        Step::Wait,
+                        Step::Pause(Duration::from_millis(2500)),
+                        Step::Wait,
+                        Step::Note("the last file of a Bitmap changed while it loaded".into()),
+                        Step::Check(Box::new(move |app: &App| {
+                            if let Some(e) = app.res.reports.get(&bitmap).and_then(|r| r.error.clone()) {
+                                return Some(format!("a Bitmap changed while it loaded: {e}"));
+                            }
+                            // 4096² in RGBA of half floats, and no other file (the gradients the
+                            // demo bakes take a few KB).
+                            let files = app.res.memory.files;
+                            (files.abs_diff(128 << 20) > 1 << 20)
+                                .then(|| format!("a Bitmap of big.png keeps {:.1} MB of files, not 128", mb(files)))
+                        })),
+                        edit(Edit::RemoveNodes(vec![bitmap])),
+                        seal(),
+                        Step::Wait,
+                        Step::Pause(Duration::from_millis(300)),
+                        Step::Check(Box::new(|app: &App| {
+                            let files = app.res.memory.files;
+                            (files > 1 << 20).then(|| format!("no Bitmap, and {:.1} MB of files", mb(files)))
+                        })),
+                    ]);
+                    Some(steps)
+                }
+                _ => None,
+            }
+        }),
+    });
+
+    // Nine demos in one graph: 207 nodes to draw, compute and change.
+    let mut grown = 0;
+    scenes.push(Scene {
+        name: "a large graph",
+        next: Box::new(move |app: &App, dice: &mut Dice| {
+            grown += 1;
+            let g = app.graph();
+            match grown {
+                1 => {
+                    let ids: Vec<NodeId> = g.nodes.iter().map(|n| n.id).collect();
+                    let mut steps: Vec<Step> = (1..=8)
+                        .flat_map(|k| {
+                            [edit(Edit::Duplicate { ids: ids.clone(), offset: [0.0, 900.0 * k as f32] }), seal()]
+                        })
+                        .collect();
+                    steps.extend([Step::Do(Message::FrameAll), Step::Wait, Step::Note("nine demos".into())]);
+                    Some(steps)
+                }
+                2 => {
+                    let var = g.variables.iter().find(|v| matches!(v.value, Value::Float(_)))?.clone();
+                    let mut steps: Vec<Step> = (0..=60)
+                        .map(|k| {
+                            edit(Edit::SetVariable {
+                                name: var.name.clone(),
+                                value: swept(&var.value, &var.min, &var.max, k as f32 / 60.0),
+                            })
+                        })
+                        .collect();
+                    steps.extend([seal(), Step::Wait, Step::Note(format!("nine demos, {} dragged", var.name))]);
+                    for _ in 0..40 {
+                        let at = iced::Point::new(dice.float(0.0, 900.0), dice.float(0.0, 700.0));
+                        steps
+                            .push(Step::Do(Message::Graph(GraphMessage::ZoomAt { at, factor: dice.float(0.8, 1.25) })));
+                        steps.push(Step::Do(Message::Graph(GraphMessage::PanBy(iced::Vector::new(
+                            dice.float(-60.0, 60.0),
+                            dice.float(-60.0, 60.0),
+                        )))));
+                    }
+                    Some(steps)
+                }
+                3 => {
+                    let count = g.nodes.len();
+                    Some(vec![
+                        Step::Do(Message::SelectAll),
+                        Step::Do(Message::Delete),
+                        Step::Wait,
+                        Step::Note("everything deleted".into()),
+                        Step::Do(Message::Undo),
+                        Step::Wait,
+                        Step::Note("everything back".into()),
+                        Step::Check(Box::new(move |app: &App| {
+                            let now = app.graph().nodes.len();
+                            (now != count).then(|| format!("deleted and undone, {now} nodes, not {count}"))
+                        })),
+                    ])
+                }
+                4 => Some(back_home("a large graph")),
+                _ => None,
+            }
+        }),
+    });
+
+    // Input values taken to their edges: ranges the wrong way round, values far out of them,
+    // names taken or empty.
+    let mut edged = false;
+    scenes.push(Scene {
+        name: "input values at their edges",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            if std::mem::replace(&mut edged, true) {
+                return None;
+            }
+            let g = app.graph();
+            let mut steps = Vec::new();
+            let names: Vec<String> = g.variables.iter().map(|v| v.name.clone()).collect();
+            let long = "x".repeat(500);
+            for v in &g.variables {
+                let name = v.name.clone();
+                let far = |x: f32| match v.value {
+                    Value::Int(_) => Value::Int(x as i32),
+                    Value::Vec2(_) => Value::Vec2([x, -x]),
+                    Value::Color(_) => Value::Color([x, -x, x, 1.0]),
+                    Value::Bool(_) => Value::Bool(x > 0.0),
+                    Value::Float(_) => Value::Float(x),
+                };
+                if v.has_range() {
+                    steps.push(edit(Edit::SetVariableRange { name: name.clone(), min: far(10.0), max: far(-10.0) }));
+                    steps.push(edit(Edit::SetVariableRange { name: name.clone(), min: far(0.0), max: far(0.0) }));
+                }
+                for x in [1e30, -1e30, f32::NAN, f32::INFINITY, 0.0] {
+                    steps.push(edit(Edit::SetVariable { name: name.clone(), value: far(x) }));
+                    steps.push(edit(Edit::SetVariableDefault { name: name.clone(), value: far(x) }));
+                }
+                steps.push(edit(Edit::ResetVariable(name.clone())));
+                steps.push(edit(Edit::SetVariableDescription { name: name.clone(), text: "ы".repeat(5000) }));
+                for to in ["", "   ", "1abc", "with space", "имя", names[0].as_str(), long.as_str()] {
+                    steps.push(edit(Edit::RenameVariable { from: name.clone(), to: to.to_string() }));
+                }
+                steps.push(seal());
+            }
+            if let Some(input) = g.nodes.iter().find(|n| n.variable.is_some()) {
+                steps.push(edit(Edit::BindVariable { node: input.id, name: "a_new_one".into() }));
+                steps.push(edit(Edit::BindVariable { node: input.id, name: String::new() }));
+            }
+            steps.push(edit(Edit::AddVariableNode { name: "not_there".into(), pos: [0.0, 0.0] }));
+            steps.extend([seal(), Step::Wait, Step::Note("input values at their edges".into())]);
+            steps.push(Step::Check(Box::new(|app: &App| {
+                let g = app.graph();
+                g.variables.iter().find_map(|v| {
+                    let values = [v.value, v.default, v.min, v.max];
+                    values
+                        .iter()
+                        .any(|x| !x.is_finite())
+                        .then(|| format!("the input value {} holds {values:?}", v.name))
+                })
+            })));
+            steps.extend(back_home("input values at their edges"));
+            Some(steps)
+        }),
+    });
+
+    // Outputs called what file systems keep for themselves, or what they cannot hold.
+    let named = folder.join("export").join("names");
+    let mut rounds = 0;
+    scenes.push(Scene {
+        name: "odd names of outputs",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            rounds += 1;
+            let names: Vec<String> = match rounds {
+                1 => vec!["aux".into(), "a/b\\c:d*e?f\"g<h>i|".into(), "..".into(), "🎨 цвет".into(), "я".repeat(300)],
+                2 => vec!["con.map".into(), String::new(), "LPT1".into(), "basecolor".into(), "BASECOLOR".into()],
+                3 => vec!["nul.height".into(), "b".repeat(1000), " . ".into(), "COM9".into(), "com9".into()],
+                4 => return Some(back_home("odd names of outputs")),
+                _ => return None,
+            };
+            let outputs: Vec<NodeId> = app.graph().nodes_of(NodeKind::OUTPUT).map(|n| n.id).collect();
+            let folder = named.join(rounds.to_string());
+            let _ = std::fs::create_dir_all(&folder);
+            let mut steps = Vec::new();
+            for (id, name) in outputs.iter().zip(names.iter().chain(std::iter::repeat(&names[0]))) {
+                steps.push(edit(Edit::SetParam {
+                    node: *id,
+                    key: "name".into(),
+                    value: ParamValue::Text(name.clone()),
+                }));
+            }
+            let wanted = outputs.len();
+            steps.extend([
+                seal(),
+                Step::Wait,
+                Step::Do(Message::ExportFolderPicked(Some(folder.clone()))),
+                Step::Wait,
+                Step::Note(format!("outputs called {names:?}")),
+                Step::Check(Box::new(move |_: &App| {
+                    let files: Vec<PathBuf> = std::fs::read_dir(&folder).ok()?.flatten().map(|e| e.path()).collect();
+                    if files.len() != wanted {
+                        let names: Vec<_> = files.iter().filter_map(|f| f.file_name()).collect();
+                        return Some(format!("{} files of {wanted} exported: {names:?}", files.len()));
+                    }
+                    files
+                        .iter()
+                        .find_map(|f| image::open(f).err().map(|e| format!("{} cannot be read back: {e}", f.display())))
+                })),
+            ]);
+            Some(steps)
+        }),
+    });
+
+    // The window made as small as it goes, larger than the screen, filling it and back, and
+    // sixty sizes in a row: its frames, and the views and what they draw, are made again.
+    let mut resized = false;
+    scenes.push(Scene {
+        name: "the window resized",
+        next: Box::new(move |_: &App, _: &mut Dice| {
+            if std::mem::replace(&mut resized, true) {
+                return None;
+            }
+            let resize = |w: f32, h: f32| Step::Window(WindowChange::Resize(iced::Size::new(w, h)));
+            let mut steps = Vec::new();
+            for (w, h) in [(1000.0, 640.0), (1920.0, 1080.0), (400.0, 300.0), (3840.0, 2160.0), (1680.0, 1000.0)] {
+                steps.extend([
+                    resize(w, h),
+                    Step::Pause(Duration::from_millis(400)),
+                    Step::Note(format!("the window asked to be {w}x{h}")),
+                ]);
+            }
+            for k in 0..60 {
+                steps.push(resize(1000.0 + 23.0 * k as f32, 640.0 + 11.0 * (k % 7) as f32));
+            }
+            steps.extend([
+                Step::Window(WindowChange::Maximize(true)),
+                Step::Pause(Duration::from_millis(700)),
+                Step::Note("the window filling the screen".into()),
+                Step::Window(WindowChange::Maximize(false)),
+                Step::Pause(Duration::from_millis(300)),
+                resize(1680.0, 1000.0),
+                Step::Pause(Duration::from_millis(700)),
+                Step::Note("the window at its size again".into()),
+                Step::Check(Box::new(|app: &App| {
+                    let size = app.ui.window_size;
+                    let off = (size.width - 1680.0).abs() > 1.0 || (size.height - 1000.0).abs() > 1.0;
+                    off.then(|| format!("the window is {size:?} after it was asked to be 1680x1000"))
+                })),
+            ]);
+            Some(steps)
+        }),
+    });
+
+    // The largest export there is: every output at 8192².
+    let large = folder.join("export").join("8192");
+    let mut sized = false;
+    scenes.push(Scene {
+        name: "exporting at 8192",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            if std::mem::replace(&mut sized, true) {
+                return None;
+            }
+            let _ = std::fs::create_dir_all(&large);
+            let wanted = app.graph().nodes_of(NodeKind::OUTPUT).count();
+            let folder = large.clone();
+            let mut steps = vec![
+                edit(Edit::SetResolution([8192, 8192])),
+                seal(),
+                Step::Wait,
+                Step::Note("8192, before exporting".into()),
+                Step::Do(Message::ExportFolderPicked(Some(large.clone()))),
+                Step::Wait,
+                Step::Note("exported at 8192".into()),
+                Step::Check(Box::new(move |_: &App| {
+                    let files: Vec<PathBuf> = std::fs::read_dir(&folder).ok()?.flatten().map(|e| e.path()).collect();
+                    if files.len() != wanted {
+                        return Some(format!("{} files exported at 8192, not {wanted}", files.len()));
+                    }
+                    files.iter().find_map(|f| match image::image_dimensions(f) {
+                        Ok((8192, 8192)) => None,
+                        Ok((w, h)) => Some(format!("{} is {w}x{h}, not 8192x8192", f.display())),
+                        Err(e) => Some(format!("{} cannot be read back: {e}", f.display())),
+                    })
+                })),
+            ];
+            steps.extend(back_home("exporting at 8192"));
+            Some(steps)
+        }),
+    });
+
+    // Quitting with changes not saved asks first; not quitting, the app goes on.
+    let mut asked = 0;
+    scenes.push(Scene {
+        name: "quit, and not",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            asked += 1;
+            match asked {
+                1 => Some(vec![edit(Edit::SetResolution([1024, 1024])), seal(), Step::Wait]),
+                // (Nothing to save, quitting would quit.)
+                2 if app.doc.is_dirty() => Some(vec![
+                    Step::Do(Message::Quit),
+                    Step::Pause(Duration::from_millis(300)),
+                    Step::Check(Box::new(|app: &App| {
+                        app.ui.dialog.is_none().then(|| "quitting with changes asked nothing".into())
+                    })),
+                    Step::Do(Message::Dialog(None)),
+                    Step::Pause(Duration::from_millis(300)),
+                    Step::Check(Box::new(|app: &App| app.ui.dialog.is_some().then(|| "the dialog stayed".into()))),
+                ]),
+                2 => Some(vec![Step::Check(Box::new(|_: &App| Some("a changed size left nothing to save".into())))]),
+                _ => None,
+            }
+        }),
+    });
+    scenes
+}
+
+/// A few random things, as a person trying the app out does them.
+fn random_steps(app: &App, dice: &mut Dice) -> Option<Vec<Step>> {
+    let g = app.graph();
+    if g.nodes.is_empty() {
+        return Some(vec![Step::Do(Message::Proceed(PendingAction::LoadDemo)), Step::Wait]);
+    }
+    let node = &g.nodes[dice.below(g.nodes.len())];
+    let other = &g.nodes[dice.below(g.nodes.len())];
+    let mut steps = Vec::new();
+    let seal = || Step::Do(Message::Seal);
+    match dice.below(40) {
+        0..=9 => {
+            // A parameter dragged a little, or set far.
+            let params: Vec<&ParamDef> = node.def().params.iter().filter(|p| !node.is_exposed(p.key)).collect();
+            if let Some(pd) = params.get(dice.below(params.len())) {
+                let far = dice.chance(10);
+                for _ in 0..if far { 1 } else { 1 + dice.below(20) } {
+                    if let Some(v) = value_for(pd, dice, far) {
+                        steps.push(edit(Edit::SetParam { node: node.id, key: pd.key.into(), value: v }));
+                    }
+                }
+                steps.push(seal());
+            }
+        }
+        10..=11 => {
+            if let Some(var) = g.variables.get(dice.below(g.variables.len())) {
+                for _ in 0..=dice.below(30) {
+                    let value = swept(&var.value, &var.min, &var.max, dice.float(0.0, 1.0));
+                    steps.push(edit(Edit::SetVariable { name: var.name.clone(), value }));
+                }
+                steps.push(seal());
+            }
+        }
+        12..=14 => {
+            // An output to an input.
+            let inputs = node.def().inputs;
+            if let (Some(o), Some(i)) = (other.def().outputs.first(), inputs.get(dice.below(inputs.len()))) {
+                steps.push(edit(Edit::Connect {
+                    a: SocketRef { node: other.id, key: output_socket_key(o.key), output: true },
+                    b: SocketRef { node: node.id, key: input_socket_key(i.key), output: false },
+                }));
+                steps.push(seal());
+            }
+        }
+        15 => {
+            if let Some(l) = g.links.get(dice.below(g.links.len())) {
+                steps.extend([edit(Edit::RemoveLink(l.clone())), seal()]);
+            }
+        }
+        16 => {
+            let kind = NodeKind::ALL[dice.below(NodeKind::ALL.len())];
+            let pos = [dice.float(-500.0, 1500.0), dice.float(-500.0, 1500.0)];
+            steps.push(if dice.chance(50) {
+                edit(Edit::AddNode { kind, pos })
+            } else {
+                Step::Do(Message::Graph(GraphMessage::Drop { payload: DragPayload::Node(kind), graph_pos: pos }))
+            });
+            steps.push(seal());
+        }
+        17 => {
+            if g.nodes.len() > 3 {
+                steps.extend([edit(Edit::RemoveNodes(vec![node.id])), seal()]);
+            }
+        }
+        18..=20 => steps.push(Step::Do(if dice.chance(50) { Message::Undo } else { Message::Redo })),
+        21..=23 => {
+            if node.def().has_image() {
+                steps.push(preview(node.id));
+            }
+        }
+        24 => {
+            let s = [256, 512, 1024, 2048, 2048, 4096][dice.below(6)];
+            steps.extend([edit(Edit::SetResolution([s, s])), seal()]);
+        }
+        25 => steps.push(Step::Do(Message::ToggleBypass(node.id))),
+        26 => steps.extend([edit(Edit::Duplicate { ids: vec![node.id], offset: [40.0, 40.0] }), seal()]),
+        27 => {
+            // Through the selection, as the keyboard does it.
+            steps.push(Step::Do(Message::Graph(GraphMessage::Select { node: node.id, mode: SelectMode::Replace })));
+            steps.push(Step::Do(Message::Graph(GraphMessage::Select { node: other.id, mode: SelectMode::Add })));
+            steps.push(Step::Do(match dice.below(4) {
+                0 => Message::Duplicate,
+                1 if g.nodes.len() > 4 => Message::Delete,
+                2 => Message::AddComment,
+                _ => Message::Frame,
+            }));
+        }
+        28 => {
+            let exposable: Vec<&ParamDef> = node.def().params.iter().filter(|p| p.can_expose()).collect();
+            if let Some(pd) = exposable.get(dice.below(exposable.len())) {
+                let exposed = !node.is_exposed(pd.key);
+                steps.extend([edit(Edit::SetExposed { node: node.id, key: pd.key.into(), exposed }), seal()]);
+            }
+        }
+        29 => {
+            let message = match dice.below(6) {
+                0 => PreviewMessage::Channel(dice.below(5) as u32),
+                1 => PreviewMessage::ToggleTiling,
+                2 => PreviewMessage::Fit,
+                3 => PreviewMessage::OneToOne,
+                4 => PreviewMessage::ZoomAt {
+                    at: iced::Point::new(dice.float(0.0, 600.0), dice.float(0.0, 600.0)),
+                    factor: dice.float(0.2, 5.0),
+                },
+                _ => PreviewMessage::PanBy(iced::Vector::new(dice.float(-900.0, 900.0), dice.float(-900.0, 900.0))),
+            };
+            steps.push(Step::Do(Message::Preview(message)));
+        }
+        30 => {
+            if node.kind == NodeKind::LEVELS {
+                steps.push(Step::Do(Message::AutoLevels(node.id)));
+            }
+        }
+        31 => {
+            if g.nodes.len() < 8 || dice.chance(10) {
+                steps.push(Step::Do(Message::Proceed(PendingAction::LoadDemo)));
+            }
+        }
+        32 => {
+            let inputs = node.def().inputs;
+            if let Some(i) = inputs.get(dice.below(inputs.len())) {
+                steps.extend([edit(Edit::Disconnect { node: node.id, socket: input_socket_key(i.key) }), seal()]);
+            }
+        }
+        _ => steps.push(Step::Wait),
+    }
+    if dice.chance(15) {
+        steps.push(Step::Wait);
+    }
+    if dice.chance(3) {
+        steps.push(Step::Note("random".into()));
+    }
+    Some(steps)
+}

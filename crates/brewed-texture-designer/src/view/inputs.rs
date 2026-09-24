@@ -155,7 +155,8 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
         text(title)
             .size(style::TEXT_SIZE)
             .font(if changed { style::italic() } else { style::bold() })
-            .color(if changed { style::ACCENT } else { style::TEXT }),
+            .color(if changed { style::ACCENT } else { style::TEXT })
+            .wrapping(text::Wrapping::None),
     ]
     .spacing(5)
     .align_y(Alignment::Center);
@@ -170,7 +171,8 @@ Changed — middle-click the row to put {} back", var.description, var.default.d
     let name: Element<'a, Message> = crate::view::tip(name, hint, tooltip::Position::Bottom);
     let header = row![
         grip,
-        container(name).width(Length::FillPortion(2)),
+        // In a narrow panel the name is cut short rather than drawn under the value.
+        container(name).width(Length::FillPortion(2)).clip(true),
         container(editor).width(Length::FillPortion(3)),
         button(icon(if expanded { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0, style::TEXT_DIM))
             .padding(4)
