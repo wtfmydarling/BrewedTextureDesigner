@@ -25,6 +25,12 @@ use brewed_texture_core::nodes::ImageKind;
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// Grayscale images: one channel as a half float, a quarter of the memory of a color image.
 pub const GRAY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+/// The seeds of a distance field: the place of a pixel as an integer (see distance.wgsl); and the
+/// labels of a flood fill (flood.wgsl).
+pub const SEED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
+/// How far each pixel is from the outside of its shape along its row and column, in the four
+/// directions (see runs.wgsl).
+pub const RUN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Uint;
 /// Where the size of the image a kernel draws is bound (see common.wgsl).
 const TARGET_BINDING: u32 = 15;
 /// How many pixels a kernel draws at most in one draw (see [`Gpu::draw`]).
@@ -95,6 +101,10 @@ struct KernelSource {
     /// Reads its inputs through a trilinear sampler (bound after the output), which
     /// wraps on the axes the node tiles on.
     filtered: bool,
+    /// Reads images of unsigned integers (the seeds of a distance field), not of floats.
+    uint: bool,
+    /// Writes integers in this format ([`SEED_FORMAT`], [`RUN_FORMAT`]), not an image of floats.
+    writes: Option<wgpu::TextureFormat>,
     /// How many kinds of image it makes, each built on its own (the `KIND` of common.wgsl).
     kinds: u32,
 }
@@ -113,7 +123,40 @@ macro_rules! kinded_kernel {
             entry: $entry,
             inputs: $inputs,
             filtered: false,
+            uint: false,
+            writes: None,
             kinds: $kinds,
+        }
+    };
+}
+
+macro_rules! uint_kernel {
+    ($name:expr, $file:expr, $entry:expr, $inputs:expr) => {
+        KernelSource {
+            name: $name,
+            source: include_str!(concat!("shaders/", $file)),
+            entry: $entry,
+            inputs: $inputs,
+            filtered: false,
+            uint: true,
+            writes: None,
+            kinds: 1,
+        }
+    };
+}
+
+/// A kernel writing integers in `format`, from images of floats or of integers (`uint`).
+macro_rules! integer_kernel {
+    ($name:expr, $file:expr, $entry:expr, $inputs:expr, $uint:expr, $format:expr) => {
+        KernelSource {
+            name: $name,
+            source: include_str!(concat!("shaders/", $file)),
+            entry: $entry,
+            inputs: $inputs,
+            filtered: false,
+            uint: $uint,
+            writes: Some($format),
+            kinds: 1,
         }
     };
 }
@@ -126,6 +169,8 @@ macro_rules! filtered_kernel {
             entry: $entry,
             inputs: $inputs,
             filtered: true,
+            uint: false,
+            writes: None,
             kinds: 1,
         }
     };
@@ -143,6 +188,7 @@ static KERNELS: &[KernelSource] = &[
     kernel!("blur_1d", "blur.wgsl", "blur_1d", 1),
     kernel!("downsample", "blur.wgsl", "downsample", 1),
     kernel!("resample", "blur.wgsl", "resample", 1),
+    kernel!("downsample_max", "blur.wgsl", "downsample_max", 1),
     kernel!("sharpen", "sharpen.wgsl", "main", 2),
     kernel!("warp", "warp.wgsl", "main", 2),
     kernel!("mirror", "mirror.wgsl", "main", 1),
@@ -160,6 +206,21 @@ static KERNELS: &[KernelSource] = &[
     kernel!("thumbnail", "display.wgsl", "thumbnail", 1),
     kernel!("show", "blit.wgsl", "show", 1),
     kernel!("mip", "blit.wgsl", "mip", 1),
+    kernel!("height_blend", "height_blend.wgsl", "main", 3),
+    kernel!("normal_combine", "normal_combine.wgsl", "main", 3),
+    filtered_kernel!("nonuniform_blur", "nonuniform_blur.wgsl", "main", 2),
+    kernel!("make_it_tile", "make_it_tile.wgsl", "main", 1),
+    integer_kernel!("distance_seed", "distance_seed.wgsl", "seed", 1, false, SEED_FORMAT),
+    integer_kernel!("flood_label", "distance_seed.wgsl", "label", 1, false, SEED_FORMAT),
+    integer_kernel!("runs_seed", "distance_seed.wgsl", "runs_seed", 1, false, RUN_FORMAT),
+    integer_kernel!("runs_step", "runs.wgsl", "step", 1, true, RUN_FORMAT),
+    integer_kernel!("flood_spread", "flood.wgsl", "spread", 3, true, SEED_FORMAT),
+    integer_kernel!("flood_jump", "flood.wgsl", "jump", 1, true, SEED_FORMAT),
+    uint_kernel!("flood_fill", "flood.wgsl", "fill", 1),
+    uint_kernel!("differ", "differ.wgsl", "differ", 2),
+    integer_kernel!("distance_jump", "distance.wgsl", "jump", 1, true, SEED_FORMAT),
+    uint_kernel!("distance_field", "distance.wgsl", "field", 1),
+    uint_kernel!("distance_signed", "distance.wgsl", "signed_field", 2),
 ];
 
 /// "GPU name (backend)" for status bars and logs.
@@ -273,7 +334,8 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
     pub adapter_info: String,
     kernels: RefCell<HashMap<KernelKey, Result<Rc<Kernel>, String>>>,
-    layouts: RefCell<HashMap<(usize, bool), wgpu::BindGroupLayout>>,
+    /// By the number of inputs, whether they are filtered, and whether they are integers.
+    layouts: RefCell<HashMap<(usize, bool, bool), wgpu::BindGroupLayout>>,
     /// Trilinear samplers for the kernels that filter their inputs, by tiling: bit 0
     /// repeats horizontally, bit 1 vertically; the other axes clamp.
     samplers: [wgpu::Sampler; 4],
@@ -562,6 +624,11 @@ impl Gpu {
         self.upload(img, bytemuck::cast_slice(half));
     }
 
+    /// One half float per pixel, into a grayscale image.
+    pub fn upload_gray_f16(&self, img: &GpuImage, half: &[u16]) {
+        self.upload(img, bytemuck::cast_slice(half));
+    }
+
     /// Upload one value per pixel to a grayscale image (as half floats, converted with
     /// SIMD).
     pub fn upload_gray_f32(&self, img: &GpuImage, values: &[f32]) {
@@ -589,8 +656,8 @@ impl Gpu {
         );
     }
 
-    fn layout(&self, inputs: usize, filtered: bool) -> wgpu::BindGroupLayout {
-        if let Some(l) = self.layouts.borrow().get(&(inputs, filtered)) {
+    fn layout(&self, inputs: usize, filtered: bool, uint: bool) -> wgpu::BindGroupLayout {
+        if let Some(l) = self.layouts.borrow().get(&(inputs, filtered, uint)) {
             return l.clone();
         }
         let uniform = |binding: u32| wgpu::BindGroupLayoutEntry {
@@ -609,8 +676,13 @@ impl Gpu {
                 binding: 1 + i as u32,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
-                    // Read texel by texel, or through a sampler by the kernels that filter.
-                    sample_type: wgpu::TextureSampleType::Float { filterable: filtered },
+                    // Read texel by texel, or through a sampler by the kernels that filter; or
+                    // integers.
+                    sample_type: if uint {
+                        wgpu::TextureSampleType::Uint
+                    } else {
+                        wgpu::TextureSampleType::Float { filterable: filtered }
+                    },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -626,11 +698,16 @@ impl Gpu {
             });
         }
         entries.push(uniform(TARGET_BINDING));
+        let kind = match (filtered, uint) {
+            (true, _) => "_filtered",
+            (false, true) => "_uint",
+            (false, false) => "",
+        };
         let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("layout_{inputs}_inputs{}", if filtered { "_filtered" } else { "" })),
+            label: Some(&format!("layout_{inputs}_inputs{kind}")),
             entries: &entries,
         });
-        self.layouts.borrow_mut().insert((inputs, filtered), layout.clone());
+        self.layouts.borrow_mut().insert((inputs, filtered, uint), layout.clone());
         layout
     }
 
@@ -644,12 +721,12 @@ impl Gpu {
         source: &str,
         entry: &str,
         inputs: usize,
-        filtered: bool,
+        (filtered, uint): (bool, bool),
         output: wgpu::TextureFormat,
         gray: u8,
         kind: u32,
     ) -> Result<Rc<Kernel>, String> {
-        let layout = self.layout(inputs, filtered);
+        let layout = self.layout(inputs, filtered, uint);
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(label),
@@ -707,9 +784,13 @@ impl Gpu {
             return k.clone();
         }
         let src = KERNELS.iter().find(|k| k.name == name).ok_or_else(|| format!("unknown kernel '{name}'"))?;
-        let result = if kind < src.kinds {
+        let integers = [SEED_FORMAT, RUN_FORMAT];
+        let result = if src.writes.map_or(integers.contains(&output), |f| f != output) {
+            Err(format!("'{name}' writes {}, not {output:?}", src.writes.map_or_else(|| "images of floats".to_string(), |f| format!("{f:?}"))))
+        } else if kind < src.kinds {
             let label = if src.kinds > 1 { format!("{name} {kind}") } else { name.to_string() };
-            self.build_kernel(&label, &kernel_source(src), src.entry, src.inputs, src.filtered, output, gray, kind)
+            let reads = (src.filtered, src.uint);
+            self.build_kernel(&label, &kernel_source(src), src.entry, src.inputs, reads, output, gray, kind)
         } else {
             Err(format!("'{name}' makes {} kinds of image, not a kind {kind}", src.kinds))
         };
@@ -724,7 +805,7 @@ impl Gpu {
         if let Some(k) = self.kernels.borrow().get(&key) {
             return k.clone();
         }
-        let result = self.build_kernel("pixel_math", source, "main", inputs, false, output, 0, 0);
+        let result = self.build_kernel("pixel_math", source, "main", inputs, (false, false), output, 0, 0);
         let mut cache = self.kernels.borrow_mut();
         if cache.len() > 256 {
             cache.retain(|(k, ..), _| !k.starts_with("dyn:"));
@@ -883,6 +964,43 @@ impl Gpu {
 
     pub fn encoder(&self) -> wgpu::CommandEncoder {
         self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("brewed") })
+    }
+
+    /// Submit what `encoder` recorded (a new one in its place) and wait until the GPU is done:
+    /// for work that decides what it does next from what the GPU found.
+    pub fn finish(&self, encoder: &mut wgpu::CommandEncoder) {
+        let done = std::mem::replace(encoder, self.encoder());
+        self.submit(done);
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// Whether any pixel of `image` is above 0 (its red, or its one channel): the image halved
+    /// by its maximum down to one pixel, read back. Waits for the GPU (see [`Gpu::finish`]).
+    pub fn any(&self, encoder: &mut wgpu::CommandEncoder, image: &GpuImage) -> Result<bool, String> {
+        let mut levels: Vec<GpuImage> = Vec::new();
+        let mut current = image.clone();
+        let mut result = Ok(());
+        while current.width() > 1 || current.height() > 1 {
+            let (w, h) = (current.width().div_ceil(2), current.height().div_ceil(2));
+            let next = self.take_scratch(w, h, image.format());
+            result = self.run(encoder, "downsample_max", &[0u8; 32], &[&current], &next);
+            current = next.clone();
+            levels.push(next);
+            if result.is_err() {
+                break;
+            }
+        }
+        let found = result.map(|()| {
+            let rb = self.encode_readback_region(encoder, &current, [0, 0]);
+            self.finish(encoder);
+            rb.map();
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            matches!(rb.poll(), Some(Ok(()))) && rb.to_f32().first().is_some_and(|v| *v > 0.0)
+        });
+        for level in levels {
+            self.recycle(level);
+        }
+        found
     }
 
     /// Where the parameters of a draw go: a buffer, and where in it. They are written when
@@ -1142,7 +1260,11 @@ mod tests {
             // Every way the engine builds them: drawing color images or grayscale ones, from
             // color or grayscale inputs, and every kind of image.
             let gray_inputs = ((1u16 << src.inputs) - 1) as u8;
-            for output in [COLOR_FORMAT, GRAY_FORMAT] {
+            let outputs = match src.writes {
+                Some(format) => vec![format],
+                None => vec![COLOR_FORMAT, GRAY_FORMAT],
+            };
+            for output in outputs {
                 for gray in [0, gray_inputs] {
                     for kind in 0..src.kinds {
                         if let Err(e) = gpu.kernel_variant(name, output, gray, kind) {

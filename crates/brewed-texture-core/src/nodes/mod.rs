@@ -19,8 +19,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::gradient::Gradient;
 use crate::types::{DataType, ParamValue, Tiling};
 
-pub use filters::{BLEND_MODES, PIXEL_MATH_BUILTINS};
+pub use effects::BEVEL_PROFILES;
+pub use filters::{BLEND_MODES, DISTANCE_MODES, FLOOD_FILL_OUTPUTS, PIXEL_MATH_BUILTINS};
 pub use generators::{
+    SVG_FITS, SVG_OUTPUTS, TEXT_ALIGNS,
     NOISE_CELLS, NOISE_CRACKS, NOISE_FIBERS, NOISE_SCRATCHES, NOISE_TYPES, NOISE_VEINS, NOISE_WHITE, NOISE_WOOD,
     SHAPE_POLYGON, SHAPE_ROUNDED, SHAPE_STAR, SHAPES, TILE_PATTERN_IMAGE,
 };
@@ -450,6 +452,13 @@ pub fn image_kind(kind: NodeKind, params: &crate::eval::Params, inputs: &[Option
     if kind == NodeKind::IMAGE_INPUT {
         return if params.u("kind") == 1 { ImageKind::Color } else { ImageKind::Gray };
     }
+    if kind == NodeKind::FLOOD_FILL {
+        return if params.u("output") == 1 { ImageKind::Color } else { ImageKind::Gray };
+    }
+    if kind == NodeKind::SVG {
+        // In its colors, or how much of each pixel it covers.
+        return if params.u("output") == 0 { ImageKind::Color } else { ImageKind::Gray };
+    }
     kind.def().output_kind(inputs)
 }
 
@@ -624,6 +633,8 @@ impl NodeKind {
     pub const GRADIENT: NodeKind = NodeKind(&generators::GRADIENT);
     pub const NOISE: NodeKind = NodeKind(&generators::NOISE);
     pub const BITMAP: NodeKind = NodeKind(&generators::BITMAP);
+    pub const SVG: NodeKind = NodeKind(&generators::SVG);
+    pub const TEXT: NodeKind = NodeKind(&generators::TEXT);
     // Filters.
     pub const TRANSFORM_2D: NodeKind = NodeKind(&filters::TRANSFORM_2D);
     pub const BLEND: NodeKind = NodeKind(&filters::BLEND);
@@ -635,12 +646,19 @@ impl NodeKind {
     pub const DIRECTIONAL_WARP: NodeKind = NodeKind(&filters::DIRECTIONAL_WARP);
     pub const MIRROR: NodeKind = NodeKind(&filters::MIRROR);
     pub const PIXEL_MATH: NodeKind = NodeKind(&filters::PIXEL_MATH);
+    pub const DISTANCE: NodeKind = NodeKind(&filters::DISTANCE);
+    pub const NON_UNIFORM_BLUR: NodeKind = NodeKind(&filters::NON_UNIFORM_BLUR);
+    pub const MAKE_IT_TILE: NodeKind = NodeKind(&filters::MAKE_IT_TILE);
+    pub const FLOOD_FILL: NodeKind = NodeKind(&filters::FLOOD_FILL);
     // Height & normal.
     pub const NORMAL: NodeKind = NodeKind(&effects::NORMAL);
     pub const AMBIENT_OCCLUSION: NodeKind = NodeKind(&effects::AMBIENT_OCCLUSION);
     pub const CURVATURE: NodeKind = NodeKind(&effects::CURVATURE);
     pub const EDGE_DETECT: NodeKind = NodeKind(&effects::EDGE_DETECT);
     pub const EMBOSS: NodeKind = NodeKind(&effects::EMBOSS);
+    pub const BEVEL: NodeKind = NodeKind(&effects::BEVEL);
+    pub const HEIGHT_BLEND: NodeKind = NodeKind(&effects::HEIGHT_BLEND);
+    pub const NORMAL_COMBINE: NodeKind = NodeKind(&effects::NORMAL_COMBINE);
     // Adjustments.
     pub const LEVELS: NodeKind = NodeKind(&adjustments::LEVELS);
     pub const HISTOGRAM_SCAN: NodeKind = NodeKind(&adjustments::HISTOGRAM_SCAN);
@@ -673,21 +691,30 @@ impl NodeKind {
         NodeKind::GRADIENT,
         NodeKind::NOISE,
         NodeKind::BITMAP,
+        NodeKind::SVG,
+        NodeKind::TEXT,
         NodeKind::TRANSFORM_2D,
         NodeKind::BLEND,
         NodeKind::BLUR,
         NodeKind::DIRECTIONAL_BLUR,
+        NodeKind::NON_UNIFORM_BLUR,
         NodeKind::SLOPE_BLUR,
         NodeKind::SHARPEN,
         NodeKind::WARP,
         NodeKind::DIRECTIONAL_WARP,
         NodeKind::MIRROR,
         NodeKind::PIXEL_MATH,
+        NodeKind::DISTANCE,
+        NodeKind::FLOOD_FILL,
+        NodeKind::MAKE_IT_TILE,
         NodeKind::NORMAL,
         NodeKind::AMBIENT_OCCLUSION,
         NodeKind::CURVATURE,
         NodeKind::EDGE_DETECT,
         NodeKind::EMBOSS,
+        NodeKind::BEVEL,
+        NodeKind::HEIGHT_BLEND,
+        NodeKind::NORMAL_COMBINE,
         NodeKind::LEVELS,
         NodeKind::HISTOGRAM_SCAN,
         NodeKind::INVERT,

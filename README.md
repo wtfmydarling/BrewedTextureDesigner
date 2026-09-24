@@ -144,15 +144,19 @@ PipeWire подгружается только там, где без него н
 | Категория | Ноды |
 |---|---|
 | Inputs & Values | Float / Integer / Boolean / Vec2 / Color Input, **Math**, Compose Vec2, Compose Color, **Image Input** (вход графа, используемого как нода) |
-| Generators | Uniform Color, **Shape** (14 фигур и профилей), **Tile Generator** (смещение рядов или столбцов), Gradient, **Noise** (30 шумов, каждый своим способом, все тайлятся: Perlin, Simplex, Value, Billow, Ridged, Liquid, Marble, Wood, Veins, Streaks, Flow, Fibers, Scratches, Ripples, Turing, Raindrops, Caustics, Cells, Cracks, Crystal, Mosaic, Stones, Scales, Blocks, Truchet, Maze, Spots, Blotches, Craters, White Noise), Bitmap |
-| Filters | **Transform 2D**, **Blend** (19 режимов, маска), **Blur**, Directional Blur, Slope Blur, **Sharpen**, Warp, Directional Warp, Mirror, Pixel Math |
-| Height & Normal | Normal, Ambient Occlusion, Curvature, Edge Detect, Emboss |
+| Generators | Uniform Color, **Shape** (14 фигур и профилей), **Tile Generator** (смещение рядов или столбцов), Gradient, **Noise** (30 шумов, каждый своим способом, все тайлятся: Perlin, Simplex, Value, Billow, Ridged, Liquid, Marble, Wood, Veins, Streaks, Flow, Fibers, Scratches, Ripples, Turing, Raindrops, Caustics, Cells, Cracks, Crystal, Mosaic, Stones, Scales, Blocks, Truchet, Maze, Spots, Blotches, Craters, White Noise), Bitmap, **SVG** (векторная графика из файла: в своих цветах или маской покрытия), **Text** (строка текста своим шрифтом или встроенным Inter) |
+| Filters | **Transform 2D**, **Blend** (19 режимов, маска), **Blur**, Directional Blur, **Non-uniform Blur** (радиус по карте), Slope Blur, **Sharpen**, Warp, Directional Warp, Mirror, Pixel Math, **Distance** (поле расстояний), **Flood Fill** (случайный серый или цвет каждой отдельной фигуре маски), **Make It Tile** (делает тайлящейся картинку, которая не тайлится) |
+| Height & Normal | Normal, Ambient Occlusion, Curvature, Edge Detect, Emboss, **Bevel** (фаска по маске: линейная, плавная, скруглённая, вогнутая, внутрь или наружу), **Height Blend** (две карты высот, выше та, что выше), **Normal Combine** (детали одной normal map на другой: Reoriented, Whiteout, UDN) |
 | Adjustments | **Levels** (гистограмма, Auto levels), Histogram Scan, Invert, Grayscale, HSL, **Gradient Map**, Channel Shuffle, Posterize |
 | Output | **Output**: имя, формат RGBA/RGB/RG/R/G/B/A, 8/16/32 бит, назначение для 3D |
 
 У всех нод есть **тайлинг** (No tiling / Horizontal / Vertical / H and V): на тайлящихся осях выборка заворачивается через край, и генераторы получаются бесшовными. У value-нод параметр показан, но отключён. Ноду с входом можно временно выключить (**bypass**, Ctrl+B): она передаст первый вход дальше без изменений.
 
 **Серые и цветные изображения**, как в Substance Designer. Шумы, фигуры, градиенты, AO, Curvature, Histogram Scan делают серое изображение (один канал), Gradient Map, Normal, Uniform Color и Bitmap — цветное (RGBA), а фильтры отдают то, что получили. Сокеты и связи показывают это цветом: серые — серым, цветные — оранжевым; вход, которому годится любое, окрашивается тем, что в него пришло. Цветное на сером входе читается как яркость, серое на цветном — как серый во всех каналах.
+
+**SVG и Text** рисуют векторы на CPU (resvg) ровно в размер текстуры и сразу со своим сдвигом, поворотом и масштабом, поэтому края резкие при любом разрешении; полосами на всех ядрах, в фоне, как декодируются файлы Bitmap. Пока новая картинка рисуется, нода показывает прошлую: перетаскивание ползунка не мигает пустотой. Где текстура тайлится, фигура, ушедшая за край, возвращается с другой стороны. Текст раскладывается usvg (с shaping через rustybuzz) шрифтом ноды, а чего в нём нет — встроенным Inter (SIL Open Font License, `crates/brewed-texture-engine/assets/fonts`): один и тот же текст выглядит одинаково на всех системах. Так делается, например, параметрический пол-пазл из векторного контура деталей: SVG маской, Flood Fill даёт каждой детали свой цвет, Bevel — фаску.
+
+**Distance, Bevel и Flood Fill** считаются на видеокарте полями расстояний jump flooding: каждый пиксель узнаёт ближайший пиксель фигуры за log₂ прохода (плюс один), и только до нужного расстояния; где текстура тайлится — через её края. Координаты хранятся целыми числами (`r32uint`: место 8192 не помещается точно во float 32), это вдвое меньше памяти, чем пары float. Flood Fill метит пиксели каждой фигуры наименьшим местом в ней: метки растекаются по соседям, прыгают на всё вписанное в фигуру расстояние (поле расстояний до её края), вдоль строк и столбцов до концов фигуры и по указателям (пиксель берёт метку пикселя, на который указывает его метка). После каждой пачки проходов видеокарта сравнивает метки до и после последнего прохода, сводит разницу максимумом до одного пикселя, и проходы повторяются, пока метки меняются: у каждой фигуры одно значение при любой её форме — кирпичи, змейка из тонких полос, спираль (тесты сверяют число значений с числом фигур, посчитанным на CPU).
 
 **Шумы** сделаны каждый своим способом, а не как варианты одного: градиентный шум на квадратной решётке (Perlin) и на треугольной (Simplex), шум значений, гребни мультифрактала, поля, закрученные шумом (Liquid, Marble), линии уровня (Wood), нули фрактала (Veins), размазывание зерна вдоль течения (Flow), пряди и царапины, шум Габора (Ripples) и одна его длина волны, разрезанная пополам (Turing), кольца волн от капель (Raindrops), свет, собранный волнами как линзами (Caustics), клетки Вороного пятью разными способами и чешуя, блоки, плитки Трюше и лабиринт, пятна, кляксы, кратеры и белый шум. Одинаковый seed у разных типов даёт разные узоры.
 
@@ -199,7 +203,7 @@ Output хранит то, что он записывает: свой вход в
 ## Проверка
 
 ```bash
-cargo test --workspace                                            # 160 тестов
+cargo test --workspace                                            # 166 тестов
 WGPU_BACKEND=dx12 cargo test --workspace                          # они же на другом бэкенде (vulkan, dx12, metal)
 cargo test --workspace -- --ignored                               # живые тесты пипетки и захвата указателя (нужен рабочий стол), замеры, стресс-тесты
 cargo run --release -- --autopilot 30 --seed 3                    # программа 30 минут гоняет себя сама (ниже)

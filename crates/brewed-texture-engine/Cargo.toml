@@ -16,3 +16,6 @@ wide.workspace = true
 rayon.workspace = true
 image.workspace = true
 log.workspace = true
+# The SVG and Text nodes: vector graphics and text drawn into pixels (the library iced draws its
+# SVGs with, text included: nothing more to build).
+resvg = { version = "0.45", default-features = false, features = ["text"] }

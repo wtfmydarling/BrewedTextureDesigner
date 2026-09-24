@@ -15,6 +15,7 @@ pub mod kernels;
 pub mod service;
 pub mod simd;
 pub mod tools;
+pub mod vector;
 
 #[cfg(test)]
 mod tests;

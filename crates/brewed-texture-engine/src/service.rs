@@ -171,7 +171,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         // Wait for work; poll while files are being decoded in the background.
         let first = if let Some(request) = waiting.take() {
             Some(request)
-        } else if engine.bitmaps_loading() {
+        } else if engine.files_loading() {
             match rx.recv_timeout(Duration::from_millis(25)) {
                 Ok(r) => Some(r),
                 Err(RecvTimeoutError::Timeout) => None,
@@ -228,7 +228,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                 }
             }
         }
-        if engine.receive_bitmaps() {
+        if engine.receive_files() {
             pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
         }
         // What is read after this round: the views' nodes and the nodes asked about. Whatever

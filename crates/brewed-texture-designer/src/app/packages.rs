@@ -741,10 +741,8 @@ impl App {
         });
         let (node, key) = match kind {
             ResourceKind::Bitmap => (NodeKind::BITMAP, "path"),
-            other => {
-                self.set_status(format!("No node reads {} yet", other.name().to_lowercase()), false);
-                return;
-            }
+            ResourceKind::Svg => (NodeKind::SVG, "path"),
+            ResourceKind::Font => (NodeKind::TEXT, "font"),
         };
         let edit = Edit::AddNodeWith { kind: node, pos, params: vec![(key.into(), ParamValue::Text(path))] };
         if self.apply(edit) {

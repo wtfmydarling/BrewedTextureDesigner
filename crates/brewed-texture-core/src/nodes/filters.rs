@@ -186,3 +186,74 @@ pub static PIXEL_MATH: NodeDef = NodeDef {
 
 /// Built-in per-pixel variables of the Pixel Math node.
 pub const PIXEL_MATH_BUILTINS: &[&str] = &["u", "v", "px", "py", "width", "height"];
+
+/// What a Distance node makes of the distances, in the order of its "mode" parameter.
+pub const DISTANCE_MODES: &[&str] = &["From the Shapes", "Into the Shapes", "Signed"];
+
+pub static DISTANCE: NodeDef = NodeDef {
+    id: "distance",
+    name: "Distance",
+    category: Category::Filters,
+    description: "How far each pixel is from the shapes of a mask: white on them, fading to black at the \
+                  distance; or into them from their edges; or signed, gray at the edges. Where the texture \
+                  tiles, distances go across its edges.",
+    keywords: "distance field sdf glow outline expand grow spread jump flood",
+    inputs: &[gray("mask", "Mask")],
+    outputs: GRAY_OUT,
+    params: &[
+        choice("mode", "Mode", 0, DISTANCE_MODES).tip(
+            "From the Shapes: 1 on them, 0 at the distance. Into the Shapes: 0 at their edges, 1 at the distance \
+             into them. Signed: 0.5 at the edges, 1 at the distance into them, 0 at the distance away.",
+        ),
+        pixels("distance", "Distance", 64.0, 1.0, 512.0).at_least(0.0).tip("How far it goes."),
+        float("threshold", "Threshold", 0.5, 0.0, 1.0).bounded().tip("Where the mask is a shape: at this value and above."),
+    ],
+    role: Role::Image,
+};
+
+pub static NON_UNIFORM_BLUR: NodeDef = NodeDef {
+    id: "non_uniform_blur",
+    name: "Non-uniform Blur",
+    category: Category::Filters,
+    description: "Blurs each pixel as much as a map says: black not at all, white by the radius. Without a map, \
+                  everywhere by the radius. The cost is the same for any radius.",
+    keywords: "blur variable depth of field map mask soft",
+    inputs: &[image("input", "Input"), gray_opt("map", "Blur Map")],
+    outputs: IMAGE_OUT,
+    params: &[pixels("radius", "Radius", 16.0, 0.0, 256.0).at_least(0.0).tip("How far white on the map blurs.")],
+    role: Role::Image,
+};
+
+pub static MAKE_IT_TILE: NodeDef = NodeDef {
+    id: "make_it_tile",
+    name: "Make It Tile",
+    category: Category::Filters,
+    description: "Makes an image that does not tile, a photo say, tile: copies of it shifted by half the image \
+                  cover the seams, each shown where its own seams are not, blended over the width.",
+    keywords: "tile tileable seamless seam photo repeat wrap",
+    inputs: IMAGE_IN,
+    outputs: IMAGE_OUT,
+    params: &[float("blend", "Blend Width", 0.08, 0.01, 0.24).bounded().tip("Where one copy gives way to the next, as a part of the image.")],
+    role: Role::Image,
+};
+
+/// What a Flood Fill gives each shape, in the order of its "output" parameter.
+pub const FLOOD_FILL_OUTPUTS: &[&str] = &["Random Grayscale", "Random Color"];
+
+pub static FLOOD_FILL: NodeDef = NodeDef {
+    id: "flood_fill",
+    name: "Flood Fill",
+    category: Category::Filters,
+    description: "Gives each shape of a mask (each region of it, connected across the edges where the texture \
+                  tiles) a random gray or color of its own: every brick, tile or puzzle piece different. Black \
+                  around the shapes.",
+    keywords: "flood fill random color grayscale islands regions per tile variation connected",
+    inputs: &[gray("mask", "Mask")],
+    outputs: IMAGE_OUT,
+    params: &[
+        choice("output", "Output", 0, FLOOD_FILL_OUTPUTS).fixed(),
+        int("seed", "Seed", 0, 0, 1000),
+        float("threshold", "Threshold", 0.5, 0.0, 1.0).bounded().tip("Where the mask is a shape: at this value and above."),
+    ],
+    role: Role::Image,
+};

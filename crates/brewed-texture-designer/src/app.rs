@@ -2183,27 +2183,18 @@ impl App {
             self.open_package(path);
             return Task::none();
         }
-        let path = PathBuf::from(packages::clean(&path));
-        if matches!(ResourceKind::of_path(&path.display().to_string()), Some(ResourceKind::Svg | ResourceKind::Font)) {
-            let key = self.doc_key;
-            return self.update_nested(Message::Explorer(ExplorerMessage::FilesPicked(key, vec![path])));
-        }
-        if file_extensions(NodeKind::BITMAP, "path").contains(&ext.as_str()) {
+        let path = packages::clean(&path);
+        // An image, vector graphics or a font: the node that reads it (and the package lists it).
+        if let Some(kind) = ResourceKind::of_path(&path) {
             self.close_popups();
             // Several files dropped at once arrive one by one: stack their nodes.
             let burst = self.ui.drop_burst.filter(|(at, _)| at.elapsed() < Duration::from_millis(800)).map_or(0, |(_, n)| n);
             self.ui.drop_burst = Some((Instant::now(), burst + 1));
             let [x, y] = self.graph_pos_for_paste();
-            let path = ParamValue::Text(path.display().to_string());
-            let edit = Edit::AddNodeWith { kind: NodeKind::BITMAP, pos: [x, y + burst as f32 * 200.0], params: vec![("path".into(), path)] };
-            if self.apply(edit) {
-                self.doc.seal();
-                let created = self.ui.selection.first().copied();
-                self.set_preview(created);
-            }
+            self.add_resource_node(path, kind, Some([x, y + burst as f32 * 200.0]));
             return Task::none();
         }
-        self.set_status(format!("Cannot use '{}': drop a package, an image, vector graphics or a font", path.display()), true);
+        self.set_status(format!("Cannot use '{path}': drop a package, an image, vector graphics or a font"), true);
         Task::none()
     }
 

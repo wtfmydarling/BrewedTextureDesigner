@@ -292,7 +292,8 @@ fn every_image_node_runs_with_defaults_in_every_tiling_mode() {
         let ev = evaluate_blocking(&mut e, &g);
         for (id, name) in &ids {
             let st = e.state(*id).unwrap();
-            if *name == "Bitmap" {
+            // (They read files, and none is selected.)
+            if *name == "Bitmap" || *name == "SVG" {
                 assert!(st.error.is_some(), "no file selected");
                 continue;
             }
@@ -464,6 +465,313 @@ fn a_graph_used_as_a_node_computes_what_its_nodes_do() {
     assert!(flat_again.chunks(4).all(|p| close(p[0], 0.5, 1e-3)), "{:?}", pixel(&flat_again, 7, 7));
 }
 
+/// The SVG and Text nodes draw sharp pictures at the texture's size: an SVG file in its colors
+/// or as how much of each pixel it covers, and text in the font built in, both wrapping around
+/// where the texture tiles.
+#[test]
+fn svg_and_text_nodes() {
+    let Some(mut e) = engine() else { return };
+    let dir = std::env::temp_dir().join(format!("brewed-vector-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("half.svg");
+    // A red square on the left half of a picture twice as wide as it is high.
+    std::fs::write(&file, r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="100" height="100" fill="#ff0000"/></svg>"##)
+        .unwrap();
+    let mut g = graph();
+    let svg = g.add_node(NodeKind::SVG, [0.0, 0.0]);
+    set(&mut g, svg, "path", ParamValue::Text(file.display().to_string()));
+    set(&mut g, svg, "fit", ParamValue::Enum(2));
+    let data = eval_read(&mut e, &g, svg);
+    assert_eq!(pixel(&data, RES / 4, RES / 2), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(pixel(&data, 3 * RES / 4, RES / 2)[3], 0.0);
+    // As a mask: white where it is, black elsewhere, grayscale.
+    set(&mut g, svg, "output", ParamValue::Enum(1));
+    let data = eval_read(&mut e, &g, svg);
+    assert_eq!(pixel(&data, RES / 4, 7), [1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(pixel(&data, 3 * RES / 4, 7), [0.0, 0.0, 0.0, 1.0]);
+    assert!(e.image(svg).unwrap().is_gray());
+    // Moved a quarter to the right with no tiling, the right half is covered and nothing wraps.
+    set(&mut g, svg, "tiling", ParamValue::Enum(0));
+    set(&mut g, svg, "offset", ParamValue::Vec2([0.5, 0.0]));
+    let data = eval_read(&mut e, &g, svg);
+    assert_eq!(pixel(&data, 3 * RES / 4, 7)[0], 1.0);
+    assert_eq!(pixel(&data, RES / 4, 7)[0], 0.0);
+
+    let text = g.add_node(NodeKind::TEXT, [0.0, 0.0]);
+    let data = eval_read(&mut e, &g, text);
+    let covered = mean(&data);
+    assert!(covered > 0.01, "the letters are there: {covered}");
+    // Half a texture over, where the texture tiles: all of it still there, what left the right
+    // edge back at the left.
+    set(&mut g, text, "offset", ParamValue::Vec2([0.5, 0.0]));
+    let moved = mean(&eval_read(&mut e, &g, text));
+    assert!((moved - covered).abs() < 0.02 * covered, "{moved} against {covered}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Distances by jump flooding are the distances: from a dot, a pixel's value falls off as its
+/// true distance from the dot does, across the edges where the texture tiles; the signed field
+/// is a half at the edge of a disc; a bevel rises from the edge to its top over its width.
+#[test]
+fn distance_fields_and_bevels() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    // A disc of radius 1/8 in the middle.
+    let disc = g.add_node(NodeKind::SHAPE, [0.0, 0.0]);
+    set(&mut g, disc, "size", ParamValue::Vec2([0.25, 0.25]));
+    set(&mut g, disc, "softness", ParamValue::Float(0.0));
+    let dist = g.add_node(NodeKind::DISTANCE, [0.0, 0.0]);
+    g.connect(disc, "o:output", dist, "i:mask").unwrap();
+    // 64 px of 1024 is 16 px of 256.
+    let data = eval_read(&mut e, &g, dist);
+    let r = RES as f32 / 8.0;
+    let c = RES as f32 / 2.0;
+    assert_eq!(pixel(&data, RES / 2, RES / 2)[0], 1.0, "on the shape");
+    for x in [c + r + 4.0, c + r + 8.0, c + r + 12.0] {
+        let expected = 1.0 - (x - (c + r)) / 16.0;
+        let got = pixel(&data, x as u32, RES / 2)[0];
+        assert!(close(got, expected, 0.08), "at {x}: {got}, not {expected}");
+    }
+    assert_eq!(pixel(&data, 3, 3)[0], 0.0, "farther than the distance");
+    // Tiling: half a disc at the left edge (the disc itself not wrapping) has distances across
+    // it, on the right.
+    set(&mut g, disc, "offset", ParamValue::Vec2([-0.5, 0.0]));
+    set(&mut g, disc, "tiling", ParamValue::Enum(0));
+    let data = eval_read(&mut e, &g, dist);
+    let right = pixel(&data, RES - 3, RES / 2)[0];
+    assert!(right > 0.7, "across the edge: {right}");
+    set(&mut g, dist, "tiling", ParamValue::Enum(0));
+    let data = eval_read(&mut e, &g, dist);
+    assert_eq!(pixel(&data, RES - 3, RES / 2)[0], 0.0, "not across an edge that does not tile");
+    set(&mut g, disc, "offset", ParamValue::Vec2([0.0, 0.0]));
+    set(&mut g, disc, "tiling", ParamValue::Enum(3));
+    set(&mut g, dist, "tiling", ParamValue::Enum(3));
+    // Signed: a half at the edge, more inside, less outside.
+    set(&mut g, dist, "mode", ParamValue::Enum(2));
+    let data = eval_read(&mut e, &g, dist);
+    let edge = pixel(&data, (c + r) as u32, RES / 2)[0];
+    assert!(close(edge, 0.5, 0.06), "at the edge: {edge}");
+    assert!(pixel(&data, RES / 2, RES / 2)[0] > 0.9);
+    assert!(pixel(&data, 3, 3)[0] < 0.1);
+    // Into the shapes: 0 at the edge, rising inward.
+    set(&mut g, dist, "mode", ParamValue::Enum(1));
+    let data = eval_read(&mut e, &g, dist);
+    assert_eq!(pixel(&data, 3, 3)[0], 0.0);
+    assert!(pixel(&data, RES / 2, RES / 2)[0] > 0.99);
+
+    // A bevel: 0 outside, the top in the middle, the slope in between in its profile.
+    let bevel = g.add_node(NodeKind::BEVEL, [0.0, 0.0]);
+    g.connect(disc, "o:output", bevel, "i:mask").unwrap();
+    set(&mut g, bevel, "profile", ParamValue::Enum(0));
+    let data = eval_read(&mut e, &g, bevel);
+    // 24 px of 1024 is 6 px of 256: halfway up 3.5 px in (a half pixel from the edge).
+    let half = pixel(&data, (c + r - 3.5) as u32, RES / 2)[0];
+    assert!(close(half, 0.5, 0.12), "halfway up: {half}");
+    assert_eq!(pixel(&data, RES / 2, RES / 2)[0], 1.0);
+    assert_eq!(pixel(&data, 3, 3)[0], 0.0);
+    // Outward: the shape at the top, the slope around it.
+    set(&mut g, bevel, "direction", ParamValue::Enum(1));
+    let data = eval_read(&mut e, &g, bevel);
+    assert_eq!(pixel(&data, RES / 2, RES / 2)[0], 1.0);
+    let out = pixel(&data, (c + r + 3.5) as u32, RES / 2)[0];
+    assert!(close(out, 0.5, 0.12), "halfway down: {out}");
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+/// Height Blend shows the higher map; Normal Combine of a flat base is the detail, and of a flat
+/// detail the base; Non-uniform Blur leaves alone what its map says not to blur and smooths the
+/// rest; Make It Tile makes an image that does not tile, tile.
+#[test]
+fn height_blend_normal_combine_blur_by_map_and_tiling() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let uniform = |g: &mut Graph, v: f32| {
+        let id = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+        set(g, id, "color", ParamValue::Color([v, v, v, 1.0]));
+        id
+    };
+    let (high, low) = (uniform(&mut g, 0.6), uniform(&mut g, 0.4));
+    let hb = g.add_node(NodeKind::HEIGHT_BLEND, [0.0, 0.0]);
+    g.connect(high, "o:output", hb, "i:top").unwrap();
+    g.connect(low, "o:output", hb, "i:bottom").unwrap();
+    set(&mut g, hb, "contrast", ParamValue::Float(1.0));
+    assert!(close(pixel(&eval_read(&mut e, &g, hb), 5, 5)[0], 0.6, 1e-3));
+    set(&mut g, hb, "offset", ParamValue::Float(-0.3));
+    assert!(close(pixel(&eval_read(&mut e, &g, hb), 5, 5)[0], 0.4, 1e-3), "lowered below the bottom one");
+    set(&mut g, hb, "output", ParamValue::Enum(1));
+    assert!(close(pixel(&eval_read(&mut e, &g, hb), 5, 5)[0], 0.0, 1e-3), "the top one does not show");
+
+    // A tilted detail on a flat base is the detail (UDN keeps the base's height, which flattens
+    // it a little); a flat detail leaves the base as it is.
+    let flat = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    set(&mut g, flat, "color", ParamValue::Color([0.5, 0.5, 1.0, 1.0]));
+    let n = [0.3f32, -0.2, 0.0];
+    let nz = (1.0 - n[0] * n[0] - n[1] * n[1]).sqrt();
+    let tilted = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    set(&mut g, tilted, "color", ParamValue::Color([n[0] * 0.5 + 0.5, n[1] * 0.5 + 0.5, nz * 0.5 + 0.5, 1.0]));
+    let nc = g.add_node(NodeKind::NORMAL_COMBINE, [0.0, 0.0]);
+    g.connect(flat, "o:output", nc, "i:base").unwrap();
+    g.connect(tilted, "o:output", nc, "i:detail").unwrap();
+    let udn = {
+        let l = (n[0] * n[0] + n[1] * n[1] + 1.0).sqrt();
+        [n[0] / l, n[1] / l, 1.0 / l]
+    };
+    for technique in 0..3 {
+        set(&mut g, nc, "technique", ParamValue::Enum(technique));
+        let got = pixel(&eval_read(&mut e, &g, nc), 3, 3);
+        let expected = if technique == 2 { udn } else { [n[0], n[1], nz] };
+        for c in 0..3 {
+            let want = expected[c] * 0.5 + 0.5;
+            assert!(close(got[c], want, 4e-3), "technique {technique}, channel {c}: {} not {want}", got[c]);
+        }
+    }
+    g.connect(tilted, "o:output", nc, "i:base").unwrap();
+    g.connect(flat, "o:output", nc, "i:detail").unwrap();
+    set(&mut g, nc, "technique", ParamValue::Enum(0));
+    let got = pixel(&eval_read(&mut e, &g, nc), 3, 3);
+    assert!(close(got[0], n[0] * 0.5 + 0.5, 4e-3) && close(got[1], n[1] * 0.5 + 0.5, 4e-3), "{got:?}");
+
+    // Blurred by a map: nothing where it is black, the noise smoother where it is white.
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let black = uniform(&mut g, 0.0);
+    let nb = g.add_node(NodeKind::NON_UNIFORM_BLUR, [0.0, 0.0]);
+    g.connect(noise, "o:output", nb, "i:input").unwrap();
+    g.connect(black, "o:output", nb, "i:map").unwrap();
+    let source = eval_read(&mut e, &g, noise);
+    let unblurred = eval_read(&mut e, &g, nb);
+    assert!(source.iter().zip(&unblurred).all(|(a, b)| close(*a, *b, 2e-3)), "black blurs nothing");
+    g.disconnect(nb, "i:map");
+    // (32 px of 256: wider than the noise's grain.)
+    set(&mut g, nb, "radius", ParamValue::Float(128.0));
+    let blurred = eval_read(&mut e, &g, nb);
+    let variance = |d: &[f32]| {
+        let m = mean(d);
+        d.iter().step_by(4).map(|v| (*v as f64 - m).powi(2)).sum::<f64>() / (d.len() / 4) as f64
+    };
+    assert!(variance(&blurred) < 0.5 * variance(&source), "{} against {}", variance(&blurred), variance(&source));
+
+    // A gradient from left to right does not tile; made to, it does.
+    let ramp = g.add_node(NodeKind::GRADIENT, [0.0, 0.0]);
+    set(&mut g, ramp, "tiling", ParamValue::Enum(0));
+    let tile = g.add_node(NodeKind::MAKE_IT_TILE, [0.0, 0.0]);
+    g.connect(ramp, "o:output", tile, "i:input").unwrap();
+    let (before, _) = seams(&eval_read(&mut e, &g, ramp), RES);
+    let (after, inside) = seams(&eval_read(&mut e, &g, tile), RES);
+    assert!(before > 0.5, "the ramp does not tile: {before}");
+    assert!(after < 0.05 && after <= inside * 4.0 + 0.01, "made to tile: {after} (inside {inside})");
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+/// How many shapes `mask` has: regions of it connected through their four neighbours (across
+/// the edges when it `tiles`), counted on the CPU.
+fn shapes_of(mask: &[f32], size: u32, tiles: bool) -> usize {
+    let inside = |i: usize| mask[i * 4] >= 0.5;
+    let n = (size * size) as usize;
+    let mut seen = vec![false; n];
+    let mut count = 0;
+    for start in 0..n {
+        if seen[start] || !inside(start) {
+            continue;
+        }
+        count += 1;
+        seen[start] = true;
+        let mut stack = vec![start];
+        while let Some(i) = stack.pop() {
+            let (x, y) = ((i as u32 % size) as i64, (i as u32 / size) as i64);
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (mut nx, mut ny) = (x + dx, y + dy);
+                if tiles {
+                    nx = nx.rem_euclid(size as i64);
+                    ny = ny.rem_euclid(size as i64);
+                } else if nx < 0 || ny < 0 || nx >= size as i64 || ny >= size as i64 {
+                    continue;
+                }
+                let j = (ny * size as i64 + nx) as usize;
+                if !seen[j] && inside(j) {
+                    seen[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+    }
+    count
+}
+
+/// Whether every two neighbours inside the shapes of `mask` have the same value in `filled`
+/// (their shape's), and how many values there are: `None` when two neighbours differ.
+fn one_value_a_shape(mask: &[f32], filled: &[f32], size: u32, tiles: bool) -> Option<usize> {
+    let at = |d: &[f32], x: u32, y: u32| d[((y * size + x) * 4) as usize];
+    let mut values = std::collections::BTreeSet::new();
+    for y in 0..size {
+        for x in 0..size {
+            if at(mask, x, y) < 0.5 {
+                continue;
+            }
+            values.insert(at(filled, x, y).to_bits());
+            for (nx, ny) in [(x + 1, y), (x, y + 1)] {
+                let (nx, ny) = if tiles { (nx % size, ny % size) } else if nx >= size || ny >= size { continue } else { (nx, ny) };
+                if at(mask, nx, ny) >= 0.5 && at(filled, nx, ny) != at(filled, x, y) {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(values.len())
+}
+
+/// Flood Fill gives each shape one value: the bricks of the tile generator, a U whose arms meet
+/// through its bottom (and, where the texture tiles, across the edges), a snake of thin
+/// stripes turning at their ends.
+#[test]
+fn flood_fill_gives_each_shape_one_value() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let tiles = g.add_node(NodeKind::TILE_GENERATOR, [0.0, 0.0]);
+    let fill = g.add_node(NodeKind::FLOOD_FILL, [0.0, 0.0]);
+    g.connect(tiles, "o:output", fill, "i:mask").unwrap();
+    let mask = eval_read(&mut e, &g, tiles);
+    let filled = eval_read(&mut e, &g, fill);
+    let shapes = one_value_a_shape(&mask, &filled, RES, true).expect("one value a brick");
+    assert_eq!(shapes, shapes_of(&mask, RES, true), "a value for each brick");
+    assert!(shapes > 40, "the bricks are told apart: {shapes}");
+    assert!(e.image(fill).unwrap().is_gray());
+    set(&mut g, fill, "output", ParamValue::Enum(1));
+    let colored = eval_read(&mut e, &g, fill);
+    assert!(!e.image(fill).unwrap().is_gray());
+    assert!(one_value_a_shape(&mask, &colored, RES, true).is_some());
+
+    let shape = |g: &mut Graph, expression: &str| {
+        let pm = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
+        set(g, pm, "expression", ParamValue::Text(expression.into()));
+        pm
+    };
+    // A U, its arms meeting only at the bottom.
+    let u_shape = shape(&mut g, "max(step(0.75, v), max(1 - step(0.25, u), step(0.75, u))) * step(0.1, v)");
+    g.connect(u_shape, "o:output", fill, "i:mask").unwrap();
+    set(&mut g, fill, "tiling", ParamValue::Enum(0));
+    let mask = eval_read(&mut e, &g, u_shape);
+    let filled = eval_read(&mut e, &g, fill);
+    assert_eq!(one_value_a_shape(&mask, &filled, RES, false), Some(1), "a U is one shape");
+    // A snake: stripes 2 px wide, 6 px apart, joined at the top and the bottom in turn.
+    let snake = shape(
+        &mut g,
+        "max(1 - step(2, mod(px, 8)), \
+         step(8, mod(px, 16)) * (1 - step(2, py)) + (1 - step(8, mod(px, 16))) * step(height - 2, py)) * (1 - step(width - 8, px))",
+    );
+    g.connect(snake, "o:output", fill, "i:mask").unwrap();
+    let mask = eval_read(&mut e, &g, snake);
+    let filled = eval_read(&mut e, &g, fill);
+    assert_eq!(one_value_a_shape(&mask, &filled, RES, false), Some(1), "the snake is one shape");
+    // A spiral band, four turns of it, thin and curved all along.
+    let spiral = shape(&mut g, "(1 - step(0.3, fract(hypot(u - 0.5, v - 0.5) * 10 - atan2(v - 0.5, u - 0.5) / tau))) * (1 - step(0.45, hypot(u - 0.5, v - 0.5)))");
+    g.connect(spiral, "o:output", fill, "i:mask").unwrap();
+    let mask = eval_read(&mut e, &g, spiral);
+    let filled = eval_read(&mut e, &g, fill);
+    // (Where the circle cuts it, the tip of its tail falls apart in a few slivers of their own.)
+    assert_eq!(one_value_a_shape(&mask, &filled, RES, false), Some(shapes_of(&mask, RES, false)), "the spiral is one shape");
+    assert!(e.gpu.take_errors().is_empty());
+}
+
 #[test]
 fn readbacks_and_preview() {
     let Some(mut e) = engine() else { return };
@@ -547,13 +855,13 @@ fn files_no_node_reads_leave_the_gpu() {
     let n = g.add_node(NodeKind::BITMAP, [0.0, 0.0]);
     set(&mut g, n, "path", ParamValue::Text(a.display().to_string()));
     e.evaluate(&g, &brewed_texture_core::eval::evaluate(&g));
-    assert!(e.bitmaps_loading());
+    assert!(e.files_loading());
     g.remove_nodes(&[n]);
     e.evaluate(&g, &brewed_texture_core::eval::evaluate(&g));
-    assert!(!e.bitmaps_loading());
+    assert!(!e.files_loading());
     let start = std::time::Instant::now();
     while start.elapsed() < std::time::Duration::from_millis(500) {
-        assert!(!e.receive_bitmaps());
+        assert!(!e.receive_files());
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert_eq!(e.memory_report().files, 0);

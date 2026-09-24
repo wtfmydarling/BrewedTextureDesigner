@@ -81,3 +81,63 @@ pub static EMBOSS: NodeDef = NodeDef {
     ],
     role: Role::Image,
 };
+
+/// How the edge of a bevel rises, in the order of its "profile" parameter.
+pub const BEVEL_PROFILES: &[&str] = &["Linear", "Smooth", "Round", "Concave"];
+
+pub static BEVEL: NodeDef = NodeDef {
+    id: "bevel",
+    name: "Bevel",
+    category: Category::Effects,
+    description: "A height map of the shapes of a mask with their edges beveled: rising from the edge to full \
+                  height over the width, in the profile chosen; outward, the slope goes down around the shapes. \
+                  Where the texture tiles, the shapes go across its edges.",
+    keywords: "bevel chamfer round edge height inset rounded corner",
+    inputs: &[gray("mask", "Mask")],
+    outputs: GRAY_OUT,
+    params: &[
+        pixels("width", "Width", 24.0, 1.0, 256.0).at_least(0.0).tip("How wide the slope is."),
+        choice("profile", "Profile", 2, BEVEL_PROFILES).tip(
+            "Linear: a straight slope. Smooth: eased at both ends. Round: a quarter circle, steep at the edge. \
+             Concave: hollowed, steep at the top.",
+        ),
+        choice("direction", "Direction", 0, &["Inward", "Outward"])
+            .tip("Inward: the slope is inside the shapes. Outward: around them, the shapes at full height."),
+        float("threshold", "Threshold", 0.5, 0.0, 1.0).bounded().tip("Where the mask is a shape: at this value and above."),
+    ],
+    role: Role::Image,
+};
+
+pub static HEIGHT_BLEND: NodeDef = NodeDef {
+    id: "height_blend",
+    name: "Height Blend",
+    category: Category::Effects,
+    description: "Two height maps together, the higher one showing where it is higher: stones in sand, moss \
+                  in the cracks. The top one is raised by the offset; the contrast sharpens where one gives \
+                  way to the other. It gives the height, or where the top one shows.",
+    keywords: "height blend combine max mix terrain layer",
+    inputs: &[gray("top", "Top"), gray("bottom", "Bottom"), gray_opt("mask", "Mask")],
+    outputs: GRAY_OUT,
+    params: &[
+        float("offset", "Height Offset", 0.0, -1.0, 1.0).tip("Raises the top height map (lowers it, below 0)."),
+        float("contrast", "Contrast", 0.9, 0.0, 1.0).bounded().tip("How sharply one gives way to the other."),
+        choice("output", "Output", 0, &["Height", "Mask"]).tip("The heights together, or where the top one shows."),
+    ],
+    role: Role::Image,
+};
+
+pub static NORMAL_COMBINE: NodeDef = NodeDef {
+    id: "normal_combine",
+    name: "Normal Combine",
+    category: Category::Effects,
+    description: "The details of one normal map on another: Reoriented bends the detail over the base, \
+                  Whiteout and UDN add their slopes. A mask says where the detail goes.",
+    keywords: "normal combine blend detail reoriented rnm whiteout udn",
+    inputs: &[color_image("base", "Base"), color_image("detail", "Detail"), gray_opt("mask", "Mask")],
+    outputs: COLOR_OUT,
+    params: &[
+        choice("technique", "Technique", 0, &["Reoriented", "Whiteout", "UDN"]),
+        float("intensity", "Detail Intensity", 1.0, 0.0, 2.0).at_least(0.0),
+    ],
+    role: Role::Image,
+};

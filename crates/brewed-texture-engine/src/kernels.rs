@@ -12,7 +12,7 @@ use brewed_texture_core::eval::Params;
 use brewed_texture_core::expr;
 use brewed_texture_core::nodes::{NOISE_CRACKS, NOISE_FIBERS, NOISE_SCRATCHES, NOISE_VEINS, NOISE_WOOD, TILE_PATTERN_IMAGE};
 
-use crate::gpu::{Gpu, GpuImage};
+use crate::gpu::{Gpu, GpuImage, RUN_FORMAT, SEED_FORMAT};
 
 /// How a Pixel Math variable gets its value.
 #[derive(Clone, Debug)]
@@ -31,7 +31,8 @@ pub struct ExecCtx<'a> {
     /// Fixed inputs in definition order (`None` = unconnected).
     pub inputs: &'a [Option<GpuImage>],
     pub output: &'a GpuImage,
-    /// Decoded file of a Bitmap node.
+    /// The picture a node draws from: the decoded file of a Bitmap node, the drawing of an SVG
+    /// or a Text node.
     pub bitmap: Option<&'a GpuImage>,
     /// Baked gradient of a Gradient Map node.
     pub lut: Option<&'a GpuImage>,
@@ -45,7 +46,7 @@ pub type KernelFn = fn(&mut ExecCtx) -> Result<Option<String>, String>;
 /// Whether a node of `kind` reads its first input at every scale, through its mips: the
 /// engine gives that input mips when it computes it.
 pub fn reads_at_every_scale(kind: NodeKind) -> bool {
-    kind == NodeKind::AMBIENT_OCCLUSION
+    kind == NodeKind::AMBIENT_OCCLUSION || kind == NodeKind::NON_UNIFORM_BLUR
 }
 
 /// The GPU implementation of an image node type.
@@ -57,7 +58,8 @@ pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
         "tile_generator" => tile_generator,
         "gradient" => gradient,
         "noise" => noise,
-        "bitmap" => bitmap,
+        // The picture is drawn at the texture's size (see `crate::vector`): copied as is.
+        "bitmap" | "svg" | "text" => bitmap,
         "transform_2d" => transform_2d,
         "blend" => blend,
         "blur" => blur,
@@ -73,6 +75,13 @@ pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
         "curvature" => curvature,
         "edge_detect" => edge_detect,
         "emboss" => emboss,
+        "distance" => distance,
+        "bevel" => bevel,
+        "height_blend" => height_blend,
+        "normal_combine" => normal_combine,
+        "non_uniform_blur" => non_uniform_blur,
+        "make_it_tile" => make_it_tile,
+        "flood_fill" => flood_fill,
         "levels" | "histogram_scan" | "invert" | "grayscale" | "hsl" | "posterize" => adjust,
         "gradient_map" => gradient_map,
         "channel_shuffle" => channel_shuffle,
@@ -219,6 +228,74 @@ impl BlurU {
     pub fn copy(tiling: u32) -> BlurU {
         BlurU { sigma: 0.0, radius: 0, dir_x: 0, dir_y: 0, tiling, pad: [0; 3] }
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct HeightBlendU {
+    offset: f32,
+    contrast: f32,
+    output: u32,
+    masked: u32,
+    tiling: u32,
+    pad: [u32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct NormalCombineU {
+    intensity: f32,
+    technique: u32,
+    masked: u32,
+    tiling: u32,
+    /// Whether the base and the detail are connected (else they are flat).
+    base: u32,
+    detail: u32,
+    pad: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct NonUniformU {
+    radius_x: f32,
+    radius_y: f32,
+    tiling: u32,
+    mapped: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct FloodU {
+    tiling: u32,
+    seed: u32,
+    /// Gray (0) or color (1).
+    mode: u32,
+    /// How far a pass of the runs looks.
+    step: u32,
+}
+
+/// How many times the labels of a flood fill spread and jump (see flood.wgsl) before it looks
+/// whether they still change; then twice as many each time, up to [`FLOOD_MOST_ROUNDS`] in all.
+const FLOOD_ROUNDS: usize = 16;
+/// As many rounds as a flood fill takes, however winding its shapes (a maze).
+const FLOOD_MOST_ROUNDS: usize = 4096;
+
+/// The parameters of the passes of a distance field (distance.wgsl).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct DistanceU {
+    /// How far a pass looks.
+    step: i32,
+    tiling: u32,
+    /// The seeds are the pixels of the shapes (1), or those around them (0).
+    inside: u32,
+    /// Count from the largest distance wanted back.
+    flip: u32,
+    threshold: f32,
+    /// In pixels of the image.
+    max_distance: f32,
+    profile: u32,
+    pad: u32,
 }
 
 #[repr(C)]
@@ -806,6 +883,242 @@ fn channel_shuffle(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 fn output(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let img = input(cx.inputs, 0, &cx.gpu.black);
     cx.gpu.encode_show(cx.encoder, img, cx.output, cx.params.u("format"))?;
+    Ok(None)
+}
+
+// ------------------------------------------------------------------ more filters
+
+fn height_blend(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    let u = HeightBlendU {
+        offset: p.f("offset"),
+        contrast: p.f("contrast"),
+        output: p.u("output"),
+        masked: u32::from(connected(cx.inputs, 2)),
+        tiling: p.tiling(),
+        pad: [0; 3],
+    };
+    let (top, bottom, mask) = (input(cx.inputs, 0, &cx.gpu.black), input(cx.inputs, 1, &cx.gpu.black), input(cx.inputs, 2, &cx.gpu.white));
+    cx.gpu.run(cx.encoder, "height_blend", bytes(&u), &[top, bottom, mask], cx.output)?;
+    Ok(None)
+}
+
+fn normal_combine(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    let u = NormalCombineU {
+        intensity: p.f("intensity"),
+        technique: p.u("technique"),
+        masked: u32::from(connected(cx.inputs, 2)),
+        tiling: p.tiling(),
+        base: u32::from(connected(cx.inputs, 0)),
+        detail: u32::from(connected(cx.inputs, 1)),
+        pad: [0; 2],
+    };
+    let (base, detail, mask) = (input(cx.inputs, 0, &cx.gpu.black), input(cx.inputs, 1, &cx.gpu.black), input(cx.inputs, 2, &cx.gpu.white));
+    cx.gpu.run(cx.encoder, "normal_combine", bytes(&u), &[base, detail, mask], cx.output)?;
+    Ok(None)
+}
+
+fn non_uniform_blur(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    // The input at every scale, as Ambient Occlusion reads it (see `reads_at_every_scale`): one
+    // that came without its mips (or of another size) is copied into an image that has them.
+    let img = input(cx.inputs, 0, &cx.gpu.black).clone();
+    let [w, h] = cx.output.size();
+    let mipped = (img.texture.mip_level_count() == 1 || img.size() != [w, h])
+        .then(|| {
+            let mipped = cx.gpu.take_scratch_with_mips(w, h, crate::gpu::format_of(img.kind()));
+            cx.gpu.encode_copy_with_mips(cx.encoder, &img, &mipped, 0).map(|()| mipped)
+        })
+        .transpose()?;
+    let r = px_to_uv(p.f("radius"), cx.output);
+    let u = NonUniformU { radius_x: r[0], radius_y: r[1], tiling: p.tiling(), mapped: u32::from(connected(cx.inputs, 1)) };
+    let read = mipped.as_ref().unwrap_or(&img);
+    let map = input(cx.inputs, 1, &cx.gpu.white);
+    let result = cx.gpu.run_filtered(cx.encoder, "nonuniform_blur", bytes(&u), &[read, map], cx.output, p.tiling());
+    if let Some(mipped) = mipped {
+        cx.gpu.recycle(mipped);
+    }
+    result.map(|()| None)
+}
+
+fn make_it_tile(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let u = ScalarU { value: cx.params.f("blend"), a: cx.params.tiling(), b: 0, c: 0 };
+    let img = input(cx.inputs, 0, &cx.gpu.black);
+    cx.gpu.run(cx.encoder, "make_it_tile", bytes(&u), &[img], cx.output)?;
+    Ok(None)
+}
+
+// ------------------------------------------------------------------ distance fields
+
+/// The seeds of a distance field of `mask` (see distance.wgsl): each pixel knowing the nearest
+/// pixel of the shapes (`inside` 1) or around them (0), as far as the passes reach: the first
+/// looks as far as the largest distance wanted (or half across the image), the step halving
+/// from pass to pass, and one more of one. An image of [`SEED_FORMAT`], to recycle.
+fn distance_seeds(gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, mask: &GpuImage, size: [u32; 2], u: DistanceU) -> Result<GpuImage, String> {
+    let [w, h] = size;
+    let reach = (u.max_distance.ceil().max(1.0) as u32).next_power_of_two();
+    let first = reach.min(w.max(h).next_power_of_two() / 2).max(1);
+    let mut a = gpu.take_scratch(w, h, SEED_FORMAT);
+    let mut b = gpu.take_scratch(w, h, SEED_FORMAT);
+    let mut result = gpu.run(encoder, "distance_seed", bytes(&u), &[mask], &a);
+    let mut step = first;
+    let mut again = true;
+    while result.is_ok() {
+        result = gpu.run(encoder, "distance_jump", bytes(&DistanceU { step: step as i32, ..u }), &[&a], &b);
+        std::mem::swap(&mut a, &mut b);
+        if step > 1 {
+            step /= 2;
+        } else if std::mem::take(&mut again) {
+            // Jump flooding + 1: a last pass of one mends the few pixels the others got wrong.
+        } else {
+            break;
+        }
+    }
+    gpu.recycle(b);
+    match result {
+        Ok(()) => Ok(a),
+        Err(e) => {
+            gpu.recycle(a);
+            Err(e)
+        }
+    }
+}
+
+/// A distance field of `mask` into `output`, as `u` says; `signed`: into the shapes and away
+/// from them, both.
+fn distance_field(gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, mask: &GpuImage, output: &GpuImage, u: DistanceU, signed: bool) -> Result<(), String> {
+    let size = output.size();
+    if signed {
+        let shapes = distance_seeds(gpu, encoder, mask, size, DistanceU { inside: 1, ..u })?;
+        let around = distance_seeds(gpu, encoder, mask, size, DistanceU { inside: 0, ..u });
+        let result = around.and_then(|around| {
+            let drawn = gpu.run(encoder, "distance_signed", bytes(&u), &[&shapes, &around], output);
+            gpu.recycle(around);
+            drawn
+        });
+        gpu.recycle(shapes);
+        return result;
+    }
+    let seeds = distance_seeds(gpu, encoder, mask, size, u)?;
+    let result = gpu.run(encoder, "distance_field", bytes(&u), &[&seeds], output);
+    gpu.recycle(seeds);
+    result
+}
+
+/// Each shape of the mask its own random value (see flood.wgsl): the pixels of each labelled with
+/// the smallest place in it, spreading as far as the distance field of the shapes says they
+/// have room and along their rows and columns, and jumping, until a round changes nothing (the
+/// GPU says whether the last round of each batch did: the labels are then the same all over each
+/// shape, whatever its shape).
+fn flood_fill(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    let size = cx.output.size();
+    let [w, h] = size;
+    let mask = input(cx.inputs, 0, &cx.gpu.black);
+    let tiling = p.tiling();
+    // How far each pixel of the shapes is from their outside, as far as it goes.
+    let room = DistanceU { step: 0, tiling, inside: 0, flip: 0, threshold: p.f("threshold"), max_distance: w.max(h) as f32, profile: 0, pad: 0 };
+    let outside = distance_seeds(cx.gpu, cx.encoder, mask, size, room)?;
+    let u = FloodU { tiling, seed: p.i("seed").max(0) as u32, mode: p.u("output"), step: 0 };
+    // The ends of each pixel's row and column in its shape.
+    let mut runs = cx.gpu.take_scratch(w, h, RUN_FORMAT);
+    let mut next = cx.gpu.take_scratch(w, h, RUN_FORMAT);
+    let mut result = cx.gpu.run(cx.encoder, "runs_seed", bytes(&room), &[mask], &runs);
+    let mut step = 1;
+    while step < w.max(h) && result.is_ok() {
+        result = cx.gpu.run(cx.encoder, "runs_step", bytes(&FloodU { step, ..u }), &[&runs], &next);
+        std::mem::swap(&mut runs, &mut next);
+        step *= 2;
+    }
+    cx.gpu.recycle(next);
+    let mut a = cx.gpu.take_scratch(w, h, SEED_FORMAT);
+    let mut b = cx.gpu.take_scratch(w, h, SEED_FORMAT);
+    let before = cx.gpu.take_scratch(w, h, SEED_FORMAT);
+    let changes = cx.gpu.take_scratch(w, h, crate::gpu::GRAY_FORMAT);
+    result = result.and_then(|()| cx.gpu.run(cx.encoder, "flood_label", bytes(&room), &[mask], &a));
+    let (mut batch, mut rounds, mut warning) = (FLOOD_ROUNDS, 0, None);
+    while result.is_ok() {
+        for round in 0..batch {
+            if round + 1 == batch {
+                // The labels before the last round, to see whether it changed any.
+                cx.encoder.copy_texture_to_texture(
+                    a.texture.as_image_copy(),
+                    before.texture.as_image_copy(),
+                    wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                );
+            }
+            result = result.and_then(|()| cx.gpu.run(cx.encoder, "flood_spread", bytes(&u), &[&a, &outside, &runs], &b));
+            std::mem::swap(&mut a, &mut b);
+            for _ in 0..2 {
+                result = result.and_then(|()| cx.gpu.run(cx.encoder, "flood_jump", bytes(&u), &[&a], &b));
+                std::mem::swap(&mut a, &mut b);
+            }
+        }
+        rounds += batch;
+        result = result.and_then(|()| cx.gpu.run(cx.encoder, "differ", &[0u8; 16], &[&before, &a], &changes));
+        match result.as_ref().map_err(Clone::clone).and_then(|()| cx.gpu.any(cx.encoder, &changes)) {
+            Ok(false) => break,
+            Ok(true) if rounds >= FLOOD_MOST_ROUNDS => {
+                warning = Some("The shapes wind too far to tell them all apart: some may have more than one value".to_string());
+                break;
+            }
+            Ok(true) => batch = (batch * 2).min(FLOOD_MOST_ROUNDS - rounds),
+            Err(e) => result = Err(e),
+        }
+    }
+    let result = result.and_then(|()| cx.gpu.run(cx.encoder, "flood_fill", bytes(&u), &[&a], cx.output));
+    for image in [a, b, before, changes, outside, runs] {
+        cx.gpu.recycle(image);
+    }
+    result.map(|()| warning)
+}
+
+/// Pixels of the image, from pixels of a 1024 px texture.
+fn px(value: f32, output: &GpuImage) -> f32 {
+    value.max(0.0) * output.width() as f32 / 1024.0
+}
+
+fn distance(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    let u = DistanceU {
+        step: 0,
+        tiling: p.tiling(),
+        inside: 1,
+        flip: 1,
+        threshold: p.f("threshold"),
+        max_distance: px(p.f("distance"), cx.output).max(1e-3),
+        profile: 0,
+        pad: 0,
+    };
+    let mask = input(cx.inputs, 0, &cx.gpu.black);
+    match p.u("mode") {
+        // From the shapes: 1 on them (their pixels are the seeds), 0 at the distance.
+        0 => distance_field(cx.gpu, cx.encoder, mask, cx.output, u, false)?,
+        // Into them: from the pixels around them.
+        1 => distance_field(cx.gpu, cx.encoder, mask, cx.output, DistanceU { inside: 0, flip: 0, ..u }, false)?,
+        _ => distance_field(cx.gpu, cx.encoder, mask, cx.output, u, true)?,
+    }
+    Ok(None)
+}
+
+fn bevel(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    // Inward: from the pixels around the shapes, rising into them; outward: from the shapes,
+    // falling away from them.
+    let outward = p.u("direction") == 1;
+    let u = DistanceU {
+        step: 0,
+        tiling: p.tiling(),
+        inside: u32::from(outward),
+        flip: u32::from(outward),
+        threshold: p.f("threshold"),
+        max_distance: px(p.f("width"), cx.output).max(1e-3),
+        profile: p.u("profile"),
+        pad: 0,
+    };
+    let mask = input(cx.inputs, 0, &cx.gpu.black);
+    distance_field(cx.gpu, cx.encoder, mask, cx.output, u, false)?;
     Ok(None)
 }
 

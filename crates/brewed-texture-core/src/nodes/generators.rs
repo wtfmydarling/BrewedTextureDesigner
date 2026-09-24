@@ -337,6 +337,61 @@ pub static NOISE: NodeDef = NodeDef {
     role: Role::Image,
 };
 
+/// How the picture of an SVG node fills the texture.
+pub const SVG_FITS: &[&str] = &["Fit", "Fill", "Stretch"];
+/// What an SVG node makes of the picture.
+pub const SVG_OUTPUTS: &[&str] = &["Color", "Coverage"];
+/// Where the text of a Text node is, from its position.
+pub const TEXT_ALIGNS: &[&str] = &["Left", "Center", "Right"];
+
+pub static SVG: NodeDef = NodeDef {
+    id: "svg",
+    name: "SVG",
+    category: Category::Generators,
+    description: "Vector graphics from an SVG file, drawn sharp at any texture size: in their colors, or as how \
+                  much of each pixel they cover (a mask). Moved, turned and scaled without losing an edge; where \
+                  the texture tiles, what leaves one edge comes back at the other.",
+    keywords: "vector svg illustrator inkscape shape logo pattern mask file",
+    inputs: NO_SOCKETS,
+    outputs: IMAGE_OUT,
+    params: &[
+        file("path", "File", &["svg"]),
+        choice("fit", "Fit", 0, SVG_FITS)
+            .fixed()
+            .tip("Fit: all of the picture, as large as the texture holds it. Fill: the texture covered, the rest \
+                  cut. Stretch: to the texture's shape."),
+        choice("output", "Output", 0, SVG_OUTPUTS)
+            .fixed()
+            .tip("Color: the picture's colors. Coverage: grayscale, how much of each pixel the picture covers."),
+        vec2("offset", "Offset", [0.0, 0.0], -1.0, 1.0),
+        angle("rotation", "Rotation", 0.0, -180.0, 180.0).tip("Degrees, counter-clockwise."),
+        float_log("scale", "Scale", 1.0, 0.05, 20.0).at_least(0.001),
+    ],
+    role: Role::Image,
+};
+
+pub static TEXT: NodeDef = NodeDef {
+    id: "text",
+    name: "Text",
+    category: Category::Generators,
+    description: "A line of text, drawn sharp at any texture size: white where the letters are. In its font \
+                  file, or in Inter, built in, for what the font does not have; the same on every system. Where \
+                  the texture tiles, what leaves one edge comes back at the other.",
+    keywords: "text font letters numbers label words typography type",
+    inputs: NO_SOCKETS,
+    outputs: GRAY_OUT,
+    params: &[
+        text("text", "Text", "Text"),
+        file("font", "Font", &["ttf", "otf", "ttc"]).tip("A font file (TrueType, OpenType); none: Inter, built in."),
+        pixels("size", "Size", 200.0, 4.0, 1024.0).at_least(0.0).tip("How high the letters are (the font's em)."),
+        choice("align", "Alignment", 1, TEXT_ALIGNS).tip("Which end of the line is at the position."),
+        float("spacing", "Letter Spacing", 0.0, -0.3, 1.0).tip("Between the letters, in ems."),
+        vec2("offset", "Offset", [0.0, 0.0], -1.0, 1.0),
+        angle("rotation", "Rotation", 0.0, -180.0, 180.0).tip("Degrees, counter-clockwise."),
+    ],
+    role: Role::Image,
+};
+
 pub static BITMAP: NodeDef = NodeDef {
     id: "bitmap",
     name: "Bitmap",

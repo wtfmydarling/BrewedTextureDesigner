@@ -33,6 +33,7 @@ use brewed_texture_core::types::DataType;
 use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, Gpu, GpuImage, Readback, StoredImage, format_of, output_format};
 use crate::kernels::{self, DisplayU, ExecCtx, PixelVar};
 use crate::simd::{self, ImageStats};
+use crate::vector::{self, Raster, Vector, VectorJob};
 
 pub const THUMB_SIZE: u32 = 128;
 /// Samples in a baked gradient.
@@ -163,6 +164,23 @@ struct DecodedBitmap {
     result: Result<(u32, u32, Pixels), String>,
 }
 
+/// The drawing of an SVG or a Text node (see [`crate::vector`]).
+enum Drawing {
+    /// Being drawn by the job with this number, of the picture with this key; with the node's
+    /// last drawing, shown until then, and the picture asked for since, drawn next.
+    Busy { ticket: u64, key: u64, last: Option<(GpuImage, u64)>, next: Option<VectorJob> },
+    Ready { key: u64, image: GpuImage, generation: u64 },
+    Failed { key: u64, error: String },
+}
+
+struct Drawn {
+    node: NodeId,
+    ticket: u64,
+    key: u64,
+    size: [u32; 2],
+    result: Result<Raster, String>,
+}
+
 struct Lut {
     hash: u64,
     image: GpuImage,
@@ -251,6 +269,10 @@ pub struct Engine {
     bitmap_generation: u64,
     bitmap_tx: Sender<DecodedBitmap>,
     bitmap_rx: Receiver<DecodedBitmap>,
+    /// The drawings of the SVG and Text nodes, by node.
+    drawings: HashMap<NodeId, Drawing>,
+    drawn_tx: Sender<Drawn>,
+    drawn_rx: Receiver<Drawn>,
     luts: HashMap<NodeId, Lut>,
     keep: Keep,
     /// What the 2D view shows, and what of it it was last given.
@@ -277,6 +299,7 @@ pub struct Engine {
 impl Engine {
     pub fn new(gpu: Gpu) -> Engine {
         let (bitmap_tx, bitmap_rx) = channel();
+        let (drawn_tx, drawn_rx) = channel();
         Engine {
             gpu,
             states: HashMap::new(),
@@ -285,6 +308,9 @@ impl Engine {
             bitmap_generation: 1,
             bitmap_tx,
             bitmap_rx,
+            drawings: HashMap::new(),
+            drawn_tx,
+            drawn_rx,
             luts: HashMap::new(),
             keep: Keep::default(),
             preview: None,
@@ -326,15 +352,17 @@ impl Engine {
             .collect()
     }
 
-    /// Are files still being decoded? (The graph must be evaluated again when they arrive.)
-    pub fn bitmaps_loading(&self) -> bool {
-        self.bitmaps.values().any(|b| matches!(b, BitmapEntry::Loading(_)))
+    /// Are files still being decoded, or pictures drawn? (The graph must be evaluated again when
+    /// they arrive.)
+    pub fn files_loading(&self) -> bool {
+        self.bitmaps.values().any(|b| matches!(b, BitmapEntry::Loading(_))) || self.drawings.values().any(|d| matches!(d, Drawing::Busy { .. }))
     }
 
     /// Drop every cached result (new document, device change ...).
     pub fn reset(&mut self) {
         self.states.clear();
         self.luts.clear();
+        self.drawings.clear();
         self.preview_sent = None;
         self.materials_sent.clear();
         self.given.clear();
@@ -371,7 +399,11 @@ impl Engine {
                 memory.kept += bytes;
             }
         }
-        let files = self.luts.values().map(|l| &l.image).chain(self.bitmaps.values().filter_map(|b| match b {
+        let drawings = self.drawings.values().filter_map(|d| match d {
+            Drawing::Ready { image, .. } | Drawing::Busy { last: Some((image, _)), .. } => Some(image),
+            _ => None,
+        });
+        let files = self.luts.values().map(|l| &l.image).chain(drawings).chain(self.bitmaps.values().filter_map(|b| match b {
             BitmapEntry::Ready { image, .. } => Some(image),
             _ => None,
         }));
@@ -416,9 +448,45 @@ impl Engine {
         self.bitmaps.remove(path);
     }
 
-    /// Upload decoded files. Returns true if any arrived (evaluate again).
-    pub fn receive_bitmaps(&mut self) -> bool {
-        let mut any = false;
+    /// The drawing an SVG or Text node shows for `job` (see [`crate::vector`]): drawn in the
+    /// background, on every core; meanwhile the node's last drawing, if it has one, so that a
+    /// value dragged never leaves it empty. While one is being drawn, only the last picture
+    /// asked for is drawn next. `(image, generation)`.
+    fn drawing_for(&mut self, node: NodeId, job: VectorJob) -> Result<Option<(GpuImage, u64)>, String> {
+        let key = job.key();
+        match self.drawings.get_mut(&node) {
+            Some(Drawing::Ready { key: k, image, generation }) if *k == key => return Ok(Some((image.clone(), *generation))),
+            Some(Drawing::Failed { key: k, error }) if *k == key => return Err(error.clone()),
+            Some(Drawing::Busy { key: k, last, next, .. }) => {
+                // Being drawn: this one next, unless it is the one being drawn.
+                *next = (*k != key).then_some(job);
+                return Ok(last.clone());
+            }
+            _ => {}
+        }
+        let last = match self.drawings.get(&node) {
+            Some(Drawing::Ready { image, generation, .. }) => Some((image.clone(), *generation)),
+            _ => None,
+        };
+        self.draw(node, job, last.clone());
+        Ok(last)
+    }
+
+    fn draw(&mut self, node: NodeId, job: VectorJob, last: Option<(GpuImage, u64)>) {
+        self.bitmap_generation += 1;
+        let ticket = self.bitmap_generation;
+        let key = job.key();
+        self.drawings.insert(node, Drawing::Busy { ticket, key, last, next: None });
+        let tx = self.drawn_tx.clone();
+        std::thread::spawn(move || {
+            let result = vector::rasterize(&job);
+            let _ = tx.send(Drawn { node, ticket, key, size: job.size, result });
+        });
+    }
+
+    /// Upload decoded files and drawn pictures. Returns true if any arrived (evaluate again).
+    pub fn receive_files(&mut self) -> bool {
+        let mut any = self.receive_drawings();
         while let Ok(done) = self.bitmap_rx.try_recv() {
             // A file no node reads any more, or asked for again since: not uploaded.
             if !matches!(self.bitmaps.get(&done.path), Some(BitmapEntry::Loading(t)) if *t == done.ticket) {
@@ -449,12 +517,53 @@ impl Engine {
         any
     }
 
+    fn receive_drawings(&mut self) -> bool {
+        let mut any = false;
+        while let Ok(done) = self.drawn_rx.try_recv() {
+            // A node gone, or a picture asked for again since.
+            let Some(Drawing::Busy { ticket, next, last, .. }) = self.drawings.get_mut(&done.node) else { continue };
+            if *ticket != done.ticket {
+                continue;
+            }
+            let (next, last) = (next.take(), last.take());
+            let [w, h] = done.size;
+            let drawn = match done.result {
+                Ok(Raster::Gray(values)) => {
+                    let image = self.gpu.create_image_as(w, h, GRAY_FORMAT, "drawing");
+                    self.gpu.upload_gray_f16(&image, &values);
+                    Ok(image)
+                }
+                Ok(Raster::Color(values)) => {
+                    let image = self.gpu.create_image(w, h, "drawing");
+                    self.gpu.upload_rgba_f16(&image, &values);
+                    Ok(image)
+                }
+                Err(e) => Err(e),
+            };
+            self.bitmap_generation += 1;
+            let generation = self.bitmap_generation;
+            match (drawn, next) {
+                // Drawn, and another asked for since: that one now, this one shown meanwhile.
+                (Ok(image), Some(next)) => self.draw(done.node, next, Some((image, generation))),
+                (Err(_), Some(next)) => self.draw(done.node, next, last),
+                (Ok(image), None) => {
+                    self.drawings.insert(done.node, Drawing::Ready { key: done.key, image, generation });
+                }
+                (Err(error), None) => {
+                    self.drawings.insert(done.node, Drawing::Failed { key: done.key, error });
+                }
+            }
+            any = true;
+        }
+        any
+    }
+
     // ------------------------------------------------------------------ evaluation
 
     /// Bring every image up to date with `graph`. `eval` is the CPU evaluation of the
     /// same graph (values and effective parameters).
     pub fn evaluate(&mut self, graph: &Graph, eval: &Evaluation) -> EvalReport {
-        self.receive_bitmaps();
+        self.receive_files();
         self.gpu.start_use();
 
         // Forget nodes that were deleted, and let go of their images.
@@ -473,6 +582,8 @@ impl Engine {
             .map(|n| eval.params(n.id).map_or(n.text("path"), |p| p.text("path")))
             .collect();
         self.bitmaps.retain(|path, _| files.contains(path.as_str()));
+        // The drawings of nodes that draw none any more go too.
+        self.drawings.retain(|id, _| graph.node(*id).is_some_and(|n| n.kind == NodeKind::SVG || n.kind == NodeKind::TEXT));
         for id in &eval.cyclic {
             self.release(*id);
             let state = self.states.entry(*id).or_default();
@@ -752,6 +863,24 @@ impl Engine {
             }
         }
 
+        // Drawing of an SVG or a Text node, at the texture's size.
+        if (node.kind == NodeKind::SVG || node.kind == NodeKind::TEXT) && !node.bypass {
+            match self.drawing_for(node.id, vector_job(node.kind, params, resolution)) {
+                Ok(Some((img, generation))) => {
+                    generation.hash(&mut hasher);
+                    bitmap = Some(img);
+                }
+                Ok(None) => {
+                    warning = Some("Drawing…".into());
+                    u64::MAX.hash(&mut hasher);
+                }
+                Err(e) => {
+                    e.hash(&mut hasher);
+                    error = Some(e);
+                }
+            }
+        }
+
         // Gradient of a Gradient Map node.
         let mut lut: Option<GpuImage> = None;
         if node.kind == NodeKind::GRADIENT_MAP {
@@ -811,8 +940,8 @@ impl Engine {
             (arriving, arriving_size, arriving.map(|k| output_format(params.u("format"), params.u("bit_depth"), k)))
         } else {
             let kind = match &bitmap {
-                Some(file) => file.kind(),
-                None => image_kind(node.kind, params, &input_kinds),
+                Some(file) if node.kind == NodeKind::BITMAP => file.kind(),
+                _ => image_kind(node.kind, params, &input_kinds),
             };
             let uniform = node.kind == NodeKind::UNIFORM_COLOR || node.kind == NodeKind::IMAGE_INPUT;
             let size = if uniform { [1, 1] } else { resolution };
@@ -1214,15 +1343,34 @@ fn decode_bitmap(path: &str) -> Result<(u32, u32, Pixels), String> {
     Ok((w, h, Pixels::Color(half)))
 }
 
+/// What an SVG or a Text node draws, from its parameters, at the texture size `size`.
+fn vector_job(kind: NodeKind, params: &brewed_texture_core::eval::Params, size: [u32; 2]) -> VectorJob {
+    let what = if kind == NodeKind::SVG {
+        Vector::Svg { path: params.text("path").to_string(), fit: params.u("fit"), color: params.u("output") == 0 }
+    } else {
+        // Sizes in pixels of a 1024 px texture, as every length of a node.
+        let px = params.f("size").max(0.0) * size[0] as f32 / 1024.0;
+        Vector::Text {
+            text: params.text("text").to_string(),
+            font: params.text("font").to_string(),
+            size: px,
+            align: params.u("align"),
+            spacing: params.f("spacing"),
+        }
+    };
+    let scale = if kind == NodeKind::SVG { params.f("scale").max(1e-3) } else { 1.0 };
+    VectorJob { what, size, offset: params.v2("offset"), rotation: params.f("rotation"), scale, tiling: params.tiling() }
+}
+
 /// Convenience for tests and tools: evaluate `graph` from scratch and wait for the GPU.
 pub fn evaluate_blocking(engine: &mut Engine, graph: &Graph) -> Evaluation {
     let eval = brewed_texture_core::eval::evaluate(graph);
     engine.evaluate(graph, &eval);
-    // Files are decoded in the background; wait for them once.
+    // Files are decoded and pictures drawn in the background; wait for them.
     let start = Instant::now();
-    while engine.bitmaps_loading() && start.elapsed().as_secs() < 10 {
+    while engine.files_loading() && start.elapsed().as_secs() < 10 {
         std::thread::sleep(std::time::Duration::from_millis(5));
-        if engine.receive_bitmaps() {
+        if engine.receive_files() {
             engine.evaluate(graph, &eval);
         }
     }

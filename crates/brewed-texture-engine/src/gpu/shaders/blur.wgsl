@@ -45,3 +45,14 @@ fn resample(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let uv = out_uv(gid.xy, size);
     return widen(sample_bilinear(in0, uv, P.tiling), GRAY0);
 }
+
+// 2x2 maximum (output half the input size, rounded up): whether anything is set, a level at a
+// time down to one pixel.
+@fragment
+fn downsample_max(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let gid = pixel(at);
+    let p = vec2<i32>(gid.xy) * 2;
+    let a = max(fetch(in0, p, 0u), fetch(in0, p + vec2<i32>(1, 0), 0u));
+    let b = max(fetch(in0, p + vec2<i32>(0, 1), 0u), fetch(in0, p + vec2<i32>(1, 1), 0u));
+    return max(a, b);
+}
