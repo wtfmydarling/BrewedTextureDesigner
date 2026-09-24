@@ -13,14 +13,13 @@
 //! written once and built for the images it is run on: the format it writes, and which of
 //! its inputs are grayscale (it reads those through `widen`, see show.wgsl).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use brewed_texture_core::nodes::ImageKind;
-use wgpu::util::DeviceExt;
 
 /// Color images: red, green, blue and alpha as half floats.
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -30,6 +29,13 @@ pub const GRAY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 const TARGET_BINDING: u32 = 15;
 /// How many pixels a kernel draws at most in one draw (see [`Gpu::draw`]).
 const BAND_PIXELS: u32 = 1 << 20;
+/// Bytes of a buffer of the draws' parameters (see [`Uniforms`]): those of a part of the work
+/// (see [`PART_DRAWS`]) and more.
+const UNIFORM_CHUNK: u64 = 1 << 16;
+/// How much work is recorded at most before it is submitted, a part of what is being done
+/// (see [`Gpu::draw`]): draws, and pixels drawn.
+const PART_DRAWS: u32 = 64;
+const PART_PIXELS: u64 = 1 << 24;
 
 /// How a node's image is read (`widen`) and an output writes it (`as_output`): the WGSL the
 /// kernels read their inputs with, for the views that sample the node images to read them
@@ -247,8 +253,23 @@ type KernelKey = (String, wgpu::TextureFormat, u8, u32);
 /// began (see [`Gpu::start_use`]).
 type Pool = Vec<(GpuImage, bool)>;
 
+/// The parameters of the draws recorded since work was last submitted, a slice of a buffer
+/// each. The buffers stay from one submission to the next and are written once each when the
+/// work is submitted ([`Gpu::submit`]): a buffer of its own for every draw, and the one wgpu
+/// uploads it through, were two allocations a draw, of 64 KB each on D3D12 (where a buffer is
+/// placed on 64 KB).
+#[derive(Default)]
+struct Uniforms {
+    /// Buffers of [`UNIFORM_CHUNK`] bytes (or of what one draw needs, if more), and what the
+    /// draws since the last submission put in them.
+    chunks: Vec<(wgpu::Buffer, Vec<u8>)>,
+    /// The first buffer that may have room.
+    current: usize,
+}
+
 pub struct Gpu {
     pub device: wgpu::Device,
+    /// Work is submitted with [`Gpu::submit`], which writes the parameters of its draws first.
     pub queue: wgpu::Queue,
     pub adapter_info: String,
     kernels: RefCell<HashMap<KernelKey, Result<Rc<Kernel>, String>>>,
@@ -257,6 +278,11 @@ pub struct Gpu {
     /// repeats horizontally, bit 1 vertically; the other axes clamp.
     samplers: [wgpu::Sampler; 4],
     pool: RefCell<Pool>,
+    uniforms: RefCell<Uniforms>,
+    /// What was drawn since work was last submitted: draws, and pixels.
+    recorded: Cell<(u32, u64)>,
+    /// The part of the work [`Gpu::draw`] submitted last, which the next part waits for.
+    part: RefCell<Option<wgpu::SubmissionIndex>>,
     /// 1x1 transparent black, bound to unconnected inputs.
     pub black: GpuImage,
     /// 1x1 opaque white (e.g. an unconnected blend mask).
@@ -301,6 +327,9 @@ impl Gpu {
             layouts: RefCell::default(),
             samplers,
             pool: RefCell::default(),
+            uniforms: RefCell::default(),
+            recorded: Cell::default(),
+            part: RefCell::default(),
             black,
             white,
             errors,
@@ -310,9 +339,10 @@ impl Gpu {
         gpu
     }
 
-    /// Create a device without a window (tests, command line tools).
+    /// Create a device without a window (tests, command line tools), on the backends
+    /// `WGPU_BACKEND` names (as iced does for the window), or the primary ones.
     pub fn headless() -> Result<Gpu, String> {
-        Self::headless_on(wgpu::Backends::PRIMARY)
+        Self::headless_on(wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY))
     }
 
     /// [`Gpu::headless`] on one of `backends`.
@@ -728,14 +758,10 @@ impl Gpu {
         contents.resize(target_at as usize, 0);
         let [w, h] = output.level_size();
         contents.extend_from_slice(bytemuck::bytes_of(&[w, h, 0, 0]));
-        let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: &contents,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let (buffer, at) = self.uniform_slot(&contents);
         let range = |offset: u64, size: u64| {
             let size = wgpu::BufferSize::new(size);
-            wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buffer, offset, size })
+            wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buffer, offset: at + offset, size })
         };
         let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: range(0, params_size) }];
         for (i, img) in inputs.iter().enumerate() {
@@ -779,6 +805,23 @@ impl Gpu {
         for y in (0..h).step_by(rows as usize) {
             pass.set_scissor_rect(0, y, w, rows.min(h - y));
             pass.draw(0..3, 0..1);
+        }
+        drop(pass);
+        // Much work is submitted in parts, each once the part before is done. Other work (the
+        // window's frames) waits for two parts at most, not for all of it; and a list of
+        // commands stays short: a D3D12 command allocator keeps the memory of the longest list
+        // it ever held, and wgpu keeps its allocators to use them again (all of a large graph
+        // at once kept about a megabyte of system memory a node).
+        let (draws, pixels) = self.recorded.get();
+        let recorded = (draws + 1, pixels + u64::from(w) * u64::from(h));
+        if recorded.0 < PART_DRAWS && recorded.1 < PART_PIXELS {
+            self.recorded.set(recorded);
+            return;
+        }
+        let part = std::mem::replace(encoder, self.encoder());
+        let submitted = self.submit(part);
+        if let Some(before) = self.part.replace(Some(submitted)) {
+            let _ = self.device.poll(wgpu::PollType::Wait { submission_index: Some(before), timeout: None });
         }
     }
 
@@ -842,6 +885,51 @@ impl Gpu {
         self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("brewed") })
     }
 
+    /// Where the parameters of a draw go: a buffer, and where in it. They are written when
+    /// the work is submitted ([`Gpu::submit`]).
+    fn uniform_slot(&self, contents: &[u8]) -> (wgpu::Buffer, u64) {
+        let align = self.device.limits().min_uniform_buffer_offset_alignment as usize;
+        let size = contents.len().div_ceil(align) * align;
+        let mut uniforms = self.uniforms.borrow_mut();
+        let Uniforms { chunks, current } = &mut *uniforms;
+        loop {
+            if *current == chunks.len() {
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("parameters"),
+                    size: UNIFORM_CHUNK.max(size as u64),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                chunks.push((buffer, Vec::new()));
+            }
+            let (buffer, data) = &mut chunks[*current];
+            let at = data.len();
+            if (at + size) as u64 <= buffer.size() {
+                data.extend_from_slice(contents);
+                data.resize(at + size, 0);
+                return (buffer.clone(), at as u64);
+            }
+            *current += 1;
+        }
+    }
+
+    /// Submit recorded work, the parameters of its draws written first (a write for each
+    /// buffer of them). The queue runs submissions in order, so the next writes come after
+    /// this work read them.
+    pub fn submit(&self, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
+        self.recorded.set((0, 0));
+        let mut uniforms = self.uniforms.borrow_mut();
+        for (buffer, data) in &mut uniforms.chunks {
+            if !data.is_empty() {
+                self.queue.write_buffer(buffer, 0, data);
+                data.clear();
+            }
+        }
+        uniforms.current = 0;
+        drop(uniforms);
+        self.queue.submit(Some(encoder.finish()))
+    }
+
     /// Record a copy of `img` into a mappable buffer. Call [`Readback::map`] after
     /// the encoder has been submitted.
     pub fn encode_readback(&self, encoder: &mut wgpu::CommandEncoder, img: &GpuImage) -> Readback {
@@ -898,7 +986,7 @@ impl Gpu {
     pub fn read_stored_blocking(&self, img: &GpuImage) -> Result<StoredImage, String> {
         let mut encoder = self.encoder();
         let rb = self.encode_readback(&mut encoder, img);
-        self.queue.submit(Some(encoder.finish()));
+        self.submit(encoder);
         rb.map();
         self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU poll failed: {e}"))?;
         match rb.poll() {
@@ -1089,6 +1177,41 @@ mod tests {
         assert_eq!(&back[16..20], &[2.0, 2.0, 2.0, 1.0], "values past 1 stay what they are");
     }
 
+    /// Draws keep their own parameters however much is drawn before the work is submitted: it
+    /// is submitted in parts, with the parameters of each in a buffer used again.
+    #[test]
+    fn draws_keep_their_own_parameters() {
+        let Ok(gpu) = Gpu::headless() else { return };
+        // Twenty parts of draws, each of a color of its own.
+        let draws = PART_DRAWS as usize * 20;
+        let images: Vec<GpuImage> = (0..draws).map(|_| gpu.create_image(1, 1, "a color")).collect();
+        let color = |i: usize, round: usize| {
+            let v = (i + round) as f32 / draws as f32;
+            [v, 1.0 - v, 0.5, 1.0]
+        };
+        for round in 0..2 {
+            let mut encoder = gpu.encoder();
+            for (i, image) in images.iter().enumerate() {
+                let params = color(i, round);
+                gpu.run(&mut encoder, "uniform_color", bytemuck::bytes_of(&params), &[], image).expect("drawn");
+                // What is not submitted yet is a part at most.
+                assert!(gpu.recorded.get().0 < PART_DRAWS);
+            }
+            gpu.submit(encoder);
+            let mut encoder = gpu.encoder();
+            let back: Vec<Readback> = images.iter().map(|image| gpu.encode_readback(&mut encoder, image)).collect();
+            gpu.submit(encoder);
+            back.iter().for_each(Readback::map);
+            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+            for (i, rb) in back.iter().enumerate() {
+                let (px, want) = (rb.to_f32(), color(i, round));
+                assert!(px.iter().zip(want).all(|(p, w)| (p - w).abs() < 1e-3), "draw {i} of round {round}: {px:?}");
+            }
+            assert_eq!(gpu.uniforms.borrow().chunks.len(), 1, "round {round}");
+        }
+        assert!(gpu.take_errors().is_empty());
+    }
+
     /// A grayscale image is drawn in one channel of 16 bits, with the mips the views sample it
     /// with.
     #[test]
@@ -1103,7 +1226,7 @@ mod tests {
         let mut encoder = gpu.encoder();
         gpu.encode_copy_with_mips(&mut encoder, &source, &drawn, 0).expect("drawn");
         gpu.encode_show(&mut encoder, &drawn.level(1), &second, 0).expect("read");
-        gpu.queue.submit(Some(encoder.finish()));
+        gpu.submit(encoder);
         let back = gpu.read_image_blocking(&drawn).expect("the image");
         let top: Vec<f32> = back.chunks(4).map(|p| p[0]).collect();
         for (v, e) in top.iter().zip(values) {

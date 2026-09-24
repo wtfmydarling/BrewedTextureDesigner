@@ -583,7 +583,7 @@ impl Engine {
 
         // 4. Let go of what stayed from before and does not stay any more.
         self.sweep();
-        self.gpu.queue.submit(Some(encoder.finish()));
+        self.gpu.submit(encoder);
         self.report = report;
         report
     }
@@ -1027,7 +1027,7 @@ impl Engine {
             jobs.push((thumb, readback));
             drawn.push(picture);
         }
-        self.gpu.queue.submit(Some(encoder.finish()));
+        self.gpu.submit(encoder);
         for (_, rb) in &jobs {
             rb.map();
         }
@@ -1084,7 +1084,7 @@ impl Engine {
         if let Err(e) = self.gpu.encode_mips(&mut encoder, &mipped) {
             log::error!("mips: {e}");
         }
-        self.gpu.queue.submit(Some(encoder.finish()));
+        self.gpu.submit(encoder);
         if let Some(state) = self.states.get_mut(&id) {
             state.image = Some(mipped);
         }
@@ -1137,7 +1137,7 @@ impl Engine {
         let full = self.gpu.take_scratch(size[0], size[1], COLOR_FORMAT);
         let mut encoder = self.gpu.encoder();
         let copied = self.gpu.encode_show(&mut encoder, image, &full, 0);
-        self.gpu.queue.submit(Some(encoder.finish()));
+        self.gpu.submit(encoder);
         let pixels = copied.and_then(|()| self.gpu.read_stored_blocking(&full));
         self.gpu.recycle(full);
         pixels
@@ -1162,7 +1162,7 @@ impl Engine {
         let at = [pixel[0] * image.width() / size[0], pixel[1] * image.height() / size[1]];
         let mut encoder = self.gpu.encoder();
         let rb = self.gpu.encode_readback_region(&mut encoder, image, at);
-        self.gpu.queue.submit(Some(encoder.finish()));
+        self.gpu.submit(encoder);
         rb.map();
         self.wait_idle();
         match rb.poll() {

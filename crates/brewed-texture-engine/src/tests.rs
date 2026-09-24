@@ -1143,7 +1143,7 @@ fn image_allocation_costs() {
                 let image = gpu.create_image_raw_for_tests(2048, 2048, mips, format);
                 let mut encoder = gpu.encoder();
                 gpu.encode_clear(&mut encoder, &image.level(0));
-                gpu.queue.submit(Some(encoder.finish()));
+                gpu.submit(encoder);
                 drop(image);
                 let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
                 if i > 0 {
@@ -1152,7 +1152,7 @@ fn image_allocation_costs() {
                 let started = std::time::Instant::now();
                 let mut encoder = gpu.encoder();
                 gpu.encode_clear(&mut encoder, &kept.level(0));
-                gpu.queue.submit(Some(encoder.finish()));
+                gpu.submit(encoder);
                 let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
                 if i > 0 {
                     reused += started.elapsed().as_secs_f64() * 1000.0;
@@ -1632,4 +1632,99 @@ fn the_demo_settles_on_what_its_outputs_write() {
     assert!(e.memory_report().kept > 0);
     e.settle();
     assert_eq!(e.memory_report(), settled);
+}
+
+/// What wgpu's allocator holds of the GPU's memory once nine demos in one graph are computed,
+/// on each backend it reports on (prints).
+#[test]
+#[ignore = "a measurement"]
+fn memory_the_allocator_keeps() {
+    let (demo, preview) = brewed_texture_core::demo::graph();
+    let mut g = demo.clone();
+    let ids: Vec<NodeId> = demo.nodes.iter().map(|n| n.id).collect();
+    for k in 1..=8 {
+        g.paste(&demo.copy_nodes(&ids), [0.0, 900.0 * k as f32]);
+    }
+    let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
+    for backends in [wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::METAL] {
+        let Ok(gpu) = Gpu::headless_on(backends) else { continue };
+        let mut e = Engine::new(gpu);
+        e.set_keep(crate::engine::Keep::Read);
+        e.set_preview(preview);
+        let held = |e: &Engine| {
+            let report = e.gpu.device.generate_allocator_report()?;
+            Some((mb(report.total_allocated_bytes), mb(report.total_reserved_bytes)))
+        };
+        let before = held(&e);
+        evaluate_blocking(&mut e, &g);
+        let _ = e.render_thumbnails();
+        let computed = held(&e);
+        e.settle();
+        e.wait_idle();
+        let settled = held(&e);
+        let name = &e.gpu.adapter_info;
+        println!("{name}, MB allocated and reserved: {before:.1?} before, {computed:.1?} computed");
+        println!("{name}, MB allocated and reserved: {settled:.1?} settled");
+    }
+}
+
+/// The demo nine times in one graph, "mortar" dragged through the engine thread as the app
+/// drags it, then nothing for a while: to watch the process's memory from outside (prints its
+/// id, and when each part starts).
+#[test]
+#[ignore = "a measurement"]
+fn a_large_graph_dragged_through_the_service() {
+    use crate::service::{EngineService, Event, Request};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+    let Ok(gpu) = Gpu::headless() else { return };
+    println!("pid {} on {}", std::process::id(), gpu.adapter_info);
+    let finished = Arc::new(Mutex::new(0u64));
+    let done = finished.clone();
+    let emit: crate::service::Emit = Arc::new(move |event| {
+        if let Event::Finished { revision, .. } = event {
+            *done.lock().unwrap() = revision;
+        }
+    });
+    let service = EngineService::spawn(gpu.device.clone(), gpu.queue.clone(), gpu.adapter_info.clone(), emit);
+    let (demo, preview) = brewed_texture_core::demo::graph();
+    let materials: Vec<NodeId> =
+        demo.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
+    let mut g = demo.clone();
+    let ids: Vec<NodeId> = demo.nodes.iter().map(|n| n.id).collect();
+    // (BREWED_COPIES copies of the demo besides it, 8 if it does not say.)
+    let copies: u32 = std::env::var("BREWED_COPIES").ok().and_then(|c| c.parse().ok()).unwrap_or(8);
+    for k in 1..=copies {
+        g.paste(&demo.copy_nodes(&ids), [0.0, 900.0 * k as f32]);
+    }
+    let send = |g: &Graph, revision: u64| {
+        let eval = brewed_texture_core::eval::evaluate(g);
+        service.send(Request::Evaluate { revision, graph: Arc::new(g.clone()), eval: Arc::new(eval) });
+    };
+    let wait_for = |revision: u64| {
+        while *finished.lock().unwrap() < revision {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    let started = Instant::now();
+    let say = |what: &str| println!("{:6.1} s {what}", started.elapsed().as_secs_f64());
+    std::thread::sleep(Duration::from_secs(3));
+    say("computing");
+    service.send(Request::Preview(preview));
+    service.send(Request::Materials(materials));
+    send(&g, 1);
+    wait_for(1);
+    say("computed");
+    std::thread::sleep(Duration::from_secs(4));
+    say("dragging");
+    let mortar = g.variables.iter().position(|v| v.name == "mortar").unwrap();
+    for step in 0..=60u64 {
+        g.variables[mortar].value = Value::Float(0.02 + 0.001 * step as f32);
+        send(&g, 2 + step);
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    wait_for(62);
+    say("dragged");
+    std::thread::sleep(Duration::from_secs(8));
+    say("done");
 }
