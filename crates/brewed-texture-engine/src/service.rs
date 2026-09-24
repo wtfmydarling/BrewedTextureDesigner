@@ -298,13 +298,14 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
             (emit)(Event::Probe { node, pixel, rgba: engine.probe(node, pixel) });
         }
         for job in pending.exports {
-            match engine.read_image(job.node) {
-                Ok((w, h, rgba)) => {
+            match engine.read_stored(job.node) {
+                Ok(image) => {
                     let emit = emit.clone();
-                    // Quantizing and encoding happen off the engine thread.
+                    // Converting and encoding happen off the engine thread, from the image as
+                    // the GPU stores it, a band at a time.
                     std::thread::spawn(move || {
                         let result =
-                            export::write_image(&job.path, &rgba, w, h, job.format, job.bit_depth).map(|_| job.path);
+                            export::write_stored(&job.path, &image, job.format, job.bit_depth).map(|_| job.path);
                         (emit)(Event::Exported(result));
                     });
                 }

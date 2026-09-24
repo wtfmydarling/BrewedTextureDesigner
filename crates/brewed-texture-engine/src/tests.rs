@@ -459,6 +459,45 @@ fn bitmap_node_decodes_and_resamples() {
 }
 
 #[test]
+fn files_no_node_reads_leave_the_gpu() {
+    let Some(mut e) = engine() else { return };
+    let dir = std::env::temp_dir().join(format!("btd-files-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b) = (dir.join("a.png"), dir.join("b.png"));
+    image::RgbaImage::from_pixel(64, 32, image::Rgba([200, 10, 10, 255])).save(&a).unwrap();
+    image::RgbaImage::from_pixel(32, 64, image::Rgba([10, 200, 10, 255])).save(&b).unwrap();
+    let mut g = graph();
+    let n = g.add_node(NodeKind::BITMAP, [0.0, 0.0]);
+    set(&mut g, n, "path", ParamValue::Text(a.display().to_string()));
+    evaluate_blocking(&mut e, &g);
+    let one = e.memory_report().files;
+    assert!(one > 0);
+    // Another file: the first is read no more, and goes.
+    set(&mut g, n, "path", ParamValue::Text(b.display().to_string()));
+    evaluate_blocking(&mut e, &g);
+    assert_eq!(e.memory_report().files, one);
+    // No Bitmap node, no file.
+    g.remove_nodes(&[n]);
+    evaluate_blocking(&mut e, &g);
+    assert_eq!(e.memory_report().files, 0);
+    // A file whose node went while it was decoded is not uploaded when it arrives.
+    let n = g.add_node(NodeKind::BITMAP, [0.0, 0.0]);
+    set(&mut g, n, "path", ParamValue::Text(a.display().to_string()));
+    e.evaluate(&g, &brewed_texture_core::eval::evaluate(&g));
+    assert!(e.bitmaps_loading());
+    g.remove_nodes(&[n]);
+    e.evaluate(&g, &brewed_texture_core::eval::evaluate(&g));
+    assert!(!e.bitmaps_loading());
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_millis(500) {
+        assert!(!e.receive_bitmaps());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(e.memory_report().files, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn demo_graph_evaluates_without_errors() {
     let Some(mut e) = engine() else { return };
     let (mut g, _) = brewed_texture_core::demo::graph();
@@ -1198,6 +1237,247 @@ fn demo_memory_through_the_service() {
     let Some((during, settled)) = drag_through_the_service(2048, 60) else { return };
     println!("while dragging: {during:.0?}");
     println!("the most: {:.0} MB; settled: {settled:.0} MB", during.iter().copied().fold(0.0, f64::max));
+}
+
+/// Values worth trying for a parameter: its default, the ends of its slider, and what can be
+/// typed past them (or what its limits hold it to); for a choice, every option and ones a file
+/// could hold that no option is.
+fn edge_values(pd: &brewed_texture_core::nodes::ParamDef) -> Vec<ParamValue> {
+    use brewed_texture_core::nodes::ParamKind;
+    let limit = |v: f32| match pd.limits {
+        Some((lo, hi)) => v.clamp(lo, hi),
+        None => v,
+    };
+    let mut out = Vec::new();
+    match pd.kind {
+        ParamKind::Float { default, min, max, .. } => {
+            let span = (max - min).abs().max(1.0);
+            for v in [default, min, max, 0.0, -1.0, 1.0, max + span * 10.0, min - span * 10.0, 1e6, -1e6, 1e-6] {
+                out.push(ParamValue::Float(limit(v)));
+            }
+        }
+        ParamKind::Int { default, min, max } => {
+            for v in [
+                default as i64,
+                min as i64,
+                max as i64,
+                0,
+                -1,
+                max as i64 * 10 + 10,
+                min as i64 - 100,
+                100_000,
+                i32::MAX as i64,
+                i32::MIN as i64 + 1,
+            ] {
+                out.push(ParamValue::Int(limit(v as f32) as i64 as i32));
+            }
+        }
+        ParamKind::Vec2 { default, min, max } => {
+            let span = (max - min).abs().max(1.0);
+            for v in [
+                default,
+                [min, min],
+                [max, max],
+                [0.0, 0.0],
+                [max + span * 10.0; 2],
+                [min - span * 10.0; 2],
+                [1e6, -1e6],
+            ] {
+                out.push(ParamValue::Vec2([limit(v[0]), limit(v[1])]));
+            }
+        }
+        ParamKind::Color { default } => {
+            for v in [default, [0.0; 4], [1.0; 4], [-10.0, -10.0, -10.0, -1.0], [10.0; 4], [1e6; 4]] {
+                out.push(ParamValue::Color(v));
+            }
+        }
+        ParamKind::Enum { default, options } => {
+            out.extend((0..options.len() as u32).map(ParamValue::Enum));
+            for v in [default, options.len() as u32, 1000, u32::MAX] {
+                out.push(ParamValue::Enum(v));
+            }
+        }
+        ParamKind::Bool { .. } => out.extend([ParamValue::Bool(false), ParamValue::Bool(true)]),
+        ParamKind::Text { .. } => out.extend([ParamValue::Text(String::new()), ParamValue::Text("x".repeat(10_000))]),
+        ParamKind::File { .. } => out.extend([
+            ParamValue::Text(String::new()),
+            ParamValue::Text("does/not/exist.png".into()),
+            ParamValue::Text(std::env::temp_dir().display().to_string()),
+            ParamValue::Text(file!().into()),
+        ]),
+        ParamKind::Expression { pixel, .. } => {
+            let texts: &[&str] = if pixel {
+                &[
+                    "u",
+                    "0",
+                    "1/0",
+                    "sqrt(-1)",
+                    "log(0)",
+                    "u*1e30*1e30",
+                    "((((((((u))))))))",
+                    "u +",
+                    "unknown_function(u)",
+                    "a",
+                ]
+            } else {
+                &["0", "1/0", "sqrt(-1)", "1e40*1e40", "1 +", "x", "pow(2, 1000)"]
+            };
+            out.extend(texts.iter().map(|t| ParamValue::Text((*t).into())));
+        }
+        _ => {}
+    }
+    out
+}
+
+/// One variant of a node under stress: evaluated twice (the first time builds its pipelines),
+/// then what went wrong, if anything. `at_4k` scales its time from the resolution of `g` to
+/// 4096×4096. Returns the engine to go on with (a new one after a panic).
+fn stress(
+    mut e: Engine,
+    g: &Graph,
+    id: NodeId,
+    what: &str,
+    findings: &mut Vec<String>,
+    times: &mut Vec<(f64, String)>,
+) -> Engine {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let pixels = f64::from(g.resolution[0]) * f64::from(g.resolution[1]);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        evaluate_blocking(&mut e, g);
+        // Computed once more, alone: bypassed and back gives it a new key, and what it reads
+        // is there.
+        let mut changed = g.clone();
+        if let Some(n) = changed.node_mut(id) {
+            n.bypass = !n.bypass;
+        }
+        evaluate_blocking(&mut e, &changed);
+        let t = std::time::Instant::now();
+        evaluate_blocking(&mut e, g);
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        let nans = e.read_image(id).ok().map(|(_, _, px)| px.iter().filter(|v| !v.is_finite()).count());
+        (ms, nans)
+    }));
+    match result {
+        Err(panic) => {
+            let message = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default();
+            findings.push(format!("PANIC {what}: {message}"));
+            return engine().expect("the GPU is still there");
+        }
+        Ok((ms, nans)) => {
+            let errors = e.gpu.take_errors();
+            if !errors.is_empty() {
+                findings.push(format!("GPU ERROR {what}: {}", errors.join(" | ")));
+            }
+            if let Some(n) = nans.filter(|n| *n > 0) {
+                findings.push(format!("NaN {what}: {n} values"));
+            }
+            // (What a small image takes is mostly the cost of a submission, which does not grow.)
+            if pixels >= 512.0 * 512.0 {
+                times.push((ms * 4096.0 * 4096.0 / pixels, what.to_string()));
+            }
+        }
+    }
+    e
+}
+
+/// A node of `kind` alone with what it reads: grayscale or color images at its inputs.
+fn node_with_inputs(kind: NodeKind, color: bool, resolution: [u32; 2]) -> (Graph, NodeId) {
+    let mut g = Graph { resolution, ..Graph::default() };
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let src = if color {
+        let hsl = g.add_node(NodeKind::HSL, [0.0, 0.0]);
+        g.connect(noise, "o:output", hsl, "i:input").unwrap();
+        hsl
+    } else {
+        noise
+    };
+    let id = g.add_node(kind, [0.0, 0.0]);
+    for sd in kind.def().inputs {
+        let _ = g.connect(src, "o:output", id, &brewed_texture_core::graph::input_socket_key(sd.key));
+    }
+    (g, id)
+}
+
+/// Every parameter of every image node at its edges, one at a time from the node as it is
+/// added, with grayscale and with color images arriving, at 1024×1024; then every node with
+/// all its parameters at random edges at once, at sizes that are not powers of two. Prints
+/// what panics, makes a GPU error or a NaN, and the slowest, with the time each would take
+/// at 4096×4096 (a graphics driver resets a device that works on one thing for about 2 s).
+#[test]
+#[ignore = "a stress test"]
+fn every_parameter_at_its_edges() {
+    let Some(mut e) = engine() else { return };
+    let mut findings: Vec<String> = Vec::new();
+    let mut times: Vec<(f64, String)> = Vec::new();
+    let started = std::time::Instant::now();
+    let kinds: Vec<NodeKind> = NodeKind::ALL.iter().copied().filter(|k| k.def().has_image()).collect();
+    for &kind in &kinds {
+        let d = kind.def();
+        for color in [false, true] {
+            if d.inputs.is_empty() && color {
+                continue;
+            }
+            let (g, id) = node_with_inputs(kind, color, [1024, 1024]);
+            for pd in d.params {
+                for value in edge_values(pd) {
+                    let mut g = g.clone();
+                    let Some(param) = g.node_mut(id).and_then(|n| n.param_mut(pd.key)) else { continue };
+                    param.value = value.clone();
+                    let what =
+                        format!("{} ({}) {} = {:?}", d.name, if color { "color" } else { "gray" }, pd.key, value);
+                    e = stress(e, &g, id, &what, &mut findings, &mut times);
+                }
+            }
+        }
+    }
+    let one_at_a_time = times.len();
+    // All at once, at random, at odd sizes.
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for &kind in &kinds {
+        let d = kind.def();
+        for round in 0..12 {
+            let resolution = [[777, 333], [16, 16], [1000, 16], [333, 1024]][round % 4];
+            let (mut g, id) = node_with_inputs(kind, round % 2 == 1, resolution);
+            let mut chosen = Vec::new();
+            for pd in d.params {
+                let values = edge_values(pd);
+                if values.is_empty() {
+                    continue;
+                }
+                let v = values[(next() % values.len() as u64) as usize].clone();
+                chosen.push(format!("{}={:?}", pd.key, v));
+                if let Some(param) = g.node_mut(id).and_then(|n| n.param_mut(pd.key)) {
+                    param.value = v;
+                }
+            }
+            let what = format!("{} at {resolution:?} with {}", d.name, chosen.join(", "));
+            e = stress(e, &g, id, &what, &mut findings, &mut times);
+        }
+    }
+    println!(
+        "{} evaluations ({one_at_a_time} one parameter at a time) in {:.1} s, {} findings",
+        times.len(),
+        started.elapsed().as_secs_f64(),
+        findings.len()
+    );
+    for f in &findings {
+        println!("{}", f.chars().take(300).collect::<String>());
+    }
+    times.sort_by(|a, b| b.0.total_cmp(&a.0));
+    println!("the slowest, as they would take at 4096x4096:");
+    for (ms, what) in times.iter().take(25) {
+        println!("  {:7.0} ms  {}", ms, what.chars().take(200).collect::<String>());
+    }
 }
 
 /// What the demo takes in GPU memory at 2048×2048, as the app shows it (prints).

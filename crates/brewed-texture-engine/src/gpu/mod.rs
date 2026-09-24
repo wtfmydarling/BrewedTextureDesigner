@@ -28,6 +28,8 @@ pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const GRAY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 /// Where the size of the image a kernel draws is bound (see common.wgsl).
 const TARGET_BINDING: u32 = 15;
+/// How many pixels a kernel draws at most in one draw (see [`Gpu::draw`]).
+const BAND_PIXELS: u32 = 1 << 20;
 
 /// How a node's image is read (`widen`) and an output writes it (`as_output`): the WGSL the
 /// kernels read their inputs with, for the views that sample the node images to read them
@@ -770,7 +772,14 @@ impl Gpu {
         });
         pass.set_pipeline(&kernel.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.draw(0..3, 0..1);
+        // In bands of rows, a draw each: a system resets a device one piece of work keeps busy
+        // for long (about 2 s on Windows), and a heavy kernel on a large image on a slow device
+        // gets there. A band is short whatever the kernel, the image or the device.
+        let rows = (BAND_PIXELS / w).clamp(1, h);
+        for y in (0..h).step_by(rows as usize) {
+            pass.set_scissor_rect(0, y, w, rows.min(h - y));
+            pass.draw(0..3, 0..1);
+        }
     }
 
     /// Run a built-in kernel over `output`, built for the images it reads and writes.
@@ -882,13 +891,18 @@ impl Gpu {
 
     /// Read an image back to the CPU as RGBA f32, blocking until the GPU is done.
     pub fn read_image_blocking(&self, img: &GpuImage) -> Result<Vec<f32>, String> {
+        self.read_stored_blocking(img).map(|stored| stored.to_f32())
+    }
+
+    /// Read an image back to the CPU as its texture stores it, blocking until the GPU is done.
+    pub fn read_stored_blocking(&self, img: &GpuImage) -> Result<StoredImage, String> {
         let mut encoder = self.encoder();
         let rb = self.encode_readback(&mut encoder, img);
         self.queue.submit(Some(encoder.finish()));
         rb.map();
         self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU poll failed: {e}"))?;
         match rb.poll() {
-            Some(Ok(())) => Ok(rb.to_f32()),
+            Some(Ok(())) => Ok(rb.stored()),
             Some(Err(e)) => Err(e),
             None => Err("GPU readback did not finish".into()),
         }
@@ -939,41 +953,85 @@ impl Readback {
     }
 
     /// The pixels as they are stored, without the rows' padding. Requires a successful map.
-    fn bytes(&self) -> Vec<u8> {
+    pub fn stored(&self) -> StoredImage {
         let row = (self.width * bytes_per_pixel(self.format)) as usize;
-        let mut out = Vec::with_capacity(row * self.height as usize);
+        let mut bytes = Vec::with_capacity(row * self.height as usize);
         {
             let view = self.buffer.get_mapped_range(..);
             for y in 0..self.height as usize {
                 let start = y * self.padded_row as usize;
-                out.extend_from_slice(&view[start..start + row]);
+                bytes.extend_from_slice(&view[start..start + row]);
             }
         }
         self.buffer.unmap();
-        out
+        StoredImage { width: self.width, height: self.height, format: self.format, bytes }
+    }
+
+    /// Pixels as RGBA f32 (see [`StoredImage::to_f32`]). Requires a successful map.
+    pub fn to_f32(&self) -> Vec<f32> {
+        self.stored().to_f32()
+    }
+}
+
+/// An image read back as its texture stores it: its rows packed, in its format. As small as
+/// the image is on the GPU (a quarter of it as RGBA floats, or a sixteenth for one channel of
+/// 8 bits), and converted a band at a time where it is read.
+pub struct StoredImage {
+    pub width: u32,
+    pub height: u32,
+    pub format: wgpu::TextureFormat,
+    pub bytes: Vec<u8>,
+}
+
+impl StoredImage {
+    /// RGBA f32 pixels, stored as such.
+    pub fn from_f32(width: u32, height: u32, rgba: &[f32]) -> StoredImage {
+        let bytes = bytemuck::cast_slice(rgba).to_vec();
+        StoredImage { width, height, format: wgpu::TextureFormat::Rgba32Float, bytes }
     }
 
     /// Pixels as RGBA f32 whatever they are stored as: one channel is gray in red, green and
     /// blue, and opaque; two are red and green, with no blue, opaque (as a shader reads them).
     pub fn to_f32(&self) -> Vec<f32> {
-        let bytes = self.bytes();
+        self.rows_to_f32(0..self.height)
+    }
+
+    /// Those of some rows (see [`StoredImage::to_f32`]).
+    pub fn rows_to_f32(&self, rows: std::ops::Range<u32>) -> Vec<f32> {
+        use wgpu::TextureFormat as F;
+        let row = (self.width * bytes_per_pixel(self.format)) as usize;
+        let bytes = &self.bytes[rows.start as usize * row..rows.end as usize * row];
         let values: Vec<f32> = match self.format {
-            wgpu::TextureFormat::R8Unorm | wgpu::TextureFormat::Rg8Unorm | wgpu::TextureFormat::Rgba8Unorm => {
-                bytes.iter().map(|b| f32::from(*b) / 255.0).collect()
+            F::R8Unorm | F::Rg8Unorm | F::Rgba8Unorm => bytes.iter().map(|b| f32::from(*b) / 255.0).collect(),
+            F::R32Float | F::Rg32Float | F::Rgba32Float => {
+                bytes.as_chunks::<4>().0.iter().map(|b| f32::from_ne_bytes(*b)).collect()
             }
-            _ => {
-                // Half floats, expanded with SIMD on all cores.
-                let half: &[u16] = bytemuck::cast_slice(&bytes);
-                let mut out = vec![0.0f32; half.len()];
-                crate::simd::f16_to_f32(half, &mut out);
-                out
-            }
+            // Half floats (copied first when they are not where half floats may be read).
+            _ => match bytemuck::try_cast_slice::<u8, u16>(bytes) {
+                Ok(half) => convert_half(half),
+                Err(_) => {
+                    let half: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|b| u16::from_ne_bytes(*b)).collect();
+                    convert_half(&half)
+                }
+            },
         };
-        match self.format.components() {
-            1 => values.iter().flat_map(|v| [*v, *v, *v, 1.0]).collect(),
-            2 => values.as_chunks::<2>().0.iter().flat_map(|[r, g]| [*r, *g, 0.0, 1.0]).collect(),
-            _ => values,
-        }
+        expand(self.format, values)
+    }
+}
+
+/// Half floats as floats, with SIMD on all cores.
+fn convert_half(half: &[u16]) -> Vec<f32> {
+    let mut out = vec![0.0f32; half.len()];
+    crate::simd::f16_to_f32(half, &mut out);
+    out
+}
+
+/// The values of pixels of `format` as RGBA (see [`StoredImage::to_f32`]).
+fn expand(format: wgpu::TextureFormat, values: Vec<f32>) -> Vec<f32> {
+    match format.components() {
+        1 => values.iter().flat_map(|v| [*v, *v, *v, 1.0]).collect(),
+        2 => values.as_chunks::<2>().0.iter().flat_map(|[r, g]| [*r, *g, 0.0, 1.0]).collect(),
+        _ => values,
     }
 }
 

@@ -29,7 +29,7 @@ use brewed_texture_core::eval::{Evaluation, VarSource};
 use brewed_texture_core::graph::{Graph, Node, NodeId, input_socket_key};
 use brewed_texture_core::nodes::{ImageKind, NodeKind, PIXEL_MATH_BUILTINS, image_kind};
 
-use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, Gpu, GpuImage, Readback, format_of, output_format};
+use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, Gpu, GpuImage, Readback, StoredImage, format_of, output_format};
 use crate::kernels::{self, DisplayU, ExecCtx, PixelVar};
 use crate::simd::{self, ImageStats};
 
@@ -140,7 +140,9 @@ pub struct DisplayImage {
 }
 
 enum BitmapEntry {
-    Loading,
+    /// Being decoded, by the decoding with this number (the file may have been asked for
+    /// again since an earlier one started, which then counts no more).
+    Loading(u64),
     Ready { image: GpuImage, generation: u64 },
     Failed(String),
 }
@@ -155,6 +157,8 @@ enum Pixels {
 
 struct DecodedBitmap {
     path: String,
+    /// The number of the decoding (see [`BitmapEntry::Loading`]).
+    ticket: u64,
     result: Result<(u32, u32, Pixels), String>,
 }
 
@@ -323,7 +327,7 @@ impl Engine {
 
     /// Are files still being decoded? (The graph must be evaluated again when they arrive.)
     pub fn bitmaps_loading(&self) -> bool {
-        self.bitmaps.values().any(|b| matches!(b, BitmapEntry::Loading))
+        self.bitmaps.values().any(|b| matches!(b, BitmapEntry::Loading(_)))
     }
 
     /// Drop every cached result (new document, device change ...).
@@ -390,14 +394,16 @@ impl Engine {
         match self.bitmaps.get(path) {
             Some(BitmapEntry::Ready { image, generation }) => Ok(Some((image.clone(), *generation))),
             Some(BitmapEntry::Failed(e)) => Err(e.clone()),
-            Some(BitmapEntry::Loading) => Ok(None),
+            Some(BitmapEntry::Loading(_)) => Ok(None),
             None => {
-                self.bitmaps.insert(path.to_string(), BitmapEntry::Loading);
+                self.bitmap_generation += 1;
+                let ticket = self.bitmap_generation;
+                self.bitmaps.insert(path.to_string(), BitmapEntry::Loading(ticket));
                 let tx = self.bitmap_tx.clone();
                 let path = path.to_string();
                 std::thread::spawn(move || {
                     let result = decode_bitmap(&path);
-                    let _ = tx.send(DecodedBitmap { path, result });
+                    let _ = tx.send(DecodedBitmap { path, ticket, result });
                 });
                 Ok(None)
             }
@@ -413,6 +419,10 @@ impl Engine {
     pub fn receive_bitmaps(&mut self) -> bool {
         let mut any = false;
         while let Ok(done) = self.bitmap_rx.try_recv() {
+            // A file no node reads any more, or asked for again since: not uploaded.
+            if !matches!(self.bitmaps.get(&done.path), Some(BitmapEntry::Loading(t)) if *t == done.ticket) {
+                continue;
+            }
             let entry = match done.result {
                 Ok((w, h, pixels)) => {
                     let image = match pixels {
@@ -455,6 +465,13 @@ impl Engine {
         }
         self.luts.retain(|id, _| alive.contains(id));
         self.boundary.retain(|id| alive.contains(id));
+        // Files no Bitmap node reads any more go, whatever was open before (a file read again
+        // is decoded again).
+        let files: HashSet<&str> = graph
+            .nodes_of(NodeKind::BITMAP)
+            .map(|n| eval.params(n.id).map_or(n.text("path"), |p| p.text("path")))
+            .collect();
+        self.bitmaps.retain(|path, _| files.contains(path.as_str()));
         for id in &eval.cyclic {
             self.release(*id);
             let state = self.states.entry(*id).or_default();
@@ -1106,26 +1123,32 @@ impl Engine {
     /// reads as gray and opaque, an image smaller than the texture (a uniform color) is
     /// spread over it, and an output reads as it writes its image.
     pub fn read_image(&self, node: NodeId) -> Result<(u32, u32, Vec<f32>), String> {
+        let stored = self.read_stored(node)?;
+        Ok((stored.width, stored.height, stored.to_f32()))
+    }
+
+    /// The same pixels as they are stored (see [`StoredImage`]): what an export writes.
+    pub fn read_stored(&self, node: NodeId) -> Result<StoredImage, String> {
         let image = self.image(node).ok_or("The node has no image")?;
         let size = self.last_resolution;
         if image.size() == size {
-            return Ok((size[0], size[1], self.gpu.read_image_blocking(image)?));
+            return self.gpu.read_stored_blocking(image);
         }
         let full = self.gpu.take_scratch(size[0], size[1], COLOR_FORMAT);
         let mut encoder = self.gpu.encoder();
         let copied = self.gpu.encode_show(&mut encoder, image, &full, 0);
         self.gpu.queue.submit(Some(encoder.finish()));
-        let pixels = copied.and_then(|()| self.gpu.read_image_blocking(&full));
+        let pixels = copied.and_then(|()| self.gpu.read_stored_blocking(&full));
         self.gpu.recycle(full);
-        Ok((size[0], size[1], pixels?))
+        pixels
     }
 
     /// Histogram and statistics (blocking readback, multithreaded SIMD). An image smaller
     /// than the texture size has the same histogram as it spread over it.
     pub fn stats(&self, node: NodeId) -> Option<Arc<ImageStats>> {
         let image = self.image(node)?;
-        let pixels = self.gpu.read_image_blocking(image).ok()?;
-        Some(Arc::new(simd::image_stats(&pixels, image.width(), image.height())))
+        let stored = self.gpu.read_stored_blocking(image).ok()?;
+        Some(Arc::new(simd::stored_stats(&stored)))
     }
 
     /// Value of one pixel of the texture (blocking).

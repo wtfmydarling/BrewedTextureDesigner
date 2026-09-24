@@ -12,8 +12,14 @@ use half::slice::HalfFloatSliceExt;
 use rayon::prelude::*;
 use wide::{f32x8, i32x8};
 
+use crate::gpu::StoredImage;
+
 /// Floats per parallel task: 64K floats = 16K RGBA pixels = 256 KiB.
 const TASK: usize = 1 << 16;
+
+/// Pixels converted at a time from an image as it is stored (see [`StoredImage`]): 16 MiB as
+/// RGBA floats, whatever the size of the image.
+pub const BAND: u32 = 1 << 20;
 
 #[inline(always)]
 fn load8(s: &[f32]) -> f32x8 {
@@ -214,9 +220,28 @@ fn bin_of(v: f32) -> usize {
 
 /// Compute histograms, min, max and mean of packed RGBA f32 pixels in parallel.
 pub fn image_stats(rgba: &[f32], width: u32, height: u32) -> ImageStats {
+    finish_stats(partial_stats(rgba), rgba.len() / 4, width, height)
+}
+
+/// [`image_stats`] of an image as it is stored, a band of rows at a time: no more memory than
+/// a band as floats, whatever the size of the image.
+pub fn stored_stats(image: &StoredImage) -> ImageStats {
+    let rows = (BAND / image.width.max(1)).max(1);
+    let mut partial = Partial::new();
+    let mut pixels = 0;
+    for y in (0..image.height).step_by(rows as usize) {
+        let band = image.rows_to_f32(y..(y + rows).min(image.height));
+        pixels += band.len() / 4;
+        partial = partial.merge(partial_stats(&band));
+    }
+    finish_stats(partial, pixels, image.width, image.height)
+}
+
+/// Histograms, extremes and sums of packed RGBA f32 pixels, in parallel.
+fn partial_stats(rgba: &[f32]) -> Partial {
     let pixels = rgba.len() / 4;
     let rgba = &rgba[..pixels * 4];
-    let partial = rgba
+    rgba
         .par_chunks(TASK)
         .fold(Partial::new, |mut p, chunk| {
             let zero = f32x8::splat(0.0);
@@ -277,8 +302,11 @@ pub fn image_stats(rgba: &[f32], width: u32, height: u32) -> ImageStats {
             }
             p
         })
-        .reduce(Partial::new, Partial::merge);
+        .reduce(Partial::new, Partial::merge)
+}
 
+/// The statistics of `pixels` pixels from what [`partial_stats`] found of them.
+fn finish_stats(partial: Partial, pixels: usize, width: u32, height: u32) -> ImageStats {
     let mn = partial.min.to_array();
     let mx = partial.max.to_array();
     let mut stats = ImageStats { width, height, hist: partial.hist, min: [0.0; 4], max: [0.0; 4], mean: [0.0; 4] };
@@ -307,6 +335,20 @@ mod tests {
                 (s as f32 / u32::MAX as f32) * 1.4 - 0.2 // covers values outside [0, 1]
             })
             .collect()
+    }
+
+    #[test]
+    fn stats_of_a_stored_image_are_its_stats() {
+        // More than a band of pixels.
+        let (w, h) = (1500u32, 1000u32);
+        let rgba = noise((w * h * 4) as usize, 3);
+        let whole = image_stats(&rgba, w, h);
+        let banded = stored_stats(&StoredImage::from_f32(w, h, &rgba));
+        assert_eq!(whole.hist, banded.hist);
+        assert_eq!((whole.min, whole.max), (banded.min, banded.max));
+        for c in 0..4 {
+            assert!((whole.mean[c] - banded.mean[c]).abs() < 1e-5, "{:?} {:?}", whole.mean, banded.mean);
+        }
     }
 
     #[test]

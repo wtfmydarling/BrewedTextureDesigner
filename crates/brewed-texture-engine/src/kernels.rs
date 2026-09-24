@@ -565,7 +565,9 @@ fn directional_blur(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 
 fn slope_blur(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let p = cx.params;
-    let amount = p.f("intensity") / 1024.0;
+    // The path is no longer than the image is wide: a longer one only goes round a tiled
+    // image again, and far apart samples keep the GPU busy for long.
+    let amount = (p.f("intensity") / 1024.0).clamp(-1.0, 1.0);
     let u = SlopeU {
         dir_x: 0.0,
         dir_y: 0.0,
@@ -795,7 +797,9 @@ fn output(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 // ------------------------------------------------------------------ blur
 
 /// Separable Gaussian blur. Large radii are blurred on a downsampled copy and upsampled
-/// again, which keeps the cost bounded for any radius.
+/// again, which keeps the cost bounded for any radius: the copy is halved until the Gaussian
+/// is narrow on it, and a Gaussian wider than four times the image (the image's average,
+/// however much wider) is taken as that wide.
 pub fn gaussian_blur(
     gpu: &Gpu,
     encoder: &mut wgpu::CommandEncoder,
@@ -809,11 +813,13 @@ pub fn gaussian_blur(
         // Nothing to blur (or a 1x1 placeholder input): plain resample.
         return gpu.run(encoder, "resample", bytes(&copy), &[input], output);
     }
-    let mut s = sigma;
-    let mut levels = 0;
-    while s > 12.0 && levels < 6 {
+    let [w, h] = output.size();
+    let mut s = sigma.min(4.0 * w.max(h) as f32);
+    let (mut levels, mut cw, mut ch) = (0, w, h);
+    while s > 12.0 && (cw > 1 || ch > 1) {
         s *= 0.5;
         levels += 1;
+        (cw, ch) = (cw.div_ceil(2), ch.div_ceil(2));
     }
     let mut chain: Vec<GpuImage> = Vec::new();
     let mut current = input.clone();
