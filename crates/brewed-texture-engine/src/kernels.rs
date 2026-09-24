@@ -760,9 +760,10 @@ fn ambient_occlusion(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     // channel.)
     let img = input(cx.inputs, 0, &cx.gpu.black).clone();
     let [w, h] = cx.output.size();
-    let heights = (img.texture.mip_level_count() == 1 || img.size() != [w, h])
+    let heights = (img.texture.mip_level_count() == 1 || img.size() != [w, h] || !crate::gpu::filterable(img.format()))
         .then(|| {
-            let heights = cx.gpu.take_scratch_with_mips(w, h, crate::gpu::format_of(img.kind()));
+            let format = crate::gpu::format_of(img.kind(), brewed_texture_core::Precision::Half);
+            let heights = cx.gpu.take_scratch_with_mips(w, h, format);
             cx.gpu.encode_copy_with_mips(cx.encoder, &img, &heights, 0).map(|()| heights)
         })
         .transpose()?;
@@ -925,9 +926,10 @@ fn non_uniform_blur(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     // that came without its mips (or of another size) is copied into an image that has them.
     let img = input(cx.inputs, 0, &cx.gpu.black).clone();
     let [w, h] = cx.output.size();
-    let mipped = (img.texture.mip_level_count() == 1 || img.size() != [w, h])
+    let mipped = (img.texture.mip_level_count() == 1 || img.size() != [w, h] || !crate::gpu::filterable(img.format()))
         .then(|| {
-            let mipped = cx.gpu.take_scratch_with_mips(w, h, crate::gpu::format_of(img.kind()));
+            let format = crate::gpu::format_of(img.kind(), brewed_texture_core::Precision::Half);
+            let mipped = cx.gpu.take_scratch_with_mips(w, h, format);
             cx.gpu.encode_copy_with_mips(cx.encoder, &img, &mipped, 0).map(|()| mipped)
         })
         .transpose()?;

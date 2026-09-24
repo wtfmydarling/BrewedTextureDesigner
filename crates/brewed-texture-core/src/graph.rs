@@ -463,6 +463,38 @@ impl Clipboard {
     }
 }
 
+/// How precisely a graph keeps its grayscale images (heights, masks): in half floats, 11 bits
+/// of precision and 2 bytes a pixel, or in floats, 24 bits and 4 bytes. A gentle slope over a
+/// large texture is steps in half floats, which a normal map shows as bands and a 16-bit file
+/// keeps; in floats it is smooth. Colors are half floats either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Precision {
+    #[default]
+    Half,
+    Full,
+}
+
+impl Precision {
+    pub const ALL: [Precision; 2] = [Precision::Half, Precision::Full];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Precision::Half => "16-bit float",
+            Precision::Full => "32-bit float",
+        }
+    }
+
+    fn is_half(&self) -> bool {
+        *self == Precision::Half
+    }
+}
+
+impl std::fmt::Display for Precision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Graph {
     pub nodes: Vec<Node>,
@@ -473,6 +505,9 @@ pub struct Graph {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
     pub resolution: [u32; 2],
+    /// How precisely grayscale images are kept.
+    #[serde(default, skip_serializing_if = "Precision::is_half")]
+    pub precision: Precision,
     pub next_id: u64,
 }
 
@@ -484,6 +519,7 @@ impl Default for Graph {
             variables: Vec::new(),
             comments: Vec::new(),
             resolution: [2048, 2048],
+            precision: Precision::Half,
             next_id: 1,
         }
     }

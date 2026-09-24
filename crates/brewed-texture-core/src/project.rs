@@ -198,7 +198,8 @@ mod tests {
     #[test]
     fn roundtrip() {
         let (mut package, views, open) = demo();
-        let second = package.add_graph("Second", Graph::default());
+        let full = Graph { precision: crate::Precision::Full, ..Graph::default() };
+        let second = package.add_graph("Second", full);
         let json = to_json(&package, &views, second, None).unwrap();
         let loaded = from_json(&json, None, "x").unwrap();
         assert_eq!(loaded.package, package);

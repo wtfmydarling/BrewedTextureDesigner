@@ -19,12 +19,15 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
+use brewed_texture_core::Precision;
 use brewed_texture_core::nodes::ImageKind;
 
 /// Color images: red, green, blue and alpha as half floats.
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// Grayscale images: one channel as a half float, a quarter of the memory of a color image.
 pub const GRAY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+/// Grayscale images of a graph of full precision (see [`Precision`]): one channel as a float.
+pub const GRAY_FULL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 /// The seeds of a distance field: the place of a pixel as an integer (see distance.wgsl); and the
 /// labels of a flood fill (flood.wgsl).
 pub const SEED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
@@ -58,31 +61,47 @@ struct CopyU {
     pad: [u32; 3],
 }
 
-/// The format images of a kind are stored in.
-pub fn format_of(kind: ImageKind) -> wgpu::TextureFormat {
-    match kind {
-        ImageKind::Gray => GRAY_FORMAT,
-        ImageKind::Color => COLOR_FORMAT,
+/// The format images of a kind are stored in, in a graph of `precision`.
+pub fn format_of(kind: ImageKind, precision: Precision) -> wgpu::TextureFormat {
+    match (kind, precision) {
+        (ImageKind::Gray, Precision::Full) => GRAY_FULL_FORMAT,
+        (ImageKind::Gray, Precision::Half) => GRAY_FORMAT,
+        (ImageKind::Color, _) => COLOR_FORMAT,
     }
+}
+
+/// Whether a format can be sampled through a filter: by the views, and by the kernels that
+/// filter their inputs. Floats of 32 bits cannot on every device (it takes a feature WebGPU
+/// does not promise), so what is shown of them, and what such a kernel reads, is a copy in half
+/// floats.
+pub fn filterable(format: wgpu::TextureFormat) -> bool {
+    !matches!(
+        format,
+        wgpu::TextureFormat::R32Float | wgpu::TextureFormat::Rg32Float | wgpu::TextureFormat::Rgba32Float
+    )
 }
 
 /// The format an output keeps the image it writes in, from its format (see
 /// [`brewed_texture_core::nodes::OUTPUT_FORMATS`]) and bit depth (see [`crate::export`]),
-/// and what arrives at it: the channels it writes, one, two or four (a device has no
-/// textures of three: RGB is kept with an opaque alpha), of 8 bits, or of half floats, which
-/// hold all a node's image has for 16 bits and 32. What arrives gray is one channel in any
-/// format but RG.
-pub fn output_format(format: u32, bit_depth: u32, arriving: ImageKind) -> wgpu::TextureFormat {
+/// what arrives at it and the graph's precision: the channels it writes, one, two or four (a
+/// device has no textures of three: RGB is kept with an opaque alpha), of 8 bits, or of the
+/// floats the graph computes in, which hold all a node's image has for 16 bits and 32: half
+/// floats, and floats for the grayscale images of a graph of full precision (a 16-bit file of
+/// them has all its steps). What arrives gray is one channel in any format but RG.
+pub fn output_format(format: u32, bit_depth: u32, arriving: ImageKind, precision: Precision) -> wgpu::TextureFormat {
     use wgpu::TextureFormat as F;
     let channels = match (format, arriving) {
         (2, _) => 2,
         (0 | 1, ImageKind::Color) => 4,
         _ => 1,
     };
+    let full = precision == Precision::Full;
     match (channels, bit_depth == crate::export::DEPTH_8) {
         (1, true) => F::R8Unorm,
+        (1, false) if full => F::R32Float,
         (1, false) => F::R16Float,
         (2, true) => F::Rg8Unorm,
+        (2, false) if full => F::Rg32Float,
         (2, false) => F::Rg16Float,
         (_, true) => F::Rgba8Unorm,
         (_, false) => F::Rgba16Float,
@@ -622,6 +641,11 @@ impl Gpu {
 
     pub fn upload_rgba_f16(&self, img: &GpuImage, half: &[u16]) {
         self.upload(img, bytemuck::cast_slice(half));
+    }
+
+    /// Floats as they are, one per channel, into an image of floats.
+    pub fn upload_floats(&self, img: &GpuImage, values: &[f32]) {
+        self.upload(img, bytemuck::cast_slice(values));
     }
 
     /// One half float per pixel, into a grayscale image.

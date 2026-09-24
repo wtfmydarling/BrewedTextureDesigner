@@ -1580,10 +1580,11 @@ impl App {
                         .iter()
                         .map(|n| {
                             let kind = view::graph::made_kind(self, n.id).unwrap_or(ImageKind::Color);
+                            let precision = graph.precision;
                             let format = if n.kind == NodeKind::OUTPUT {
-                                brewed_texture_engine::gpu::output_format(n.enum_value("format"), n.enum_value("bit_depth"), kind)
+                                brewed_texture_engine::gpu::output_format(n.enum_value("format"), n.enum_value("bit_depth"), kind, precision)
                             } else {
-                                brewed_texture_engine::gpu::format_of(kind)
+                                brewed_texture_engine::gpu::format_of(kind, precision)
                             };
                             u64::from(format.block_copy_size(None).unwrap_or(8))
                         })

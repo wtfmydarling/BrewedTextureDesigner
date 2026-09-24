@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use iced::widget::{button, column, container, image, pick_list, row, rule, space, text, tooltip};
 use iced::{Alignment, Element, Length};
-use brewed_texture_core::Edit;
+use brewed_texture_core::{Edit, Precision};
 
 use crate::app::{App, Dialog, ExplorerMessage, MenuId, Message, PreviewMessage};
 use crate::icons::{Icon, icon};
@@ -171,6 +171,15 @@ pub fn graph_header(app: &App) -> Element<'_, Message> {
                 .style(style::toggle_button(lock))
                 .on_press(Message::LockSquare),
             if lock { "Width and height are kept equal (click to size them separately)" } else { "Keep width and height equal" },
+            tooltip::Position::Bottom,
+        ),
+        tip(
+            pick_list(Precision::ALL, Some(app.graph().precision), |p| Message::Edit(Edit::SetPrecision(p)))
+                .text_size(style::SMALL)
+                .padding([2, 6])
+                .style(style::pick_list),
+            "How precisely grayscale images (heights, masks) are kept. 32-bit float: a gentle slope stays smooth \
+             in normal maps and 16-bit files, at twice the memory of grayscale images; colors are 16-bit either way.",
             tooltip::Position::Bottom,
         ),
     ]

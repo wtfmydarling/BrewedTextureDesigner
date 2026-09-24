@@ -30,7 +30,8 @@ use brewed_texture_core::graph::{Graph, Node, NodeId, input_socket_key};
 use brewed_texture_core::nodes::{ImageKind, NodeKind, PIXEL_MATH_BUILTINS, Role, image_kind};
 use brewed_texture_core::types::DataType;
 
-use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, Gpu, GpuImage, Readback, StoredImage, format_of, output_format};
+use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, GRAY_FULL_FORMAT, Gpu, GpuImage, Readback, StoredImage, filterable, format_of, output_format};
+use brewed_texture_core::Precision;
 use crate::kernels::{self, DisplayU, ExecCtx, PixelVar};
 use crate::simd::{self, ImageStats};
 use crate::vector::{self, Raster, Vector, VectorJob};
@@ -151,8 +152,9 @@ enum BitmapEntry {
 
 /// A file's pixels, as they will be uploaded.
 enum Pixels {
-    /// One value per pixel: the file is grayscale, and so is its image.
-    Gray(Vec<f32>),
+    /// One value per pixel: the file is grayscale, and so is its image; `fine`: of more than
+    /// 8 bits (a 16-bit height map), kept in floats, all its steps.
+    Gray(Vec<f32>, bool),
     /// RGBA half floats.
     Color(Vec<u16>),
 }
@@ -285,6 +287,9 @@ pub struct Engine {
     asked: Vec<NodeId>,
     /// The textures of the images the views were given (see [`Engine::release`]).
     given: Vec<wgpu::Texture>,
+    /// What the views show of images they cannot filter (floats of 32 bits), by the node that
+    /// makes them: a copy in half floats with mips, and the version of the node it is of.
+    shown_copies: HashMap<NodeId, (u64, GpuImage)>,
     /// What the last change read from outside itself (see [`Keep::Read`]).
     boundary: HashSet<NodeId>,
     /// Thumbnails the evaluations recorded, to read back (see [`Engine::render_thumbnails`]).
@@ -319,6 +324,7 @@ impl Engine {
             materials_sent: Vec::new(),
             asked: Vec::new(),
             given: Vec::new(),
+            shown_copies: HashMap::new(),
             boundary: HashSet::new(),
             thumbnails: Vec::new(),
             choices: HashMap::new(),
@@ -366,6 +372,7 @@ impl Engine {
         self.preview_sent = None;
         self.materials_sent.clear();
         self.given.clear();
+        self.shown_copies.clear();
         self.boundary.clear();
         self.thumbnails.clear();
         self.choices.clear();
@@ -398,6 +405,9 @@ impl Engine {
             } else {
                 memory.kept += bytes;
             }
+        }
+        for (_, copy) in self.shown_copies.values() {
+            memory.shown += once(copy);
         }
         let drawings = self.drawings.values().filter_map(|d| match d {
             Drawing::Ready { image, .. } | Drawing::Busy { last: Some((image, _)), .. } => Some(image),
@@ -495,9 +505,14 @@ impl Engine {
             let entry = match done.result {
                 Ok((w, h, pixels)) => {
                     let image = match pixels {
-                        Pixels::Gray(values) => {
+                        Pixels::Gray(values, false) => {
                             let image = self.gpu.create_image_as(w, h, GRAY_FORMAT, "bitmap");
                             self.gpu.upload_gray_f32(&image, &values);
+                            image
+                        }
+                        Pixels::Gray(values, true) => {
+                            let image = self.gpu.create_image_as(w, h, GRAY_FULL_FORMAT, "bitmap");
+                            self.gpu.upload_floats(&image, &values);
                             image
                         }
                         Pixels::Color(half) => {
@@ -757,6 +772,8 @@ impl Engine {
     /// showing, what is not asked about any more. An evaluation does it itself; this is for
     /// a view that moved on to an image that is there, which needs no evaluation.
     pub fn sweep(&mut self) {
+        let shown = self.shown();
+        self.shown_copies.retain(|id, _| shown.contains(id));
         if self.keep == Keep::All {
             return;
         }
@@ -937,7 +954,8 @@ impl Engine {
         let (kind, size, format) = if alias {
             (arriving, arriving_size, None)
         } else if node.kind == NodeKind::OUTPUT {
-            (arriving, arriving_size, arriving.map(|k| output_format(params.u("format"), params.u("bit_depth"), k)))
+            let formats = |k| output_format(params.u("format"), params.u("bit_depth"), k, graph.precision);
+            (arriving, arriving_size, arriving.map(formats))
         } else {
             let kind = match &bitmap {
                 Some(file) if node.kind == NodeKind::BITMAP => file.kind(),
@@ -945,7 +963,7 @@ impl Engine {
             };
             let uniform = node.kind == NodeKind::UNIFORM_COLOR || node.kind == NodeKind::IMAGE_INPUT;
             let size = if uniform { [1, 1] } else { resolution };
-            (Some(kind), size, Some(format_of(kind)))
+            (Some(kind), size, Some(format_of(kind, graph.precision)))
         };
         (size, format).hash(&mut hasher);
         let key = hasher.finish();
@@ -990,7 +1008,8 @@ impl Engine {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let [w, h] = plan.size;
-        let mipped = mips && w.max(h) > 1;
+        // (What cannot be filtered is shown through a copy that can, with its own mips.)
+        let mipped = mips && w.max(h) > 1 && filterable(format);
         let own = self.states.get(&id).and_then(|s| s.image.clone());
         let image = match own {
             Some(img) if (img.texture.mip_level_count() > 1) == mipped => img,
@@ -1143,7 +1162,7 @@ impl Engine {
         for option in 0..options {
             params.values[choice].1 = brewed_texture_core::ParamValue::Enum(option as u32);
             // Drawn as the node draws itself, in the kind of image it makes with the option.
-            let format = format_of(image_kind(kind, &params, &input_kinds));
+            let format = format_of(image_kind(kind, &params, &input_kinds), Precision::Half);
             let picture = self.gpu.take_scratch(CHOICE_RES, CHOICE_RES, format);
             let mut cx = ExecCtx {
                 kind,
@@ -1195,13 +1214,40 @@ impl Engine {
     fn display(&mut self, node: NodeId) -> Option<DisplayImage> {
         let version = self.version(node)?;
         let producer = self.producer(node);
-        self.ensure_mips(producer);
-        let image = self.image(producer)?.clone();
-        if !self.given.contains(&image.texture) {
-            self.given.push(image.texture.clone());
-        }
+        let image = if self.image(producer).is_some_and(|img| filterable(img.format())) {
+            self.ensure_mips(producer);
+            let image = self.image(producer)?.clone();
+            if !self.given.contains(&image.texture) {
+                self.given.push(image.texture.clone());
+            }
+            image
+        } else {
+            self.shown_copy(producer)?
+        };
         let size = self.last_resolution;
         Some(DisplayImage { node, version, size, gray: image.is_gray(), texture: image.texture, view: image.view })
+    }
+
+    /// What a view shows of a node's image that it cannot filter (floats of 32 bits): a copy of
+    /// it in half floats with mips, made again when the node's image changes. The copy is a
+    /// texture of its own, not from the pool: the view keeps it for as long as it draws it.
+    fn shown_copy(&mut self, id: NodeId) -> Option<GpuImage> {
+        let version = self.version(id)?;
+        if let Some((v, copy)) = self.shown_copies.get(&id)
+            && *v == version
+        {
+            return Some(copy.clone());
+        }
+        let image = self.image(id)?.clone();
+        let [w, h] = image.size();
+        let copy = self.gpu.create_image_with_mips(w, h, format_of(image.kind(), Precision::Half), "shown");
+        let mut encoder = self.gpu.encoder();
+        if let Err(e) = self.gpu.encode_copy_with_mips(&mut encoder, &image, &copy, 0) {
+            log::error!("shown copy: {e}");
+        }
+        self.gpu.submit(encoder);
+        self.shown_copies.insert(id, (version, copy.clone()));
+        Some(copy)
     }
 
     /// Give a node's image the mips a view samples it with: the same image, in a texture that
@@ -1323,10 +1369,12 @@ fn decode_bitmap(path: &str) -> Result<(u32, u32, Pixels), String> {
     }
     match img.color() {
         image::ColorType::L8 => {
-            return Ok((w, h, Pixels::Gray(img.into_luma8().into_raw().into_iter().map(|v| f32::from(v) / 255.0).collect())));
+            let values = img.into_luma8().into_raw().into_iter().map(|v| f32::from(v) / 255.0).collect();
+            return Ok((w, h, Pixels::Gray(values, false)));
         }
         image::ColorType::L16 => {
-            return Ok((w, h, Pixels::Gray(img.into_luma16().into_raw().into_iter().map(|v| f32::from(v) / 65535.0).collect())));
+            let values = img.into_luma16().into_raw().into_iter().map(|v| f32::from(v) / 65535.0).collect();
+            return Ok((w, h, Pixels::Gray(values, true)));
         }
         _ => {}
     }

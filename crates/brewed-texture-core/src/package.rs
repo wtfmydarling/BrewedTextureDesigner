@@ -542,7 +542,7 @@ pub fn make_subgraph(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Remainder)
         }
     }
 
-    let mut inner = Graph { resolution: graph.resolution, ..Graph::default() };
+    let mut inner = Graph { resolution: graph.resolution, precision: graph.precision, ..Graph::default() };
     let nodes: Vec<&Node> = graph.nodes.iter().filter(|n| chosen.contains(&n.id)).collect();
     let bounds = |f: fn(&Node) -> f32| {
         nodes
@@ -785,7 +785,12 @@ pub fn flatten<L: Library>(lib: &L, from: Option<&str>, id: GraphId) -> Option<F
     let graph = &entry.graph;
     let mut b = Builder {
         lib,
-        flat: Graph { resolution: graph.resolution, variables: graph.variables.clone(), ..Graph::default() },
+        flat: Graph {
+            resolution: graph.resolution,
+            precision: graph.precision,
+            variables: graph.variables.clone(),
+            ..Graph::default()
+        },
         problems: BTreeMap::new(),
         owners: HashMap::new(),
         redirects: HashMap::new(),

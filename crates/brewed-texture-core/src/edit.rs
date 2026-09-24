@@ -4,7 +4,7 @@
 
 use crate::gradient::Gradient;
 use crate::instance::Instance;
-use crate::graph::{Clipboard, CommentId, Graph, Link, MAX_RESOLUTION, MIN_RESOLUTION, NodeId, SocketRef, coordinate};
+use crate::graph::{Clipboard, CommentId, Graph, Link, MAX_RESOLUTION, MIN_RESOLUTION, NodeId, Precision, SocketRef, coordinate};
 use crate::nodes::{NodeKind, Role};
 use crate::types::{DataType, ParamValue, Value, can_connect};
 
@@ -78,6 +78,7 @@ pub enum Edit {
         value: f32,
     },
     SetResolution([u32; 2]),
+    SetPrecision(Precision),
     /// Paste with the top-left of the copied nodes at `at`.
     Paste {
         clipboard: Clipboard,
@@ -241,6 +242,7 @@ impl Edit {
             Edit::SetBypass { .. } => "Bypass",
             Edit::SetLocalVar { .. } => "Change Variable",
             Edit::SetResolution(_) => "Change Size",
+            Edit::SetPrecision(_) => "Change Precision",
             Edit::Paste { .. } => "Paste",
             Edit::Duplicate { .. } => "Duplicate",
             Edit::SetVariable { .. }
@@ -432,6 +434,13 @@ impl Edit {
                     return Ok(EditResult::unchanged());
                 }
                 graph.resolution = res;
+                EditResult::changed()
+            }
+            Edit::SetPrecision(precision) => {
+                if graph.precision == precision {
+                    return Ok(EditResult::unchanged());
+                }
+                graph.precision = precision;
                 EditResult::changed()
             }
             Edit::Paste { clipboard, at } => {

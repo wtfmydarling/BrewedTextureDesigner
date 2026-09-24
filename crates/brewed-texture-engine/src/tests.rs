@@ -772,6 +772,61 @@ fn flood_fill_gives_each_shape_one_value() {
     assert!(e.gpu.take_errors().is_empty());
 }
 
+/// A gentle slope, a two-hundredth of the range across the image: steps of half floats in a
+/// graph of half precision, all its values in one of full precision: in the node's image, in
+/// what an output of 16 bits writes and in the file it exports, and through Ambient Occlusion
+/// (which reads it filtered, from a copy in half floats); the 2D view shows a copy it can
+/// filter. A 16-bit grayscale file keeps all its steps too.
+#[test]
+fn full_precision_keeps_gentle_slopes() {
+    use brewed_texture_core::Precision;
+    use wgpu::TextureFormat as F;
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let slope = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
+    set(&mut g, slope, "expression", ParamValue::Text("0.5 + u * 0.005".into()));
+    let out = g.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+    set(&mut g, out, "bit_depth", ParamValue::Enum(1));
+    g.connect(slope, "o:output", out, "i:input").unwrap();
+    let ao = g.add_node(NodeKind::AMBIENT_OCCLUSION, [0.0, 0.0]);
+    g.connect(slope, "o:output", ao, "i:input").unwrap();
+    let values = |d: &[f32]| d.iter().step_by(4).map(|v| v.to_bits()).collect::<std::collections::BTreeSet<_>>().len();
+    let half = values(&eval_read(&mut e, &g, slope));
+    assert!(half < 20, "half floats have few steps there: {half}");
+    g.precision = Precision::Full;
+    let full = values(&eval_read(&mut e, &g, slope));
+    assert!(full > 200, "floats have them all: {full}");
+    assert_eq!(e.image(slope).unwrap().format(), F::R32Float);
+    assert_eq!(e.image(out).unwrap().format(), F::R32Float);
+    // The 16-bit file has the steps too.
+    let stored = e.read_stored(out).unwrap();
+    let dir = std::env::temp_dir().join(format!("brewed-precision-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("slope.png");
+    crate::export::write_stored(&file, &stored, 0, crate::export::DEPTH_16).unwrap();
+    let read = image::open(&file).unwrap().into_luma16();
+    let steps = read.pixels().map(|p| p.0[0]).collect::<std::collections::BTreeSet<_>>().len();
+    assert!(steps > 200, "16 bits of it: {steps} steps");
+    // Filtered from a copy it can filter, and shown through one.
+    let _ = eval_read(&mut e, &g, ao);
+    assert!(e.gpu.take_errors().is_empty());
+    e.set_keep(crate::engine::Keep::Read);
+    let shown = e.prepare_preview(Some(slope)).flatten().expect("shown");
+    assert_eq!(shown.texture.format(), F::R16Float);
+    assert!(shown.texture.mip_level_count() > 1);
+    e.set_keep(crate::engine::Keep::All);
+    // A 16-bit grayscale file: all its steps in a graph of full precision.
+    let gradient = image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::from_fn(RES, RES, |x, _| image::Luma([32768 + x as u16 * 2]));
+    let heights = dir.join("heights.png");
+    gradient.save(&heights).unwrap();
+    let bitmap = g.add_node(NodeKind::BITMAP, [0.0, 0.0]);
+    set(&mut g, bitmap, "path", ParamValue::Text(heights.display().to_string()));
+    let read = values(&eval_read(&mut e, &g, bitmap));
+    assert!(read > 200, "{read} values of 256");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(e.gpu.take_errors().is_empty());
+}
+
 #[test]
 fn readbacks_and_preview() {
     let Some(mut e) = engine() else { return };
