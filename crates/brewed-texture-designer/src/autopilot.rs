@@ -5,7 +5,8 @@
 //! sliders, undo and redo, saving and opening, broken files too, exporting and reading the
 //! files back, pictures for Bitmap nodes from one pixel to 4096², the 3D view, the pictures of
 //! the options, documents changed while the engine works, a graph of 207 nodes, input values
-//! at their edges, odd names of outputs, the window resized, an export at 8192), then does
+//! at their edges, odd names of outputs, the window resized, an export at 8192, packages whose
+//! graphs are used as nodes, saved, opened, moved and found again), then does
 //! random things until its time is up, and quits. Everything it does goes to a log with the
 //! time, the engine's memory and how fast the window draws, and what went wrong is marked
 //! FINDING: whatever breaks can be followed back, and the same seed does the same things.
@@ -21,7 +22,7 @@ use std::time::{Duration, Instant};
 use brewed_texture_core::graph::{input_socket_key, output_socket_key};
 use brewed_texture_core::{DataType, Edit, NodeId, NodeKind, ParamDef, ParamKind, ParamValue, SocketRef, Value};
 
-use crate::app::{App, DragPayload, GraphMessage, Message, PendingAction, PreviewMessage, SelectMode};
+use crate::app::{App, Dialog, DragPayload, ExplorerMessage, GraphMessage, Message, PendingAction, PreviewMessage, SelectMode};
 use crate::view::view3d::{Camera, Move, Shape};
 
 /// How long the autopilot flies, and on which seed.
@@ -1402,6 +1403,154 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
         }),
     });
 
+    // Packages: nodes made a graph of their own, its values dragged, the graph edited on its
+    // own; the demo's graph used as a node in another package; both saved, closed and opened
+    // again, Open Reference; the demo's file moved, asked for, and found.
+    let packages = folder.join("packages");
+    let _ = std::fs::create_dir_all(packages.join("moved"));
+    let mut stage = 0;
+    scenes.push(Scene {
+        name: "packages and graphs used as nodes",
+        next: Box::new(move |app: &App, dice: &mut Dice| {
+            stage += 1;
+            let wall = packages.join("wall.brewtex");
+            let moved = packages.join("moved").join("wall.brewtex");
+            let uses = packages.join("uses.brewtex");
+            let close_all = |app: &App| -> Vec<Step> {
+                app.packages().into_iter().map(|(key, _)| Step::Do(Message::Proceed(PendingAction::Close(key)))).collect()
+            };
+            let instance = |app: &App| app.graph().nodes.iter().find(|n| n.instance.is_some()).map(|n| n.id);
+            match stage {
+                1 => {
+                    let _ = std::fs::remove_file(&moved);
+                    let kinds = [NodeKind::BLEND, NodeKind::LEVELS, NodeKind::BLUR];
+                    let ids: Vec<NodeId> = app.graph().nodes.iter().filter(|n| kinds.contains(&n.kind)).map(|n| n.id).collect();
+                    Some(vec![
+                        Step::Do(Message::SavePicked(Some(wall))),
+                        Step::Do(Message::Graph(GraphMessage::SelectBox { ids, additive: false })),
+                        Step::Do(Message::MakeSubgraph),
+                        Step::Wait,
+                        Step::Note("nodes made a graph of their own".into()),
+                        Step::Check(Box::new(|app: &App| {
+                            let used = app.graph().nodes.iter().find(|n| n.instance.is_some())?;
+                            let errors = app.eval.node(used.id).map(|e| e.errors.clone()).unwrap_or_default();
+                            (app.doc.package().graphs.len() != 2 || !errors.is_empty() || !app.res.inner.is_empty())
+                                .then(|| format!("made a subgraph: {} graphs, {errors:?}, {:?}", app.doc.package().graphs.len(), app.res.inner))
+                        })),
+                    ])
+                }
+                2 => {
+                    // Its values dragged, as the properties drag them.
+                    let id = instance(app)?;
+                    let node = app.graph().node(id)?;
+                    let mut steps = Vec::new();
+                    for pd in node.param_defs() {
+                        for _ in 0..10 {
+                            if let Some(value) = value_for(&pd, dice, false) {
+                                steps.push(edit(Edit::SetParam { node: id, key: pd.key.to_string(), value }));
+                            }
+                        }
+                        steps.push(Step::Do(Message::Seal));
+                    }
+                    steps.extend([preview(id), Step::Wait, Step::Note("its values dragged".into())]);
+                    Some(steps)
+                }
+                3 => {
+                    // The graph edited on its own, and back.
+                    let key = app.doc_key;
+                    let sub = app.doc.package().graphs.last()?.id;
+                    let main = app.doc.package().first();
+                    Some(vec![
+                        Step::Do(Message::Explorer(ExplorerMessage::OpenGraph(key, sub))),
+                        Step::Wait,
+                        Step::Note("the new graph on its own".into()),
+                        Step::Do(Message::Explorer(ExplorerMessage::OpenGraph(key, main))),
+                        Step::Wait,
+                    ])
+                }
+                4 => {
+                    // The demo's graph used as a node in a new package, shown.
+                    let key = app.doc_key;
+                    let graph = app.doc.package().first();
+                    let name = app.doc.entry().name.clone();
+                    Some(vec![
+                        Step::Do(Message::SavePicked(Some(wall))),
+                        Step::Do(Message::New),
+                        Step::Do(Message::Graph(GraphMessage::Drop { payload: DragPayload::Graph { key, graph, name }, graph_pos: [0.0, 0.0] })),
+                        Step::Wait,
+                    ])
+                }
+                5 => {
+                    let id = instance(app)?;
+                    Some(vec![
+                        preview(id),
+                        Step::Wait,
+                        Step::Do(Message::SavePicked(Some(uses))),
+                        Step::Note("the demo, a node of another package".into()),
+                        Step::Check(Box::new(move |app: &App| {
+                            let errors = app.eval.node(id).map(|e| e.errors.clone()).unwrap_or_default();
+                            (!errors.is_empty() || app.res.preview.is_none()).then(|| format!("the demo as a node: {errors:?}, shown: {}", app.res.preview.is_some()))
+                        })),
+                    ])
+                }
+                6 => {
+                    let mut steps = close_all(app);
+                    steps.extend([Step::Do(Message::OpenPicked(Some(uses))), Step::Wait]);
+                    Some(steps)
+                }
+                7 => {
+                    let id = instance(app)?;
+                    Some(vec![
+                        Step::Check(Box::new(|app: &App| app.ui.dialog.as_ref().map(|d| format!("opened again, it asked {d:?}")))),
+                        Step::Do(Message::OpenReference(id)),
+                        Step::Wait,
+                        Step::Note("Open Reference".into()),
+                        Step::Check(Box::new(|app: &App| {
+                            (app.packages().len() != 2).then(|| format!("Open Reference: {} packages, not 2", app.packages().len()))
+                        })),
+                    ])
+                }
+                8 => {
+                    // The demo's file moved: asked for.
+                    let mut steps = close_all(app);
+                    let _ = std::fs::rename(&wall, &moved);
+                    steps.extend([
+                        Step::Do(Message::OpenPicked(Some(uses))),
+                        Step::Wait,
+                        Step::Check(Box::new(|app: &App| {
+                            (!matches!(app.ui.dialog, Some(Dialog::Missing(_)))).then(|| "a moved package was not asked for".into())
+                        })),
+                    ]);
+                    Some(steps)
+                }
+                9 => {
+                    let Some(Dialog::Missing(missing)) = &app.ui.dialog else { return Some(Vec::new()) };
+                    let item = missing.items.first()?.path.clone();
+                    Some(vec![
+                        Step::Do(Message::Explorer(ExplorerMessage::Located(missing.key, item, Some(moved)))),
+                        Step::Wait,
+                        Step::Note("found where it was moved".into()),
+                        Step::Check(Box::new(|app: &App| {
+                            let id = app.graph().nodes.iter().find(|n| n.instance.is_some())?.id;
+                            let errors = app.eval.node(id).map(|e| e.errors.clone()).unwrap_or_default();
+                            (app.ui.dialog.is_some() || !errors.is_empty()).then(|| format!("found again: {:?}, {errors:?}", app.ui.dialog))
+                        })),
+                        Step::Do(Message::Undo),
+                        Step::Do(Message::Redo),
+                        Step::Wait,
+                    ])
+                }
+                10 => {
+                    let mut steps = close_all(app);
+                    let _ = std::fs::rename(&moved, &wall);
+                    steps.extend(back_home("packages"));
+                    Some(steps)
+                }
+                _ => None,
+            }
+        }),
+    });
+
     // Quitting with changes not saved asks first; not quitting, the app goes on.
     let mut asked = 0;
     scenes.push(Scene {
@@ -1545,6 +1694,21 @@ fn random_steps(app: &App, dice: &mut Dice) -> Option<Vec<Step>> {
         31 => {
             if g.nodes.len() < 8 || dice.chance(10) {
                 steps.push(Step::Do(Message::Proceed(PendingAction::LoadDemo)));
+            }
+        }
+        33 => {
+            // Two nodes made a graph of their own; now and then, back into the graph they came
+            // from (undo), or another graph of the package edited for a while.
+            steps.push(Step::Do(Message::Graph(GraphMessage::SelectBox { ids: vec![node.id, other.id], additive: false })));
+            steps.push(Step::Do(Message::MakeSubgraph));
+            if dice.chance(50) {
+                steps.push(Step::Do(Message::Undo));
+            }
+        }
+        34 => {
+            let graphs = &app.doc.package().graphs;
+            if let Some(entry) = graphs.get(dice.below(graphs.len())) {
+                steps.push(Step::Do(Message::Explorer(ExplorerMessage::OpenGraph(app.doc_key, entry.id))));
             }
         }
         32 => {
