@@ -3,7 +3,7 @@
 //! [`crate::Document`] records edits for undo / redo.
 
 use crate::gradient::Gradient;
-use crate::graph::{Clipboard, Comment, CommentId, Graph, Link, MAX_RESOLUTION, MIN_RESOLUTION, NodeId, SocketRef};
+use crate::graph::{Clipboard, CommentId, Graph, Link, MAX_RESOLUTION, MIN_RESOLUTION, NodeId, SocketRef, coordinate};
 use crate::nodes::{NodeKind, Role};
 use crate::types::{DataType, ParamValue, Value, can_connect};
 
@@ -339,7 +339,7 @@ impl Edit {
                     return Ok(EditResult::unchanged());
                 }
                 for n in graph.nodes.iter_mut().filter(|n| ids.contains(&n.id)) {
-                    n.pos = [n.pos[0] + delta[0], n.pos[1] + delta[1]];
+                    n.pos = [coordinate(n.pos[0] + delta[0]), coordinate(n.pos[1] + delta[1])];
                 }
                 EditResult::changed()
             }
@@ -518,9 +518,9 @@ impl Edit {
                     return Ok(EditResult::unchanged());
                 }
                 let comment = graph.comment_mut(id).ok_or("The comment no longer exists")?;
-                comment.pos = [comment.pos[0] + delta[0], comment.pos[1] + delta[1]];
+                comment.pos = [coordinate(comment.pos[0] + delta[0]), coordinate(comment.pos[1] + delta[1])];
                 for n in graph.nodes.iter_mut().filter(|n| nodes.contains(&n.id)) {
-                    n.pos = [n.pos[0] + delta[0], n.pos[1] + delta[1]];
+                    n.pos = [coordinate(n.pos[0] + delta[0]), coordinate(n.pos[1] + delta[1])];
                 }
                 EditResult::changed()
             }
@@ -529,12 +529,12 @@ impl Edit {
                     return Err("A comment needs a position and a size".into());
                 }
                 let comment = graph.comment_mut(id).ok_or("The comment no longer exists")?;
-                let size = [size[0].max(Comment::MIN_SIZE[0]), size[1].max(Comment::MIN_SIZE[1])];
-                if comment.pos == pos && comment.size == size {
+                let before = (comment.pos, comment.size);
+                (comment.pos, comment.size) = (pos, size);
+                comment.normalize();
+                if (comment.pos, comment.size) == before {
                     return Ok(EditResult::unchanged());
                 }
-                comment.pos = pos;
-                comment.size = size;
                 EditResult::changed()
             }
             Edit::SetCommentText { id, text } => {

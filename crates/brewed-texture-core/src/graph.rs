@@ -17,6 +17,16 @@ pub struct NodeId(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct CommentId(pub u64);
 
+/// How far from the origin anything in a graph is, at most, in graph units: far beyond any
+/// graph (the demo is 2000 wide), and near enough that a view of it never goes past what a
+/// float holds, whatever a file says or an edit does.
+pub const MAX_COORD: f32 = 1e7;
+
+/// A coordinate within [`MAX_COORD`] (0 when it is not a number).
+pub fn coordinate(v: f32) -> f32 {
+    if v.is_finite() { v.clamp(-MAX_COORD, MAX_COORD) } else { 0.0 }
+}
+
 /// A titled frame around a group of nodes, to say what they are for. It is moved with
 /// the nodes it holds, and it is only ever decoration: nothing in the graph depends on it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -39,6 +49,19 @@ impl Comment {
     /// Smallest a comment can be dragged to, in graph units: still large enough to grab
     /// its title bar and its corner.
     pub const MIN_SIZE: [f32; 2] = [120.0, 80.0];
+
+    /// Keep what a file says within what can be drawn: a place, a size between the smallest
+    /// and [`MAX_COORD`], and a color.
+    pub fn normalize(&mut self) {
+        self.pos = self.pos.map(coordinate);
+        for (size, min) in self.size.iter_mut().zip(Comment::MIN_SIZE) {
+            *size = if size.is_finite() { size.clamp(min, MAX_COORD) } else { min };
+        }
+        if !self.color.iter().all(|c| c.is_finite()) {
+            self.color = Comment::gray();
+        }
+        self.color = self.color.map(|c| c.clamp(0.0, 1.0));
+    }
 
     /// Does this comment hold a node of size `size` at `pos`? True when the whole node is
     /// inside, so that moving the comment never tears a node away from its neighbours.
@@ -87,7 +110,7 @@ impl Node {
             .all_params()
             .map(|p| ParamSlot { key: p.key.to_string(), value: p.default_value(), exposed: p.exposed_by_default })
             .collect();
-        Node { id, kind, pos, params, variable: None, var_values: BTreeMap::new(), bypass: false }
+        Node { id, kind, pos: pos.map(coordinate), params, variable: None, var_values: BTreeMap::new(), bypass: false }
     }
 
     pub fn def(&self) -> &'static NodeDef {
@@ -195,11 +218,7 @@ impl Node {
         if !self.def().has_image() || self.def().inputs.is_empty() {
             self.bypass = false;
         }
-        for p in &mut self.pos {
-            if !p.is_finite() {
-                *p = 0.0;
-            }
-        }
+        self.pos = self.pos.map(coordinate);
     }
 }
 
@@ -432,8 +451,9 @@ impl Graph {
     /// Add a comment frame; it is drawn behind the nodes it covers.
     pub fn add_comment(&mut self, text: String, pos: [f32; 2], size: [f32; 2]) -> CommentId {
         let id = CommentId(self.alloc_id());
-        let size = [size[0].max(Comment::MIN_SIZE[0]), size[1].max(Comment::MIN_SIZE[1])];
-        self.comments.push(Comment { id, text, pos, size, color: Comment::gray() });
+        let mut comment = Comment { id, text, pos, size, color: Comment::gray() };
+        comment.normalize();
+        self.comments.push(comment);
         id
     }
 
@@ -798,12 +818,19 @@ impl Graph {
         for n in &mut self.nodes {
             n.normalize();
         }
+        let mut seen = HashSet::new();
+        self.comments.retain(|c| seen.insert(c.id));
+        for c in &mut self.comments {
+            c.normalize();
+        }
         let mut names = HashSet::new();
         self.variables.retain(|v| names.insert(v.name.clone()));
         for v in &mut self.variables {
             v.normalize();
         }
-        let max_id = self.nodes.iter().map(|n| n.id.0).max().unwrap_or(0);
+        // Nodes and comments take their ids from the same count.
+        let ids = self.nodes.iter().map(|n| n.id.0).chain(self.comments.iter().map(|c| c.id.0));
+        let max_id = ids.max().unwrap_or(0);
         self.next_id = self.next_id.max(max_id + 1);
         self.resolution = self.resolution.map(|r| r.clamp(MIN_RESOLUTION, MAX_RESOLUTION));
         self.sync_variables();
@@ -835,13 +862,18 @@ impl Graph {
         for v in &clip.variables {
             let target = match self.variable(&v.name) {
                 Some(existing) if existing.ty == v.ty => v.name.clone(),
+                // (A clipboard can hold anything another program put there.)
                 Some(_) => {
                     let name = self.unique_variable_name(&v.name);
-                    self.variables.push(Variable { name: name.clone(), ..v.clone() });
+                    let mut pasted = Variable { name: name.clone(), ..v.clone() };
+                    pasted.normalize();
+                    self.variables.push(pasted);
                     name
                 }
                 None => {
-                    self.variables.push(v.clone());
+                    let mut pasted = v.clone();
+                    pasted.normalize();
+                    self.variables.push(pasted);
                     v.name.clone()
                 }
             };
