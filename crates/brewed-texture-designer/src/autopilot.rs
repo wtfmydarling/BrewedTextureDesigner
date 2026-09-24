@@ -4,8 +4,10 @@
 //! parameters, showing every node, adding every kind of node, typed values far past the
 //! sliders, undo and redo, saving and opening, broken files too, exporting and reading the
 //! files back, pictures for Bitmap nodes from one pixel to 4096², the 3D view, the pictures of
-//! the options), then does random things until its time is up, and quits. Everything it does
-//! goes to a log with the time and the engine's memory, and what went wrong is marked
+//! the options, documents changed while the engine works, a graph of 207 nodes, input values
+//! at their edges, odd names of outputs, the window resized, an export at 8192), then does
+//! random things until its time is up, and quits. Everything it does goes to a log with the
+//! time, the engine's memory and how fast the window draws, and what went wrong is marked
 //! FINDING: whatever breaks can be followed back, and the same seed does the same things.
 //!
 //! It stays inside the app: no file dialog, no clipboard, no eyedropper; its files are in a
@@ -267,20 +269,25 @@ impl Autopilot {
                 }
                 Step::Note(what) => {
                     let m = app.res.memory;
-                    // What the device's allocator holds, UI and engine together (D3D12 says).
-                    let allocator = self.device.as_ref().and_then(|d| d.generate_allocator_report()).map_or_else(
-                        String::new,
-                        |r| format!(", allocator {:.1} MB of {:.1}", mb(r.total_allocated_bytes), mb(r.total_reserved_bytes)),
-                    );
-                    self.write(&format!(
-                        "NOTE {what}: {:.1} MB (views {:.1}, kept {:.1}, scratch {:.1}, files {:.1}), {} nodes{allocator}",
+                    let memory = format!(
+                        "{:.1} MB (views {:.1}, kept {:.1}, scratch {:.1}, files {:.1})",
                         mb(m.total()),
                         mb(m.shown),
                         mb(m.kept),
                         mb(m.scratch),
-                        mb(m.files),
-                        app.graph().nodes.len()
-                    ));
+                        mb(m.files)
+                    );
+                    let nodes = app.graph().nodes.len();
+                    // How fast the window draws (the 3D view draws it frame after frame in real time).
+                    let rate = app.ui.frame_rate;
+                    let drawn = format!("{:.0} FPS (worst frame {:.0} ms)", rate.fps, rate.worst_ms);
+                    // What the device's allocator holds, UI and engine together (D3D12 says).
+                    let report = self.device.as_ref().and_then(|d| d.generate_allocator_report());
+                    let allocator = report.map_or_else(String::new, |r| {
+                        let (taken, held) = (mb(r.total_allocated_bytes), mb(r.total_reserved_bytes));
+                        format!(", allocator {taken:.1} MB of {held:.1}")
+                    });
+                    self.write(&format!("NOTE {what}: {memory}, {nodes} nodes, {drawn}{allocator}"));
                 }
                 Step::Check(check) => {
                     if let Some(problem) = check(app) {
@@ -398,7 +405,7 @@ fn back_home(what: &'static str) -> Vec<Step> {
             // The five maps it writes with their mips: 64 MB at 2048.
             (m.kept + m.scratch > 0 || m.total() > 65 * 1024 * 1024).then(|| {
                 format!(
-                    "after {what}, the demo takes {:.1} MB (views {:.1}, kept {:.1}, scratch {:.1}, files {:.1}), not 64",
+                    "after {what}: {:.1} MB (views {:.1}, kept {:.1}, scratch {:.1}, files {:.1}), not 64",
                     mb(m.total()),
                     mb(m.shown),
                     mb(m.kept),
@@ -1160,7 +1167,13 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                             [edit(Edit::Duplicate { ids: ids.clone(), offset: [0.0, 900.0 * k as f32] }), seal()]
                         })
                         .collect();
-                    steps.extend([Step::Do(Message::FrameAll), Step::Wait, Step::Note("nine demos".into())]);
+                    steps.extend([
+                        Step::Do(Message::FrameAll),
+                        Step::Wait,
+                        Step::Note("nine demos".into()),
+                        Step::Pause(Duration::from_secs(2)),
+                        Step::Note("nine demos, drawn for two seconds".into()),
+                    ]);
                     Some(steps)
                 }
                 2 => {
