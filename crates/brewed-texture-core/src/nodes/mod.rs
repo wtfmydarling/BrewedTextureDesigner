@@ -16,9 +16,11 @@ mod values;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::curve::Curve;
 use crate::gradient::Gradient;
 use crate::types::{DataType, ParamValue, Tiling};
 
+pub use adjustments::CURVE_CHANNELS;
 pub use effects::BEVEL_PROFILES;
 pub use filters::{BLEND_MODES, DISTANCE_MODES, FLOOD_FILL_OUTPUTS, PIXEL_MATH_BUILTINS};
 pub use generators::{
@@ -199,6 +201,10 @@ pub enum ParamKind {
     Gradient {
         default: &'static [(f32, [f32; 4])],
     },
+    /// A tone curve, through its points (see [`crate::curve`]).
+    Curve {
+        default: &'static [[f32; 2]],
+    },
 }
 
 /// A parameter of a node: of a node type (`'static`), or of a graph used as a node, whose
@@ -315,6 +321,7 @@ impl<'a> ParamDef<'a> {
             }
             ParamKind::File { .. } => ParamValue::Text(String::new()),
             ParamKind::Gradient { default } => ParamValue::Gradient(Gradient::from_pairs(default)),
+            ParamKind::Curve { default } => ParamValue::Curve(Curve::from_points(default)),
         }
     }
 
@@ -353,6 +360,7 @@ impl<'a> ParamDef<'a> {
                 | (ParamKind::Enum { .. }, ParamValue::Enum(_))
                 | (ParamKind::Text { .. } | ParamKind::File { .. } | ParamKind::Expression { .. }, ParamValue::Text(_))
                 | (ParamKind::Gradient { .. }, ParamValue::Gradient(_))
+                | (ParamKind::Curve { .. }, ParamValue::Curve(_))
         )
     }
 
@@ -382,6 +390,7 @@ impl<'a> ParamDef<'a> {
                 ParamValue::Enum(v.min(options.len().saturating_sub(1) as u32))
             }
             (_, ParamValue::Gradient(g)) => ParamValue::Gradient(g.normalized()),
+            (_, ParamValue::Curve(c)) => ParamValue::Curve(c.normalized()),
             (_, v) => v,
         }
     }
@@ -432,6 +441,9 @@ pub(crate) const fn expression(key: &'static str, label: &'static str, default: 
 }
 pub(crate) const fn gradient(key: &'static str, label: &'static str, default: &'static [(f32, [f32; 4])]) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Gradient { default })
+}
+pub(crate) const fn curve(key: &'static str, label: &'static str, default: &'static [[f32; 2]]) -> ParamDef<'static> {
+    ParamDef::new(key, label, ParamKind::Curve { default }).fixed()
 }
 
 /// The tiling parameter every node carries (always first in the parameter list).
@@ -673,6 +685,7 @@ impl NodeKind {
     pub const GRAYSCALE: NodeKind = NodeKind(&adjustments::GRAYSCALE);
     pub const HSL: NodeKind = NodeKind(&adjustments::HSL);
     pub const GRADIENT_MAP: NodeKind = NodeKind(&adjustments::GRADIENT_MAP);
+    pub const CURVE: NodeKind = NodeKind(&adjustments::CURVE);
     pub const CHANNEL_SHUFFLE: NodeKind = NodeKind(&adjustments::CHANNEL_SHUFFLE);
     pub const RGBA_MERGE: NodeKind = NodeKind(&adjustments::RGBA_MERGE);
     pub const POSTERIZE: NodeKind = NodeKind(&adjustments::POSTERIZE);
@@ -730,6 +743,7 @@ impl NodeKind {
         NodeKind::GRAYSCALE,
         NodeKind::HSL,
         NodeKind::GRADIENT_MAP,
+        NodeKind::CURVE,
         NodeKind::CHANNEL_SHUFFLE,
         NodeKind::RGBA_MERGE,
         NodeKind::POSTERIZE,

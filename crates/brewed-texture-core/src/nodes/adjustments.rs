@@ -124,6 +124,25 @@ pub static CHANNEL_SHUFFLE: NodeDef = NodeDef {
     role: Role::Image,
 };
 
+/// Which channels of a color image a Curve changes.
+pub const CURVE_CHANNELS: &[&str] = &["RGB", "Red", "Green", "Blue", "Alpha"];
+
+pub static CURVE: NodeDef = NodeDef {
+    id: "curve",
+    name: "Curve",
+    category: Category::Adjustments,
+    description: "Maps each value through a curve: drag its points, click to add one, drag one out of the square \
+                  to remove it. On a color image, the channels chosen go through it.",
+    keywords: "curves tone contrast gamma remap tonal",
+    inputs: IMAGE_IN,
+    outputs: IMAGE_OUT,
+    params: &[
+        curve("curve", "Curve", &[[0.0, 0.0], [1.0, 1.0]]),
+        choice("channels", "Channels", 0, CURVE_CHANNELS).tip("On a color image, the channels the curve changes."),
+    ],
+    role: Role::Image,
+};
+
 pub static RGBA_MERGE: NodeDef = NodeDef {
     id: "rgba_merge",
     name: "RGBA Merge",

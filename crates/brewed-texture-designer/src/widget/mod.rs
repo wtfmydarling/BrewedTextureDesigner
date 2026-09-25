@@ -1,6 +1,7 @@
 //! Custom widgets.
 
 pub mod color;
+pub mod curve;
 pub mod dropdown;
 pub mod gradient;
 pub mod layered;

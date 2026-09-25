@@ -11,7 +11,7 @@ use iced::widget::{button, column, container, mouse_area, pick_list, row, scroll
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::graph::{Node, NodeId, param_socket_key};
 use brewed_texture_core::nodes::{NodeKind, ParamDef, ParamKind, Role};
-use brewed_texture_core::{Edit, Gradient, Interpolation, ParamValue, Tiling};
+use brewed_texture_core::{Curve, Edit, Gradient, Interpolation, ParamValue, Tiling};
 
 use crate::app::{App, ColorTarget, Message};
 use crate::icons::{Icon, icon};
@@ -19,6 +19,7 @@ use crate::style;
 use crate::picker::PickTarget;
 use crate::view::editors::{eyedropper, swatch};
 use crate::view::{tip, section};
+use crate::widget::curve::curve_editor;
 use crate::widget::gradient::gradient_editor;
 use crate::widget::number::number;
 use crate::widget::{expose_toggle, socket_icon};
@@ -394,6 +395,7 @@ fn shown(pd: &ParamDef<'_>, value: &ParamValue) -> String {
         ParamValue::Text(t) if t.is_empty() => "nothing".to_string(),
         ParamValue::Text(t) => format!("'{}'", crate::view::graph::truncate(t, 24)),
         ParamValue::Gradient(_) => "the gradient it came with".to_string(),
+        ParamValue::Curve(_) => "the curve it came with".to_string(),
         other => other.as_value().map_or_else(|| "its default".to_string(), |v| v.display()),
     }
 }
@@ -457,6 +459,11 @@ Changed — middle-click the row to put {} back", pd.tooltip, shown(&pd, &defaul
     // over the interface instead, so that opening it moves nothing.
     if !exposed && let ParamValue::Gradient(g) = &slot.value {
         col = col.push(gradient_block(app, node, pd.key, g));
+    }
+    // So is a curve, whose square is under the row.
+    if let ParamValue::Curve(c) = &slot.value {
+        let (id, key) = (node.id, pd.key);
+        col = col.push(curve_editor(c, move |c| set(id, key, ParamValue::Curve(c))).on_release(Message::Seal));
     }
     // Always the same widget around the row, whether the value was changed or not: a row
     // that changed shape under the mouse would lose what the field was doing. Putting back
@@ -560,6 +567,22 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
             .padding([3, 6])
             .style(style::text_input)
             .into(),
+        (ParamKind::Curve { .. }, ParamValue::Curve(c)) => row![
+            space().width(Length::Fill),
+            tip(
+                button(icon(Icon::Reverse, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(set(id, key, ParamValue::Curve(c.inverted()))),
+                "Upside down: dark for light",
+                tooltip::Position::Top,
+            ),
+            tip(
+                button(icon(Icon::Reset, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(set(id, key, ParamValue::Curve(Curve::default()))),
+                "Straight: every value as it is",
+                tooltip::Position::Top,
+            ),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center)
+        .into(),
         (ParamKind::Gradient { .. }, ParamValue::Gradient(g)) => {
             let interpolation = g.interpolation;
             let g2 = g.clone();

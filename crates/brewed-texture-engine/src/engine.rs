@@ -37,7 +37,7 @@ use crate::simd::{self, ImageStats};
 use crate::vector::{self, Raster, Vector, VectorJob};
 
 pub const THUMB_SIZE: u32 = 128;
-/// Samples in a baked gradient.
+/// Samples in a baked gradient or curve.
 pub const LUT_SIZE: usize = 1024;
 /// The size the pictures of a node's options are drawn at before they are made into
 /// thumbnails: fine enough for their look, small enough to draw them all at once.
@@ -87,7 +87,7 @@ pub struct Memory {
     /// Scratch images the last change worked in, kept for the next one while changes keep
     /// coming.
     pub scratch: u64,
-    /// Loaded files and baked gradients.
+    /// Loaded files, and baked gradients and curves.
     pub files: u64,
 }
 
@@ -186,6 +186,35 @@ struct Drawn {
 struct Lut {
     hash: u64,
     image: GpuImage,
+}
+
+/// What a node reads from a table baked on the CPU.
+enum Table {
+    Gradient(brewed_texture_core::Gradient),
+    Curve(brewed_texture_core::Curve),
+}
+
+impl Table {
+    fn hash_into(&self, h: &mut impl Hasher) {
+        match self {
+            Table::Gradient(g) => {
+                0u8.hash(h);
+                g.hash_into(h);
+            }
+            Table::Curve(c) => {
+                1u8.hash(h);
+                c.hash_into(h);
+            }
+        }
+    }
+
+    /// `n` entries, from 0 to 1 (both in): colors of the gradient; the curve's values, in red.
+    fn bake(&self, n: usize) -> Vec<[f32; 4]> {
+        match self {
+            Table::Gradient(g) => g.bake(n),
+            Table::Curve(c) => c.bake(n).into_iter().map(|v| [v, v, v, 1.0]).collect(),
+        }
+    }
 }
 
 /// Which images an engine keeps from one evaluation to the next.
@@ -898,17 +927,23 @@ impl Engine {
             }
         }
 
-        // Gradient of a Gradient Map node.
+        // The gradient of a Gradient Map node, the curve of a Curve node: baked into a table.
         let mut lut: Option<GpuImage> = None;
-        if node.kind == NodeKind::GRADIENT_MAP {
-            let gradient = params.gradient("gradient");
-            let mut gh = DefaultHasher::new();
-            gradient.hash_into(&mut gh);
-            let ghash = gh.finish();
-            let current = self.luts.get(&node.id).filter(|l| l.hash == ghash).map(|l| l.image.clone());
+        let table = if node.kind == NodeKind::GRADIENT_MAP {
+            Some(Table::Gradient(params.gradient("gradient")))
+        } else if node.kind == NodeKind::CURVE {
+            Some(Table::Curve(params.curve("curve")))
+        } else {
+            None
+        };
+        if let Some(table) = table {
+            let mut th = DefaultHasher::new();
+            table.hash_into(&mut th);
+            let thash = th.finish();
+            let current = self.luts.get(&node.id).filter(|l| l.hash == thash).map(|l| l.image.clone());
             let image = current.unwrap_or_else(|| {
-                let image = self.gpu.create_lut(&gradient.bake(LUT_SIZE));
-                self.luts.insert(node.id, Lut { hash: ghash, image: image.clone() });
+                let image = self.gpu.create_lut(&table.bake(LUT_SIZE));
+                self.luts.insert(node.id, Lut { hash: thash, image: image.clone() });
                 image
             });
             lut = Some(image);
@@ -1137,7 +1172,7 @@ impl Engine {
         let options = d.param(key)?.enum_options().len();
         // Nodes that need more than parameters (a file, a baked gradient, variables per
         // pixel) have no choices worth a picture.
-        let plain = d.has_image() && !d.is_pixel_expression() && ![NodeKind::BITMAP, NodeKind::GRADIENT_MAP].contains(&kind);
+        let plain = d.has_image() && !d.is_pixel_expression() && ![NodeKind::BITMAP, NodeKind::GRADIENT_MAP, NodeKind::CURVE].contains(&kind);
         if options == 0 || !plain {
             return None;
         }

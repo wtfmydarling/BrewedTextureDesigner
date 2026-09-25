@@ -217,6 +217,7 @@ static KERNELS: &[KernelSource] = &[
     kernel!("gradient_map", "gradient_map.wgsl", "main", 2),
     kernel!("shuffle", "shuffle.wgsl", "main", 2),
     kernel!("rgba_merge", "rgba_merge.wgsl", "main", 4),
+    kernel!("curve", "curve.wgsl", "main", 2),
     kernel!("directional_blur", "directional.wgsl", "main", 1),
     kernel!("directional_warp", "slope.wgsl", "directional_warp", 2),
     kernel!("slope_blur", "slope.wgsl", "slope_blur", 2),

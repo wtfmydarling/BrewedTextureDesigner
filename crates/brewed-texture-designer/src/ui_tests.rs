@@ -1119,6 +1119,37 @@ fn the_3d_view_draws_in_real_time() {
     assert!(!texts(&mut w, "0 FPS · 0.0 ms").is_empty());
 }
 
+/// A curve is drawn with the mouse in its square, under its row in the properties: a click
+/// adds a point there and drags it, in one step to undo.
+#[test]
+fn a_curve_is_drawn_with_the_mouse() {
+    use brewed_texture_core::Curve;
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::CURVE, pos: [-400.0, 900.0] }));
+    w.send(Message::Seal);
+    let id = w.app.graph().nodes_of(NodeKind::CURVE).next().expect("the curve").id;
+    w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+    w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+    let curve = |w: &Harness| w.app.graph().node(id).and_then(|n| n.value("curve")).and_then(|v| v.as_curve()).cloned().expect("a curve");
+    assert_eq!(curve(&w), Curve::default());
+    w.snapshot("curve_editor");
+
+    // The square lies between the row of the curve and the row after it.
+    let right = |r: &&iced::Rectangle| r.x > 1300.0;
+    let label = *texts(&mut w, "Curve").iter().filter(right).max_by(|a, b| a.y.total_cmp(&b.y)).expect("the row of the curve");
+    let next = *texts(&mut w, "Channels").iter().find(right).expect("the row after it");
+    let inside = Point::new(label.x + 150.0, (label.y + label.height + next.y) / 2.0);
+    drag(&mut w, inside, inside + iced::Vector::new(0.0, -40.0));
+    let drawn = curve(&w);
+    assert_eq!(drawn.points.len(), 3, "{drawn:?}");
+    let middle = drawn.points[1];
+    assert!(middle[1] > middle[0] + 0.1, "dragged up: {middle:?}");
+    w.send(Message::Undo);
+    assert_eq!(curve(&w), Curve::default(), "one undo puts the straight line back");
+    w.send(Message::Redo);
+    assert_eq!(curve(&w), drawn);
+}
+
 /// The 3D view is lit by the studio or by an environment image, chosen in the menu of its
 /// header: the studio, the images used last, and one to look for; how bright, and how far it
 /// is turned. An image that cannot be read says so and is forgotten, the view staying lit as

@@ -329,6 +329,37 @@ fn tile_offset_moves_the_random_variation() {
     assert_eq!(pixel(&vertical, x, y1), pixel(&base, x, y1 - RES / 4));
 }
 
+/// A Curve maps each value through its curve: the straight line leaves an image as it is, a
+/// curve through a point lifts the middle as far as it says; on a color image, only the
+/// channels chosen change.
+#[test]
+fn curve_maps_values() {
+    use brewed_texture_core::Curve;
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let ramp = g.add_node(NodeKind::GRADIENT, [0.0, 0.0]);
+    let curve = g.add_node(NodeKind::CURVE, [0.0, 0.0]);
+    g.connect(ramp, "o:output", curve, "i:input").unwrap();
+    let before = eval_read(&mut e, &g, ramp);
+    let straight = eval_read(&mut e, &g, curve);
+    assert!(before.iter().zip(&straight).step_by(4).all(|(a, b)| close(*a, *b, 0.002)));
+    let lifted = Curve::from_points(&[[0.0, 0.0], [0.5, 0.8], [1.0, 1.0]]);
+    set(&mut g, curve, "curve", ParamValue::Curve(lifted.clone()));
+    let after = eval_read(&mut e, &g, curve);
+    for x in [0, RES / 4, RES / 2, RES - 1] {
+        let (v, got) = (pixel(&before, x, 9)[0], pixel(&after, x, 9)[0]);
+        assert!(close(got, lifted.sample(v), 0.003), "{v} → {got}, not {}", lifted.sample(v));
+    }
+    // On a color image, the red only.
+    let color = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    set(&mut g, color, "color", ParamValue::Color([0.5, 0.5, 0.5, 1.0]));
+    g.connect(color, "o:output", curve, "i:input").unwrap();
+    set(&mut g, curve, "channels", ParamValue::Enum(1));
+    let p = pixel(&eval_read(&mut e, &g, curve), 3, 3);
+    assert!(close(p[0], 0.8, 0.003) && close(p[1], 0.5, 0.002) && close(p[2], 0.5, 0.002), "{p:?}");
+    assert!(e.gpu.take_errors().is_empty());
+}
+
 /// RGBA Merge packs grayscale maps into the channels of one image (occlusion, roughness and
 /// metallic, as engines take them): each channel its map, or its value with none; a color
 /// image at a channel is its luminance.

@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::curve::Curve;
 use crate::expr;
 use crate::gradient::Gradient;
 use crate::graph::{Graph, Node, NodeId, param_socket_key, var_socket_key};
@@ -70,6 +71,12 @@ impl Params {
         match self.get(key) {
             Some(ParamValue::Gradient(g)) => g.clone(),
             _ => Gradient::default(),
+        }
+    }
+    pub fn curve(&self, key: &str) -> Curve {
+        match self.get(key) {
+            Some(ParamValue::Curve(c)) => c.clone(),
+            _ => Curve::default(),
         }
     }
     /// Tiling bits (see [`crate::Tiling`]).

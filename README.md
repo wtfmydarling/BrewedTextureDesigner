@@ -100,6 +100,9 @@ Explorer:  │ граф       размер текстуры (по умолч. 20
 ### Gradient Map
 Градиент с любым числом точек (до 64): клик по полосе добавляет точку, ручки перетаскиваются, если утащить ручку вниз, точка удаляется; интерполяция Linear, Smooth или Constant; есть реверс и равномерное распределение. Градиент можно взять пипеткой с экрана (см. ниже).
 
+### Curve
+Тоновая кривая в квадрате под строкой параметра: ручки точек перетаскиваются (по горизонтали — только между соседями), клик в пустое место квадрата добавляет точку и сразу тянет её, ручка, вынесенная за квадрат, удаляет точку (две остаются всегда); всё перетаскивание — один шаг undo. Кнопки в строке переворачивают кривую и выпрямляют её. Между точками — монотонный кубический сплайн (Фрича–Карлсона): гладкий и никогда не выходит за свои точки, поэтому растущая кривая нигде не проседает, а значения не выходят за 0 и 1. Кривая запекается на CPU в таблицу из 1024 значений (как градиент Gradient Map), видеокарта читает её с интерполяцией; у цветной картинки меняются выбранные каналы (RGB или один).
+
 ### Пипетка
 «Pick color» есть у каждого редактора цвета (цветовые параметры, цветовые Input Values — значение и значение по умолчанию, точки градиента), «Pick gradient» — у Gradient Map. Пипетка живая, как системные: ничего не снимается заранее и ничего на экране не останавливается (видео под курсором продолжает идти), берётся ровно то, что на экране сейчас, откуда угодно — с референса на втором мониторе, из браузера, из самой программы.
 
@@ -156,7 +159,7 @@ brewed-texture-designer --render walls.brewtex --graph "Brick Wall" --set bricks
 | Generators | Uniform Color, **Shape** (14 фигур и профилей), **Tile Generator** (смещение рядов или столбцов), **Tile Sampler** (паттерны по сетке: до четырёх картинок на выбор случайно, карты маски, масштаба, поворота и цвета, свои цвета плиток, наложение Max, Add или Stack), Gradient, **Noise** (30 шумов, каждый своим способом, все тайлятся: Perlin, Simplex, Value, Billow, Ridged, Liquid, Marble, Wood, Veins, Streaks, Flow, Fibers, Scratches, Ripples, Turing, Raindrops, Caustics, Cells, Cracks, Crystal, Mosaic, Stones, Scales, Blocks, Truchet, Maze, Spots, Blotches, Craters, White Noise), Bitmap (PNG, JPEG, TGA, BMP, TIFF, EXR, HDR), **SVG** (векторная графика из файла: в своих цветах или маской покрытия), **Text** (строка текста своим шрифтом или встроенным Inter) |
 | Filters | **Transform 2D**, **Blend** (19 режимов, маска), **Blur**, Directional Blur, **Non-uniform Blur** (радиус по карте), Slope Blur, **Sharpen**, Warp, Directional Warp, Mirror, Pixel Math, **Distance** (поле расстояний), **Flood Fill** (случайный серый или цвет каждой отдельной фигуре маски), **Make It Tile** (делает тайлящейся картинку, которая не тайлится) |
 | Height & Normal | Normal, Ambient Occlusion, Curvature, Edge Detect, Emboss, **Bevel** (фаска по маске: линейная, плавная, скруглённая, вогнутая, внутрь или наружу), **Height Blend** (две карты высот, выше та, что выше), **Normal Combine** (детали одной normal map на другой: Reoriented, Whiteout, UDN) |
-| Adjustments | **Levels** (гистограмма, Auto levels), Histogram Scan, Invert, Grayscale, HSL, **Gradient Map**, Channel Shuffle, **RGBA Merge** (четыре серые карты в каналы одной картинки: ORM для движков), Posterize |
+| Adjustments | **Levels** (гистограмма, Auto levels), **Curve** (тоновая кривая: точки тянутся мышью, клик добавляет, вынос за квадрат удаляет; RGB или один канал), Histogram Scan, Invert, Grayscale, HSL, **Gradient Map**, Channel Shuffle, **RGBA Merge** (четыре серые карты в каналы одной картинки: ORM для движков), Posterize |
 | Output | **Output**: имя, формат RGBA/RGB/RG/R/G/B/A, 8/16/32 бит, назначение для 3D |
 
 У всех нод есть **тайлинг** (No tiling / Horizontal / Vertical / H and V): на тайлящихся осях выборка заворачивается через край, и генераторы получаются бесшовными. У value-нод параметр показан, но отключён. Ноду с входом можно временно выключить (**bypass**, Ctrl+B): она передаст первый вход дальше без изменений.
@@ -218,7 +221,7 @@ Output хранит то, что он записывает: свой вход в
 ## Проверка
 
 ```bash
-cargo test --workspace                                            # 181 тест
+cargo test --workspace                                            # 187 тестов
 WGPU_BACKEND=dx12 cargo test --workspace                          # они же на другом бэкенде (vulkan, dx12, metal)
 cargo test --workspace -- --ignored                               # живые тесты пипетки и захвата указателя (нужен рабочий стол), замеры, стресс-тесты
 cargo run --release -- --autopilot 30 --seed 3                    # программа 30 минут гоняет себя сама (ниже)

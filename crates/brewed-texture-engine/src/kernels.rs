@@ -34,7 +34,7 @@ pub struct ExecCtx<'a> {
     /// The picture a node draws from: the decoded file of a Bitmap node, the drawing of an SVG
     /// or a Text node.
     pub bitmap: Option<&'a GpuImage>,
-    /// Baked gradient of a Gradient Map node.
+    /// The table baked for a Gradient Map (its gradient) or a Curve (its curve).
     pub lut: Option<&'a GpuImage>,
     /// Pixel Math: resolved variables in the order of the expression's variables.
     pub pixel_vars: &'a [PixelVar],
@@ -87,6 +87,7 @@ pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
         "gradient_map" => gradient_map,
         "channel_shuffle" => channel_shuffle,
         "rgba_merge" => rgba_merge,
+        "curve" => curve,
         "output" => output,
         _ => return None,
     };
@@ -1008,6 +1009,14 @@ fn channel_shuffle(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let a = input(cx.inputs, 0, &cx.gpu.black);
     let b = input(cx.inputs, 1, &cx.gpu.black);
     cx.gpu.run(cx.encoder, "shuffle", bytes(&u), &[a, b], cx.output)?;
+    Ok(None)
+}
+
+fn curve(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let table = cx.lut.ok_or("The curve was not prepared")?;
+    let u = ScalarU { value: 0.0, a: cx.params.u("channels"), b: cx.params.tiling(), c: 0 };
+    let img = input(cx.inputs, 0, &cx.gpu.black);
+    cx.gpu.run(cx.encoder, "curve", bytes(&u), &[img, table], cx.output)?;
     Ok(None)
 }
 

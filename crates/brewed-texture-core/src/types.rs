@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 
+use crate::curve::Curve;
 use crate::gradient::Gradient;
 
 /// Type of a socket. Images live on the GPU, everything else is a CPU value.
@@ -227,6 +228,8 @@ pub enum ParamValue {
     Enum(u32),
     Text(String),
     Gradient(Gradient),
+    /// A tone curve (see [`crate::curve`]).
+    Curve(Curve),
 }
 
 impl ParamValue {
@@ -239,7 +242,7 @@ impl ParamValue {
             ParamValue::Bool(_) => Some(DataType::Bool),
             ParamValue::Vec2(_) => Some(DataType::Vec2),
             ParamValue::Color(_) => Some(DataType::Color),
-            ParamValue::Text(_) | ParamValue::Gradient(_) => None,
+            ParamValue::Text(_) | ParamValue::Gradient(_) | ParamValue::Curve(_) => None,
         }
     }
 
@@ -255,7 +258,7 @@ impl ParamValue {
             ParamValue::Bool(v) => Some(Value::Bool(*v)),
             ParamValue::Vec2(v) => Some(Value::Vec2(*v)),
             ParamValue::Color(v) => Some(Value::Color(*v)),
-            ParamValue::Text(_) | ParamValue::Gradient(_) => None,
+            ParamValue::Text(_) | ParamValue::Gradient(_) | ParamValue::Curve(_) => None,
         }
     }
 
@@ -293,12 +296,23 @@ impl ParamValue {
                 7u8.hash(h);
                 g.hash_into(h);
             }
+            ParamValue::Curve(c) => {
+                8u8.hash(h);
+                c.hash_into(h);
+            }
         }
     }
 
     pub fn as_gradient(&self) -> Option<&Gradient> {
         match self {
             ParamValue::Gradient(g) => Some(g),
+            _ => None,
+        }
+    }
+
+    pub fn as_curve(&self) -> Option<&Curve> {
+        match self {
+            ParamValue::Curve(c) => Some(c),
             _ => None,
         }
     }

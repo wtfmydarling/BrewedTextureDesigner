@@ -11,6 +11,7 @@
 //! * [`project`]: the file format (with migration of older files, and paths relative to the
 //!   file).
 
+pub mod curve;
 pub mod demo;
 pub mod document;
 pub mod edit;
@@ -27,6 +28,7 @@ pub mod types;
 
 pub use document::Document;
 pub use edit::{Edit, EditResult};
+pub use curve::Curve;
 pub use gradient::{Gradient, GradientStop, Interpolation};
 pub use graph::{Clipboard, Comment, CommentId, Graph, Link, Node, NodeId, Precision, SocketInfo, SocketKind, SocketRef, Variable};
 pub use instance::{GraphId, GraphRef, Instance, Interface};
