@@ -60,6 +60,12 @@ pub fn to_wgsl_sampling(program: &Program, var: &dyn Fn(usize) -> String, sample
     emit(&program.root, &Env { var, sample })
 }
 
+/// [`to_wgsl_sampling`] of each value of the expression: one, or each of a list.
+pub fn components_wgsl(program: &Program, var: &dyn Fn(usize) -> String, sample: &dyn Fn(usize, &str, &str) -> String) -> Vec<String> {
+    let env = Env { var, sample };
+    std::iter::once(&program.root).chain(&program.more).map(|node| emit(node, &env)).collect()
+}
+
 struct Env<'a> {
     var: &'a dyn Fn(usize) -> String,
     sample: &'a dyn Fn(usize, &str, &str) -> String,

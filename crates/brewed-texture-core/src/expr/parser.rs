@@ -122,15 +122,29 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a whole expression and make sure nothing is left over.
-    pub fn parse_all(&mut self) -> PResult {
+    /// One value, or a list of up to four separated by commas (the red, green, blue and alpha
+    /// of Pixel Math): `u, v, 0.5`.
+    pub fn parse_list(&mut self) -> Result<Vec<Node>, ExprError> {
         if matches!(self.peek().kind, TokenKind::Eof) {
             let tok = self.peek().clone();
             return Err(self.error_at(&tok, "Expression is empty"));
         }
-        let node = self.expr()?;
+        let mut list = vec![self.expr()?];
+        while self.eat(&TokenKind::Comma) {
+            if matches!(self.peek().kind, TokenKind::Eof | TokenKind::Comma) {
+                let tok = self.peek().clone();
+                return Err(self.error_at(&tok, "Missing value after ','"));
+            }
+            let start = self.peek().span.start;
+            list.push(self.expr()?);
+            if list.len() > 4 {
+                let end = self.prev().map_or(start, |t| t.span.end);
+                return Err(ExprError { message: "At most four values: red, green, blue and alpha".into(), span: Span::new(start, end) });
+            }
+        }
         let tok = self.peek().clone();
         match &tok.kind {
-            TokenKind::Eof => Ok(node),
+            TokenKind::Eof => Ok(list),
             TokenKind::RParen => Err(self.error_at(&tok, "Unmatched ')'")),
             TokenKind::Error(msg) => Err(self.error_at(&tok, msg.clone())),
             TokenKind::Number(_) | TokenKind::Ident(_) | TokenKind::LParen => {

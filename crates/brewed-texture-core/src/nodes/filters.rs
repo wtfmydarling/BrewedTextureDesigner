@@ -169,10 +169,11 @@ pub static PIXEL_MATH: NodeDef = NodeDef {
     category: Category::Filters,
     description: "Evaluates an expression for every pixel on the GPU. Unknown words become image inputs, which \
                   sample(image, x, y) reads anywhere (x and y from 0 to 1, like u and v); u, v, px, py, width and \
-                  height are built in.",
-    keywords: "expression formula shader per pixel custom",
+                  height are built in. One value makes a grayscale image; two to four separated by commas (red, \
+                  green, blue, alpha) a color one.",
+    keywords: "expression formula shader per pixel custom processor color",
     inputs: NO_SOCKETS,
-    outputs: GRAY_OUT,
+    outputs: IMAGE_OUT,
     params: &[
         expression("expression", "Expression", "u * v", true),
         choice("channel", "Read Channel", 0, &["Luminance", "Red", "Green", "Blue", "Alpha"])

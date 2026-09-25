@@ -1417,7 +1417,7 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         Some((k, gray)) => format!("chan(widen(sample_bilinear(t{k}, vec2<f32>({x}, {y}), P.tiling), {gray}))"),
         None => exprs[i].clone(),
     };
-    let body = expr::wgsl::to_wgsl_sampling(program, &|i| exprs[i].clone(), &sample);
+    let values = expr::wgsl::components_wgsl(program, &|i| exprs[i].clone(), &sample);
 
     let mut source = String::new();
     source.push_str(crate::gpu::COMMON_WGSL);
@@ -1449,9 +1449,15 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         let gray = image.is_gray();
         source.push_str(&format!("    let img{i} = chan(widen(read_input(t{i}, gid.xy, size, P.tiling), {gray}));\n"));
     }
-    source.push_str(&format!(
-        "    let r = {body};\n    return vec4<f32>(r, r, r, 1.0);\n}}\n"
-    ));
+    // One value: gray; a list: red, green, blue and alpha (the missing ones none, and opaque).
+    let result = match values.as_slice() {
+        [r] => format!("    let r = {r};\n    return vec4<f32>(r, r, r, 1.0);\n}}\n"),
+        [r, g] => format!("    return vec4<f32>({r}, {g}, 0.0, 1.0);\n}}\n"),
+        [r, g, b] => format!("    return vec4<f32>({r}, {g}, {b}, 1.0);\n}}\n"),
+        [r, g, b, a, ..] => format!("    return vec4<f32>({r}, {g}, {b}, {a});\n}}\n"),
+        [] => "    return vec4<f32>(0.0, 0.0, 0.0, 1.0);\n}\n".to_string(),
+    };
+    source.push_str(&result);
 
     let kernel = cx.gpu.dynamic_kernel(&source, images.len(), cx.output.format())?;
     let mut u =

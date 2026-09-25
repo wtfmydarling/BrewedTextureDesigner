@@ -461,6 +461,11 @@ pub fn image_kind(kind: NodeKind, params: &crate::eval::Params, inputs: &[Option
         let image = params.u("pattern") == TILE_PATTERN_IMAGE && inputs.first() == Some(&Some(ImageKind::Color));
         return if image { ImageKind::Color } else { ImageKind::Gray };
     }
+    if kind == NodeKind::PIXEL_MATH {
+        // One value is gray; a list of them, the channels of a color image.
+        let values = crate::expr::compile_cached(params.text("expression")).as_ref().as_ref().map_or(1, |p| p.components());
+        return if values > 1 { ImageKind::Color } else { ImageKind::Gray };
+    }
     if kind == NodeKind::TILE_SAMPLER {
         // Tiles in colors of their own, or of the Color Map, are in color; so are tiles of
         // images when one of them is.

@@ -44,7 +44,10 @@ impl std::fmt::Display for ExprError {
 /// A successfully parsed and constant-folded expression.
 #[derive(Clone, Debug)]
 pub struct Program {
+    /// The value (the first of a list).
     pub root: Node,
+    /// The values after the first of a list (`r, g, b, a` in Pixel Math): up to three.
+    pub more: Vec<Node>,
     /// Free variables in order of first appearance.
     pub vars: Vec<String>,
 }
@@ -57,7 +60,12 @@ impl Program {
 
     /// True when the expression does not depend on any variable.
     pub fn is_constant(&self) -> bool {
-        matches!(self.root, Node::Num(_))
+        matches!(self.root, Node::Num(_)) && self.more.iter().all(|n| matches!(n, Node::Num(_)))
+    }
+
+    /// How many values the expression gives: one, or a list of up to four.
+    pub fn components(&self) -> usize {
+        1 + self.more.len()
     }
 }
 
@@ -70,9 +78,9 @@ pub fn compile(src: &str) -> Result<Program, ExprError> {
     }
     let tokens = lexer::tokenize(src);
     let mut parser = parser::Parser::new(&tokens);
-    let root = parser.parse_all()?;
-    let root = fold(root);
-    Ok(Program { root, vars: parser.vars })
+    let mut list = parser.parse_list()?.into_iter().map(fold);
+    let root = list.next().expect("a list has a value");
+    Ok(Program { root, more: list.collect(), vars: parser.vars })
 }
 
 pub type Compiled = Arc<Result<Program, ExprError>>;
@@ -409,6 +417,24 @@ mod tests {
     fn lenient_variables_while_typing() {
         assert_eq!(variables_lenient("sin(myVar"), vec!["myVar"]);
         assert_eq!(variables_lenient("x + y *"), vec!["x", "y"]);
+    }
+
+    /// A list of up to four values (red, green, blue and alpha of Pixel Math), separated by
+    /// commas outside calls.
+    #[test]
+    fn lists_of_values() {
+        let p = compile("u, v * 2, 0.5").unwrap();
+        assert_eq!((p.components(), p.vars.clone()), (3, vec!["u".to_string(), "v".to_string()]));
+        assert_eq!(compile("min(a, b), c").unwrap().components(), 2);
+        assert_eq!(compile("1, 2, 3, 4").unwrap().components(), 4);
+        assert!(compile("1, 2, 3, 4").unwrap().is_constant());
+        assert!(!compile("1, x").unwrap().is_constant());
+        assert!(err("a, b, c, d, e").message.contains("At most four"));
+        assert!(err("a,").message.contains("Missing value"));
+        assert!(err("a,, b").message.contains("Missing value"));
+        let code = wgsl::components_wgsl(&p, &|i| format!("V{i}"), &|i, _, _| format!("S{i}"));
+        assert_eq!(code.len(), 3);
+        assert_eq!(code[2], "f32(0.5)");
     }
 
     /// `sample(image, x, y)` reads an image input anywhere (in Pixel Math); what it reads is

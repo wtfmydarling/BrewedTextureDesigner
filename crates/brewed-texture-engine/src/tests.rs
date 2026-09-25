@@ -242,6 +242,30 @@ fn shape_and_pixel_math() {
     assert!(close(pixel(&data, RES / 2, RES / 2)[0], 1.0 + 0.5 * (RES / 2) as f32 / RES as f32, 1e-2));
 }
 
+/// Pixel Math makes a color image of a list of values: red, green, blue and alpha, those not
+/// given none and opaque; one value stays a grayscale image.
+#[test]
+fn pixel_math_makes_colors_of_lists() {
+    use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT};
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let pm = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
+    set(&mut g, pm, "expression", ParamValue::Text("u, v, 0.25".into()));
+    let rgb = eval_read(&mut e, &g, pm);
+    assert_eq!(e.image(pm).unwrap().format(), COLOR_FORMAT);
+    let (x, y) = (RES / 4, 3 * RES / 4);
+    let (u, v) = ((x as f32 + 0.5) / RES as f32, (y as f32 + 0.5) / RES as f32);
+    let p = pixel(&rgb, x, y);
+    assert!(close(p[0], u, 2e-3) && close(p[1], v, 2e-3) && close(p[2], 0.25, 1e-3) && p[3] == 1.0, "{p:?}");
+    set(&mut g, pm, "expression", ParamValue::Text("1, 0.5, 0, 0.5".into()));
+    let p = pixel(&eval_read(&mut e, &g, pm), 9, 9);
+    assert_eq!(p, [1.0, 0.5, 0.0, 0.5]);
+    set(&mut g, pm, "expression", ParamValue::Text("u".into()));
+    let _ = eval_read(&mut e, &g, pm);
+    assert_eq!(e.image(pm).unwrap().format(), GRAY_FORMAT);
+    assert!(e.gpu.take_errors().is_empty());
+}
+
 /// Pixel Math reads an image anywhere with `sample`: mirrored across, and a neighbour's
 /// difference (an edge), each pixel what the image has where it says; a value not connected
 /// to an image reads the same everywhere.
