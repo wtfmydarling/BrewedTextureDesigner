@@ -12,6 +12,7 @@ pub mod engine;
 pub mod export;
 pub mod gpu;
 pub mod kernels;
+pub mod render;
 pub mod service;
 pub mod simd;
 pub mod tools;
