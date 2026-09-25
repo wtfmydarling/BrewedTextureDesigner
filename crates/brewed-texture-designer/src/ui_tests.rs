@@ -1291,7 +1291,11 @@ fn stays_inside(message: &Message) -> bool {
         | Message::Proceed(PendingAction::Quit)
         | Message::Preview(PreviewMessage::BrowseEnvironment)
         | Message::Explorer(
-            ExplorerMessage::Save(_) | ExplorerMessage::SaveAs(_) | ExplorerMessage::LinkFiles(_) | ExplorerMessage::Locate(..),
+            ExplorerMessage::Save(_)
+                | ExplorerMessage::SaveAs(_)
+                | ExplorerMessage::LinkFiles(_)
+                | ExplorerMessage::Locate(..)
+                | ExplorerMessage::CollectFiles(_),
         ) => false,
         Message::FromMenu(inner) => stays_inside(inner),
         _ => true,
@@ -1776,6 +1780,61 @@ fn far_away_nodes_are_drawn() {
 }
 
 // ---------------------------------------------------------------------------- packages
+
+/// The files a package uses are collected beside it: a picture from elsewhere is copied into
+/// `<package>_files`, the node reads the copy (one step to undo), and saved, the package says
+/// where the copy is relative to itself; a package without a file says it has nowhere to put
+/// them.
+#[test]
+fn the_files_of_a_package_are_collected() {
+    use brewed_texture_core::package;
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    // Unsaved, the demo has nowhere to put them.
+    w.send(Message::Explorer(ExplorerMessage::CollectFiles(w.app.doc_key)));
+    assert!(w.app.ui.status.as_ref().is_some_and(|s| s.error && s.text.contains("Save")), "{:?}", w.app.ui.status);
+
+    let dir = scratch("collect");
+    let stock = dir.join("stock");
+    std::fs::create_dir_all(&stock).unwrap();
+    let bricks = stock.join("bricks.png");
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 60, 40, 255])).save(&bricks).unwrap();
+    let home = dir.join("wall");
+    std::fs::create_dir_all(&home).unwrap();
+    let file = home.join("wall.brewtex");
+    w.send(Message::SavePicked(Some(file.clone())));
+    w.send(Message::Edit(Edit::AddNodeWith {
+        kind: NodeKind::BITMAP,
+        pos: [0.0, 900.0],
+        params: vec![("path".into(), ParamValue::Text(bricks.display().to_string()))],
+    }));
+    w.send(Message::Seal);
+    let bitmap = w.app.graph().nodes_of(NodeKind::BITMAP).next().expect("the bitmap").id;
+    let path_of = |w: &Harness| w.app.graph().node(bitmap).map(|n| n.text("path").to_string()).unwrap_or_default();
+
+    // What the app copies (on a thread of its own, which the harness does not run), copied.
+    let key = w.app.doc_key;
+    let folder = home.join("wall_files");
+    let plan = package::collect_plan(&w.app.doc.package().all_files(), &home, &folder, std::path::Path::exists);
+    assert_eq!(plan, vec![(bricks.display().to_string(), folder.join("bricks.png").display().to_string())]);
+    let collected = crate::app::packages::copy_files(&plan);
+    assert!(collected.failed.is_empty(), "{:?}", collected.failed);
+    w.send(Message::Explorer(ExplorerMessage::FilesCollected(key, collected)));
+    let copy = folder.join("bricks.png");
+    assert_eq!(path_of(&w), copy.display().to_string());
+    assert!(copy.is_file());
+    // Nothing left to collect; one undo reads the original again.
+    assert!(package::collect_plan(&w.app.doc.package().all_files(), &home, &folder, std::path::Path::exists).is_empty());
+    w.send(Message::Undo);
+    assert_eq!(path_of(&w), bricks.display().to_string());
+    w.send(Message::Redo);
+    w.send(Message::SavePicked(Some(file.clone())));
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("wall_files/bricks.png"), "saved relative to itself: {text}");
+    // A second copy is never written over a file that is there.
+    let again = crate::app::packages::copy_files(&plan);
+    assert!(again.copied.is_empty() && again.failed.len() == 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
 
 /// A folder of its own for a test's files.
 fn scratch(name: &str) -> std::path::PathBuf {

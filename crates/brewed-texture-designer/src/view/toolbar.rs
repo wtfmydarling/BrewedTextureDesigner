@@ -67,6 +67,7 @@ fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
         item("New Graph", "", Some(Message::Explorer(ExplorerMessage::NewGraph(key)))),
         item("Open Package…", "Ctrl+O", Some(Message::Open)),
         item("Link Files…", "", Some(Message::Explorer(ExplorerMessage::LinkFiles(key)))),
+        item("Collect Files", "", Some(Message::Explorer(ExplorerMessage::CollectFiles(key)))),
         separator(),
         item("Save", "Ctrl+S", Some(Message::Save)),
         item("Save As…", "Ctrl+Shift+S", Some(Message::SaveAs)),

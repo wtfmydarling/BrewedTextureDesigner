@@ -19,7 +19,7 @@ use brewed_texture_core::{
     Document, Edit, Graph, GraphId, GraphRef, Instance, Interface, NodeId, NodeKind, ParamValue,
 };
 
-use super::{App, ContextMenu, Dialog, DragPayload, ExplorerMessage, Message, MissingFiles, PendingAction, blocking};
+use super::{App, Collected, ContextMenu, Dialog, DragPayload, ExplorerMessage, Message, MissingFiles, PendingAction, blocking};
 
 /// A package open in the Explorer, other than the one being edited.
 pub struct OpenPackage {
@@ -55,6 +55,27 @@ impl Library for Shelf<'_> {
             Some(p) => self.open.iter().find(|(k, _)| k == p).map(|(_, package)| *package).or_else(|| self.deps.get(p)),
         }
     }
+}
+
+/// Copy each file of `plan` (where it is, where its copy goes), making the folders; a file is
+/// copied only where nothing is (a plan leaves out the names taken).
+pub fn copy_files(plan: &[(String, String)]) -> Collected {
+    let mut out = Collected::default();
+    for (from, to) in plan {
+        let target = Path::new(to);
+        let made = target.parent().map_or(Ok(()), std::fs::create_dir_all).map_err(|e| e.to_string());
+        let copied = made.and_then(|()| {
+            if target.exists() {
+                return Err("there is a file of that name there".to_string());
+            }
+            std::fs::copy(from, target).map(|_| ()).map_err(|e| e.to_string())
+        });
+        match copied {
+            Ok(()) => out.copied.push((from.clone(), to.clone())),
+            Err(e) => out.failed.push(format!("{} ({e})", package::file_name(from))),
+        }
+    }
+    out
 }
 
 /// A path as the packages say it: absolute, without `.` and `..`.
@@ -493,6 +514,52 @@ impl App {
         }
     }
 
+    /// Copy the files the package open as `key` uses that are not beside it into
+    /// `<its name>_files` beside it, on a thread of its own (see [`copy_files`]); the package
+    /// uses the copies once they are made. A package without a file has nowhere to put them.
+    fn collect_files(&mut self, key: u64) -> Task<Message> {
+        let Some(doc) = self.package_doc(key) else { return Task::none() };
+        let Some(file) = doc.path().cloned() else {
+            let title = doc.title();
+            self.set_status(format!("Save {title} first: its files are collected beside its file"), true);
+            return Task::none();
+        };
+        let home = file.parent().map(Path::to_path_buf).unwrap_or_default();
+        let stem = file.file_stem().map_or_else(|| "package".to_string(), |s| s.to_string_lossy().to_string());
+        let folder = home.join(format!("{stem}_files"));
+        let plan = package::collect_plan(&doc.package().all_files(), &home, &folder, Path::exists);
+        if plan.is_empty() {
+            let title = doc.title();
+            self.set_status(format!("The files of {title} are beside it already"), false);
+            return Task::none();
+        }
+        Task::perform(blocking(move || copy_files(&plan)), move |collected| {
+            Message::Explorer(ExplorerMessage::FilesCollected(key, collected.unwrap_or_default()))
+        })
+    }
+
+    /// The files of a package were copied: it uses the copies from now on (one step to undo),
+    /// and what could not be copied is said.
+    fn files_collected(&mut self, key: u64, collected: Collected) {
+        let count = collected.copied.len();
+        if let Some(doc) = self.package_doc_mut(key)
+            && count > 0
+            && let Err(e) = doc.apply_package(PackageEdit::Relocate(collected.copied.clone()))
+        {
+            self.set_status(e, true);
+            return;
+        }
+        let folder = collected.copied.first().and_then(|(_, to)| Path::new(to).parent().map(|d| d.display().to_string()));
+        let mut said = match folder {
+            Some(folder) => format!("Copied {count} file(s) into {folder}: save the package to keep using them"),
+            None => "No file was copied".to_string(),
+        };
+        if !collected.failed.is_empty() {
+            said = format!("{said}; not copied: {}", collected.failed.join(", "));
+        }
+        self.set_status(said, !collected.failed.is_empty());
+    }
+
     /// The file dialog to find a file that is missing.
     fn locate(&self, key: u64, path: String) -> Task<Message> {
         let what = match &self.ui.dialog {
@@ -720,6 +787,11 @@ impl App {
                 self.close_popups();
                 return self.locate(key, path);
             }
+            ExplorerMessage::CollectFiles(key) => {
+                self.close_popups();
+                return self.collect_files(key);
+            }
+            ExplorerMessage::FilesCollected(key, collected) => self.files_collected(key, collected),
             ExplorerMessage::Located(key, from, Some(to)) => self.located(key, from, to),
             ExplorerMessage::Located(_, _, None) => {}
             ExplorerMessage::Context(target) => {

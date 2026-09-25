@@ -74,6 +74,7 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
             vec![
                 item("New Graph", "", Some(Message::Explorer(ExplorerMessage::NewGraph(key)))),
                 item("Link Files…", "", Some(Message::Explorer(ExplorerMessage::LinkFiles(key)))),
+                item("Collect Files", "", Some(Message::Explorer(ExplorerMessage::CollectFiles(key)))),
                 separator(),
                 item("Save", "", Some(Message::Explorer(ExplorerMessage::Save(key)))),
                 item("Save As…", "", Some(Message::Explorer(ExplorerMessage::SaveAs(key)))),

@@ -185,6 +185,18 @@ impl Package {
         added
     }
 
+    /// Every file the package uses: those it lists and those its nodes read, each once, in
+    /// that order.
+    pub fn all_files(&self) -> Vec<String> {
+        let mut seen = HashSet::new();
+        self.resources
+            .iter()
+            .map(|r| r.path.clone())
+            .chain(self.files().map(|(.., path)| path.to_string()))
+            .filter(|p| seen.insert(p.clone()))
+            .collect()
+    }
+
     /// The package files whose graphs the nodes of this one use.
     pub fn dependencies(&self) -> BTreeSet<String> {
         self.graphs
@@ -334,6 +346,9 @@ pub enum PackageEdit {
         from: String,
         to: String,
     },
+    /// Files were copied (their files collected, see [`collect_plan`]): every path that said
+    /// the first of a pair says the second.
+    Relocate(Vec<(String, String)>),
     /// Put nodes of a graph in a graph of their own, and use that graph in their place (see
     /// [`make_subgraph`]).
     MakeSubgraph {
@@ -364,6 +379,7 @@ impl PackageEdit {
             PackageEdit::AddResources(_) => "Link Files",
             PackageEdit::RemoveResource(_) => "Remove File",
             PackageEdit::Relink { .. } => "Relink",
+            PackageEdit::Relocate(_) => "Collect Files",
             PackageEdit::MakeSubgraph { .. } => "Make Subgraph",
         }
     }
@@ -456,6 +472,16 @@ impl PackageEdit {
                     return Ok(PackageResult::default());
                 }
                 package.map_paths(|p| if p == from { to.clone() } else { p.to_string() });
+                let mut seen = HashSet::new();
+                package.resources.retain(|r| seen.insert(r.path.clone()));
+                changed
+            }
+            PackageEdit::Relocate(moves) => {
+                let moves: HashMap<String, String> = moves.into_iter().filter(|(from, to)| from != to).collect();
+                if moves.is_empty() {
+                    return Ok(PackageResult::default());
+                }
+                package.map_paths(|p| moves.get(p).cloned().unwrap_or_else(|| p.to_string()));
                 let mut seen = HashSet::new();
                 package.resources.retain(|r| seen.insert(r.path.clone()));
                 changed
@@ -1094,6 +1120,35 @@ fn same_part(a: &Component<'_>, b: &Component<'_>) -> bool {
     }
 }
 
+/// Where the files of a package go when they are collected beside it (so that the package and
+/// its folder can be moved or passed on together): each file that is not in `home` (the
+/// package's folder) or below it, into `folder`, by its name, numbered where another file
+/// already has that name there (`bricks (2).png`) or `exists` says one is; the files in `home`
+/// stay where they are. Pairs of where each file is and where it goes.
+pub fn collect_plan(files: &[String], home: &Path, folder: &Path, exists: impl Fn(&Path) -> bool) -> Vec<(String, String)> {
+    let mut taken: HashSet<String> = HashSet::new();
+    let mut plan = Vec::new();
+    for file in files {
+        let path = Path::new(file);
+        if path.starts_with(home) {
+            continue;
+        }
+        let name = path.file_name().map_or_else(|| "file".to_string(), |n| n.to_string_lossy().to_string());
+        let (stem, ext) = match name.rfind('.') {
+            Some(dot) if dot > 0 => (name[..dot].to_string(), name[dot..].to_string()),
+            _ => (name.clone(), String::new()),
+        };
+        // Names are told apart as the systems that do not tell cases apart would.
+        let to = (1..)
+            .map(|n| if n == 1 { folder.join(&name) } else { folder.join(format!("{stem} ({n}){ext}")) })
+            .find(|to| !taken.contains(&to.display().to_string().to_lowercase()) && !exists(to))
+            .expect("a free name");
+        taken.insert(to.display().to_string().to_lowercase());
+        plan.push((file.clone(), to.display().to_string()));
+    }
+    plan
+}
+
 /// `path` as a file in `dir` says it: relative to `dir`, with `/` between its parts on every
 /// system, where the two share a root (a drive on Windows); as it is where they do not.
 pub fn relative_path(path: &str, dir: &Path) -> String {
@@ -1386,6 +1441,44 @@ mod tests {
         assert_eq!(relative_path("", dir), "");
         assert_eq!(resolve_path("", dir), "");
         assert_eq!(clean_path(Path::new("a/./b/../c")), Path::new("a").join("c"));
+    }
+
+    /// Collecting the files of a package: those outside its folder go into the folder asked
+    /// for, by their names, numbered where two have one or one is there already; those beside
+    /// it stay; and the package then says where they went, in one step.
+    #[test]
+    fn the_files_of_a_package_are_collected_beside_it() {
+        let root = if cfg!(windows) { Path::new(r"C:\work") } else { Path::new("/work") };
+        let home = root.join("wall");
+        let folder = home.join("wall_files");
+        let at = |p: &[&str]| p.iter().fold(root.to_path_buf(), |d, part| d.join(part)).display().to_string();
+        let files = vec![
+            at(&["stock", "bricks.png"]),
+            at(&["other", "bricks.png"]),
+            at(&["other", "BRICKS (2).png"]),
+            at(&["wall", "moss.png"]),
+            at(&["fonts", "title"]),
+        ];
+        let there_already = folder.join("title");
+        let plan = collect_plan(&files, &home, &folder, |p| p == there_already);
+        let names: Vec<String> = plan.iter().map(|(_, to)| file_name(to)).collect();
+        assert_eq!(names, vec!["bricks.png", "bricks (2).png", "BRICKS (2) (2).png", "title (2)"]);
+        assert!(plan.iter().all(|(from, to)| *from != at(&["wall", "moss.png"]) && Path::new(to).starts_with(&folder)));
+
+        // The package says where each went, the files it lists and those its nodes read.
+        let mut g = Graph::default();
+        let bitmap = g.add_node(NodeKind::BITMAP, [0.0, 0.0]);
+        g.node_mut(bitmap).unwrap().param_mut("path").unwrap().value = ParamValue::Text(files[0].clone());
+        let mut package = Package::new("Wall", g);
+        package.resources.push(Resource { path: files[1].clone(), kind: ResourceKind::Bitmap });
+        package.sync_resources();
+        assert_eq!(package.all_files(), vec![files[0].clone(), files[1].clone()]);
+        let result = PackageEdit::Relocate(plan[..2].to_vec()).apply(&mut package).unwrap();
+        assert!(result.changed);
+        let node = package.graphs[0].graph.node(bitmap).unwrap();
+        assert_eq!(node.text("path"), plan[0].1);
+        assert_eq!(package.all_files(), vec![plan[0].1.clone(), plan[1].1.clone()]);
+        assert!(!PackageEdit::Relocate(Vec::new()).apply(&mut package).unwrap().changed);
     }
 
     #[test]

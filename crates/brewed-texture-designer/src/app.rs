@@ -6,7 +6,7 @@
 //! is laid out in it (see [`packages`]), and it is sent to the engine thread, which answers
 //! with images, thumbnails and reports as [`Event`]s.
 
-mod packages;
+pub(crate) mod packages;
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -534,6 +534,20 @@ pub enum ExplorerMessage {
     /// Add the node that reads a file of a package (in the middle of the view, when no place
     /// is given).
     AddResourceNode(String, ResourceKind, Option<[f32; 2]>),
+    /// Copy the files a package uses that are not beside it into a folder beside it, and have
+    /// the package use the copies (see [`brewed_texture_core::package::collect_plan`]).
+    CollectFiles(u64),
+    /// The files were copied, or some could not be.
+    FilesCollected(u64, Collected),
+}
+
+/// What copying the files of a package did.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Collected {
+    /// Where each file was, and where its copy is.
+    pub copied: Vec<(String, String)>,
+    /// What could not be copied, and why.
+    pub failed: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
