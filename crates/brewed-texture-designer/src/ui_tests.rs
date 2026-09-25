@@ -276,7 +276,7 @@ fn nodes_that_use_graphs_are_pasted_where_their_graphs_are() {
     let nodes = |app: &App| app.graph().nodes.len();
     let blur = app.graph().nodes_of(NodeKind::BLUR).next().expect("the demo blurs").id;
     app.ui.selection = [blur].into_iter().collect();
-    let _ = app.update(Message::MakeSubgraph);
+    let _ = app.update(Message::GraphFromSelection);
     let used = *app.ui.selection.iter().next().expect("the node that uses the new graph");
     assert!(app.graph().node(used).is_some_and(|n| n.instance.is_some()));
     let _ = app.update(Message::Copy);
@@ -1994,7 +1994,7 @@ fn nodes_made_a_graph_of_their_own() {
     // The two Blends, and the Levels and the Blur between them; but the Gradient Map and the
     // Histogram Scan are between them too.
     w.app.ui.selection = of_kinds(&w.app, &[NodeKind::BLEND, NodeKind::LEVELS, NodeKind::BLUR]).into_iter().collect();
-    w.send(Message::MakeSubgraph);
+    w.send(Message::GraphFromSelection);
     assert_eq!(w.app.doc.package().graphs.len(), 1);
     let status = w.app.ui.status.as_ref().expect("a status");
     assert!(status.error && status.text.starts_with("Gradient Map, Histogram Scan are between"), "{}", status.text);
@@ -2002,7 +2002,7 @@ fn nodes_made_a_graph_of_their_own() {
     let kinds = [NodeKind::BLEND, NodeKind::LEVELS, NodeKind::BLUR, NodeKind::GRADIENT_MAP, NodeKind::HISTOGRAM_SCAN];
     let chosen = of_kinds(&w.app, &kinds);
     w.app.ui.selection = chosen.iter().copied().collect();
-    w.send(Message::MakeSubgraph);
+    w.send(Message::GraphFromSelection);
     assert_eq!(w.app.doc.package().graphs.len(), 2);
     let node = *w.app.ui.selection.first().expect("the new node is selected");
     let graph = w.app.graph().node(node).and_then(|n| n.instance.as_ref()).expect("a node that uses the graph").graph.graph;

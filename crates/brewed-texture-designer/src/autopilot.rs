@@ -416,11 +416,10 @@ fn back_home(what: &'static str) -> Vec<Step> {
         Step::Note(format!("the demo again, settled, after {what}")),
         Step::Check(Box::new(move |app: &App| {
             let m = app.res.memory;
-            // The five maps it writes with their mips, and the copy of the height the 3D view
-            // reads (floats cannot be filtered everywhere): 80 MB at 2048.
-            (m.kept + m.scratch > 0 || m.total() > 81 * 1024 * 1024).then(|| {
+            // The five maps it writes with their mips: 64 MB at 2048.
+            (m.kept + m.scratch > 0 || m.total() > 65 * 1024 * 1024).then(|| {
                 format!(
-                    "after {what}: {:.1} MB (views {:.1}, kept {:.1}, scratch {:.1}, files {:.1}), not 80",
+                    "after {what}: {:.1} MB (views {:.1}, kept {:.1}, scratch {:.1}, files {:.1}), not 64",
                     mb(m.total()),
                     mb(m.shown),
                     mb(m.kept),
@@ -1495,14 +1494,14 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                     Some(vec![
                         Step::Do(Message::SavePicked(Some(wall))),
                         Step::Do(Message::Graph(GraphMessage::SelectBox { ids, additive: false })),
-                        Step::Do(Message::MakeSubgraph),
+                        Step::Do(Message::GraphFromSelection),
                         Step::Wait,
                         Step::Note("nodes made a graph of their own".into()),
                         Step::Check(Box::new(|app: &App| {
                             let used = app.graph().nodes.iter().find(|n| n.instance.is_some())?;
                             let errors = app.eval.node(used.id).map(|e| e.errors.clone()).unwrap_or_default();
                             (app.doc.package().graphs.len() != 2 || !errors.is_empty() || !app.res.inner.is_empty())
-                                .then(|| format!("made a subgraph: {} graphs, {errors:?}, {:?}", app.doc.package().graphs.len(), app.res.inner))
+                                .then(|| format!("made a graph of the selection: {} graphs, {errors:?}, {:?}", app.doc.package().graphs.len(), app.res.inner))
                         })),
                     ])
                 }
@@ -1767,7 +1766,7 @@ fn random_steps(app: &App, dice: &mut Dice) -> Option<Vec<Step>> {
             // Two nodes made a graph of their own; now and then, back into the graph they came
             // from (undo), or another graph of the package edited for a while.
             steps.push(Step::Do(Message::Graph(GraphMessage::SelectBox { ids: vec![node.id, other.id], additive: false })));
-            steps.push(Step::Do(Message::MakeSubgraph));
+            steps.push(Step::Do(Message::GraphFromSelection));
             if dice.chance(50) {
                 steps.push(Step::Do(Message::Undo));
             }

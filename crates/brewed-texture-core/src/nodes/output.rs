@@ -4,6 +4,30 @@ use super::*;
 
 pub const OUTPUT_FORMATS: &[&str] = &["RGBA", "RGB", "RG", "R", "G", "B", "A"];
 
+/// How an Output writes its file (the "bit_depth" parameter), as Substance Designer's outputs
+/// offer: PNG of 8 or 16 bits, OpenEXR of half floats or floats, and DDS compressed as games
+/// read textures (BC1 to BC3, of 8 bits; DXT2 and DXT4 with the colors multiplied by the alpha).
+pub const OUTPUT_DEPTHS: &[&str] = &[
+    "8 bits",
+    "16 bits",
+    "16 bits float",
+    "32 bits float",
+    "DXT1 / BC1",
+    "DXT2 / BC2",
+    "DXT3 / BC2",
+    "DXT4 / BC3",
+    "DXT5 / BC3",
+];
+pub const DEPTH_8: u32 = 0;
+pub const DEPTH_16: u32 = 1;
+pub const DEPTH_16F: u32 = 2;
+pub const DEPTH_32F: u32 = 3;
+pub const DEPTH_DXT1: u32 = 4;
+pub const DEPTH_DXT2: u32 = 5;
+pub const DEPTH_DXT3: u32 = 6;
+pub const DEPTH_DXT4: u32 = 7;
+pub const DEPTH_DXT5: u32 = 8;
+
 /// Channels (indices into RGBA) written for each output format.
 pub fn output_format_channels(format: u32) -> &'static [usize] {
     match format {
@@ -27,10 +51,12 @@ pub static OUTPUT: NodeDef = NodeDef {
     outputs: NO_SOCKETS,
     params: &[
         text("name", "Name", "output").tip("File name of the exported image (without extension)."),
-        choice("format", "Format", 0, OUTPUT_FORMATS).fixed().tip("Channels written by the export."),
-        choice("bit_depth", "Bit Depth", 0, &["8 bit", "16 bit", "32 bit float"])
-            .fixed()
-            .tip("8 and 16 bit are written as PNG, 32 bit float as OpenEXR."),
+        choice("format", "Channels", 0, OUTPUT_FORMATS).fixed().tip("Channels written by the export."),
+        choice("bit_depth", "Format", 0, OUTPUT_DEPTHS).fixed().tip(
+            "How the file is written: 8 and 16 bits as PNG, 16 and 32 bits float as OpenEXR, and DXT (BC) as DDS, \
+             compressed as game engines read textures, with its mipmaps. The output keeps its image as it writes it, \
+             as the 2D and 3D views show it.",
+        ),
         choice(
             "usage",
             "Usage",

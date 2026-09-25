@@ -187,11 +187,16 @@ fn outputs_write_their_channels_at_their_bit_depth() {
     // Spread over the texture size, as it is exported.
     let data = eval_read(&mut e, &g, o);
     assert!(close(pixel(&data, 5, 5)[1], 0.6, 1e-3));
-    // What arrives gray is one channel in RGB too, of floats in a graph of full precision.
+    // What arrives gray is one channel in RGB too, as precisely as it arrives: in half floats,
+    // and in floats from a node that keeps its image in floats.
     let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
     g.connect(noise, "o:output", o, "i:input").unwrap();
     evaluate_blocking(&mut e, &g);
+    assert_eq!(e.image(o).unwrap().format(), F::R16Float);
+    set(&mut g, noise, "precision", ParamValue::Enum(3));
+    evaluate_blocking(&mut e, &g);
     assert_eq!(e.image(o).unwrap().format(), F::R32Float);
+    set(&mut g, noise, "precision", ParamValue::Enum(0));
     assert_eq!(e.image(o).unwrap().size(), [RES, RES]);
 }
 
@@ -246,7 +251,7 @@ fn shape_and_pixel_math() {
 /// given none and opaque; one value stays a grayscale image.
 #[test]
 fn pixel_math_makes_colors_of_lists() {
-    use crate::gpu::{COLOR_FORMAT, GRAY_FULL_FORMAT};
+    use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT};
     let Some(mut e) = engine() else { return };
     let mut g = graph();
     let pm = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
@@ -262,7 +267,7 @@ fn pixel_math_makes_colors_of_lists() {
     assert_eq!(p, [1.0, 0.5, 0.0, 0.5]);
     set(&mut g, pm, "expression", ParamValue::Text("u".into()));
     let _ = eval_read(&mut e, &g, pm);
-    assert_eq!(e.image(pm).unwrap().format(), GRAY_FULL_FORMAT);
+    assert_eq!(e.image(pm).unwrap().format(), GRAY_FORMAT);
     assert!(e.gpu.take_errors().is_empty());
 }
 
@@ -483,7 +488,7 @@ fn rgba_merge_packs_channels() {
 /// shimmer); and tiles stacked one over another rather than merged.
 #[test]
 fn tile_sampler_places_patterns_by_maps() {
-    use crate::gpu::{COLOR_FORMAT, GRAY_FULL_FORMAT};
+    use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT};
     let Some(mut e) = engine() else { return };
     let mut g = graph();
     let t = g.add_node(NodeKind::TILE_SAMPLER, [0.0, 0.0]);
@@ -493,7 +498,7 @@ fn tile_sampler_places_patterns_by_maps() {
     };
     // Squares of 0.8 of their cells: 64 % of the image, and it tiles.
     let plain = eval_read(&mut e, &g, t);
-    assert_eq!(e.image(t).unwrap().format(), GRAY_FULL_FORMAT);
+    assert_eq!(e.image(t).unwrap().format(), GRAY_FORMAT);
     assert!((covered(&plain, 0..RES) - 0.64).abs() < 0.03, "{}", covered(&plain, 0..RES));
     let (across, inside) = seams(&plain, RES);
     assert!(across <= inside * 1.25 + 1e-3, "{across} across the edges, at most {inside} anywhere else");
@@ -807,7 +812,7 @@ fn mixed() -> (Graph, Vec<(&'static str, NodeId)>) {
 }
 
 /// Nodes put in a graph of their own compute what they did (see
-/// `brewed_texture_core::package::make_subgraph`): every output of the demo and of a graph that
+/// `brewed_texture_core::package::graph_from_selection`): every output of the demo and of a graph that
 /// mixes much (see `mixed`), pixel for pixel, whichever nodes go, and whichever of those go in
 /// a graph of their own again: nodes chosen for what they take (a color image into a mask and
 /// into a filter of either kind, into a mask alone, the red of a color image, an input value
@@ -907,7 +912,7 @@ fn nodes_made_a_graph_of_their_own_compute_what_they_did() {
                 }
                 let mut made = p.clone();
                 let ids = chosen.iter().map(|n| n.id).collect();
-                let result = PackageEdit::MakeSubgraph { graph, nodes: ids, name: "Part".into() }.apply(&mut made).ok()?;
+                let result = PackageEdit::GraphFromSelection { graph, nodes: ids, name: "Part".into() }.apply(&mut made).ok()?;
                 let kinds: Vec<&str> = chosen.iter().map(|n| n.def().name).collect();
                 Some((made, result.graph.unwrap(), kinds))
             })
@@ -915,7 +920,7 @@ fn nodes_made_a_graph_of_their_own_compute_what_they_did() {
         for chosen in fixed {
             let mut p = package.clone();
             let kinds: Vec<&str> = chosen.iter().map(|id| p.graph(main).unwrap().graph.node(*id).unwrap().def().name).collect();
-            let edit = PackageEdit::MakeSubgraph { graph: main, nodes: chosen, name: "Part".into() };
+            let edit = PackageEdit::GraphFromSelection { graph: main, nodes: chosen, name: "Part".into() };
             edit.apply(&mut p).unwrap_or_else(|e| panic!("{kinds:?}: {e}"));
             if let Some(off) = differ(&want, &written(&mut e, &p, main)) {
                 panic!("{name}: {off}, with {kinds:?} in a graph of their own");
@@ -1249,18 +1254,19 @@ fn flood_fill_gives_each_shape_one_value() {
 }
 
 /// A gentle slope, a two-hundredth of the range across the image: steps of half floats in a
-/// graph of half precision, all its values in one of full precision (as a new graph has it):
+/// graph of half precision (as a new graph has it), all its values in one of full precision:
 /// in the node's image, in what an output of 16 bits writes and in the file it exports, and
 /// through Non-uniform Blur and the Tile Sampler, which read their inputs at every scale in
 /// the precision they have. Ambient Occlusion reads it filtered, from a copy in half floats;
 /// the 2D view shows a copy it can filter. A 16-bit grayscale file keeps all its steps too.
+/// A node can keep its image in floats in a graph of half precision, and in bytes.
 #[test]
 fn full_precision_keeps_gentle_slopes() {
     use brewed_texture_core::Precision;
     use wgpu::TextureFormat as F;
     let Some(mut e) = engine() else { return };
-    assert_eq!(Graph::default().precision, Precision::Full);
-    let mut g = Graph { precision: Precision::Half, ..graph() };
+    assert_eq!(Graph::default().precision, Precision::Half);
+    let mut g = graph();
     let slope = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
     set(&mut g, slope, "expression", ParamValue::Text("0.5 + u * 0.005".into()));
     let out = g.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
@@ -1330,6 +1336,15 @@ fn full_precision_keeps_gentle_slopes() {
     let read = values(&eval_read(&mut e, &g, bitmap));
     assert!(read > 200, "{read} values of 256");
     let _ = std::fs::remove_dir_all(&dir);
+    // Its own precision, whatever the graph's: floats in a graph of half floats, and bytes.
+    g.precision = Precision::Half;
+    set(&mut g, slope, "precision", ParamValue::Enum(3));
+    assert!(values(&eval_read(&mut e, &g, slope)) > 200);
+    assert_eq!(e.image(slope).unwrap().format(), F::R32Float);
+    set(&mut g, slope, "precision", ParamValue::Enum(1));
+    let bytes = eval_read(&mut e, &g, slope);
+    assert_eq!(e.image(slope).unwrap().format(), F::R8Unorm);
+    assert!(values(&bytes) <= 3, "{}", values(&bytes));
     assert!(e.gpu.take_errors().is_empty());
 }
 
@@ -2017,11 +2032,10 @@ fn drag_step_costs() {
         let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
         let all = u64::MAX;
         let mb_ = 1024 * 1024;
-        // What the engine keeps while a slider is dragged (six grayscale images, 96 MB at
-        // 2048 in floats), against keeping all of them, less and none.
-        let engine = 96 * mb_;
-        let budgets =
-            [(all, true), (engine, true), (48 * mb_, true), (24 * mb_, true), (0, true), (0, false), (engine, true)];
+        // What the engine keeps while a slider is dragged (six grayscale images, 48 MB at
+        // 2048), against keeping all of them, less and none.
+        let engine = 48 * mb_;
+        let budgets = [(all, true), (engine, true), (24 * mb_, true), (0, true), (0, false), (engine, true)];
         for (budget, keep_read) in budgets {
             let mut times = Vec::new();
             let mut memory = 0;
@@ -2163,12 +2177,11 @@ fn drag_through_the_service(resolution: u32, steps: usize) -> Option<(Vec<f64>, 
 #[test]
 fn dragging_keeps_memory_to_its_budget() {
     let Some((during, settled)) = drag_through_the_service(512, 40) else { return };
-    // At 512: 5 MB the maps with their mips (and the copy of the height the 3D view reads), 2
-    // the two images the next step reads, 6 of scratch images at most (six grayscale images
-    // of floats; and 0.1 of thumbnails, gradients).
+    // At 512: 4 MB the maps with their mips, 0.5 the two images the next step reads, 3 of
+    // scratch images at most (and 0.1 of thumbnails, gradients).
     let most = during.iter().copied().fold(0.0, f64::max);
-    assert!(most < 13.2, "{most:.1} MB while dragging: {during:.1?}");
-    assert!(settled < 5.1, "settled on {settled:.1} MB");
+    assert!(most < 7.8, "{most:.1} MB while dragging: {during:.1?}");
+    assert!(settled < 4.1, "settled on {settled:.1} MB");
 }
 
 /// The same at 2048×2048, as the app opens the demo (prints).
@@ -2481,7 +2494,7 @@ fn grayscale_and_color_images() {
     assert_eq!(kind(&e, gray), Some(ImageKind::Gray));
     assert_eq!(kind(&e, color), Some(ImageKind::Color));
     assert_eq!(kind(&e, hsl), Some(ImageKind::Color));
-    assert!(e.image(noise).unwrap().is_gray() && e.image(noise).unwrap().bytes() == u64::from(RES * RES * 4), "a float a pixel");
+    assert!(e.image(noise).unwrap().is_gray() && e.image(noise).unwrap().bytes() == u64::from(RES * RES * 2), "two bytes a pixel");
     // A uniform color is one pixel, and reads as the whole texture.
     assert_eq!(e.image(color).unwrap().size(), [1, 1]);
     let px = e.read_image(color).unwrap();
@@ -2556,13 +2569,12 @@ fn the_demo_settles_on_what_its_outputs_write() {
     let settled = e.memory_report();
     assert_eq!((settled.shown_images, settled.kept, settled.scratch), (outputs.len(), 0, 0));
     // Base color and normal in RGB of 8 bits (kept with alpha), the height in one channel of
-    // 16 (as floats, the graph's), roughness and occlusion in one of 8.
+    // 16, roughness and occlusion in one of 8.
     let formats: Vec<F> = outputs.iter().map(|o| e.image(*o).unwrap().format()).collect();
-    assert_eq!(formats, [F::Rgba8Unorm, F::Rgba8Unorm, F::R32Float, F::R8Unorm, F::R8Unorm]);
+    assert_eq!(formats, [F::Rgba8Unorm, F::Rgba8Unorm, F::R16Float, F::R8Unorm, F::R8Unorm]);
     let mb = settled.total() as f64 / (1024.0 * 1024.0);
-    // 80 MB at 2048: 56 of maps, 13 of their mips and 11 of the copy of the height the 3D
-    // view reads (in half floats, which it can filter, with mips).
-    assert!(mb < 5.1, "the demo takes {mb:.1} MB at 512");
+    // 64 MB at 2048: 48 of maps, 16 of mips.
+    assert!(mb < 4.1, "the demo takes {mb:.1} MB at 512");
     // Dragging an input value keeps what the next step reads; settled again, the same.
     let wear = g.variables.iter().position(|v| v.name == "wear").unwrap();
     for value in [0.6, 0.65, 0.55] {

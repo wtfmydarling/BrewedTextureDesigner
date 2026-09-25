@@ -30,7 +30,7 @@ const USAGE: &str = "Brewed Texture Designer — GPU accelerated node based text
 
 usage: brewed-texture-designer [FILE.brewtex]
        brewed-texture-designer --render PACKAGE.brewtex [--graph NAME]... [--set NAME=VALUE]...
-                               [--size N|WxH] [--precision 16|32] [--out DIR]
+                               [--size N|WxH] [--precision 8|16|32] [--out DIR]
 
   --render         compute the graphs of a package without a window and write their
                    Output nodes as File > Export Outputs does: into DIR (the current folder
@@ -40,8 +40,8 @@ usage: brewed-texture-designer [FILE.brewtex]
   --graph NAME     render this graph only (again for more)
   --set NAME=VALUE set an Input Value: 0.5, 4, true, 0.2,0.8, #9E4229 or 0.6,0.3,0.2
   --size N|WxH     the texture size: 2048, or 2048x1024
-  --precision      16 or 32: grayscale images in half or full floats, whatever the
-                   graphs say
+  --precision      8, 16 or 32: images in bytes, half floats or floats, whatever the
+                   graphs say (a node that says its own keeps it)
   --out DIR        where the files go";
 
 /// The tools for developing the program, in a build that has them (the `dev-tools` feature).
@@ -172,9 +172,10 @@ fn main() -> iced::Result {
                     "--size" => job.size = Some(size(&v).unwrap_or_else(|| usage_error(&format!("--size {v}: write 2048 or 2048x1024")))),
                     "--precision" => {
                         job.precision = Some(match v.as_str() {
+                            "8" => brewed_texture_core::Precision::Bits8,
                             "16" | "half" => brewed_texture_core::Precision::Half,
                             "32" | "full" => brewed_texture_core::Precision::Full,
-                            _ => usage_error(&format!("--precision {v}: write 16 or 32")),
+                            _ => usage_error(&format!("--precision {v}: write 8, 16 or 32")),
                         })
                     }
                     _ => job.out = PathBuf::from(v),

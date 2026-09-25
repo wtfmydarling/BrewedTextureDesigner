@@ -105,7 +105,14 @@ fn edit_menu(app: &App) -> Vec<Element<'_, Message>> {
         separator(),
         item("Select All", "Ctrl+A", Some(Message::SelectAll)),
         item("Bypass Node", "Ctrl+B", bypass.map(Message::ToggleBypass)),
-        item("Make Subgraph", "Ctrl+G", sel(Message::MakeSubgraph)),
+        item(
+            match app.ui.selection.len() {
+                0 => "Create Graph from Selection".to_string(),
+                n => format!("Create Graph from Selection ({n})"),
+            },
+            "Ctrl+G",
+            sel(Message::GraphFromSelection),
+        ),
         item(if has_selection { "Frame Selection in a Comment" } else { "Add Comment" }, "C", Some(Message::AddComment)),
     ]
 }
@@ -179,9 +186,10 @@ pub fn graph_header(app: &App) -> Element<'_, Message> {
                 .text_size(style::SMALL)
                 .padding([2, 6])
                 .style(style::pick_list),
-            "How precisely grayscale images (heights, masks) are kept. 32-bit float: a gentle slope stays smooth \
-             in normal maps and 16-bit files. 16-bit float: half the memory, but steps of 1/2048 near white, \
-             which a gentle slope shows as bands. Colors are 16-bit either way.",
+            "What the graph keeps its images in; a node can keep its own in another (its Precision). \
+             8 bits: 256 steps from 0 to 1, a quarter of the memory of floats. 16 bits float: steps of 1/2048 \
+             near 1 and finer below, values beyond 0 and 1 kept too; what a game needs. 32 bits float: smooth \
+             everywhere (a gentle slope of a height stays smooth in a normal map), twice the memory.",
             tooltip::Position::Bottom,
         ),
     ]

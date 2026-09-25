@@ -122,7 +122,7 @@ pub static IMAGE_INPUT: NodeDef = NodeDef {
     category: Category::Values,
     description: "An image the graph takes. Used as a node in another graph, the graph gets an input of \
                   this name; on its own, and while nothing arrives there, it sees the default color.",
-    keywords: "input image subgraph instance socket parameter",
+    keywords: "input image graph instance socket parameter",
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,
     params: &[
@@ -143,7 +143,7 @@ pub static GRAPH_INSTANCE: NodeDef = NodeDef {
     category: Category::Graphs,
     description: "A graph used as a node: its image inputs, outputs and input values are the node's. \
                   Changed where it is, it changes everywhere it is used.",
-    keywords: "subgraph instance graph package",
+    keywords: "instance graph package reference",
     inputs: NO_SOCKETS,
     outputs: NO_SOCKETS,
     params: &[],

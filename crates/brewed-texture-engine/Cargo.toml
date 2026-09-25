@@ -16,6 +16,11 @@ wide.workspace = true
 rayon.workspace = true
 image.workspace = true
 log.workspace = true
+# OpenEXR of half floats (the image crate writes floats only); the version the image crate
+# reads and writes EXR with.
+exr = "1.74"
+# The block compression of DDS outputs (BC1 to BC3), in Rust, on every core.
+texpresso = { version = "2", features = ["rayon"] }
 # The SVG and Text nodes: vector graphics and text drawn into pixels (the library iced draws its
 # SVGs with, text included: nothing more to build).
 resvg = { version = "0.45", default-features = false, features = ["text"] }

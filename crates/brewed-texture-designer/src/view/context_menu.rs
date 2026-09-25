@@ -7,11 +7,11 @@ use brewed_texture_core::{Edit, NodeKind};
 use crate::app::{App, ColorTarget, ContextMenu, ContextTarget, ExplorerMessage, GraphMessage, Message};
 use crate::style;
 
-fn item<'a>(label: &'a str, shortcut: &'a str, message: Option<Message>) -> Element<'a, Message> {
+fn item<'a>(label: impl Into<String>, shortcut: &'a str, message: Option<Message>) -> Element<'a, Message> {
     let enabled = message.is_some();
     button(
         row![
-            text(label).size(style::TEXT_SIZE).color(if enabled { style::TEXT } else { style::TEXT_FAINT }),
+            text(label.into()).size(style::TEXT_SIZE).color(if enabled { style::TEXT } else { style::TEXT_FAINT }),
             space().width(Length::Fill),
             text(shortcut).size(style::SMALL).color(style::TEXT_FAINT),
         ]
@@ -47,7 +47,11 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
                 item(if bypassed { "Enable Node" } else { "Bypass Node" }, "Ctrl+B", can_bypass.then_some(Message::ToggleBypass(*id))),
                 item("Open Reference", "", uses_graph.then_some(Message::OpenReference(*id))),
                 separator(),
-                item("Make Subgraph", "Ctrl+G", Some(Message::MakeSubgraph)),
+                item(
+                    format!("Create Graph from Selection ({})", app.ui.selection.len().max(1)),
+                    "Ctrl+G",
+                    Some(Message::GraphFromSelection),
+                ),
                 item("Duplicate", "Ctrl+D", Some(Message::Duplicate)),
                 item("Copy", "Ctrl+C", Some(Message::Copy)),
                 item("Cut", "Ctrl+X", Some(Message::Cut)),

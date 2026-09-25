@@ -29,6 +29,7 @@ pub use generators::{
     SHAPE_POLYGON, SHAPE_ROUNDED, SHAPE_STAR, SHAPES, TILE_PATTERN_IMAGE, TILE_SAMPLER_COLORS, TILE_SAMPLER_OVERLAPS,
 };
 pub use output::{
+    DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_DXT1, DEPTH_DXT2, DEPTH_DXT3, DEPTH_DXT4, DEPTH_DXT5, OUTPUT_DEPTHS,
     OUTPUT_FORMATS, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL,
     USAGE_ROUGHNESS, output_format_channels,
 };
@@ -453,6 +454,19 @@ pub const TILING_PARAM: ParamDef<'static> = choice("tiling", "Tiling", Tiling::B
      edge and generators leave the outside empty.",
 );
 
+/// The choices of [`PRECISION_PARAM`], in the order [`crate::Precision::of_node`] reads them.
+pub const PRECISION_LABELS: [&str; 4] = ["As the Graph", "8 bits", "16 bits float", "32 bits float"];
+
+/// The precision parameter every node that makes an image of its own carries (after the
+/// tiling): what its image is kept in, the graph's precision or its own (see
+/// [`crate::Precision`]).
+pub const PRECISION_PARAM: ParamDef<'static> = choice("precision", "Precision", 0, &PRECISION_LABELS).fixed().tip(
+    "What the node's image is kept in. 8 bits: 256 steps from 0 to 1, a quarter of the memory of floats. \
+     16 bits float: steps of 1/2048 near 1, finer below; values beyond 0 and 1 kept too. 32 bits float: smooth \
+     everywhere (a gentle slope of a height stays smooth in a normal map), twice the memory. As the Graph: what \
+     the graph says, in the header of the graph view.",
+);
+
 /// The kind of image a node makes: [`NodeDef::output_kind`], except where its parameters
 /// decide. (A Bitmap is the kind of its file, which only the engine knows once it is read.)
 pub fn image_kind(kind: NodeKind, params: &crate::eval::Params, inputs: &[Option<ImageKind>]) -> ImageKind {
@@ -523,12 +537,23 @@ impl NodeDef {
         if key == TILING_PARAM.key {
             return Some(&TILING_PARAM);
         }
+        if key == PRECISION_PARAM.key && self.has_precision() {
+            return Some(&PRECISION_PARAM);
+        }
         self.params.iter().find(|p| p.key == key)
     }
 
-    /// All parameters, the common tiling parameter first.
+    /// All parameters: the common tiling parameter first, and the precision of a node that
+    /// makes an image of its own.
     pub fn all_params(&self) -> impl Iterator<Item = &'static ParamDef<'static>> + use<> {
-        std::iter::once(&TILING_PARAM).chain(self.params.iter())
+        let precision = self.has_precision().then_some(&PRECISION_PARAM);
+        std::iter::once(&TILING_PARAM).chain(precision).chain(self.params.iter())
+    }
+
+    /// Does the node keep an image of its own, as precisely as it says (see
+    /// [`PRECISION_PARAM`])? An output keeps its image as it writes it.
+    pub fn has_precision(&self) -> bool {
+        self.role == Role::Image
     }
 
     /// Does the node produce an image (thumbnail, 2D view, meaningful tiling)?

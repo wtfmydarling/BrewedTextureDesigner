@@ -359,8 +359,8 @@ pub enum PackageEdit {
     /// the first of a pair says the second.
     Relocate(Vec<(String, String)>),
     /// Put nodes of a graph in a graph of their own, and use that graph in their place (see
-    /// [`make_subgraph`]).
-    MakeSubgraph {
+    /// [`graph_from_selection`]).
+    GraphFromSelection {
         graph: GraphId,
         nodes: Vec<NodeId>,
         name: String,
@@ -389,7 +389,7 @@ impl PackageEdit {
             PackageEdit::RemoveResource(_) => "Remove File",
             PackageEdit::Relink { .. } => "Relink",
             PackageEdit::Relocate(_) => "Collect Files",
-            PackageEdit::MakeSubgraph { .. } => "Make Subgraph",
+            PackageEdit::GraphFromSelection { .. } => "Create Graph from Selection",
         }
     }
 
@@ -495,9 +495,9 @@ impl PackageEdit {
                 package.resources.retain(|r| seen.insert(r.path.clone()));
                 changed
             }
-            PackageEdit::MakeSubgraph { graph, nodes, name } => {
+            PackageEdit::GraphFromSelection { graph, nodes, name } => {
                 let entry = package.graph(graph).ok_or("The graph no longer exists")?;
-                let (inner, mut outer) = make_subgraph(&entry.graph, &nodes)?;
+                let (inner, mut outer) = graph_from_selection(&entry.graph, &nodes)?;
                 // (Made in a copy: the package stays as it is if the node cannot be placed.)
                 let mut made = package.clone();
                 let sub = made.add_graph(&name, inner);
@@ -515,17 +515,17 @@ impl PackageEdit {
     }
 }
 
-// ---------------------------------------------------------------------------- subgraphs
+// ---------------------------------------------------------------------------- graphs of selections
 
-/// What [`make_subgraph`] leaves of the graph the nodes were taken from: the graph without
+/// What [`graph_from_selection`] leaves of the graph the nodes were taken from: the graph without
 /// them, and what to connect to the node that takes their place.
 pub struct Remainder {
     pub graph: Graph,
     pos: [f32; 2],
     /// Links into the new node: from a node of the graph, into an input (`i:`) or a parameter
-    /// (`p:`) of the subgraph.
+    /// (`p:`) of the new graph.
     into: Vec<(NodeId, String, String)>,
-    /// Links out of the new node: from an output of the subgraph, into a node of the graph.
+    /// Links out of the new node: from an output of the new graph, into a node of the graph.
     out_of: Vec<(String, NodeId, String)>,
     /// Parameters of the new node driven by the links into it.
     exposed: Vec<String>,
@@ -557,7 +557,7 @@ impl Remainder {
 /// them, at the values they have; those the other nodes read too stay, and drive the new
 /// graph's. Returns the new graph and what is left of `graph`: the same images, pixel for
 /// pixel.
-pub fn make_subgraph(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Remainder), String> {
+pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Remainder), String> {
     let chosen: HashSet<NodeId> = ids.iter().copied().filter(|id| graph.contains(*id)).collect();
     if chosen.is_empty() {
         return Err("Select the nodes to put in a graph of their own".into());
@@ -1498,7 +1498,7 @@ mod tests {
         let chosen: Vec<NodeId> = g.nodes.iter().filter(|n| wear.contains(&n.kind)).map(|n| n.id).collect();
         assert_eq!(chosen.len(), 6);
         let before = flatten(&Shelf([(None, package.clone())].into_iter().collect()), None, main).unwrap();
-        let result = PackageEdit::MakeSubgraph { graph: main, nodes: chosen.clone(), name: "Wear".into() }
+        let result = PackageEdit::GraphFromSelection { graph: main, nodes: chosen.clone(), name: "Wear".into() }
             .apply(&mut package)
             .unwrap();
         let sub = result.graph.unwrap();
@@ -1537,10 +1537,10 @@ mod tests {
         let output = g.nodes_of(NodeKind::OUTPUT).next().unwrap().id;
         let before = package.clone();
         assert!(
-            PackageEdit::MakeSubgraph { graph: main, nodes: vec![], name: "x".into() }.apply(&mut package).is_err()
+            PackageEdit::GraphFromSelection { graph: main, nodes: vec![], name: "x".into() }.apply(&mut package).is_err()
         );
         assert!(
-            PackageEdit::MakeSubgraph { graph: main, nodes: vec![output], name: "x".into() }
+            PackageEdit::GraphFromSelection { graph: main, nodes: vec![output], name: "x".into() }
                 .apply(&mut package)
                 .is_err()
         );
@@ -1575,7 +1575,7 @@ mod tests {
         // The Pixel Math alone: the Input node stays with the Levels, and drives the new graph's
         // amount.
         let mut p = package.clone();
-        let used = PackageEdit::MakeSubgraph { graph: main, nodes: vec![pm], name: "Part".into() }
+        let used = PackageEdit::GraphFromSelection { graph: main, nodes: vec![pm], name: "Part".into() }
             .apply(&mut p)
             .unwrap()
             .created[0];
@@ -1588,7 +1588,7 @@ mod tests {
 
         // The Input node, the Pixel Math and the Levels: the value goes with them.
         let mut p = package.clone();
-        let used = PackageEdit::MakeSubgraph { graph: main, nodes: vec![amount, pm, levels], name: "Part".into() }
+        let used = PackageEdit::GraphFromSelection { graph: main, nodes: vec![amount, pm, levels], name: "Part".into() }
             .apply(&mut p)
             .unwrap()
             .created[0];
@@ -1617,12 +1617,12 @@ mod tests {
         let mut package = Package::new("Main", g);
         let main = package.first();
         let before = package.clone();
-        let edit = PackageEdit::MakeSubgraph { graph: main, nodes: vec![blur, blend], name: "Part".into() };
+        let edit = PackageEdit::GraphFromSelection { graph: main, nodes: vec![blur, blend], name: "Part".into() };
         let e = edit.apply(&mut package).unwrap_err();
         assert!(e.starts_with("Levels is between"), "{e}");
         assert_eq!(package, before);
         // With it, they go.
-        let edit = PackageEdit::MakeSubgraph { graph: main, nodes: vec![blur, levels, blend], name: "Part".into() };
+        let edit = PackageEdit::GraphFromSelection { graph: main, nodes: vec![blur, levels, blend], name: "Part".into() };
         assert!(edit.apply(&mut package).is_ok());
     }
 

@@ -61,12 +61,26 @@ struct CopyU {
     pad: [u32; 3],
 }
 
-/// The format images of a kind are stored in, in a graph of `precision`.
+/// The format images of a kind are kept in at a precision (see [`Precision`]).
 pub fn format_of(kind: ImageKind, precision: Precision) -> wgpu::TextureFormat {
+    use wgpu::TextureFormat as F;
     match (kind, precision) {
-        (ImageKind::Gray, Precision::Full) => GRAY_FULL_FORMAT,
+        (ImageKind::Gray, Precision::Bits8) => F::R8Unorm,
         (ImageKind::Gray, Precision::Half) => GRAY_FORMAT,
-        (ImageKind::Color, _) => COLOR_FORMAT,
+        (ImageKind::Gray, Precision::Full) => GRAY_FULL_FORMAT,
+        (ImageKind::Color, Precision::Bits8) => F::Rgba8Unorm,
+        (ImageKind::Color, Precision::Half) => COLOR_FORMAT,
+        (ImageKind::Color, Precision::Full) => F::Rgba32Float,
+    }
+}
+
+/// The precision of the images of a format: a byte, a half float or a float a channel.
+pub fn precision_of(format: wgpu::TextureFormat) -> Precision {
+    use wgpu::TextureFormat as F;
+    match format {
+        F::R32Float | F::Rg32Float | F::Rgba32Float => Precision::Full,
+        F::R16Float | F::Rg16Float | F::Rgba16Float => Precision::Half,
+        _ => Precision::Bits8,
     }
 }
 
@@ -81,30 +95,43 @@ pub fn filterable(format: wgpu::TextureFormat) -> bool {
     )
 }
 
-/// The format an output keeps the image it writes in, from its format (see
-/// [`brewed_texture_core::nodes::OUTPUT_FORMATS`]) and bit depth (see [`crate::export`]),
-/// what arrives at it and the graph's precision: the channels it writes, one, two or four (a
-/// device has no textures of three: RGB is kept with an opaque alpha), of 8 bits, or of the
-/// floats the graph computes in, which hold all a node's image has for 16 bits and 32: half
-/// floats, and floats for the grayscale images of a graph of full precision (a 16-bit file of
-/// them has all its steps). What arrives gray is one channel in any format but RG.
-pub fn output_format(format: u32, bit_depth: u32, arriving: ImageKind, precision: Precision) -> wgpu::TextureFormat {
+/// The format an output keeps the image it writes in, from its channels (see
+/// [`brewed_texture_core::nodes::OUTPUT_FORMATS`]), its format (see
+/// [`brewed_texture_core::nodes::OUTPUT_DEPTHS`]) and what arrives at it (its kind and
+/// format): the channels it writes, one, two or four (a device has no textures of three: RGB is
+/// kept with an opaque alpha), what arrives gray one channel in any format but RG; in bytes
+/// for 8 bits and DXT, in half floats and floats for 16 and 32 bits float, and for 16 bits (a
+/// PNG of 16 bits) as precisely as it arrives, in half floats at least: a file of 16 bits of an
+/// image of floats has all its steps.
+pub fn output_format(
+    channels: u32,
+    depth: u32,
+    arriving: ImageKind,
+    arriving_format: Option<wgpu::TextureFormat>,
+) -> wgpu::TextureFormat {
+    use brewed_texture_core::nodes::{DEPTH_16, DEPTH_16F, DEPTH_32F};
     use wgpu::TextureFormat as F;
-    let channels = match (format, arriving) {
+    let channels = match (channels, arriving) {
         (2, _) => 2,
         (0 | 1, ImageKind::Color) => 4,
         _ => 1,
     };
-    let full = precision == Precision::Full;
-    match (channels, bit_depth == crate::export::DEPTH_8) {
-        (1, true) => F::R8Unorm,
-        (1, false) if full => F::R32Float,
-        (1, false) => F::R16Float,
-        (2, true) => F::Rg8Unorm,
-        (2, false) if full => F::Rg32Float,
-        (2, false) => F::Rg16Float,
-        (_, true) => F::Rgba8Unorm,
-        (_, false) => F::Rgba16Float,
+    let precision = match depth {
+        DEPTH_16 => arriving_format.map_or(Precision::Half, precision_of).max(Precision::Half),
+        DEPTH_16F => Precision::Half,
+        DEPTH_32F => Precision::Full,
+        _ => Precision::Bits8,
+    };
+    match (channels, precision) {
+        (1, Precision::Bits8) => F::R8Unorm,
+        (1, Precision::Half) => F::R16Float,
+        (1, Precision::Full) => F::R32Float,
+        (2, Precision::Bits8) => F::Rg8Unorm,
+        (2, Precision::Half) => F::Rg16Float,
+        (2, Precision::Full) => F::Rg32Float,
+        (_, Precision::Bits8) => F::Rgba8Unorm,
+        (_, Precision::Half) => F::Rgba16Float,
+        (_, Precision::Full) => F::Rgba32Float,
     }
 }
 

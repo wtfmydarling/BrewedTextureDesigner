@@ -486,15 +486,15 @@ impl App {
     }
 
     /// Put the selected nodes in a graph of their own, used in their place.
-    pub(super) fn make_subgraph(&mut self) {
+    pub(super) fn graph_from_selection(&mut self) {
         let ids = self.selected_ids();
         if ids.is_empty() {
             self.set_status("Select the nodes to put in a graph of their own", false);
             return;
         }
         self.close_popups();
-        let name = self.doc.package().unique_graph_name(&format!("{} Part", self.doc.entry().name));
-        match self.doc.apply_package(PackageEdit::MakeSubgraph { graph: self.doc.current(), nodes: ids.clone(), name })
+        let name = self.doc.package().unique_graph_name("New Graph");
+        match self.doc.apply_package(PackageEdit::GraphFromSelection { graph: self.doc.current(), nodes: ids.clone(), name })
         {
             Ok(result) => {
                 self.ui.selection = result.created.iter().copied().collect();

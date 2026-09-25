@@ -473,30 +473,45 @@ impl Clipboard {
     }
 }
 
-/// How precisely a graph keeps its grayscale images (heights, masks): in floats, 24 bits of
-/// precision and 4 bytes a pixel, or in half floats, 11 bits and 2 bytes. Half floats keep
-/// steps of 1/2048 near 1 (1/4096 near 0.5): a gentle slope over a large texture is steps in
-/// them, which a normal map shows as bands and a 16-bit file keeps; in floats it is smooth.
-/// Half floats take half the memory. Colors are half floats either way.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// How precisely images are kept, a channel of a pixel in: a byte (8 bits, 256 steps from 0 to
+/// 1, nothing beyond them), a half float (16 bits: 11 bits of precision, steps of 1/2048 near 1
+/// and finer below, values beyond 0 and 1 kept; what a game needs of a height), or a float (32
+/// bits: 24 bits of precision, twice the memory). A graph keeps its images in one, half floats
+/// unless it says otherwise, and a node can keep its own in another (its "precision"
+/// parameter, see [`crate::nodes::PRECISION_PARAM`]), as each node of Substance Designer has
+/// its output format.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Precision {
-    Half,
+    Bits8,
     #[default]
+    Half,
     Full,
 }
 
 impl Precision {
-    pub const ALL: [Precision; 2] = [Precision::Half, Precision::Full];
+    pub const ALL: [Precision; 3] = [Precision::Bits8, Precision::Half, Precision::Full];
 
     pub fn name(self) -> &'static str {
         match self {
-            Precision::Half => "16-bit float",
-            Precision::Full => "32-bit float",
+            Precision::Bits8 => "8 bits",
+            Precision::Half => "16 bits float",
+            Precision::Full => "32 bits float",
         }
     }
 
-    fn is_full(&self) -> bool {
-        *self == Precision::Full
+    /// The precision of a node whose "precision" parameter is `choice` (see
+    /// [`crate::nodes::PRECISION_PARAM`]) in a graph of precision `graph`.
+    pub fn of_node(choice: u32, graph: Precision) -> Precision {
+        match choice {
+            1 => Precision::Bits8,
+            2 => Precision::Half,
+            3 => Precision::Full,
+            _ => graph,
+        }
+    }
+
+    fn is_half(&self) -> bool {
+        *self == Precision::Half
     }
 }
 
@@ -516,8 +531,8 @@ pub struct Graph {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
     pub resolution: [u32; 2],
-    /// How precisely grayscale images are kept.
-    #[serde(default, skip_serializing_if = "Precision::is_full")]
+    /// How precisely its images are kept (see [`Precision`]).
+    #[serde(default, skip_serializing_if = "Precision::is_half")]
     pub precision: Precision,
     pub next_id: u64,
 }
@@ -530,7 +545,7 @@ impl Default for Graph {
             variables: Vec::new(),
             comments: Vec::new(),
             resolution: [2048, 2048],
-            precision: Precision::Full,
+            precision: Precision::Half,
             next_id: 1,
         }
     }

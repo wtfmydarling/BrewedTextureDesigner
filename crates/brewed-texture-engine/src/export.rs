@@ -1,5 +1,7 @@
-//! Writing Output nodes to image files: PNG (8 / 16 bit) and OpenEXR (32 bit float).
-//! Channel selection and quantization run multithreaded with SIMD.
+//! Writing Output nodes to image files: PNG of 8 and 16 bits, OpenEXR of half floats and
+//! floats, and DDS compressed as game engines read textures (BC1 to BC3, with mipmaps), as
+//! the Output's format says (see [`brewed_texture_core::nodes::OUTPUT_DEPTHS`]). Channel
+//! selection and quantization run multithreaded with SIMD.
 
 use std::path::{Path, PathBuf};
 
@@ -8,10 +10,9 @@ use brewed_texture_core::nodes::output_format_channels;
 use crate::gpu::StoredImage;
 use crate::simd;
 
-/// Bit depth choices of the Output node ("bit_depth" parameter).
-pub const DEPTH_8: u32 = 0;
-pub const DEPTH_16: u32 = 1;
-pub const DEPTH_32F: u32 = 2;
+pub use brewed_texture_core::nodes::{
+    DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_DXT1, DEPTH_DXT2, DEPTH_DXT3, DEPTH_DXT4, DEPTH_DXT5,
+};
 
 /// Make an output name safe to use as a file name.
 pub fn sanitize_file_name(name: &str) -> String {
@@ -41,9 +42,13 @@ pub fn sanitize_file_name(name: &str) -> String {
     cleaned.to_string()
 }
 
-/// File extension for a bit depth.
+/// File extension for an Output's format.
 pub fn extension(bit_depth: u32) -> &'static str {
-    if bit_depth == DEPTH_32F { "exr" } else { "png" }
+    match bit_depth {
+        DEPTH_16F | DEPTH_32F => "exr",
+        DEPTH_DXT1..=DEPTH_DXT5 => "dds",
+        _ => "png",
+    }
 }
 
 /// Unique file paths `dir/name.ext` for a list of (name, bit depth); duplicates get a
@@ -121,6 +126,30 @@ fn write_in_bands(path: &Path, image: &StoredImage, format: u32, bit_depth: u32,
     let err = |e: image::ImageError| format!("Cannot write '{}': {e}", path.display());
     let size_err = || "image buffer size mismatch".to_string();
     match bit_depth {
+        DEPTH_DXT1..=DEPTH_DXT5 => write_dds(path, image, bit_depth, rows),
+        DEPTH_16F => {
+            // OpenEXR of half floats, RGB or RGBA; single channels are replicated to gray.
+            let four = channels.len() == 4;
+            let keep: &[usize] = if four { &[0, 1, 2, 3] } else { &[0, 1, 2] };
+            let data: Vec<half::f16> = samples(image, keep, rows, |s, d| {
+                for (d, s) in d.iter_mut().zip(s) {
+                    *d = half::f16::from_f32(*s);
+                }
+            });
+            let (w, h, n) = (width as usize, height as usize, keep.len());
+            let written = if four {
+                exr::prelude::write_rgba_file(path, w, h, |x, y| {
+                    let i = (y * w + x) * n;
+                    (data[i], data[i + 1], data[i + 2], data[i + 3])
+                })
+            } else {
+                exr::prelude::write_rgb_file(path, w, h, |x, y| {
+                    let i = (y * w + x) * n;
+                    (data[i], data[i + 1], data[i + 2])
+                })
+            };
+            written.map_err(|e| format!("Cannot write '{}': {e}", path.display()))
+        }
         DEPTH_32F => {
             // OpenEXR stores RGB or RGBA; single channels are replicated to gray.
             let keep: &[usize] = if channels.len() == 4 { &[0, 1, 2, 3] } else { &[0, 1, 2] };
@@ -157,6 +186,100 @@ fn write_in_bands(path: &Path, image: &StoredImage, format: u32, bit_depth: u32,
             .map_err(err)
         }
     }
+}
+
+/// A DDS of an image compressed as game engines read textures, in the DXT format of `depth`
+/// (BC1, BC2 or BC3; DXT2 and DXT4 with the colors multiplied by the alpha), with its
+/// mipmaps: the pixels as the output keeps them, as RGBA of 8 bits (what it writes of fewer
+/// channels is kept with an opaque alpha, one channel as gray, RG with an empty blue).
+fn write_dds(path: &Path, image: &StoredImage, depth: u32, rows: u32) -> Result<(), String> {
+    use rayon::prelude::*;
+    let (width, height) = (image.width as usize, image.height as usize);
+    let mut rgba: Vec<u8> = samples(image, &[0, 1, 2, 3], rows, simd::quantize_u8);
+    if depth == DEPTH_DXT2 || depth == DEPTH_DXT4 {
+        rgba.par_chunks_mut(4).for_each(|px| {
+            for c in 0..3 {
+                px[c] = ((u32::from(px[c]) * u32::from(px[3]) + 127) / 255) as u8;
+            }
+        });
+    }
+    let (format, fourcc) = match depth {
+        DEPTH_DXT1 => (texpresso::Format::Bc1, *b"DXT1"),
+        DEPTH_DXT2 => (texpresso::Format::Bc2, *b"DXT2"),
+        DEPTH_DXT3 => (texpresso::Format::Bc2, *b"DXT3"),
+        DEPTH_DXT4 => (texpresso::Format::Bc3, *b"DXT4"),
+        _ => (texpresso::Format::Bc3, *b"DXT5"),
+    };
+    // Each level half the one above (a pixel at least), down to a pixel.
+    let mut levels = vec![(width, height, rgba)];
+    while let Some((w, h, pixels)) = levels.last()
+        && (*w > 1 || *h > 1)
+    {
+        let next = halved(pixels, *w, *h);
+        levels.push(next);
+    }
+    let mut file = dds_header(width, height, levels.len(), fourcc, format.compressed_size(width, height));
+    for (w, h, pixels) in &levels {
+        let mut blocks = vec![0u8; format.compressed_size(*w, *h)];
+        format.compress(pixels, *w, *h, texpresso::Params::default(), &mut blocks);
+        file.extend_from_slice(&blocks);
+    }
+    std::fs::write(path, file).map_err(|e| format!("Cannot write '{}': {e}", path.display()))
+}
+
+/// The next mip level of RGBA pixels of 8 bits, `w` × `h`: half as wide and as high (a pixel at
+/// least), each pixel the average of the pixels under it.
+fn halved(pixels: &[u8], w: usize, h: usize) -> (usize, usize, Vec<u8>) {
+    use rayon::prelude::*;
+    let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+    let mut out = vec![0u8; nw * nh * 4];
+    out.par_chunks_mut(nw * 4).enumerate().for_each(|(y, row)| {
+        for x in 0..nw {
+            for c in 0..4 {
+                let mut sum = 0u32;
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let (sx, sy) = ((2 * x + dx).min(w - 1), (2 * y + dy).min(h - 1));
+                    sum += u32::from(pixels[(sy * w + sx) * 4 + c]);
+                }
+                row[x * 4 + c] = ((sum + 2) / 4) as u8;
+            }
+        }
+    });
+    (nw, nh, out)
+}
+
+/// The header of a DDS file of `levels` mip levels, the first `width` × `height`, in the DXT
+/// format `fourcc`, whose first level takes `size` bytes.
+fn dds_header(width: usize, height: usize, levels: usize, fourcc: [u8; 4], size: usize) -> Vec<u8> {
+    const CAPS: u32 = 0x1;
+    const HEIGHT: u32 = 0x2;
+    const WIDTH: u32 = 0x4;
+    const PIXEL_FORMAT: u32 = 0x1000;
+    const MIPMAP_COUNT: u32 = 0x2_0000;
+    const LINEAR_SIZE: u32 = 0x8_0000;
+    const FOURCC: u32 = 0x4;
+    const COMPLEX: u32 = 0x8;
+    const TEXTURE: u32 = 0x1000;
+    const MIPMAP: u32 = 0x40_0000;
+    let mipped = levels > 1;
+    let mut header = Vec::with_capacity(128);
+    header.extend_from_slice(b"DDS ");
+    let flags = CAPS | HEIGHT | WIDTH | PIXEL_FORMAT | LINEAR_SIZE | if mipped { MIPMAP_COUNT } else { 0 };
+    for v in [124, flags, height as u32, width as u32, size as u32, 0, levels as u32] {
+        header.extend_from_slice(&u32::to_le_bytes(v));
+    }
+    header.extend_from_slice(&[0; 44]);
+    // The pixel format: its size, that a FourCC says it, the FourCC, and no bits nor masks.
+    for v in [32, FOURCC] {
+        header.extend_from_slice(&u32::to_le_bytes(v));
+    }
+    header.extend_from_slice(&fourcc);
+    header.extend_from_slice(&[0; 20]);
+    let caps = TEXTURE | if mipped { COMPLEX | MIPMAP } else { 0 };
+    for v in [caps, 0, 0, 0, 0] {
+        header.extend_from_slice(&u32::to_le_bytes(v));
+    }
+    header
 }
 
 #[cfg(test)]
@@ -206,7 +329,7 @@ mod tests {
             };
             let stored = StoredImage { width: w, height: h, format, bytes };
             let rgba = stored.to_f32();
-            for depth in [DEPTH_8, DEPTH_16, DEPTH_32F] {
+            for depth in [DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_DXT1, DEPTH_DXT4] {
                 for channels in 0..7 {
                     let ext = extension(depth);
                     let (a, b) = (dir.join(format!("a.{ext}")), dir.join(format!("b.{ext}")));
@@ -243,6 +366,69 @@ mod tests {
         write_image(&exr, &rgba, w, h, 0, DEPTH_32F).unwrap();
         let back = image::open(&exr).unwrap().into_rgba32f();
         assert!((back.as_raw()[5] - rgba[5]).abs() < 1e-6, "EXR keeps full precision");
+        // Of half floats, as precisely as they are.
+        write_image(&exr, &rgba, w, h, 0, DEPTH_16F).unwrap();
+        let back = image::open(&exr).unwrap().into_rgba32f();
+        for (a, b) in back.as_raw().iter().zip(&rgba) {
+            assert!((a - b).abs() < 1e-3, "{a} for {b}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A DDS is its header, then every mip level compressed (BC1 to BC3): what it holds is the
+    /// image, as closely as the blocks can say it, and its levels the image made smaller.
+    #[test]
+    fn dds_files_hold_the_image_and_its_mipmaps() {
+        let dir = std::env::temp_dir().join(format!("brewed_dds_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (w, h) = (37u32, 20u32);
+        // A soft ramp in each channel, and an alpha that fades.
+        let rgba: Vec<f32> = (0..h)
+            .flat_map(|y| (0..w).flat_map(move |x| [x as f32 / w as f32, y as f32 / h as f32, 0.5, 1.0 - x as f32 / (2 * w) as f32]))
+            .collect();
+        let u32_at = |b: &[u8], i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        for (depth, fourcc, format) in [
+            (DEPTH_DXT1, b"DXT1", texpresso::Format::Bc1),
+            (DEPTH_DXT2, b"DXT2", texpresso::Format::Bc2),
+            (DEPTH_DXT3, b"DXT3", texpresso::Format::Bc2),
+            (DEPTH_DXT4, b"DXT4", texpresso::Format::Bc3),
+            (DEPTH_DXT5, b"DXT5", texpresso::Format::Bc3),
+        ] {
+            let path = output_paths(&dir, &[("maps".into(), depth)]).remove(0);
+            assert_eq!(path.extension().unwrap(), "dds");
+            write_image(&path, &rgba, w, h, 0, depth).unwrap();
+            let file = std::fs::read(&path).unwrap();
+            assert_eq!(&file[..4], b"DDS ");
+            assert_eq!((u32_at(&file, 4), u32_at(&file, 12), u32_at(&file, 16)), (124, h, w));
+            assert_eq!(&file[84..88], fourcc);
+            // 37 × 20 down to 1 × 1: six levels, one after another.
+            let levels = u32_at(&file, 28) as usize;
+            assert_eq!(levels, 6);
+            let mut size = 128;
+            let (mut lw, mut lh) = (w as usize, h as usize);
+            for _ in 0..levels {
+                size += format.compressed_size(lw, lh);
+                (lw, lh) = ((lw / 2).max(1), (lh / 2).max(1));
+            }
+            assert_eq!(file.len(), size);
+            // The first level, as a game engine reads it back.
+            let mut back = vec![0u8; (w * h * 4) as usize];
+            format.decompress(&file[128..], w as usize, h as usize, &mut back);
+            let premultiplied = depth == DEPTH_DXT2 || depth == DEPTH_DXT4;
+            let mut off = 0.0f32;
+            for (i, px) in back.chunks(4).enumerate() {
+                let want = &rgba[i * 4..i * 4 + 4];
+                let alpha = if depth == DEPTH_DXT1 { 1.0 } else { want[3] };
+                for c in 0..3 {
+                    let value = if premultiplied { want[c] * want[3] } else { want[c] };
+                    off = off.max((f32::from(px[c]) / 255.0 - value).abs());
+                }
+                if depth != DEPTH_DXT1 {
+                    off = off.max((f32::from(px[3]) / 255.0 - alpha).abs());
+                }
+            }
+            assert!(off < 0.08, "{fourcc:?}: {off} off");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

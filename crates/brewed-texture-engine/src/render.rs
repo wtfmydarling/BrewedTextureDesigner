@@ -346,7 +346,7 @@ mod tests {
             .map(|n| n.id)
             .collect();
         assert_eq!(worn.len(), 3);
-        let edit = brewed_texture_core::package::PackageEdit::MakeSubgraph { graph: wall, nodes: worn, name: "Worn".into() };
+        let edit = brewed_texture_core::package::PackageEdit::GraphFromSelection { graph: wall, nodes: worn, name: "Worn".into() };
         edit.apply(&mut package).unwrap();
         project::save(&file, &package, &HashMap::new(), open).unwrap();
         let worn = |wear: &str, out: &str| {

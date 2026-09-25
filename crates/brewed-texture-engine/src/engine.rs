@@ -56,6 +56,8 @@ pub struct NodeState {
     kind: Option<ImageKind>,
     /// The size of its image (of the image it shows, for a bypassed node).
     size: [u32; 2],
+    /// The format of its image (of the image it shows, for a bypassed node).
+    format: Option<wgpu::TextureFormat>,
     /// Bumped whenever the image changes.
     pub version: u64,
     key: u64,
@@ -890,6 +892,7 @@ impl Engine {
         let mut inputs: Vec<Option<NodeId>> = Vec::with_capacity(fixed.len());
         let mut input_kinds: Vec<Option<ImageKind>> = Vec::with_capacity(fixed.len());
         let mut input_sizes: Vec<Option<[u32; 2]>> = Vec::with_capacity(fixed.len());
+        let mut input_formats: Vec<Option<wgpu::TextureFormat>> = Vec::with_capacity(fixed.len());
         for key in &fixed {
             let from = graph.link_into(node.id, key).map(|l| l.from);
             match from.and_then(|f| self.states.get(&f).filter(|st| st.kind.is_some()).map(|st| (f, st))) {
@@ -898,12 +901,14 @@ impl Engine {
                     inputs.push(Some(st.producer.unwrap_or(f)));
                     input_kinds.push(st.kind);
                     input_sizes.push(Some(st.size));
+                    input_formats.push(st.format);
                 }
                 None => {
                     0u8.hash(&mut hasher);
                     inputs.push(None);
                     input_kinds.push(None);
                     input_sizes.push(None);
+                    input_formats.push(None);
                 }
             }
         }
@@ -1014,10 +1019,11 @@ impl Engine {
         let alias = (node.bypass && !fixed.is_empty()) || d.role == Role::Instance || gray_already;
         let arriving = input_kinds.first().copied().flatten();
         let arriving_size = input_sizes.first().copied().flatten().unwrap_or(resolution);
+        let arriving_format = input_formats.first().copied().flatten();
         let (kind, size, format) = if alias {
             (arriving, arriving_size, None)
         } else if node.kind == NodeKind::OUTPUT {
-            let formats = |k| output_format(params.u("format"), params.u("bit_depth"), k, graph.precision);
+            let formats = |k| output_format(params.u("format"), params.u("bit_depth"), k, arriving_format);
             (arriving, arriving_size, arriving.map(formats))
         } else {
             let kind = match &bitmap {
@@ -1026,7 +1032,8 @@ impl Engine {
             };
             let uniform = node.kind == NodeKind::UNIFORM_COLOR || node.kind == NodeKind::IMAGE_INPUT;
             let size = if uniform { [1, 1] } else { resolution };
-            (Some(kind), size, Some(format_of(kind, graph.precision)))
+            let precision = Precision::of_node(params.u("precision"), graph.precision);
+            (Some(kind), size, Some(format_of(kind, precision)))
         };
         (size, format).hash(&mut hasher);
         let key = hasher.finish();
@@ -1037,6 +1044,7 @@ impl Engine {
         state.key = key;
         state.kind = kind;
         state.size = size;
+        state.format = if alias { arriving_format } else { format };
         state.producer = if alias { inputs.first().copied().flatten() } else { None };
         if alias {
             state.error = None;

@@ -19,7 +19,9 @@ use crate::package::{GraphEntry, Package, Resource, relative_path, resolve_path}
 
 pub const FILE_EXTENSION: &str = "brewtex";
 const FORMAT: &str = "brewed-texture-designer";
-const VERSION: u32 = 2;
+/// 3: the formats of an Output are those of [`crate::nodes::OUTPUT_DEPTHS`] (in 2, "32 bit
+/// float" was the third, which 16 bits float is now).
+const VERSION: u32 = 3;
 
 /// View settings stored with a graph (not part of undo).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -176,6 +178,15 @@ pub fn from_json(text: &str, dir: Option<&Path>, name: &str) -> Result<Loaded, S
     };
     for entry in &mut entries {
         let graph = Arc::make_mut(&mut entry.graph);
+        if version < 3 {
+            for node in graph.nodes.iter_mut().filter(|n| n.kind == crate::NodeKind::OUTPUT) {
+                if let Some(slot) = node.param_mut("bit_depth")
+                    && slot.value == crate::ParamValue::Enum(2)
+                {
+                    slot.value = crate::ParamValue::Enum(crate::nodes::DEPTH_32F);
+                }
+            }
+        }
         let links_before = graph.links.len();
         graph.normalize();
         if graph.links.len() < links_before {
@@ -219,6 +230,29 @@ mod tests {
         assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
         assert!(from_json("{}", None, "x").is_err());
         assert!(from_json("not json", None, "x").is_err());
+    }
+
+    /// An Output of 32 bits float in a file of version 2 is one in this version too, where the
+    /// third format is 16 bits float; its other formats are what they were.
+    #[test]
+    fn outputs_of_version_2_keep_their_format() {
+        use crate::{NodeKind, ParamValue};
+        let mut g = Graph::default();
+        let depths = [0, 1, 2];
+        for (i, depth) in depths.iter().enumerate() {
+            let out = g.add_node(NodeKind::OUTPUT, [0.0, 200.0 * i as f32]);
+            g.node_mut(out).unwrap().param_mut("bit_depth").unwrap().value = ParamValue::Enum(*depth);
+        }
+        let package = Package::new("Old", g);
+        let json = to_json(&package, &HashMap::new(), package.first(), None).unwrap();
+        let old = json.replace(&format!("\"version\": {VERSION}"), "\"version\": 2");
+        assert_ne!(old, json);
+        let depths_of = |text: &str| -> Vec<u32> {
+            let loaded = from_json(text, None, "x").unwrap();
+            loaded.package.graphs[0].graph.nodes.iter().map(|n| n.enum_value("bit_depth")).collect()
+        };
+        assert_eq!(depths_of(&old), [crate::nodes::DEPTH_8, crate::nodes::DEPTH_16, crate::nodes::DEPTH_32F]);
+        assert_eq!(depths_of(&json), [0, 1, 2], "this version's third format stays what it is");
     }
 
     /// A graph that is gone leaves its id behind: a new graph never takes it, in a file saved

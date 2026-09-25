@@ -614,7 +614,7 @@ pub enum Message {
     /// Open the graph a node uses.
     OpenReference(NodeId),
     /// Put the selected nodes in a graph of their own, used in their place.
-    MakeSubgraph,
+    GraphFromSelection,
     // library & drag and drop
     LibrarySearch(String),
     LibraryToggle(Category),
@@ -1601,21 +1601,22 @@ impl App {
                 if self.apply(edit)
                     && let Some([w, h]) = large
                 {
-                    // What the image nodes take at most, all at once: 4 bytes a pixel of a
-                    // grayscale image (2 in half floats), 8 of a color one, and what an output
-                    // writes.
+                    // What the image nodes take at most, all at once: each image in its
+                    // precision (2 bytes a pixel of a grayscale image in half floats, 8 of a
+                    // color one), and what an output writes.
                     use brewed_texture_core::nodes::ImageKind;
+                    use brewed_texture_engine::gpu::{format_of, output_format};
                     let graph = self.graph();
                     let nodes: Vec<&brewed_texture_core::graph::Node> = graph.nodes.iter().filter(|n| n.def().has_image()).collect();
                     let per_pixel: u64 = nodes
                         .iter()
                         .map(|n| {
                             let kind = view::graph::made_kind(self, n.id).unwrap_or(ImageKind::Color);
-                            let precision = graph.precision;
+                            let precision = brewed_texture_core::Precision::of_node(n.enum_value("precision"), graph.precision);
                             let format = if n.kind == NodeKind::OUTPUT {
-                                brewed_texture_engine::gpu::output_format(n.enum_value("format"), n.enum_value("bit_depth"), kind, precision)
+                                output_format(n.enum_value("format"), n.enum_value("bit_depth"), kind, Some(format_of(kind, graph.precision)))
                             } else {
-                                brewed_texture_engine::gpu::format_of(kind, precision)
+                                format_of(kind, precision)
                             };
                             u64::from(format.block_copy_size(None).unwrap_or(8))
                         })
@@ -1763,7 +1764,7 @@ impl App {
                 self.close_popups();
                 self.open_reference(node);
             }
-            Message::MakeSubgraph => self.make_subgraph(),
+            Message::GraphFromSelection => self.graph_from_selection(),
             Message::Graph(msg) => return self.graph_message(msg),
             Message::SelectNode(id) => {
                 self.close_popups();
@@ -2313,7 +2314,7 @@ impl App {
             _ if ctrl && char('v') => Message::Paste,
             _ if ctrl && char('d') => Message::Duplicate,
             _ if ctrl && char('a') => Message::SelectAll,
-            _ if ctrl && char('g') => Message::MakeSubgraph,
+            _ if ctrl && char('g') => Message::GraphFromSelection,
             _ if ctrl && char('b') => match self.ui.selection.iter().next() {
                 Some(id) => Message::ToggleBypass(*id),
                 None => return Task::none(),

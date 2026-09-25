@@ -57,7 +57,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+E", "Export all outputs"),
     ("Drop a file on the window", "Open a .brewtex package, add an image as a Bitmap node, link vector graphics or a font"),
     ("Explorer", "Double-click a graph to edit it; drag a graph onto another to use it as a node"),
-    ("Ctrl+G", "Make the selected nodes a graph of their own, used in their place"),
+    ("Ctrl+G", "Create a graph of the selected nodes, and use it in their place"),
     ("Eyedropper", "Click it, then click anywhere on the screen; for a gradient, drag across the colors"),
     ("Esc", "Close menus, cancel picking from the screen or a rename"),
     ("Number fields", "Drag to change (Shift fine, Ctrl snaps), click to type; expressions like 2*pi work"),

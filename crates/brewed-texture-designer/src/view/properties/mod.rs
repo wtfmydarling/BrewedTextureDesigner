@@ -137,11 +137,26 @@ fn multi_view<'a>(app: &'a App, ids: &[NodeId], n: usize) -> Element<'a, Message
                 })),
         );
     }
+    // The precision of those that keep an image of their own.
+    let own: Vec<NodeId> = ids.iter().copied().filter(|id| app.graph().node(*id).is_some_and(|n| n.def().has_precision())).collect();
+    let mut precision = row![].spacing(4);
+    for (i, label) in brewed_texture_core::nodes::PRECISION_LABELS.iter().enumerate() {
+        precision = precision.push(
+            button(text(*label).size(style::SMALL))
+                .padding([3, 7])
+                .style(style::button)
+                .on_press_maybe((!own.is_empty()).then(|| {
+                    Message::Edit(Edit::SetParamMany { nodes: own.clone(), key: "precision".into(), value: ParamValue::Enum(i as u32) })
+                })),
+        );
+    }
     container(
         column![
             text(format!("{n} nodes selected")).size(style::TEXT_SIZE),
             text("Tiling of all selected image nodes:").size(style::SMALL).color(style::TEXT_DIM),
             tiling,
+            text("Precision of all selected image nodes:").size(style::SMALL).color(style::TEXT_DIM),
+            precision,
             row![
                 button(text("Duplicate").size(style::SMALL)).padding([3, 8]).style(style::button).on_press(Message::Duplicate),
                 button(text("Delete").size(style::SMALL)).padding([3, 8]).style(style::button).on_press(Message::Delete),
