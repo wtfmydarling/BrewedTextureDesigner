@@ -285,6 +285,16 @@ fn by_chains(order: &[NodeId], plans: &HashMap<NodeId, Plan>) -> Vec<NodeId> {
     out
 }
 
+/// Which images get mips when they are computed (see `Engine::evaluate`).
+#[derive(Clone, Copy, PartialEq)]
+enum Mips {
+    /// Those a filter can read: a view shows the image, or a node filters it (what cannot be
+    /// filtered is read through a copy that can, with mips of its own).
+    Filtered,
+    /// Whatever its format: a node reads it at every scale in the precision it has.
+    Any,
+}
+
 /// A Pixel Math variable, as planned: the image of a node is read when it is computed.
 enum Var {
     Builtin(&'static str),
@@ -327,6 +337,8 @@ pub struct Engine {
     /// [`Engine::render_choices`]).
     choices: HashMap<(&'static str, String), Arc<Vec<Vec<u8>>>>,
     last_resolution: [u32; 2],
+    /// The precision of the last graph evaluated.
+    last_precision: Precision,
     pub report: EvalReport,
 }
 
@@ -358,6 +370,7 @@ impl Engine {
             thumbnails: Vec::new(),
             choices: HashMap::new(),
             last_resolution: [0, 0],
+            last_precision: Precision::default(),
             report: EvalReport::default(),
         }
     }
@@ -636,10 +649,11 @@ impl Engine {
         }
 
         let resolution = graph.resolution.map(|r| r.clamp(16, 8192));
-        if resolution != self.last_resolution {
-            // Scratch images of the old size would only waste GPU memory.
+        if resolution != self.last_resolution || graph.precision != self.last_precision {
+            // Scratch images of the old size or format would only waste GPU memory.
             self.gpu.clear_pool();
             self.last_resolution = resolution;
+            self.last_precision = graph.precision;
         }
 
         // 1. What every image node will be, before anything is computed: its key, from its
@@ -703,11 +717,18 @@ impl Engine {
                 *readers.entry(read).or_default() += 1;
             }
         }
-        // With mips: what the views show, and what a node that reads its input at every scale
-        // (ambient occlusion) reads, which it samples as it is rather than a copy of it.
-        let mut mipped = self.shown();
-        for id in runs.iter().filter(|id| kernels::reads_at_every_scale(plans[*id].node_kind)) {
-            mipped.extend(plans[id].inputs.iter().flatten());
+        // With mips: what the views show and what a node reads at every scale through a filter,
+        // where it can be filtered (see `compute`); what a node reads at every scale in the
+        // precision it has, whatever it is. Such a node reads it as it is rather than a copy.
+        let mut mipped: HashMap<NodeId, Mips> = self.shown().into_iter().map(|id| (id, Mips::Filtered)).collect();
+        for id in &runs {
+            let Some((at_every_scale, filtered)) = kernels::reads_at_every_scale(plans[id].node_kind) else { continue };
+            for input in plans[id].inputs.get(at_every_scale).unwrap_or_default().iter().flatten() {
+                let mips = mipped.entry(*input).or_insert(Mips::Filtered);
+                if !filtered {
+                    *mips = Mips::Any;
+                }
+            }
         }
         let mut encoder = self.gpu.encoder();
         let mut report = EvalReport { image_nodes: order.len(), ..EvalReport::default() };
@@ -718,7 +739,7 @@ impl Engine {
             let plan = &plans[&id];
             if let Some(format) = plan.format {
                 let Some(ne) = eval.node(id) else { continue };
-                self.compute(id, plan, format, &ne.params, ne.error(), mipped.contains(&id), &mut encoder);
+                self.compute(id, plan, format, &ne.params, ne.error(), mipped.get(&id).copied(), &mut encoder);
                 report.recomputed += 1;
             }
             // Nodes laid out from graphs used as nodes are not on the canvas: no thumbnails.
@@ -823,8 +844,8 @@ impl Engine {
     pub fn keep_scratch(&self, coming: bool) {
         if coming {
             let [w, h] = self.last_resolution;
-            let gray = u64::from(w) * u64::from(h) * u64::from(GRAY_FORMAT.block_copy_size(None).unwrap_or(2));
-            self.gpu.trim_pool(6 * gray);
+            let pixel = format_of(ImageKind::Gray, self.last_precision).block_copy_size(None).unwrap_or(4);
+            self.gpu.trim_pool(6 * u64::from(w) * u64::from(h) * u64::from(pixel));
         } else {
             self.gpu.clear_pool();
         }
@@ -979,11 +1000,18 @@ impl Engine {
         }
 
         // A bypassed node passes on what arrives at it, and makes no image of its own; so does a
-        // graph used as a node. An output makes the image it writes: what arrives at it
-        // (nothing, when nothing does), in its channels and at its bit depth, as big as that
-        // is. Any other node makes a grayscale or a color image as big as the texture size;
-        // but a uniform color is the same everywhere, and one pixel of it is all of it.
-        let alias = (node.bypass && !fixed.is_empty()) || d.role == Role::Instance;
+        // graph used as a node, and Grayscale where a grayscale image arrives (the value of it
+        // is its one value in every mode but Alpha: the grayscale input of a graph used as a
+        // node is one, see `brewed_texture_core::package::flatten`). An output makes the image
+        // it writes: what arrives at it (nothing, when nothing does), in its channels and at its
+        // bit depth, as big as that is. Any other node makes a grayscale or a color image as
+        // big as the texture size; but a uniform color is the same everywhere, and one pixel of
+        // it is all of it.
+        const GRAYSCALE_OF_ALPHA: u32 = 5;
+        let gray_already = node.kind == NodeKind::GRAYSCALE
+            && input_kinds.first() == Some(&Some(ImageKind::Gray))
+            && params.u("mode") != GRAYSCALE_OF_ALPHA;
+        let alias = (node.bypass && !fixed.is_empty()) || d.role == Role::Instance || gray_already;
         let arriving = input_kinds.first().copied().flatten();
         let arriving_size = input_sizes.first().copied().flatten().unwrap_or(resolution);
         let (kind, size, format) = if alias {
@@ -1029,8 +1057,8 @@ impl Engine {
     }
 
     /// Compute a node's image in `format` (see [`Engine::evaluate`]): into its own image when
-    /// it has one that fits, else into one from the pool; with mips when `mips` (a view shows
-    /// it, or a node reads it at every scale).
+    /// it has one that fits, else into one from the pool; with mips when `mips` says (a view
+    /// shows it, or a node reads it at every scale).
     #[allow(clippy::too_many_arguments)]
     fn compute(
         &mut self,
@@ -1039,12 +1067,18 @@ impl Engine {
         format: wgpu::TextureFormat,
         params: &brewed_texture_core::eval::Params,
         cpu_error: Option<&str>,
-        mips: bool,
+        mips: Option<Mips>,
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let [w, h] = plan.size;
-        // (What cannot be filtered is shown through a copy that can, with its own mips.)
-        let mipped = mips && w.max(h) > 1 && filterable(format);
+        // (What cannot be filtered is shown, and filtered, through a copy that can, with its
+        // own mips.)
+        let mipped = w.max(h) > 1
+            && match mips {
+                Some(Mips::Filtered) => filterable(format),
+                Some(Mips::Any) => true,
+                None => false,
+            };
         let own = self.states.get(&id).and_then(|s| s.image.clone());
         let image = match own {
             Some(img) if (img.texture.mip_level_count() > 1) == mipped => img,

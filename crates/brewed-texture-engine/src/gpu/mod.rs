@@ -199,7 +199,7 @@ static KERNELS: &[KernelSource] = &[
     kernel!("uniform_color", "uniform_color.wgsl", "main", 0),
     kernel!("shape", "shape.wgsl", "main", 0),
     kernel!("tile_gen", "tile_gen.wgsl", "main", 1),
-    filtered_kernel!("tile_sampler", "tile_sampler.wgsl", "main", 8),
+    kernel!("tile_sampler", "tile_sampler.wgsl", "main", 8),
     kernel!("gradient", "gradient.wgsl", "main", 0),
     // One pipeline per type of noise (and white noise after them).
     kinded_kernel!("noise", "noise.wgsl", "main", 0, brewed_texture_core::nodes::NOISE_TYPES.len() as u32),
@@ -231,7 +231,7 @@ static KERNELS: &[KernelSource] = &[
     kernel!("mip", "blit.wgsl", "mip", 1),
     kernel!("height_blend", "height_blend.wgsl", "main", 3),
     kernel!("normal_combine", "normal_combine.wgsl", "main", 3),
-    filtered_kernel!("nonuniform_blur", "nonuniform_blur.wgsl", "main", 2),
+    kernel!("nonuniform_blur", "nonuniform_blur.wgsl", "main", 2),
     kernel!("make_it_tile", "make_it_tile.wgsl", "main", 1),
     integer_kernel!("distance_seed", "distance_seed.wgsl", "seed", 1, false, SEED_FORMAT),
     integer_kernel!("flood_label", "distance_seed.wgsl", "label", 1, false, SEED_FORMAT),

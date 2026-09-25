@@ -413,6 +413,16 @@ impl App {
                 }
             }
         };
+        // A graph that uses this one, however deep, cannot be used in it.
+        let own = self.doc.key();
+        let docs = self.shelf.iter().map(|p| &p.doc).chain(own.is_some().then_some(&self.doc));
+        let lib = Shelf::new(Some(self.doc.package()), docs, &self.deps);
+        let from = package.clone().or_else(|| own.clone());
+        if package::uses_graph(&lib, from.as_deref(), graph, (own.as_deref(), self.doc.current())) {
+            let (name, here) = (entry.name.clone(), self.doc.entry().name.clone());
+            self.set_status(format!("'{name}' uses '{here}': it cannot be used in it"), true);
+            return;
+        }
         let instance = Instance {
             graph: GraphRef { package, graph, name: entry.name.clone() },
             interface: Interface::of(&entry.graph),

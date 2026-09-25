@@ -1,4 +1,5 @@
-//! Command line helpers that run without a window (used for verification).
+//! Command line helpers that run without a window, for developing the program (the `dev-tools`
+//! feature): benchmarks, and pictures of every node type.
 
 use std::path::Path;
 

@@ -10,6 +10,13 @@ license.workspace = true
 name = "brewed-texture-designer"
 path = "src/main.rs"
 
+[features]
+# Tools for developing the program, which users do not get: screenshots of the window in a state
+# asked for, the autopilot, the benchmarks and the contact sheet (see `--help` of a build with
+# them: `cargo run --release --features dev-tools -- --help`). The tests have the screenshots and
+# the autopilot whatever the features.
+dev-tools = ["brewed-texture-engine/dev-tools"]
+
 [dependencies]
 brewed-texture-core.workspace = true
 brewed-texture-engine.workspace = true

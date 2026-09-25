@@ -172,7 +172,7 @@ fn hex_color(hex: &str) -> Option<Value> {
 /// goes wrong is in the report.
 pub fn render(job: &Job, gpu: Gpu) -> Result<Report, String> {
     let mut report = Report::default();
-    let packages = Packages::read(&job.package, &mut report.problems)?;
+    let mut packages = Packages::read(&job.package, &mut report.problems)?;
     let graphs = packages.graphs(&job.graphs)?;
     if let Some([w, h]) = job.size
         && !((1..=8192).contains(&w) && (1..=8192).contains(&h))
@@ -195,14 +195,19 @@ pub fn render(job: &Job, gpu: Gpu) -> Result<Report, String> {
     // Only the Output nodes are read: the rest lives while the evaluation needs it.
     engine.set_keep(Keep::Read);
     for (id, name) in &graphs {
+        // The values asked for, set before the graph is laid out: what they drive in the graphs
+        // it uses takes them too.
+        if let Some(entry) = packages.root.graph_mut(*id) {
+            let graph = std::sync::Arc::make_mut(&mut entry.graph);
+            for (key, text) in &job.values {
+                if let Some(var) = graph.variables.iter_mut().find(|v| v.name == *key) {
+                    var.value = parse_value(var, text)?;
+                }
+            }
+        }
         let flat = package::flatten(&packages, Some(&packages.key), *id).ok_or_else(|| format!("The graph '{name}' cannot be laid out"))?;
         report.problems.extend(flat.problems.values().map(|p| format!("{name}: {p}")));
         let mut graph = flat.graph;
-        for (key, text) in &job.values {
-            if let Some(var) = graph.variables.iter_mut().find(|v| v.name == *key) {
-                var.value = parse_value(var, text)?;
-            }
-        }
         if let Some(size) = job.size {
             graph.resolution = size;
         }
@@ -329,6 +334,28 @@ mod tests {
         assert!(wrong(job("four", "x")).contains("bricks_x"));
         assert!(wrong(Job { size: Some([0, 64]), ..job("4", "x") }).contains("8192"));
         assert!(wrong(Job { package: dir.join("gone.brewtex"), ..job("4", "x") }).contains("gone.brewtex"));
+
+        // The worn bricks in a graph of their own, which the wall uses: a value set reaches what
+        // it drives in there too.
+        let wall = package.first();
+        let g = &package.graph(wall).unwrap().graph;
+        let worn: Vec<brewed_texture_core::NodeId> = g
+            .nodes
+            .iter()
+            .filter(|n| (n.kind == NodeKind::BLEND && n.is_exposed("opacity")) || [NodeKind::LEVELS, NodeKind::BLUR].contains(&n.kind))
+            .map(|n| n.id)
+            .collect();
+        assert_eq!(worn.len(), 3);
+        let edit = brewed_texture_core::package::PackageEdit::MakeSubgraph { graph: wall, nodes: worn, name: "Worn".into() };
+        edit.apply(&mut package).unwrap();
+        project::save(&file, &package, &HashMap::new(), open).unwrap();
+        let worn = |wear: &str, out: &str| {
+            let job = Job { values: vec![("wear".into(), wear.into())], ..job("4", out) };
+            let report = render(&job, Gpu::headless().unwrap()).unwrap();
+            assert!(report.problems.is_empty(), "{:?}", report.problems);
+            read(&dir.join(out).join("height.png"))
+        };
+        assert_ne!(worn("0.1", "clean"), worn("0.9", "worn"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -180,7 +180,8 @@ pub fn graph_header(app: &App) -> Element<'_, Message> {
                 .padding([2, 6])
                 .style(style::pick_list),
             "How precisely grayscale images (heights, masks) are kept. 32-bit float: a gentle slope stays smooth \
-             in normal maps and 16-bit files, at twice the memory of grayscale images; colors are 16-bit either way.",
+             in normal maps and 16-bit files. 16-bit float: half the memory, but steps of 1/2048 near white, \
+             which a gentle slope shows as bands. Colors are 16-bit either way.",
             tooltip::Position::Bottom,
         ),
     ]

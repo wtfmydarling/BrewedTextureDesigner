@@ -15,6 +15,7 @@ pub mod kernels;
 pub mod render;
 pub mod service;
 pub mod simd;
+#[cfg(any(test, feature = "dev-tools"))]
 pub mod tools;
 pub mod vector;
 

@@ -11,7 +11,7 @@ use crate::curve::Curve;
 use crate::expr;
 use crate::gradient::Gradient;
 use crate::graph::{Graph, Node, NodeId, param_socket_key, var_socket_key};
-use crate::nodes::{PIXEL_MATH_BUILTINS, Role};
+use crate::nodes::{NodeKind, PIXEL_MATH_BUILTINS, Role};
 use crate::types::{DataType, ParamValue, Value};
 
 /// Effective parameter values of a node: stored values with driven overrides.
@@ -228,6 +228,13 @@ fn evaluate_node(graph: &Graph, node: &Node, results: &Evaluation) -> NodeEval {
     for s in d.inputs.iter().filter(|s| !s.optional) {
         if graph.link_into(node.id, &crate::graph::input_socket_key(s.key)).is_none() {
             e.warnings.push(format!("Input '{}' is not connected", s.label));
+        }
+    }
+    // Outputs of one name: the graph used as a node has one output of it (the upper one's).
+    if node.kind == NodeKind::OUTPUT {
+        let name = node.text("name");
+        if graph.nodes_of(NodeKind::OUTPUT).any(|o| o.id != node.id && o.text("name") == name) {
+            e.warnings.push(format!("Another Output is named '{name}': give each output a name of its own"));
         }
     }
 

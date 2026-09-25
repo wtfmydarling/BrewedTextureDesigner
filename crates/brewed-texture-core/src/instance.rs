@@ -119,25 +119,29 @@ pub struct Interface {
     pub params: Vec<InstanceParam>,
 }
 
+/// The Image Inputs or the Outputs (`kind`) of `graph` that are its sockets as a node, in the
+/// order of the sockets: of the graph from top to bottom, so that moving them there orders the
+/// sockets. Of nodes of one name, the upper one is the socket.
+pub fn port_nodes(graph: &Graph, kind: NodeKind) -> Vec<&Node> {
+    let mut nodes: Vec<&Node> = graph.nodes_of(kind).collect();
+    nodes.sort_by(|a, b| a.pos[1].total_cmp(&b.pos[1]).then(a.pos[0].total_cmp(&b.pos[0])).then(a.id.cmp(&b.id)));
+    let mut names = std::collections::HashSet::new();
+    nodes.retain(|n| names.insert(n.text("name")));
+    nodes
+}
+
 impl Interface {
-    /// What `graph` is as a node. Inputs and outputs come in the order their nodes are in the
-    /// graph from top to bottom, so that moving them there orders the sockets; the parameters in
-    /// the order of the input values.
+    /// What `graph` is as a node: its inputs and outputs as [`port_nodes`] has them, and the
+    /// parameters in the order of the input values.
     pub fn of(graph: &Graph) -> Interface {
         let ports = |kind: NodeKind| {
-            let mut nodes: Vec<&Node> = graph.nodes_of(kind).collect();
-            nodes.sort_by(|a, b| {
-                a.pos[1].total_cmp(&b.pos[1]).then(a.pos[0].total_cmp(&b.pos[0])).then(a.id.cmp(&b.id))
-            });
-            let mut ports: Vec<Port> = Vec::with_capacity(nodes.len());
-            for node in nodes {
-                let name = node.text("name");
-                if !ports.iter().any(|p| p.name == name) {
-                    let kind = (kind == NodeKind::IMAGE_INPUT).then(|| image_input_kind(node));
-                    ports.push(Port { name: name.to_string(), kind });
-                }
-            }
-            ports
+            port_nodes(graph, kind)
+                .into_iter()
+                .map(|node| Port {
+                    name: node.text("name").to_string(),
+                    kind: (kind == NodeKind::IMAGE_INPUT).then(|| image_input_kind(node)),
+                })
+                .collect()
         };
         let params = graph
             .variables

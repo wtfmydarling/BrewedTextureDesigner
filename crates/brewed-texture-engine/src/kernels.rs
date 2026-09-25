@@ -43,10 +43,37 @@ pub struct ExecCtx<'a> {
 /// Records the work of one node; returns a warning for the UI, if any.
 pub type KernelFn = fn(&mut ExecCtx) -> Result<Option<String>, String>;
 
-/// Whether a node of `kind` reads its first input at every scale, through its mips: the
-/// engine gives that input mips when it computes it.
-pub fn reads_at_every_scale(kind: NodeKind) -> bool {
-    kind == NodeKind::AMBIENT_OCCLUSION || kind == NodeKind::NON_UNIFORM_BLUR
+/// Which inputs a node of `kind` reads at every scale, through their mips (the engine computes
+/// those images with their mips), and whether through a filter. A filter cannot read floats
+/// of 32 bits on every device: what it reads of them is a copy in half floats (Ambient
+/// Occlusion, whose many samples a filter makes cheap, reads heights that way); the others read
+/// their inputs in the precision they have (see `trilinear` in common.wgsl).
+pub fn reads_at_every_scale(kind: NodeKind) -> Option<(std::ops::Range<usize>, bool)> {
+    match kind.id() {
+        "ambient_occlusion" => Some((0..1, true)),
+        "non_uniform_blur" => Some((0..1, false)),
+        // The patterns.
+        "tile_sampler" => Some((0..4, false)),
+        _ => None,
+    }
+}
+
+/// `image` with its mips, for a kernel that reads it at every scale in the precision it has: as
+/// it is when it has them (or is one pixel), else a copy that has them, which the kernel
+/// recycles.
+fn with_mips(cx: &mut ExecCtx, image: &GpuImage) -> Result<Option<GpuImage>, String> {
+    let [w, h] = image.size();
+    if image.texture.mip_level_count() > 1 || w.max(h) == 1 {
+        return Ok(None);
+    }
+    let copy = cx.gpu.take_scratch_with_mips(w, h, image.format());
+    match cx.gpu.encode_copy_with_mips(cx.encoder, image, &copy, 0) {
+        Ok(()) => Ok(Some(copy)),
+        Err(e) => {
+            cx.gpu.recycle(copy);
+            Err(e)
+        }
+    }
 }
 
 /// The GPU implementation of an image node type.
@@ -635,25 +662,21 @@ fn tile_sampler(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         color,
         mask_invert: u32::from(p.b("mask_invert")),
     };
+    // The patterns at every scale (see `reads_at_every_scale`).
     let mut copies: Vec<Option<GpuImage>> = Vec::with_capacity(4);
     let mut result = Ok(());
     for i in 0..4 {
-        let img = input(cx.inputs, i, &cx.gpu.black);
+        let img = input(cx.inputs, i, &cx.gpu.black).clone();
         let used = pattern == TILE_PATTERN_IMAGE && connected(cx.inputs, i);
-        let copy = if used && (img.texture.mip_level_count() == 1 || !crate::gpu::filterable(img.format())) {
-            let [w, h] = img.size();
-            let copy = cx.gpu.take_scratch_with_mips(w, h, crate::gpu::format_of(img.kind(), brewed_texture_core::Precision::Half));
-            result = result.and_then(|()| cx.gpu.encode_copy_with_mips(cx.encoder, img, &copy, 0));
-            Some(copy)
-        } else {
+        let copy = if used { with_mips(cx, &img) } else { Ok(None) };
+        copies.push(copy.unwrap_or_else(|e| {
+            result = Err(e);
             None
-        };
-        copies.push(copy);
+        }));
     }
     let reads: Vec<&GpuImage> =
         (0..8).map(|i| copies.get(i).and_then(Option::as_ref).unwrap_or_else(|| input(cx.inputs, i, &cx.gpu.black))).collect();
-    // Clamped (tiling 0): a pattern is read within itself; the maps wrap in the shader.
-    let result = result.and_then(|()| cx.gpu.run_filtered(cx.encoder, "tile_sampler", bytes(&u), &reads, cx.output, 0));
+    let result = result.and_then(|()| cx.gpu.run(cx.encoder, "tile_sampler", bytes(&u), &reads, cx.output));
     for copy in copies.into_iter().flatten() {
         cx.gpu.recycle(copy);
     }
@@ -1102,22 +1125,14 @@ fn normal_combine(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 
 fn non_uniform_blur(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let p = cx.params;
-    // The input at every scale, as Ambient Occlusion reads it (see `reads_at_every_scale`): one
-    // that came without its mips (or of another size) is copied into an image that has them.
+    // The input at every scale, in the precision it has (see `reads_at_every_scale`).
     let img = input(cx.inputs, 0, &cx.gpu.black).clone();
-    let [w, h] = cx.output.size();
-    let mipped = (img.texture.mip_level_count() == 1 || img.size() != [w, h] || !crate::gpu::filterable(img.format()))
-        .then(|| {
-            let format = crate::gpu::format_of(img.kind(), brewed_texture_core::Precision::Half);
-            let mipped = cx.gpu.take_scratch_with_mips(w, h, format);
-            cx.gpu.encode_copy_with_mips(cx.encoder, &img, &mipped, 0).map(|()| mipped)
-        })
-        .transpose()?;
+    let mipped = with_mips(cx, &img)?;
     let r = px_to_uv(p.f("radius"), cx.output);
     let u = NonUniformU { radius_x: r[0], radius_y: r[1], tiling: p.tiling(), mapped: u32::from(connected(cx.inputs, 1)) };
     let read = mipped.as_ref().unwrap_or(&img);
     let map = input(cx.inputs, 1, &cx.gpu.white);
-    let result = cx.gpu.run_filtered(cx.encoder, "nonuniform_blur", bytes(&u), &[read, map], cx.output, p.tiling());
+    let result = cx.gpu.run(cx.encoder, "nonuniform_blur", bytes(&u), &[read, map], cx.output);
     if let Some(mipped) = mipped {
         cx.gpu.recycle(mipped);
     }

@@ -22,8 +22,11 @@ fn modal<'a>(content: Element<'a, Message>, dismiss: Option<Message>) -> Element
 
 fn action_text(action: &PendingAction) -> &'static str {
     match action {
+        #[cfg(any(test, feature = "dev-tools"))]
         PendingAction::New => "starting a new package",
+        #[cfg(any(test, feature = "dev-tools"))]
         PendingAction::OpenPath(_) => "opening another package",
+        #[cfg(any(test, feature = "dev-tools"))]
         PendingAction::LoadDemo => "loading the demo",
         PendingAction::Close(_) => "closing it",
         PendingAction::Quit => "quitting",

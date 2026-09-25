@@ -1,5 +1,5 @@
-//! Render every image node type side by side: `cargo run -p brewed-texture-engine --example
-//! contact_sheet -- OUT.png [demo]`.
+//! Render every image node type side by side: `cargo run -p brewed-texture-engine --features
+//! dev-tools --example contact_sheet -- OUT.png [demo]`.
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

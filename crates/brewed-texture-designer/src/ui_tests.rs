@@ -241,6 +241,55 @@ fn closing_with_unsaved_changes_asks_first() {
     assert_eq!(app.graph().resolution, [512, 512]);
 }
 
+/// The color of a stop of a gradient: the stop chosen on the ramp, its swatch opens the
+/// picker, and the picker colors that stop.
+#[test]
+fn a_stop_of_a_gradient_takes_a_color_from_the_picker() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let window = w.app.main_window().expect("the main window");
+    let map = w.app.graph().nodes_of(NodeKind::GRADIENT_MAP).next().expect("the demo colors by a gradient").id;
+    w.send(Message::Graph(GraphMessage::Select { node: map, mode: SelectMode::Replace }));
+    w.send(Message::GradientStop(map, "gradient".into(), 1));
+    w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+    let stop = |w: &Harness| gradient_of(&w.app, map).stops[1].color;
+    let hex = crate::widget::color::to_hex(stop(&w));
+    let swatch = *texts(&mut w, &hex).first().expect("the swatch of the stop");
+    // (The window tells the app where the cursor is: the picker opens there.)
+    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: swatch.center() }));
+    click(&mut w, swatch.center());
+    assert_eq!(w.app.ui.color_picker, Some(ColorTarget::GradientStop(map, "gradient".into())));
+    w.snapshot("gradient_stop_picker");
+    // Dragging in the saturation square of the picker colors the stop.
+    let before = stop(&w);
+    let square = w.app.ui.color_picker_at + iced::Vector::new(118.0, 70.0);
+    drag(&mut w, square, square + iced::Vector::new(-40.0, 20.0));
+    assert_ne!(stop(&w), before);
+    assert_eq!(gradient_of(&w.app, map).stops.len(), 4, "no stop added or taken away");
+}
+
+/// Nodes that use graphs of a package that has no file are pasted in that package, where their
+/// graphs are; another package could not find them, and says so rather than take graphs of its
+/// own for them. (The clipboard of the program, not the system's.)
+#[test]
+fn nodes_that_use_graphs_are_pasted_where_their_graphs_are() {
+    let (mut app, _) = App::boot(StartupOptions::default());
+    let nodes = |app: &App| app.graph().nodes.len();
+    let blur = app.graph().nodes_of(NodeKind::BLUR).next().expect("the demo blurs").id;
+    app.ui.selection = [blur].into_iter().collect();
+    let _ = app.update(Message::MakeSubgraph);
+    let used = *app.ui.selection.iter().next().expect("the node that uses the new graph");
+    assert!(app.graph().node(used).is_some_and(|n| n.instance.is_some()));
+    let _ = app.update(Message::Copy);
+    let before = nodes(&app);
+    let _ = app.update(Message::ClipboardText(None));
+    assert_eq!(nodes(&app), before + 1, "pasted in its package");
+    let _ = app.update(Message::New);
+    let _ = app.update(Message::ClipboardText(None));
+    assert!(app.graph().nodes.is_empty(), "not pasted in another");
+    let status = app.ui.status.as_ref().expect("a status");
+    assert!(status.error && status.text.contains("no file"), "{}", status.text);
+}
+
 // ---------------------------------------------------------------------------- eyedropper
 
 const SCREEN: [u32; 2] = [800, 240];
@@ -1934,12 +1983,24 @@ fn packages_and_graphs_used_as_nodes() {
 
 /// Nodes of the demo made a graph of their own: the graph appears in the package, a node
 /// that uses it takes their place with nothing wrong, the new graph opens from the Explorer
-/// and is renamed there (the node follows), and undo puts everything back.
+/// and is renamed there (the node follows), and undo puts everything back. Nodes with one
+/// between them that is not chosen cannot go: the status bar says which.
 #[test]
 fn nodes_made_a_graph_of_their_own() {
     let mut w = harness!(view::root, 1680.0, 1000.0);
-    let kinds = [NodeKind::BLEND, NodeKind::LEVELS, NodeKind::BLUR];
-    let chosen: Vec<_> = w.app.graph().nodes.iter().filter(|n| kinds.contains(&n.kind)).map(|n| n.id).collect();
+    let of_kinds = |app: &App, kinds: &[NodeKind]| -> Vec<_> {
+        app.graph().nodes.iter().filter(|n| kinds.contains(&n.kind)).map(|n| n.id).collect()
+    };
+    // The two Blends, and the Levels and the Blur between them; but the Gradient Map and the
+    // Histogram Scan are between them too.
+    w.app.ui.selection = of_kinds(&w.app, &[NodeKind::BLEND, NodeKind::LEVELS, NodeKind::BLUR]).into_iter().collect();
+    w.send(Message::MakeSubgraph);
+    assert_eq!(w.app.doc.package().graphs.len(), 1);
+    let status = w.app.ui.status.as_ref().expect("a status");
+    assert!(status.error && status.text.starts_with("Gradient Map, Histogram Scan are between"), "{}", status.text);
+    // With them.
+    let kinds = [NodeKind::BLEND, NodeKind::LEVELS, NodeKind::BLUR, NodeKind::GRADIENT_MAP, NodeKind::HISTOGRAM_SCAN];
+    let chosen = of_kinds(&w.app, &kinds);
     w.app.ui.selection = chosen.iter().copied().collect();
     w.send(Message::MakeSubgraph);
     assert_eq!(w.app.doc.package().graphs.len(), 2);

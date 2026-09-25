@@ -3,8 +3,9 @@
 // The grid and its offsets are the Tile Generator's (tile_gen.wgsl). A tile takes one of the
 // connected patterns at random; the maps, read where the tile's center is, keep it or leave it
 // out (Mask Map), scale it (Scale Map), turn it (Rotation Map) and color it (Color Map). A
-// pattern is read from its mips, from the level as fine as the tile is drawn: a large pattern
-// on small tiles does not shimmer. Tiles that overlap combine by the brighter, by their sum,
+// pattern is read from its mips, from between the levels as fine as the tile is drawn (see
+// `trilinear`: in the precision of the pattern, whatever it is): a large pattern on small tiles
+// does not shimmer. Tiles that overlap combine by the brighter, by their sum,
 // or one over another in an order of their own (each tile a random depth).
 
 struct Params {
@@ -27,8 +28,6 @@ struct Params {
 @group(0) @binding(6) var scale_map: texture_2d<f32>;
 @group(0) @binding(7) var rotation_map: texture_2d<f32>;
 @group(0) @binding(8) var color_map: texture_2d<f32>;
-// Trilinear and clamped: a pattern is read within itself.
-@group(0) @binding(9) var smp: sampler;
 
 // The pattern that is the connected images (the last of the shapes' list).
 const IMAGES: u32 = 14u;
@@ -43,13 +42,13 @@ const STACK: u32 = 2u;
 // Stacked, the tiles over a pixel that count: the highest four (a fifth is all but hidden).
 const LAYERS: i32 = 4;
 
-// Pattern `which` at `uv`, from the mip level `lod`.
+// Pattern `which` at `uv`, from the mip level `lod`; clamped: a pattern is read within itself.
 fn pattern(which: u32, uv: vec2<f32>, lod: f32) -> vec4<f32> {
     switch which {
-        case 0u: { return widen(textureSampleLevel(pattern1, smp, uv, lod), GRAY0); }
-        case 1u: { return widen(textureSampleLevel(pattern2, smp, uv, lod), GRAY1); }
-        case 2u: { return widen(textureSampleLevel(pattern3, smp, uv, lod), GRAY2); }
-        default: { return widen(textureSampleLevel(pattern4, smp, uv, lod), GRAY3); }
+        case 0u: { return widen(trilinear(pattern1, uv, lod, 0u), GRAY0); }
+        case 1u: { return widen(trilinear(pattern2, uv, lod, 0u), GRAY1); }
+        case 2u: { return widen(trilinear(pattern3, uv, lod, 0u), GRAY2); }
+        default: { return widen(trilinear(pattern4, uv, lod, 0u), GRAY3); }
     }
 }
 

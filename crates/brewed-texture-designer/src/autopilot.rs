@@ -416,10 +416,11 @@ fn back_home(what: &'static str) -> Vec<Step> {
         Step::Note(format!("the demo again, settled, after {what}")),
         Step::Check(Box::new(move |app: &App| {
             let m = app.res.memory;
-            // The five maps it writes with their mips: 64 MB at 2048.
-            (m.kept + m.scratch > 0 || m.total() > 65 * 1024 * 1024).then(|| {
+            // The five maps it writes with their mips, and the copy of the height the 3D view
+            // reads (floats cannot be filtered everywhere): 80 MB at 2048.
+            (m.kept + m.scratch > 0 || m.total() > 81 * 1024 * 1024).then(|| {
                 format!(
-                    "after {what}: {:.1} MB (views {:.1}, kept {:.1}, scratch {:.1}, files {:.1}), not 64",
+                    "after {what}: {:.1} MB (views {:.1}, kept {:.1}, scratch {:.1}, files {:.1}), not 80",
                     mb(m.total()),
                     mb(m.shown),
                     mb(m.kept),

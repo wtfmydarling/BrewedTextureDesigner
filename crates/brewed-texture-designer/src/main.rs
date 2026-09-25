@@ -3,6 +3,7 @@
 //! Brewed Texture Designer: a GPU accelerated, node based procedural texture editor.
 
 mod app;
+#[cfg(any(test, feature = "dev-tools"))]
 mod autopilot;
 mod brand;
 mod environment;
@@ -28,10 +29,6 @@ use brewed_texture_engine::render::Job;
 const USAGE: &str = "Brewed Texture Designer — GPU accelerated node based texture editor
 
 usage: brewed-texture-designer [FILE.brewtex]
-       brewed-texture-designer --screenshot OUT.png [--scenario NAME] [--select KIND] [--preview KIND] [FILE]
-       brewed-texture-designer --contact-sheet OUT.png [demo]
-       brewed-texture-designer --bench
-       brewed-texture-designer --autopilot [MINUTES] [--seed N]
        brewed-texture-designer --render PACKAGE.brewtex [--graph NAME]... [--set NAME=VALUE]...
                                [--size N|WxH] [--precision 16|32] [--out DIR]
 
@@ -43,8 +40,19 @@ usage: brewed-texture-designer [FILE.brewtex]
   --graph NAME     render this graph only (again for more)
   --set NAME=VALUE set an Input Value: 0.5, 4, true, 0.2,0.8, #9E4229 or 0.6,0.3,0.2
   --size N|WxH     the texture size: 2048, or 2048x1024
-  --precision      16 or 32: grayscale images in half or full floats
-  --out DIR        where the files go
+  --precision      16 or 32: grayscale images in half or full floats, whatever the
+                   graphs say
+  --out DIR        where the files go";
+
+/// The tools for developing the program, in a build that has them (the `dev-tools` feature).
+#[cfg(feature = "dev-tools")]
+const DEV_USAGE: &str = "
+tools for developing the program:
+       brewed-texture-designer --screenshot OUT.png [--scenario NAME] [--select KIND] [--preview KIND] [FILE]
+       brewed-texture-designer --contact-sheet OUT.png [demo]
+       brewed-texture-designer --bench
+       brewed-texture-designer --autopilot [MINUTES] [--seed N]
+
   --screenshot     start, wait until everything is computed, save a screenshot and quit
   --scenario       UI state for the screenshot: add-menu, file-menu, context-menu,
                    gradient, math, levels, inputs, transform, tiling, dialog, tile,
@@ -59,12 +67,25 @@ usage: brewed-texture-designer [FILE.brewtex]
                    by default); log what it does and what goes wrong, and quit
   --seed N         the autopilot's random steps (the same seed, the same steps)";
 
+/// What the command line takes.
+#[cfg(not(feature = "dev-tools"))]
+fn usage() -> String {
+    USAGE.to_string()
+}
+
+/// What the command line takes, the tools for developing the program too.
+#[cfg(feature = "dev-tools")]
+fn usage() -> String {
+    format!("{USAGE}\n{DEV_USAGE}")
+}
+
 fn main() -> iced::Result {
     attach_console();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,brewed_texture_designer=info")).init();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut options = StartupOptions::default();
+    #[cfg(any(test, feature = "dev-tools"))]
     let (mut flight, mut seed) = (None, 1);
     let mut render: Option<Job> = None;
     let mut i = 0;
@@ -72,9 +93,10 @@ fn main() -> iced::Result {
         let value = |i: usize| args.get(i + 1).cloned();
         match args[i].as_str() {
             "--help" | "-h" => {
-                println!("{USAGE}");
+                println!("{}", usage());
                 return Ok(());
             }
+            #[cfg(feature = "dev-tools")]
             "--bench" => {
                 if let Err(e) = brewed_texture_engine::tools::bench() {
                     eprintln!("{e}");
@@ -82,6 +104,7 @@ fn main() -> iced::Result {
                 }
                 return Ok(());
             }
+            #[cfg(feature = "dev-tools")]
             "--contact-sheet" => {
                 let out = value(i).unwrap_or_else(|| "contact_sheet.png".into());
                 let (graph, nodes) = if args.get(i + 2).map(String::as_str) == Some("demo") {
@@ -102,22 +125,27 @@ fn main() -> iced::Result {
                 }
                 return Ok(());
             }
+            #[cfg(any(test, feature = "dev-tools"))]
             "--screenshot" => {
-                options.screenshot = value(i).map(PathBuf::from);
+                options.dev.screenshot = value(i).map(PathBuf::from);
                 i += 1;
             }
+            #[cfg(any(test, feature = "dev-tools"))]
             "--scenario" => {
-                options.scenario = value(i);
+                options.dev.scenario = value(i);
                 i += 1;
             }
+            #[cfg(any(test, feature = "dev-tools"))]
             "--select" => {
-                options.select = value(i);
+                options.dev.select = value(i);
                 i += 1;
             }
+            #[cfg(any(test, feature = "dev-tools"))]
             "--preview" => {
-                options.preview = value(i);
+                options.dev.preview = value(i);
                 i += 1;
             }
+            #[cfg(any(test, feature = "dev-tools"))]
             "--autopilot" => {
                 // How long is optional.
                 let minutes = value(i).and_then(|m| m.parse::<f32>().ok());
@@ -126,6 +154,7 @@ fn main() -> iced::Result {
                 }
                 flight = Some(minutes.unwrap_or(10.0));
             }
+            #[cfg(any(test, feature = "dev-tools"))]
             "--seed" => {
                 seed = value(i).and_then(|s| s.parse().ok()).unwrap_or(seed);
                 i += 1;
@@ -153,7 +182,7 @@ fn main() -> iced::Result {
                 i += 1;
             }
             other if other.starts_with("--") => {
-                eprintln!("unknown option {other}\n\n{USAGE}");
+                eprintln!("unknown option {other}\n\n{}", usage());
                 std::process::exit(2);
             }
             other => options.open = Some(PathBuf::from(other)),
@@ -165,11 +194,16 @@ fn main() -> iced::Result {
         std::process::exit(render_package(job));
     }
 
-    options.autopilot = flight.map(|minutes| autopilot::Flight { minutes, seed });
-
     // The layout of the last session, kept for the next one (not for screenshots, which
     // show the program as it starts the first time, nor for the autopilot).
-    if options.screenshot.is_none() && options.autopilot.is_none() {
+    #[cfg(any(test, feature = "dev-tools"))]
+    let as_it_was = {
+        options.dev.autopilot = flight.map(|minutes| autopilot::Flight { minutes, seed });
+        options.dev.screenshot.is_none() && options.dev.autopilot.is_none()
+    };
+    #[cfg(not(any(test, feature = "dev-tools")))]
+    let as_it_was = true;
+    if as_it_was {
         options.workspace = Some(workspace::Workspace::load());
     }
 
@@ -185,7 +219,7 @@ fn main() -> iced::Result {
 
 /// Stop at a mistake in the command line.
 fn usage_error(message: &str) -> ! {
-    eprintln!("{message}\n\n{USAGE}");
+    eprintln!("{message}\n\n{}", usage());
     std::process::exit(2);
 }
 

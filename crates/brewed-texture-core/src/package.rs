@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::eval::{self, NodeEval, Params, VarSource};
 use crate::graph::{Graph, Link, Node, NodeId, input_socket_key, output_socket_key, param_socket_key};
-use crate::instance::{GraphId, GraphRef, Instance, Interface, Port, image_input_kind};
+use crate::instance::{GraphId, GraphRef, Instance, Interface, Port, image_input_kind, port_nodes};
 use crate::nodes::{ImageKind, NodeKind, ParamKind, Role, Slot};
 use crate::types::{DataType, ParamValue, Value};
 
@@ -97,6 +97,8 @@ pub struct Package {
     /// At least one.
     pub graphs: Vec<GraphEntry>,
     pub resources: Vec<Resource>,
+    /// The id the next graph gets. Never one a graph had: a node that used a graph that is
+    /// gone does not use another in its place.
     next_graph: u64,
 }
 
@@ -109,11 +111,18 @@ impl Package {
         package
     }
 
-    /// Put together from what a file says; [`Package::normalize`] makes it whole.
-    pub fn from_parts(graphs: Vec<GraphEntry>, resources: Vec<Resource>) -> Package {
-        let mut package = Package { graphs, resources, next_graph: 1 };
+    /// Put together from what a file says (`next_graph`: the id the next graph gets, see
+    /// [`Package::next_graph`]); [`Package::normalize`] makes it whole.
+    pub fn from_parts(graphs: Vec<GraphEntry>, resources: Vec<Resource>, next_graph: u64) -> Package {
+        let mut package = Package { graphs, resources, next_graph };
         package.normalize();
         package
+    }
+
+    /// The id the next graph gets: above the ids of the graphs that are, and of those that
+    /// were (a file keeps it).
+    pub fn next_graph(&self) -> u64 {
+        self.next_graph
     }
 
     pub fn graph(&self, id: GraphId) -> Option<&GraphEntry> {
@@ -488,17 +497,18 @@ impl PackageEdit {
             }
             PackageEdit::MakeSubgraph { graph, nodes, name } => {
                 let entry = package.graph(graph).ok_or("The graph no longer exists")?;
-                let (inner, outer) = make_subgraph(&entry.graph, &nodes)?;
-                let sub = package.add_graph(&name, inner);
-                let sub_name = package.graph(sub).expect("just added").name.clone();
-                let mut outer = outer;
+                let (inner, mut outer) = make_subgraph(&entry.graph, &nodes)?;
+                // (Made in a copy: the package stays as it is if the node cannot be placed.)
+                let mut made = package.clone();
+                let sub = made.add_graph(&name, inner);
+                let entry = made.graph(sub).expect("just added");
                 let instance = Instance {
-                    graph: GraphRef { package: None, graph: sub, name: sub_name },
-                    interface: Interface::of(&package.graph(sub).expect("just added").graph),
+                    graph: GraphRef { package: None, graph: sub, name: entry.name.clone() },
+                    interface: Interface::of(&entry.graph),
                 };
-                let id = outer.place(instance);
-                let entry = package.graph_mut(graph).expect("checked");
-                *Arc::make_mut(&mut entry.graph) = outer.graph;
+                let id = outer.place(instance)?;
+                *Arc::make_mut(&mut made.graph_mut(graph).expect("checked").graph) = outer.graph;
+                *package = made;
                 PackageResult { graph: Some(sub), created: vec![id], ..changed }
             }
         })
@@ -523,27 +533,30 @@ pub struct Remainder {
 
 impl Remainder {
     /// Put the node that uses the new graph where the nodes were, connected as they were.
-    fn place(&mut self, instance: Instance) -> NodeId {
+    fn place(&mut self, instance: Instance) -> Result<NodeId, String> {
         let id = self.graph.add_instance(instance, self.pos);
         for key in &self.exposed {
             if let Some(slot) = self.graph.node_mut(id).and_then(|n| n.param_mut(key)) {
                 slot.exposed = true;
             }
         }
+        let cannot = |e: String| format!("The new node cannot be connected as the nodes were: {e}");
         for (from, socket, key) in &self.into {
-            let _ = self.graph.connect(*from, socket, id, key);
+            self.graph.connect(*from, socket, id, key).map_err(cannot)?;
         }
         for (key, to, socket) in &self.out_of {
-            let _ = self.graph.connect(id, &output_socket_key(key), *to, socket);
+            self.graph.connect(id, &output_socket_key(key), *to, socket).map_err(cannot)?;
         }
-        id
+        Ok(id)
     }
 }
 
 /// Put the nodes `ids` of `graph` in a graph of their own. What arrives at them from the
 /// other nodes arrives through Image Inputs (images) and input values (values); what leaves
 /// them for the other nodes leaves through Outputs. The input values the nodes read go with
-/// them, at the values they have. Returns the new graph and what is left of `graph`.
+/// them, at the values they have; those the other nodes read too stay, and drive the new
+/// graph's. Returns the new graph and what is left of `graph`: the same images, pixel for
+/// pixel.
 pub fn make_subgraph(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Remainder), String> {
     let chosen: HashSet<NodeId> = ids.iter().copied().filter(|id| graph.contains(*id)).collect();
     if chosen.is_empty() {
@@ -556,6 +569,17 @@ pub fn make_subgraph(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Remainder)
         }
     }
     let links: Vec<&Link> = graph.live_links().collect();
+    // A node between chosen ones (what one of them makes reaches another through it) would be
+    // both before and after the node that takes their place.
+    let between = nodes_between(graph, &links, &chosen);
+    if !between.is_empty() {
+        let names: Vec<&str> = between.iter().take(3).map(|n| n.def().name).collect();
+        let (is, them) = if between.len() == 1 { ("is", "it") } else { ("are", "them") };
+        return Err(format!(
+            "{} {is} between the selected nodes: select {them} too, or leave out what comes after {them}",
+            names.join(", ")
+        ));
+    }
     for l in &links {
         if chosen.contains(&l.from) && !chosen.contains(&l.to) {
             let from = graph.output_socket(l.from, &l.from_socket);
@@ -583,20 +607,31 @@ pub fn make_subgraph(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Remainder)
     inner.nodes.extend(nodes.iter().map(|n| (*n).clone()));
     inner.next_id = inner.nodes.iter().map(|n| n.id.0).max().unwrap_or(0) + 1;
     let ev = eval::evaluate(graph);
-    let mut needed: Vec<String> = nodes.iter().filter_map(|n| n.variable.clone()).collect();
+    // The input values an expression reads by their names.
+    let reads_by_name = |n: &Node| -> Vec<String> {
+        if !n.is_expression_node() || !n.bool_value("auto_bind") {
+            return Vec::new();
+        }
+        let mut vars = n.expression_vars();
+        vars.retain(|v| graph.link_into(n.id, &crate::graph::var_socket_key(v)).is_none() && graph.variable(v).is_some());
+        vars
+    };
+    let mut needed: Vec<String> = Vec::new();
+    for v in nodes.iter().filter_map(|n| n.variable.clone()) {
+        if !needed.contains(&v) {
+            needed.push(v);
+        }
+    }
     for n in &nodes {
-        if n.is_expression_node() && n.bool_value("auto_bind") {
-            for v in n.expression_vars() {
-                let linked = graph.link_into(n.id, &crate::graph::var_socket_key(&v)).is_some();
-                if !linked && graph.variable(&v).is_some() && !needed.contains(&v) {
-                    // An Input node keeps it there (input values exist while one reads them).
-                    needed.push(v.clone());
-                    let reader = inner.add_node(
-                        NodeKind::input_for(graph.variable(&v).expect("checked").ty).expect("a value type"),
-                        [x0 - 260.0, y0 + 90.0 * needed.len() as f32],
-                    );
-                    inner.node_mut(reader).expect("just added").variable = Some(v);
-                }
+        for v in reads_by_name(n) {
+            if !needed.contains(&v) {
+                // An Input node keeps it there (input values exist while one reads them).
+                needed.push(v.clone());
+                let reader = inner.add_node(
+                    NodeKind::input_for(graph.variable(&v).expect("checked").ty).expect("a value type"),
+                    [x0 - 260.0, y0 + 90.0 * needed.len() as f32],
+                );
+                inner.node_mut(reader).expect("just added").variable = Some(v);
             }
         }
     }
@@ -615,10 +650,41 @@ pub fn make_subgraph(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Remainder)
 
     let mut rest = graph.clone();
     rest.remove_nodes(&chosen.iter().copied().collect::<Vec<_>>());
+    // The input values the nodes took that the other nodes read too stay, read by an Input node
+    // (one of theirs, or a new one), and drive the new graph's.
+    let mut kept: Vec<(NodeId, String)> = Vec::new();
+    for name in &needed {
+        let read = rest.variable_users(name).next().is_some() || rest.nodes.iter().any(|n| reads_by_name(n).contains(name));
+        let Some(var) = graph.variable(name).filter(|_| read) else { continue };
+        if rest.variable(name).is_none() {
+            rest.variables.push(var.clone());
+        }
+        let theirs = rest.variable_users(name).next().map(|n| n.id);
+        let reader = match theirs {
+            Some(id) => id,
+            None => {
+                let at = [x0 - 220.0, y0 + 60.0 * kept.len() as f32];
+                rest.add_variable_node(name, at).expect("the variable is there")
+            }
+        };
+        kept.push((reader, name.clone()));
+    }
     let mut remainder =
         Remainder { graph: rest, pos: [x0, y0], into: Vec::new(), out_of: Vec::new(), exposed: Vec::new() };
+    for (reader, name) in kept {
+        remainder.into.push((reader, "o:value".to_string(), param_socket_key(&name)));
+        remainder.exposed.push(name);
+    }
 
-    // What arrives from outside: one input (or input value) per thing that arrives.
+    // What arrives from outside: one input (or input value) per thing that arrives. An input
+    // takes color when any socket what arrives there goes to takes it (or either kind); else it
+    // takes grayscale, as the sockets do.
+    let takes_color: HashSet<(NodeId, String)> = links
+        .iter()
+        .filter(|l| !chosen.contains(&l.from) && chosen.contains(&l.to))
+        .filter(|l| graph.input_socket(l.to, &l.to_socket).is_some_and(|t| t.ty == DataType::Image && t.slot != Slot::Gray))
+        .map(|l| (l.from, l.from_socket.clone()))
+        .collect();
     let mut arriving: Vec<((NodeId, String), String)> = Vec::new();
     let mut row = 0.0;
     for l in links.iter().filter(|l| !chosen.contains(&l.from) && chosen.contains(&l.to)) {
@@ -636,9 +702,9 @@ pub fn make_subgraph(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Remainder)
                     let input = inner.add_node(NodeKind::IMAGE_INPUT, [x0 - 260.0, y0 + row]);
                     let node = inner.node_mut(input).expect("just added");
                     node.param_mut("name").expect("a name").value = ParamValue::Text(name.clone());
-                    // What the input takes: what the socket takes, or what arrives when it
+                    // What the input takes: what the sockets take, or what arrives when one
                     // takes either (known only to the engine: color, which gray reads as).
-                    let color = target.slot != Slot::Gray;
+                    let color = takes_color.contains(&source);
                     node.param_mut("kind").expect("a kind").value = ParamValue::Enum(u32::from(color));
                     remainder.into.push((l.from, l.from_socket.clone(), input_socket_key(&name)));
                     name
@@ -731,6 +797,32 @@ pub fn make_subgraph(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Remainder)
     inner.sync_variables();
     inner.prune_links();
     Ok((inner, remainder))
+}
+
+/// The nodes of `graph` (with its `links`) that are not `chosen` but between chosen ones: what
+/// one of those makes reaches another through them.
+fn nodes_between<'a>(graph: &'a Graph, links: &[&Link], chosen: &HashSet<NodeId>) -> Vec<&'a Node> {
+    let mut after: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+    let mut before: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+    for l in links {
+        after.entry(l.from).or_default().push(l.to);
+        before.entry(l.to).or_default().push(l.from);
+    }
+    // The nodes that are not chosen reached from the chosen ones, one way.
+    let reached = |next: &HashMap<NodeId, Vec<NodeId>>| {
+        let mut seen: HashSet<NodeId> = HashSet::new();
+        let mut stack: Vec<NodeId> = chosen.iter().copied().collect();
+        while let Some(id) = stack.pop() {
+            for n in next.get(&id).into_iter().flatten() {
+                if !chosen.contains(n) && seen.insert(*n) {
+                    stack.push(*n);
+                }
+            }
+        }
+        seen
+    };
+    let (downstream, upstream) = (reached(&after), reached(&before));
+    graph.nodes.iter().filter(|n| downstream.contains(&n.id) && upstream.contains(&n.id)).collect()
 }
 
 // ---------------------------------------------------------------------------- flattening
@@ -858,6 +950,12 @@ impl<L: Library> Builder<'_, L> {
         let id_of = |id: NodeId| prefix.map_or(id, |p| NodeId(mix(p, id.0) | INNER));
         let mut out = Expanded::default();
         let mut children: HashMap<NodeId, Expanded> = HashMap::new();
+        // The Outputs that are the outputs of the graph used as a node (of two of one name, the
+        // upper one, as its interface has them).
+        let outputs: HashSet<NodeId> = match prefix {
+            Some(_) => port_nodes(graph, NodeKind::OUTPUT).iter().map(|n| n.id).collect(),
+            None => HashSet::new(),
+        };
 
         for node in &graph.nodes {
             match node.def().role {
@@ -936,7 +1034,9 @@ impl<L: Library> Builder<'_, L> {
                     }
                 }
                 Role::Output if prefix.is_some() => {
-                    out.outputs.insert(b.text("name").to_string(), source);
+                    if outputs.contains(&b.id) {
+                        out.outputs.insert(b.text("name").to_string(), source);
+                    }
                 }
                 _ => self.flat.links.push(Link {
                     from: source.0,
@@ -946,9 +1046,9 @@ impl<L: Library> Builder<'_, L> {
                 }),
             }
         }
-        out.first = Interface::of(graph).outputs.first().and_then(|p| out.outputs.get(&p.name).cloned());
+        out.first = Interface::of(graph).outputs.iter().find_map(|p| out.outputs.get(&p.name).cloned());
 
-        // At the top, a node that uses a graph shows its first output.
+        // At the top, a node that uses a graph shows its first output (that gives anything).
         if prefix.is_none() {
             for node in graph.instances() {
                 let Some(first) = children.get(&node.id).and_then(|c| c.first.clone()) else { continue };
@@ -1064,6 +1164,32 @@ fn bake(node: &mut Node, ne: Option<&NodeEval>) {
             slot.value = ParamValue::Bool(false);
         }
     }
+}
+
+/// Does the graph `id` of the package at `from` use the graph `target` (of the package at
+/// `target.0`), itself or through graphs it uses, as deep as they go? (`None`: the package
+/// being edited, when it has no file, as [`Library::package`] has it.) A graph that uses
+/// another cannot be used in it.
+pub fn uses_graph<L: Library>(lib: &L, from: Option<&str>, id: GraphId, target: (Option<&str>, GraphId)) -> bool {
+    let mut seen: HashSet<(Option<String>, GraphId)> = HashSet::new();
+    let mut stack = vec![(from.map(str::to_string), id)];
+    while let Some((package, id)) = stack.pop() {
+        if (package.as_deref(), id) == target {
+            return true;
+        }
+        if !seen.insert((package.clone(), id)) {
+            continue;
+        }
+        let Some(graph) = lib.package(package.as_deref()).and_then(|p| p.graph(id)) else { continue };
+        for node in graph.graph.instances() {
+            let r = &node.instance.as_deref().expect("an instance").graph;
+            let used = r.package.clone().or_else(|| package.clone());
+            if let Some(entry) = lib.package(used.as_deref()).and_then(|p| p.find(r)) {
+                stack.push((used, entry.id));
+            }
+        }
+    }
+    false
 }
 
 /// Bring the nodes of `package` (the package at `own`) that use graphs in line with those
@@ -1366,10 +1492,11 @@ mod tests {
         let mut package = Package::new("Wall", demo);
         let main = package.first();
         let g = &package.graph(main).unwrap().graph;
-        // The Blend and the Levels after the tiles, whatever feeds them and whatever they feed.
-        let chosen: Vec<NodeId> =
-            g.nodes.iter().filter(|n| [NodeKind::BLEND, NodeKind::BLUR].contains(&n.kind)).map(|n| n.id).collect();
-        assert!(!chosen.is_empty());
+        // The bricks worn and colored: from the Blend after the tiles to the Blend of the base
+        // color, whatever feeds them and whatever they feed.
+        let wear = [NodeKind::BLEND, NodeKind::LEVELS, NodeKind::BLUR, NodeKind::GRADIENT_MAP, NodeKind::HISTOGRAM_SCAN];
+        let chosen: Vec<NodeId> = g.nodes.iter().filter(|n| wear.contains(&n.kind)).map(|n| n.id).collect();
+        assert_eq!(chosen.len(), 6);
         let before = flatten(&Shelf([(None, package.clone())].into_iter().collect()), None, main).unwrap();
         let result = PackageEdit::MakeSubgraph { graph: main, nodes: chosen.clone(), name: "Wear".into() }
             .apply(&mut package)
@@ -1381,7 +1508,7 @@ mod tests {
         let node = g.node(used).unwrap();
         assert_eq!(node.instance.as_ref().unwrap().graph.graph, sub);
         let s = &package.graph(sub).unwrap().graph;
-        assert_eq!(s.nodes_of(NodeKind::BLEND).count() + s.nodes_of(NodeKind::BLUR).count(), chosen.len());
+        assert_eq!(wear.iter().map(|k| s.nodes_of(*k).count()).sum::<usize>(), chosen.len());
         // Laid out again, it computes what it did: the same nodes of the same types, their links
         // going the same way.
         let after = flatten(&Shelf([(None, package.clone())].into_iter().collect()), None, main).unwrap();
@@ -1418,6 +1545,151 @@ mod tests {
                 .is_err()
         );
         assert_eq!(package, before);
+    }
+
+    /// An input value the nodes read that other nodes read too stays, and drives the new
+    /// graph's: changed there, it changes what the nodes compute. One only they read goes with
+    /// them, at the value it has.
+    #[test]
+    fn input_values_read_inside_and_outside() {
+        let mut g = Graph::default();
+        let amount = g.add_node(NodeKind::FLOAT_INPUT, [0.0, 0.0]);
+        g.bind_variable(amount, "amount").unwrap();
+        g.variable_mut("amount").unwrap().value = Value::Float(0.3);
+        let pm = g.add_node(NodeKind::PIXEL_MATH, [200.0, 0.0]);
+        g.node_mut(pm).unwrap().param_mut("expression").unwrap().value = ParamValue::Text("u * amount".into());
+        let levels = g.add_node(NodeKind::LEVELS, [400.0, 0.0]);
+        g.set_exposed(levels, "out_high", true).unwrap();
+        connect(&mut g, amount, "o:value", levels, "p:out_high");
+        connect(&mut g, pm, "o:output", levels, "i:input");
+        let out = g.add_node(NodeKind::OUTPUT, [600.0, 0.0]);
+        connect(&mut g, levels, "o:output", out, "i:input");
+        let package = Package::new("Main", g);
+        let main = package.first();
+        let flat_pm = |package: &Package| {
+            let flat = flatten(&Shelf([(None, package.clone())].into_iter().collect()), None, main).unwrap();
+            assert!(flat.problems.is_empty(), "{:?}", flat.problems);
+            flat.graph.nodes_of(NodeKind::PIXEL_MATH).next().unwrap().var_values.get("amount").copied()
+        };
+
+        // The Pixel Math alone: the Input node stays with the Levels, and drives the new graph's
+        // amount.
+        let mut p = package.clone();
+        let used = PackageEdit::MakeSubgraph { graph: main, nodes: vec![pm], name: "Part".into() }
+            .apply(&mut p)
+            .unwrap()
+            .created[0];
+        let g = &p.graph(main).unwrap().graph;
+        let link = g.link_into(used, &param_socket_key("amount")).expect("driven from outside");
+        assert_eq!(g.node(link.from).unwrap().variable.as_deref(), Some("amount"));
+        assert_eq!(flat_pm(&p), Some(0.3));
+        Arc::make_mut(&mut p.graph_mut(main).unwrap().graph).variable_mut("amount").unwrap().value = Value::Float(0.8);
+        assert_eq!(flat_pm(&p), Some(0.8), "the value changed outside");
+
+        // The Input node, the Pixel Math and the Levels: the value goes with them.
+        let mut p = package.clone();
+        let used = PackageEdit::MakeSubgraph { graph: main, nodes: vec![amount, pm, levels], name: "Part".into() }
+            .apply(&mut p)
+            .unwrap()
+            .created[0];
+        let g = &p.graph(main).unwrap().graph;
+        assert!(g.variable("amount").is_none());
+        let node = g.node(used).unwrap();
+        assert_eq!(node.value("amount"), Some(&ParamValue::Float(0.3)));
+        assert!(!node.is_exposed("amount"));
+        assert_eq!(flat_pm(&p), Some(0.3));
+    }
+
+    /// A node between the chosen ones (what one of them makes reaches another through it)
+    /// would be both before and after the node that takes their place: it is asked for, and the
+    /// package stays as it is.
+    #[test]
+    fn a_node_between_the_chosen_ones_is_asked_for() {
+        let mut g = Graph::default();
+        let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+        let blur = g.add_node(NodeKind::BLUR, [200.0, 0.0]);
+        let levels = g.add_node(NodeKind::LEVELS, [400.0, 200.0]);
+        let blend = g.add_node(NodeKind::BLEND, [600.0, 0.0]);
+        connect(&mut g, noise, "o:output", blur, "i:input");
+        connect(&mut g, blur, "o:output", levels, "i:input");
+        connect(&mut g, blur, "o:output", blend, "i:background");
+        connect(&mut g, levels, "o:output", blend, "i:mask");
+        let mut package = Package::new("Main", g);
+        let main = package.first();
+        let before = package.clone();
+        let edit = PackageEdit::MakeSubgraph { graph: main, nodes: vec![blur, blend], name: "Part".into() };
+        let e = edit.apply(&mut package).unwrap_err();
+        assert!(e.starts_with("Levels is between"), "{e}");
+        assert_eq!(package, before);
+        // With it, they go.
+        let edit = PackageEdit::MakeSubgraph { graph: main, nodes: vec![blur, levels, blend], name: "Part".into() };
+        assert!(edit.apply(&mut package).is_ok());
+    }
+
+    /// Of two Outputs of one name, the upper one is the output of the graph used as a node,
+    /// and both say so; a node that uses a graph shows its first output that gives anything.
+    #[test]
+    fn outputs_of_one_name_and_the_output_shown() {
+        let mut g = Graph::default();
+        let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+        let color = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 300.0]);
+        let unused = g.add_node(NodeKind::OUTPUT, [400.0, -300.0]);
+        let upper = g.add_node(NodeKind::OUTPUT, [400.0, 0.0]);
+        let lower = g.add_node(NodeKind::OUTPUT, [400.0, 300.0]);
+        for (id, name) in [(unused, "first"), (upper, "twice"), (lower, "twice")] {
+            g.node_mut(id).unwrap().param_mut("name").unwrap().value = ParamValue::Text(name.into());
+        }
+        // The lower one linked first: the order of the links does not choose.
+        connect(&mut g, color, "o:output", lower, "i:input");
+        connect(&mut g, noise, "o:output", upper, "i:input");
+        let ev = eval::evaluate(&g);
+        for id in [upper, lower] {
+            assert!(ev.node(id).unwrap().warnings.iter().any(|w| w.contains("Another Output is named 'twice'")));
+        }
+        assert!(ev.node(unused).unwrap().warnings.iter().all(|w| !w.contains("Another Output")));
+        let names: Vec<String> = Interface::of(&g).outputs.into_iter().map(|p| p.name).collect();
+        assert_eq!(names, ["first", "twice"]);
+
+        let mut package = Package::new("Main", Graph::default());
+        let sub = package.add_graph("Sub", g);
+        let main = package.first();
+        let instance = instance_of(&package, sub, None);
+        let m = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
+        let used = m.add_instance(instance, [0.0, 0.0]);
+        let out = m.add_node(NodeKind::OUTPUT, [300.0, 0.0]);
+        connect(m, used, &output_socket_key("twice"), out, "i:input");
+        let flat = flatten(&Shelf([(None, package)].into_iter().collect()), None, main).unwrap();
+        let f = &flat.graph;
+        let from = |id: NodeId, socket: &str| f.node(f.link_into(id, socket).unwrap().from).unwrap().kind;
+        assert_eq!(from(out, "i:input"), NodeKind::NOISE);
+        // The first output gives nothing: the node shows the next.
+        assert_eq!(from(used, &input_socket_key(SHOWN)), NodeKind::NOISE);
+    }
+
+    /// A graph uses the graphs its nodes use, and those they use, in its package and in
+    /// others: none of those can use it.
+    #[test]
+    fn graphs_used_as_deep_as_they_go() {
+        let lib_path = "/lib/stone.brewtex";
+        let library = Package::new("Stone", Graph::default());
+        let stone = library.first();
+        let mut package = Package::new("Wall", Graph::default());
+        let wall = package.first();
+        let bricks = package.add_graph("Bricks", Graph::default());
+        let mortar = package.add_graph("Mortar", Graph::default());
+        // The wall uses the bricks, which use the stone of the library, which uses nothing; the
+        // mortar is on its own.
+        let bricks_node = instance_of(&package, bricks, None);
+        Arc::make_mut(&mut package.graph_mut(wall).unwrap().graph).add_instance(bricks_node, [0.0, 0.0]);
+        let stone_node = instance_of(&library, stone, Some(lib_path));
+        Arc::make_mut(&mut package.graph_mut(bricks).unwrap().graph).add_instance(stone_node, [0.0, 0.0]);
+        let shelf = Shelf([(None, package), (Some(lib_path.to_string()), library)].into_iter().collect());
+        assert!(uses_graph(&shelf, None, wall, (None, wall)), "itself");
+        assert!(uses_graph(&shelf, None, wall, (None, bricks)));
+        assert!(uses_graph(&shelf, None, wall, (Some(lib_path), stone)), "through the bricks");
+        assert!(!uses_graph(&shelf, None, bricks, (None, wall)));
+        assert!(!uses_graph(&shelf, None, wall, (None, mortar)));
+        assert!(!uses_graph(&shelf, Some(lib_path), stone, (None, wall)));
     }
 
     #[test]

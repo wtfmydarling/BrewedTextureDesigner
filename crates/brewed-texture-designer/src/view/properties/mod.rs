@@ -674,8 +674,23 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'a str, g: &'a Gradien
             .spacing(6)
             .align_y(Alignment::Center),
         );
+        // Its color, in the picker that floats where it is opened.
+        let target = ColorTarget::GradientStop(id, key.to_string());
+        let open = app.ui.color_picker.as_ref() == Some(&target);
+        col = col.push(
+            row![
+                text("Color").size(style::SMALL).color(style::TEXT_DIM),
+                swatch(stop.color, open, Message::ColorPicker(Some(target))),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        );
     } else {
-        col = col.push(text("Click the ramp to add a stop, click a handle to edit its color.").size(style::SMALL).color(style::TEXT_FAINT));
+        col = col.push(
+            text("Click the ramp to add a stop, or a handle to change its color and position.")
+                .size(style::SMALL)
+                .color(style::TEXT_FAINT),
+        );
     }
     container(col).padding(iced::Padding { top: 2.0, right: 0.0, bottom: 4.0, left: 0.0 }).into()
 }

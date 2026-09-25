@@ -6,6 +6,8 @@
 //! is laid out in it (see [`packages`]), and it is sent to the engine thread, which answers
 //! with images, thumbnails and reports as [`Event`]s.
 
+#[cfg(any(test, feature = "dev-tools"))]
+pub(crate) mod dev;
 pub(crate) mod packages;
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -38,19 +40,12 @@ use crate::workspace::Workspace;
 #[derive(Clone, Debug, Default)]
 pub struct StartupOptions {
     pub open: Option<PathBuf>,
-    /// Save a screenshot once everything is computed, then quit.
-    pub screenshot: Option<PathBuf>,
-    /// UI state to show in the screenshot.
-    pub scenario: Option<String>,
-    /// Select the first node of this type at startup.
-    pub select: Option<String>,
-    /// Show the first node of this type in the 2D view.
-    pub preview: Option<String>,
     /// How the window was laid out last time: kept, and saved again on quitting. `None`
     /// starts from the defaults and saves nothing.
     pub workspace: Option<Workspace>,
-    /// Drive the app by itself, to find what breaks (see [`crate::autopilot`]).
-    pub autopilot: Option<crate::autopilot::Flight>,
+    /// What the tools for developing the program are asked for (see [`dev`]).
+    #[cfg(any(test, feature = "dev-tools"))]
+    pub dev: dev::DevOptions,
 }
 
 // ---------------------------------------------------------------------------- ui state
@@ -169,12 +164,16 @@ pub struct AddMenu {
     pub pending: Option<SocketRef>,
 }
 
-/// Something that discards the unsaved changes of a package: asked about first. `New`,
-/// `OpenPath` and `LoadDemo` put another package in place of the one being edited.
+/// Something that discards the unsaved changes of a package: asked about first.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PendingAction {
+    /// A new package, a package's file or the demo in place of the one being edited: how the
+    /// autopilot and the tests start again (the menus open another package beside it).
+    #[cfg(any(test, feature = "dev-tools"))]
     New,
+    #[cfg(any(test, feature = "dev-tools"))]
     OpenPath(PathBuf),
+    #[cfg(any(test, feature = "dev-tools"))]
     LoadDemo,
     /// Close the package open in the Explorer as this key.
     Close(u64),
@@ -373,6 +372,9 @@ pub struct App {
     /// The other packages open in the Explorer.
     pub shelf: Vec<OpenPackage>,
     next_key: u64,
+    /// Makes the numbers of the packages that nodes are copied from while they have no file
+    /// (see [`App::origin`]): random for each run of the program.
+    origins: std::collections::hash_map::RandomState,
     /// Packages whose graphs are used but that are not open in the Explorer, read from their
     /// files, by path.
     deps: HashMap<String, Package>,
@@ -402,11 +404,11 @@ pub struct App {
     opts: StartupOptions,
     window: Option<window::Id>,
     started: Instant,
-    screenshot_requested: bool,
     /// What the eyedropper needs to know about the app (its Wayland connection).
     host: eyedropper::Host,
-    /// The autopilot, when the app drives itself.
-    pilot: Option<crate::autopilot::Autopilot>,
+    /// The tools for developing the program: screenshots, the autopilot (see [`dev`]).
+    #[cfg(any(test, feature = "dev-tools"))]
+    dev: dev::Dev,
 }
 
 // ---------------------------------------------------------------------------- messages
@@ -662,8 +664,10 @@ pub enum Message {
     Pick(PickMessage),
     /// What the eyedropper needs to know about the app, found once its window is open.
     Host(eyedropper::Host),
+    #[cfg(any(test, feature = "dev-tools"))]
     Screenshot(window::Screenshot),
     /// The autopilot's turn (see [`crate::autopilot`]).
+    #[cfg(any(test, feature = "dev-tools"))]
     Autopilot,
 }
 
@@ -733,15 +737,6 @@ pub(crate) fn splits_of(panes: &pane_grid::State<Pane>) -> Vec<f32> {
     out
 }
 
-fn find_kind(graph: &Graph, name: &str) -> Option<NodeId> {
-    let name = name.to_lowercase().replace([' ', '-'], "_");
-    graph
-        .nodes
-        .iter()
-        .find(|n| n.kind.id() == name || n.def().name.to_lowercase().replace(' ', "_") == name)
-        .map(|n| n.id)
-}
-
 impl App {
     pub fn boot(opts: StartupOptions) -> (App, Task<Message>) {
         let (package, preview_node) = brewed_texture_core::demo::package();
@@ -751,6 +746,7 @@ impl App {
             doc_key: 1,
             shelf: Vec::new(),
             next_key: 1,
+            origins: std::collections::hash_map::RandomState::new(),
             deps: HashMap::new(),
             unreadable: HashSet::new(),
             views: HashMap::new(),
@@ -822,28 +818,21 @@ impl App {
             opts: opts.clone(),
             window: None,
             started: Instant::now(),
-            screenshot_requested: false,
             host: eyedropper::Host::default(),
-            pilot: opts.autopilot.and_then(|flight| {
-                let pilot = crate::autopilot::Autopilot::new(flight);
-                pilot.map_err(|e| log::error!("the autopilot cannot start: {e}")).ok()
-            }),
+            #[cfg(any(test, feature = "dev-tools"))]
+            dev: dev::Dev::new(&opts.dev),
         };
         if let Some(path) = opts.open.clone() {
             app.open_path(path);
         }
-        let graph = app.doc.graph();
-        if let Some(id) = opts.select.as_deref().and_then(|k| find_kind(graph, k)) {
-            app.ui.selection.insert(id);
-        }
-        if let Some(id) = opts.preview.as_deref().and_then(|k| find_kind(graph, k)) {
-            app.ui.preview.node = Some(id);
-        }
+        #[cfg(any(test, feature = "dev-tools"))]
+        app.select_at_start();
         app.refresh();
-        let scenario = match opts.scenario.as_deref() {
-            Some(s) => app.apply_scenario(s),
-            None => Task::none(),
-        };
+        // The state a screenshot shows (see `dev`).
+        #[cfg(any(test, feature = "dev-tools"))]
+        let scenario = app.scenario_at_start();
+        #[cfg(not(any(test, feature = "dev-tools")))]
+        let scenario = Task::none();
         // The environment image of the last session, read again.
         let lighting = match app.ui.preview.lighting.file.clone() {
             Some(file) => app.choose_environment(Some(file)),
@@ -931,18 +920,17 @@ impl App {
             Some(source) => subs.push(source.subscription().map(Message::Engine)),
             None => subs.push(iced::time::every(Duration::from_millis(30)).map(|_| Message::PollGpu)),
         }
-        if self.ui.status.is_some() || self.opts.screenshot.is_some() {
+        if self.ui.status.is_some() {
             subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
         }
+        #[cfg(any(test, feature = "dev-tools"))]
+        self.dev_subscriptions(&mut subs);
         // The status bar's readings change with time alone: a change that takes long says
         // so, and what the last second held grows old, the frames of a 3D view that stopped
         // drawing too.
         let aging = self.res.busy_since.is_some() || !self.res.updates.is_empty() || self.ui.frame_rate_at.is_some();
         if aging {
             subs.push(iced::time::every(Duration::from_millis(200)).map(|_| Message::Tick));
-        }
-        if self.pilot.as_ref().is_some_and(|p| !p.is_done()) {
-            subs.push(iced::time::every(Duration::from_millis(16)).map(|_| Message::Autopilot));
         }
         // Until the main window shows: it does once it has drawn a frame, or a second after it
         // was shown cloaked whatever happens (should a system not draw a cloaked window).
@@ -968,37 +956,11 @@ impl App {
         } else {
             log::info!("{text}");
         }
-        if let Some(pilot) = &mut self.pilot {
+        #[cfg(any(test, feature = "dev-tools"))]
+        if let Some(pilot) = &mut self.dev.pilot {
             pilot.status(&text, error);
         }
         self.ui.status = Some(Status { text, error, at: Instant::now() });
-    }
-
-    /// Has the engine done all it was asked, every export too?
-    pub fn engine_idle(&self) -> bool {
-        self.engine.is_some()
-            && self.res.busy_since.is_none()
-            && self.res.finished_revision >= self.eval_revision
-            && self.res.exports_pending == 0
-    }
-
-    /// The autopilot's turn: what it does now, as the interface does it; once it has done
-    /// all it does, the app quits.
-    fn fly(&mut self) -> Task<Message> {
-        use crate::autopilot::{Turn, WindowChange};
-        let Some(mut pilot) = self.pilot.take() else { return Task::none() };
-        let turn = pilot.tick(self);
-        let done = pilot.is_done();
-        self.pilot = Some(pilot);
-        if done {
-            return self.hide_and_exit();
-        }
-        match (turn, self.window) {
-            (Some(Turn::Send(message)), _) => self.update(message),
-            (Some(Turn::Window(WindowChange::Resize(size))), Some(id)) => window::resize(id, size),
-            (Some(Turn::Window(WindowChange::Maximize(on))), Some(id)) => window::maximize(id, on),
-            _ => Task::none(),
-        }
     }
 
     fn send(&self, request: Request) {
@@ -1292,18 +1254,40 @@ impl App {
             return Task::none();
         }
         let mut clip = self.doc.graph().copy_nodes(&ids);
-        // Nodes that use graphs of this package find them from another package by its file.
+        // Nodes that use graphs of this package find them from another package by its file;
+        // while it has none, no other package can.
         clip.package = self.doc.key();
+        clip.origin = clip.package.is_none().then(|| self.origin());
         let text = clip.to_text();
         self.ui.clipboard = Some(clip);
         iced::clipboard::write(text)
     }
 
+    /// A number of the package being edited for what is copied from it while it has no file
+    /// (see [`Clipboard::origin`]): of this package in this run of the program only.
+    fn origin(&self) -> u64 {
+        use std::hash::BuildHasher;
+        self.origins.hash_one(self.doc_key)
+    }
+
     fn paste_clipboard(&mut self, mut clip: Clipboard) {
         // Pasted into another package, nodes that used graphs of their own package use them in
-        // that package's file.
-        if clip.package.is_some() && clip.package != self.doc.key() {
-            clip.use_package();
+        // that package's file; of a package without one, they cannot.
+        let elsewhere = match (&clip.package, clip.origin) {
+            (Some(path), _) => Some(path) != self.doc.key().as_ref(),
+            (None, Some(origin)) => origin != self.origin(),
+            (None, None) => false,
+        };
+        if elsewhere {
+            if clip.package.is_some() {
+                clip.use_package();
+            } else if clip.uses_graphs_of_its_package() {
+                self.set_status(
+                    "The nodes use graphs of a package that has no file: save it, and copy them again",
+                    true,
+                );
+                return;
+            }
         }
         let at = self.graph_pos_for_paste();
         self.apply(Edit::Paste { clipboard: clip, at });
@@ -1436,6 +1420,7 @@ impl App {
         let asking = match &action {
             PendingAction::Quit => self.dirty_packages().into_iter().find(|k| !self.ui.discarded.contains(k)),
             PendingAction::Close(key) => self.package_doc(*key).filter(|d| d.is_dirty()).map(|_| *key),
+            #[cfg(any(test, feature = "dev-tools"))]
             _ => self.doc.is_dirty().then_some(self.doc_key),
         };
         match asking {
@@ -1452,12 +1437,14 @@ impl App {
     fn proceed(&mut self, action: PendingAction) -> Task<Message> {
         self.ui.dialog = None;
         match action {
+            #[cfg(any(test, feature = "dev-tools"))]
             PendingAction::New => {
                 let package = Package::new("Graph", Graph::default());
                 let open = package.first();
                 self.replace_package(package, None, HashMap::new(), open);
                 Task::none()
             }
+            #[cfg(any(test, feature = "dev-tools"))]
             PendingAction::LoadDemo => {
                 let (package, preview) = brewed_texture_core::demo::package();
                 let open = package.first();
@@ -1465,6 +1452,7 @@ impl App {
                 self.replace_package(package, None, views, open);
                 Task::none()
             }
+            #[cfg(any(test, feature = "dev-tools"))]
             PendingAction::OpenPath(path) => {
                 self.open_path(path);
                 Task::none()
@@ -1580,7 +1568,8 @@ impl App {
         match message {
             Message::PollGpu => {
                 if let Some(handles) = gpu::take() {
-                    if let Some(pilot) = &mut self.pilot {
+                    #[cfg(any(test, feature = "dev-tools"))]
+                    if let Some(pilot) = &mut self.dev.pilot {
                         pilot.watch(handles.device.clone());
                     }
                     let (service, source) = gpu::start_engine(handles, "GPU".into());
@@ -1601,6 +1590,7 @@ impl App {
                     self.ui.status = None;
                 }
                 self.age_readings();
+                #[cfg(any(test, feature = "dev-tools"))]
                 return self.maybe_screenshot();
             }
             Message::Edit(edit) => {
@@ -1611,8 +1601,9 @@ impl App {
                 if self.apply(edit)
                     && let Some([w, h]) = large
                 {
-                    // What the image nodes take at most, all at once: 2 bytes a pixel of a
-                    // grayscale image, 8 of a color one, and what an output writes.
+                    // What the image nodes take at most, all at once: 4 bytes a pixel of a
+                    // grayscale image (2 in half floats), 8 of a color one, and what an output
+                    // writes.
                     use brewed_texture_core::nodes::ImageKind;
                     let graph = self.graph();
                     let nodes: Vec<&brewed_texture_core::graph::Node> = graph.nodes.iter().filter(|n| n.def().has_image()).collect();
@@ -1992,7 +1983,9 @@ impl App {
             Message::Preview(msg) => return self.preview_message(msg),
             Message::Pick(msg) => return self.pick_message(msg),
             Message::Host(host) => self.host = host,
+            #[cfg(any(test, feature = "dev-tools"))]
             Message::Screenshot(shot) => return self.save_screenshot(shot),
+            #[cfg(any(test, feature = "dev-tools"))]
             Message::Autopilot => return self.fly(),
         }
         Task::none()
@@ -2092,7 +2085,8 @@ impl App {
                     self.res.updates.push_back((Instant::now(), millis, report.recomputed));
                 }
                 self.age_readings();
-                if let Some(pilot) = &mut self.pilot {
+                #[cfg(any(test, feature = "dev-tools"))]
+                if let Some(pilot) = &mut self.dev.pilot {
                     pilot.finished(millis, report.recomputed);
                 }
             }
@@ -2126,7 +2120,8 @@ impl App {
                 }
             }
             Event::GpuErrors(errors) => {
-                if let Some(pilot) = &mut self.pilot {
+                #[cfg(any(test, feature = "dev-tools"))]
+                if let Some(pilot) = &mut self.dev.pilot {
                     for e in &errors {
                         pilot.finding(format!("GPU error: {e}"));
                     }
@@ -2824,185 +2819,6 @@ impl App {
             }
             None => self.set_status("The color to set no longer exists", true),
         }
-    }
-
-    // ------------------------------------------------------------------ screenshots (testing)
-
-    fn apply_scenario(&mut self, scenario: &str) -> Task<Message> {
-        let graph = self.doc.graph().clone();
-        let first = |kind: NodeKind| graph.nodes_of(kind).next().map(|n| n.id);
-        match scenario {
-            "file-menu" => self.ui.menu = Some(MenuId::File),
-            "add-menu" => {
-                self.ui.add_menu = Some(AddMenu {
-                    at: Point::new(700.0, 300.0),
-                    graph_pos: [0.0, 0.0],
-                    query: "bl".into(),
-                    selected: 0,
-                    scroll: 0.0,
-                    pending: None,
-                });
-            }
-            "context-menu" => {
-                if let Some(id) = first(NodeKind::LEVELS) {
-                    self.ui.selection = [id].into_iter().collect();
-                    self.ui.context = Some(ContextMenu { at: Point::new(640.0, 360.0), target: ContextTarget::Node(id) });
-                }
-            }
-            "gradient" => {
-                if let Some(id) = first(NodeKind::GRADIENT_MAP) {
-                    self.ui.selection = [id].into_iter().collect();
-                    self.ui.preview.node = Some(id);
-                    self.ui.gradient_stop.insert((id, "gradient".into()), 1);
-                    self.ui.color_picker = Some(ColorTarget::GradientStop(id, "gradient".into()));
-                }
-            }
-            "math" => {
-                if let Some(id) = first(NodeKind::MATH) {
-                    self.ui.selection = [id].into_iter().collect();
-                }
-            }
-            "levels" => {
-                if let Some(id) = first(NodeKind::LEVELS) {
-                    self.ui.selection = [id].into_iter().collect();
-                    self.ui.preview.node = Some(id);
-                }
-            }
-            "inputs" => {
-                self.ui.expanded_vars.insert("mortar".into());
-                self.ui.expanded_vars.insert("tint".into());
-                // The picker floats where it was opened from: the swatch of the tint value.
-                self.ui.cursor = Point::new(1840.0, 330.0);
-                self.ui.color_picker_at = self.ui.cursor + Vector::new(-120.0, 18.0);
-                self.ui.color_picker = Some(ColorTarget::Variable("tint".into(), VarField::Value));
-            }
-            "transform" => {
-                // A Transform 2D of the noise, rotated so its gizmo shows.
-                if let Some(noise) = first(NodeKind::NOISE)
-                    && let Ok(done) = self.doc.apply(Edit::AddNode { kind: NodeKind::TRANSFORM_2D, pos: [160.0, 520.0] })
-                    && let Some(&id) = done.created.first()
-                {
-                    let _ = self.doc.apply(Edit::Connect {
-                        a: SocketRef { node: noise, key: "o:output".into(), output: true },
-                        b: SocketRef { node: id, key: "i:input".into(), output: false },
-                    });
-                    let _ = self.doc.apply(Edit::SetParam { node: id, key: "rotation".into(), value: ParamValue::Float(30.0) });
-                    self.ui.selection = [id].into_iter().collect();
-                    self.ui.preview.node = Some(id);
-                }
-            }
-            "tiling" => {
-                // The wall repeated: no seams.
-                if let Some(id) = first(NodeKind::OUTPUT) {
-                    self.ui.selection = [id].into_iter().collect();
-                    self.ui.preview.node = Some(id);
-                }
-                self.ui.preview.show_tiling = true;
-            }
-            "choices" => {
-                if let Some(id) = first(NodeKind::NOISE) {
-                    self.ui.selection = [id].into_iter().collect();
-                    self.ui.preview.node = Some(id);
-                    let _ = self.open_choice_menu(id, "type");
-                }
-            }
-            "dialog" => {
-                let _ = self.doc.apply(Edit::SetResolution([1024, 1024]));
-                self.ui.dialog = Some(Dialog::Unsaved(PendingAction::Quit));
-            }
-            "tile" => {
-                if let Some(id) = first(NodeKind::TILE_GENERATOR) {
-                    self.ui.selection = [id].into_iter().collect();
-                    self.ui.preview.node = Some(id);
-                }
-            }
-            "lighting-menu" => self.ui.preview.lighting.menu = true,
-            "tile-sampler" => {
-                // Stones: discs of every size and turn, kept and colored where the noise says.
-                if let Some(noise) = first(NodeKind::NOISE)
-                    && let Ok(done) = self.doc.apply(Edit::AddNode { kind: NodeKind::TILE_SAMPLER, pos: [160.0, 520.0] })
-                    && let Some(&id) = done.created.first()
-                {
-                    for socket in ["i:mask_map", "i:rotation_map", "i:color_map"] {
-                        let _ = self.doc.apply(Edit::Connect {
-                            a: SocketRef { node: noise, key: "o:output".into(), output: true },
-                            b: SocketRef { node: id, key: socket.into(), output: false },
-                        });
-                    }
-                    for (key, value) in [
-                        ("pattern", ParamValue::Enum(8)),
-                        ("x_amount", ParamValue::Int(12)),
-                        ("y_amount", ParamValue::Int(12)),
-                        ("scale", ParamValue::Float(1.3)),
-                        ("random_scale", ParamValue::Float(0.5)),
-                        ("random_position", ParamValue::Float(0.6)),
-                        ("random_luminance", ParamValue::Float(0.4)),
-                        ("mask_threshold", ParamValue::Float(0.35)),
-                        ("color", ParamValue::Enum(1)),
-                        ("blend_mode", ParamValue::Enum(2)),
-                    ] {
-                        let _ = self.doc.apply(Edit::SetParam { node: id, key: key.into(), value });
-                    }
-                    self.ui.selection = [id].into_iter().collect();
-                    self.ui.preview.node = Some(id);
-                }
-            }
-            // Several at once.
-            other if other.contains(';') => return Task::batch(other.split(';').map(|s| self.apply_scenario(s)).collect::<Vec<_>>()),
-            // The model of the 3D view, by its name ("mat-ball").
-            other if other.starts_with("shape:") => {
-                let name = other["shape:".len()..].replace('-', " ");
-                match view::view3d::Shape::ALL.into_iter().find(|s| s.to_string().eq_ignore_ascii_case(&name)) {
-                    Some(shape) => self.ui.preview.view3d.shape = shape,
-                    None => log::warn!("no shape '{name}'"),
-                }
-            }
-            // The 3D view lit by an environment image, as bright and as blurred behind the model
-            // as said.
-            other if other.starts_with("environment:") => return self.choose_environment(Some(other["environment:".len()..].to_string())),
-            other if other.starts_with("exposure:") => self.ui.preview.lighting.exposure = other["exposure:".len()..].parse().unwrap_or(0.0),
-            other if other.starts_with("blur:") => self.ui.preview.lighting.blur = other["blur:".len()..].parse().unwrap_or(0.25),
-            other => log::warn!("unknown scenario '{other}'"),
-        }
-        Task::none()
-    }
-
-    fn maybe_screenshot(&mut self) -> Task<Message> {
-        if self.opts.screenshot.is_none() || self.screenshot_requested {
-            return Task::none();
-        }
-        let settled = self.res.evaluated_revision == self.eval_revision
-            && self.started.elapsed() > Duration::from_millis(2500)
-            && (self.ui.preview.node.is_none() || self.res.preview.is_some())
-            // The model wears the maps in every screenshot: they take longest to arrive.
-            && self.res.materials.len() >= self.material_nodes().len()
-            // ...and is lit by its environment image.
-            && self.ui.preview.lighting.reading.is_none()
-            // An open menu of pictures shows all of them.
-            && self.ui.choice_menu.as_ref().is_none_or(|m| {
-                self.graph().node(m.node).is_some_and(|n| self.res.choices.contains_key(&(n.kind.id(), m.key)))
-            });
-        if !settled || self.started.elapsed() < Duration::from_secs(3) {
-            if self.started.elapsed() > Duration::from_secs(30) {
-                log::error!("screenshot: gave up waiting for the engine");
-                return iced::exit();
-            }
-            return Task::none();
-        }
-        let Some(id) = self.window else { return Task::none() };
-        self.screenshot_requested = true;
-        window::screenshot(id).map(Message::Screenshot)
-    }
-
-    fn save_screenshot(&mut self, shot: window::Screenshot) -> Task<Message> {
-        if let Some(path) = &self.opts.screenshot {
-            let (w, h) = (shot.size.width, shot.size.height);
-            match ::image::RgbaImage::from_raw(w, h, shot.rgba.to_vec()).map(|img| img.save(path)) {
-                Some(Ok(())) => println!("screenshot saved to {}", path.display()),
-                other => eprintln!("screenshot failed: {other:?}"),
-            }
-        }
-        iced::exit()
     }
 
     pub fn view(&self, window: window::Id) -> iced::Element<'_, Message> {

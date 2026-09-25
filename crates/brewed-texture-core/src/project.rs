@@ -64,6 +64,9 @@ struct ProjectFile {
     resources: Vec<Resource>,
     #[serde(default)]
     open: Option<GraphId>,
+    /// The id the next graph gets (see [`Package::next_graph`]).
+    #[serde(default)]
+    next_graph: u64,
     /// Version 1: the one graph, and where its view was.
     #[serde(default)]
     graph: Option<Graph>,
@@ -79,6 +82,7 @@ struct ProjectOut<'a> {
     #[serde(skip_serializing_if = "<[Resource]>::is_empty")]
     resources: &'a [Resource],
     open: GraphId,
+    next_graph: u64,
 }
 
 /// A loaded project and what was adjusted while loading it.
@@ -109,7 +113,14 @@ pub fn to_json(package: &Package, views: &HashMap<GraphId, ViewState>, open: Gra
         .iter()
         .map(|g| FileGraphOut { id: g.id, name: &g.name, graph: &g.graph, view: views.get(&g.id).cloned().unwrap_or_default() })
         .collect();
-    let file = ProjectOut { format: FORMAT, version: VERSION, graphs, resources: &package.resources, open };
+    let file = ProjectOut {
+        format: FORMAT,
+        version: VERSION,
+        graphs,
+        resources: &package.resources,
+        open,
+        next_graph: package.next_graph(),
+    };
     serde_json::to_string_pretty(&file).map_err(|e| e.to_string())
 }
 
@@ -171,7 +182,7 @@ pub fn from_json(text: &str, dir: Option<&Path>, name: &str) -> Result<Loaded, S
             notes.push(format!("{}: {} invalid link(s) were removed", entry.name, links_before - graph.links.len()));
         }
     }
-    let mut package = Package::from_parts(entries, file.resources);
+    let mut package = Package::from_parts(entries, file.resources, file.next_graph);
     if let Some(dir) = dir {
         package.map_paths(|p| resolve_path(p, dir));
     }
@@ -198,8 +209,8 @@ mod tests {
     #[test]
     fn roundtrip() {
         let (mut package, views, open) = demo();
-        let full = Graph { precision: crate::Precision::Full, ..Graph::default() };
-        let second = package.add_graph("Second", full);
+        let half = Graph { precision: crate::Precision::Half, ..Graph::default() };
+        let second = package.add_graph("Second", half);
         let json = to_json(&package, &views, second, None).unwrap();
         let loaded = from_json(&json, None, "x").unwrap();
         assert_eq!(loaded.package, package);
@@ -208,6 +219,21 @@ mod tests {
         assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
         assert!(from_json("{}", None, "x").is_err());
         assert!(from_json("not json", None, "x").is_err());
+    }
+
+    /// A graph that is gone leaves its id behind: a new graph never takes it, in a file saved
+    /// and read again too, and a node that used the graph that is gone does not use it.
+    #[test]
+    fn ids_of_graphs_that_are_gone_are_not_taken() {
+        use crate::package::PackageEdit;
+        let mut package = Package::new("Main", Graph::default());
+        let gone = package.add_graph("Gone", Graph::default());
+        PackageEdit::RemoveGraph(gone).apply(&mut package).unwrap();
+        let json = to_json(&package, &HashMap::new(), package.first(), None).unwrap();
+        let mut loaded = from_json(&json, None, "x").unwrap().package;
+        assert_eq!(loaded, package);
+        let new = loaded.add_graph("New", Graph::default());
+        assert!(new.0 > gone.0, "{new:?} after {gone:?}");
     }
 
     /// A file of version 1 is a package of its one graph, named after the file.

@@ -2,8 +2,9 @@
 // Shared helpers, prepended to every kernel.
 //
 // Conventions:
-//   * a color image is rgba16float, a grayscale one r16float (one channel); uv in [0, 1]
-//     with texel centers at (i + 0.5) / size and y pointing down (row 0 is the top);
+//   * a color image is rgba16float, a grayscale one r32float (one channel; r16float in a
+//     graph of half precision); uv in [0, 1] with texel centers at (i + 0.5) / size and y
+//     pointing down (row 0 is the top);
 //   * `tiling` is a bit set: bit 0 = wrap horizontally, bit 1 = wrap vertically;
 //   * angles given by the user are degrees, counter-clockwise on screen.
 // ---------------------------------------------------------------------------
@@ -33,7 +34,7 @@ override KIND: u32 = 0u;
 // A kernel draws its image: one triangle covers it, and the kernel's fragment entry computes
 // each of its pixels on its own and returns it. A render pass writes any format a device
 // renders to, where a compute shader could store to only a few: a grayscale image is
-// written as it is kept, one channel of 16 bits.
+// written as it is kept, one channel.
 
 // The size of the image being drawn (in the buffer of the parameters, after them).
 @group(0) @binding(15) var<uniform> TARGET: vec4<u32>;
@@ -65,26 +66,49 @@ fn wrap_i(i: i32, n: i32) -> i32 {
     return (i + n * (1 + (-i) / n)) % n;
 }
 
-// Texel fetch that wraps on tiled axes and clamps to the edge otherwise.
-fn fetch(tex: texture_2d<f32>, p: vec2<i32>, tiling: u32) -> vec4<f32> {
-    let d = vec2<i32>(textureDimensions(tex));
+// Texel fetch from the mip level `level` that wraps on tiled axes and clamps to the edge
+// otherwise.
+fn fetch_level(tex: texture_2d<f32>, p: vec2<i32>, level: i32, tiling: u32) -> vec4<f32> {
+    let d = vec2<i32>(textureDimensions(tex, level));
     var q: vec2<i32>;
     q.x = select(clamp(p.x, 0, d.x - 1), wrap_i(p.x, d.x), tile_x(tiling));
     q.y = select(clamp(p.y, 0, d.y - 1), wrap_i(p.y, d.y), tile_y(tiling));
-    return textureLoad(tex, q, 0);
+    return textureLoad(tex, q, level);
 }
 
-fn sample_bilinear(tex: texture_2d<f32>, uv: vec2<f32>, tiling: u32) -> vec4<f32> {
-    let d = vec2<f32>(textureDimensions(tex));
-    let st = uv * d - 0.5;
+fn fetch(tex: texture_2d<f32>, p: vec2<i32>, tiling: u32) -> vec4<f32> {
+    return fetch_level(tex, p, 0, tiling);
+}
+
+// The mip level `level` read between its pixels, as a linear filter reads it, but in the
+// precision the image has: floats of 32 bits cannot be filtered on every device, and a filter
+// weighs the pixels in steps of 1/256 on most.
+fn bilinear_level(tex: texture_2d<f32>, uv: vec2<f32>, level: i32, tiling: u32) -> vec4<f32> {
+    let st = uv * vec2<f32>(textureDimensions(tex, level)) - 0.5;
     let fl = floor(st);
     let i = vec2<i32>(fl);
     let f = st - fl;
-    let a = fetch(tex, i, tiling);
-    let b = fetch(tex, i + vec2<i32>(1, 0), tiling);
-    let c = fetch(tex, i + vec2<i32>(0, 1), tiling);
-    let e = fetch(tex, i + vec2<i32>(1, 1), tiling);
+    let a = fetch_level(tex, i, level, tiling);
+    let b = fetch_level(tex, i + vec2<i32>(1, 0), level, tiling);
+    let c = fetch_level(tex, i + vec2<i32>(0, 1), level, tiling);
+    let e = fetch_level(tex, i + vec2<i32>(1, 1), level, tiling);
     return mix(mix(a, b, f.x), mix(c, e, f.x), f.y);
+}
+
+fn sample_bilinear(tex: texture_2d<f32>, uv: vec2<f32>, tiling: u32) -> vec4<f32> {
+    return bilinear_level(tex, uv, 0, tiling);
+}
+
+// The image at `uv` from its mips, between the two levels around `lod`: what a trilinear
+// sampler reads, in the precision the image has (see `bilinear_level`).
+fn trilinear(tex: texture_2d<f32>, uv: vec2<f32>, lod: f32, tiling: u32) -> vec4<f32> {
+    let l = clamp(lod, 0.0, f32(textureNumLevels(tex) - 1u));
+    let l0 = floor(l);
+    let lower = bilinear_level(tex, uv, i32(l0), tiling);
+    if (l == l0) {
+        return lower;
+    }
+    return mix(lower, bilinear_level(tex, uv, i32(l0) + 1, tiling), l - l0);
 }
 
 fn sample_nearest(tex: texture_2d<f32>, uv: vec2<f32>, tiling: u32) -> vec4<f32> {

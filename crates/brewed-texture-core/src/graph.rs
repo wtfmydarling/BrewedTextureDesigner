@@ -429,6 +429,11 @@ pub struct Clipboard {
     /// [`Clipboard::use_package`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
+    /// Which package the nodes were copied from, when it has no file: another package cannot
+    /// find its graphs (a number the program makes up for the package, see
+    /// [`Clipboard::uses_graphs_of_its_package`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<u64>,
 }
 
 impl Clipboard {
@@ -440,6 +445,11 @@ impl Clipboard {
 
     pub fn from_text(text: &str) -> Option<Clipboard> {
         serde_json::from_str(text.trim().strip_prefix(Clipboard::MAGIC)?).ok()
+    }
+
+    /// Do nodes use graphs of the package they were copied from?
+    pub fn uses_graphs_of_its_package(&self) -> bool {
+        self.nodes.iter().any(|n| n.instance.as_ref().is_some_and(|i| i.graph.package.is_none()))
     }
 
     /// Have the nodes that use graphs of the package they were copied from say which file
@@ -463,14 +473,15 @@ impl Clipboard {
     }
 }
 
-/// How precisely a graph keeps its grayscale images (heights, masks): in half floats, 11 bits
-/// of precision and 2 bytes a pixel, or in floats, 24 bits and 4 bytes. A gentle slope over a
-/// large texture is steps in half floats, which a normal map shows as bands and a 16-bit file
-/// keeps; in floats it is smooth. Colors are half floats either way.
+/// How precisely a graph keeps its grayscale images (heights, masks): in floats, 24 bits of
+/// precision and 4 bytes a pixel, or in half floats, 11 bits and 2 bytes. Half floats keep
+/// steps of 1/2048 near 1 (1/4096 near 0.5): a gentle slope over a large texture is steps in
+/// them, which a normal map shows as bands and a 16-bit file keeps; in floats it is smooth.
+/// Half floats take half the memory. Colors are half floats either way.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Precision {
-    #[default]
     Half,
+    #[default]
     Full,
 }
 
@@ -484,8 +495,8 @@ impl Precision {
         }
     }
 
-    fn is_half(&self) -> bool {
-        *self == Precision::Half
+    fn is_full(&self) -> bool {
+        *self == Precision::Full
     }
 }
 
@@ -506,7 +517,7 @@ pub struct Graph {
     pub comments: Vec<Comment>,
     pub resolution: [u32; 2],
     /// How precisely grayscale images are kept.
-    #[serde(default, skip_serializing_if = "Precision::is_half")]
+    #[serde(default, skip_serializing_if = "Precision::is_full")]
     pub precision: Precision,
     pub next_id: u64,
 }
@@ -519,7 +530,7 @@ impl Default for Graph {
             variables: Vec::new(),
             comments: Vec::new(),
             resolution: [2048, 2048],
-            precision: Precision::Half,
+            precision: Precision::Full,
             next_id: 1,
         }
     }
@@ -1043,7 +1054,7 @@ impl Graph {
                 variables.push(v.clone());
             }
         }
-        Clipboard { nodes, links, variables, package: None }
+        Clipboard { nodes, links, variables, package: None, origin: None }
     }
 
     /// Paste nodes, offsetting their positions by `offset`. Variables that already exist
