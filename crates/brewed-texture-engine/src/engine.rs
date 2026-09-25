@@ -1436,10 +1436,17 @@ impl Engine {
     }
 }
 
-/// Decode an image file: a grayscale file (without alpha) into one value per pixel, any
-/// other into RGBA half floats (SIMD conversion on all cores).
+/// Decode an image file (on disk, or held by its package, see
+/// [`brewed_texture_core::files`]): a grayscale file (without alpha) into one value per pixel,
+/// any other into RGBA half floats (SIMD conversion on all cores).
 fn decode_bitmap(path: &str) -> Result<(u32, u32, Pixels), String> {
-    let img = image::open(path).map_err(|e| format!("Cannot open '{path}': {e}"))?;
+    let bytes = brewed_texture_core::files::read(path)?;
+    let name = brewed_texture_core::package::file_name(path);
+    // By its extension, as a file on disk is opened; else by what it starts with.
+    let format = image::ImageFormat::from_path(&name)
+        .or_else(|_| image::guess_format(&bytes))
+        .map_err(|e| format!("Cannot open '{name}': {e}"))?;
+    let img = image::load_from_memory_with_format(&bytes, format).map_err(|e| format!("Cannot open '{name}': {e}"))?;
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 || w > 8192 || h > 8192 {
         return Err(format!("Unsupported image size {w}x{h} (max 8192)"));

@@ -12,6 +12,7 @@ mod gpu;
 mod highlight;
 mod icons;
 mod picker;
+mod previews;
 mod scrub;
 mod style;
 mod view;

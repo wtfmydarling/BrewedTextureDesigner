@@ -1,6 +1,7 @@
 //! A package: what a project file holds. Graphs, any of which can be used as a node in the
 //! others (see [`crate::instance`]) and in the graphs of other packages, and the files they
-//! use (images, vector graphics, fonts), linked where they are on disk.
+//! use (images, vector graphics, fonts): linked where they are on disk, or held by the package
+//! itself (embedded, see [`crate::files`]).
 //!
 //! In memory every path is absolute. A file stores them relative to itself wherever it can,
 //! so that a project moved or copied with its files keeps finding them (see
@@ -73,17 +74,50 @@ impl ResourceKind {
     }
 }
 
-/// A file a package uses: linked where it is on disk.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// A file a package uses: linked where it is on disk, or held by the package (embedded).
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Resource {
+    /// Where it is on disk; for an embedded file, the name the package holds it by (see
+    /// [`crate::files`]).
     pub path: String,
     pub kind: ResourceKind,
+    /// The file itself, when the package holds it: written into the package's file.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::files::base64_bytes")]
+    pub data: Option<Arc<Vec<u8>>>,
 }
 
+/// Two resources are the same when they say the same file: the name of an embedded one says
+/// its bytes.
+impl PartialEq for Resource {
+    fn eq(&self, other: &Resource) -> bool {
+        self.path == other.path && self.kind == other.kind && self.data.is_some() == other.data.is_some()
+    }
+}
+
+impl Eq for Resource {}
+
 impl Resource {
+    /// A file linked where it is on disk.
+    pub fn linked(path: String, kind: ResourceKind) -> Resource {
+        Resource { path, kind, data: None }
+    }
+
+    /// A file the package holds, `bytes`, that came as `name`: its embedded name, which
+    /// [`crate::files`] keeps its bytes by.
+    pub fn embedded(name: &str, kind: ResourceKind, bytes: Arc<Vec<u8>>) -> Resource {
+        let path = crate::files::embedded_path(name, &bytes);
+        crate::files::keep(&path, &bytes);
+        Resource { path, kind, data: Some(bytes) }
+    }
+
     /// Its file name, as the Explorer shows it.
     pub fn name(&self) -> String {
         file_name(&self.path)
+    }
+
+    /// Does the package hold the file itself?
+    pub fn is_embedded(&self) -> bool {
+        self.data.is_some()
     }
 }
 
@@ -178,7 +212,8 @@ impl Package {
     }
 
     /// The files of the package: those it lists, and every file a node reads, which it lists
-    /// from then on. True if a file was added.
+    /// from then on (an embedded one with its bytes: a node pasted from another package brings
+    /// the file it reads). True if a file was added.
     pub fn sync_resources(&mut self) -> bool {
         let used: Vec<String> = self.files().map(|(.., path)| path.to_string()).collect();
         let mut added = false;
@@ -186,12 +221,18 @@ impl Package {
             if self.resources.iter().any(|r| r.path == path) {
                 continue;
             }
-            if let Some(kind) = ResourceKind::of_path(&path) {
-                self.resources.push(Resource { path, kind });
-                added = true;
-            }
+            let Some(kind) = ResourceKind::of_path(&path) else { continue };
+            let data = crate::files::is_embedded(&path).then(|| crate::files::embedded(&path)).flatten();
+            self.resources.push(Resource { path, kind, data });
+            added = true;
         }
         added
+    }
+
+    /// The files of the package no node reads.
+    pub fn unused_resources(&self) -> Vec<&Resource> {
+        let read: HashSet<&str> = self.files().map(|(.., path)| path).collect();
+        self.resources.iter().filter(|r| !read.contains(r.path.as_str())).collect()
     }
 
     /// Every file the package uses: those it lists and those its nodes read, each once, in
@@ -254,13 +295,13 @@ impl Package {
         let mut out: Vec<Missing> = Vec::new();
         let mut seen = HashSet::new();
         for r in &self.resources {
-            if seen.insert(r.path.clone()) && !Path::new(&r.path).is_file() {
+            if seen.insert(r.path.clone()) && r.data.is_none() && !crate::files::is_there(&r.path) {
                 out.push(Missing { path: r.path.clone(), what: MissingKind::Resource(r.kind), graphs: Vec::new() });
             }
         }
         for (.., path) in self.files() {
             if seen.insert(path.to_string())
-                && !Path::new(path).is_file()
+                && !crate::files::is_there(path)
                 && let Some(kind) = ResourceKind::of_path(path)
             {
                 out.push(Missing { path: path.to_string(), what: MissingKind::Resource(kind), graphs: Vec::new() });
@@ -308,6 +349,22 @@ impl Package {
             entry.name = name;
         }
         self.next_graph = self.next_graph.max(self.graphs.iter().map(|g| g.id.0).max().unwrap_or(0) + 1);
+        // The files the package holds: kept for whatever reads them, under the name their bytes
+        // give them (a file edited by hand could say another).
+        for r in &mut self.resources {
+            match &r.data {
+                Some(bytes) => {
+                    let named = crate::files::embedded_path(&r.path, bytes);
+                    if named != r.path {
+                        r.data = None;
+                    } else {
+                        crate::files::keep(&r.path, bytes);
+                    }
+                }
+                None if crate::files::is_embedded(&r.path) => r.data = crate::files::embedded(&r.path),
+                None => {}
+            }
+        }
         let mut paths = HashSet::new();
         self.resources.retain(|r| !r.path.trim().is_empty() && paths.insert(r.path.clone()));
         self.sync_resources();
@@ -358,6 +415,13 @@ pub enum PackageEdit {
     /// Files were copied (their files collected, see [`collect_plan`]): every path that said
     /// the first of a pair says the second.
     Relocate(Vec<(String, String)>),
+    /// Hold linked files in the package itself (each file of the package and what it holds,
+    /// read by whoever asks): every node that read one reads it there.
+    Embed(Vec<(String, Arc<Vec<u8>>)>),
+    /// Hold files in the package itself (the name each came as, and what it holds).
+    Import(Vec<(String, Arc<Vec<u8>>)>),
+    /// Take out the files no node reads.
+    RemoveUnused,
     /// Put nodes of a graph in a graph of their own, and use that graph in their place (see
     /// [`graph_from_selection`]).
     GraphFromSelection {
@@ -389,6 +453,9 @@ impl PackageEdit {
             PackageEdit::RemoveResource(_) => "Remove File",
             PackageEdit::Relink { .. } => "Relink",
             PackageEdit::Relocate(_) => "Collect Files",
+            PackageEdit::Embed(_) => "Embed Files",
+            PackageEdit::Import(_) => "Import Files",
+            PackageEdit::RemoveUnused => "Remove Unused Files",
             PackageEdit::GraphFromSelection { .. } => "Create Graph from Selection",
         }
     }
@@ -448,7 +515,7 @@ impl PackageEdit {
                     }
                     match ResourceKind::of_path(&path) {
                         Some(kind) => {
-                            package.resources.push(Resource { path, kind });
+                            package.resources.push(Resource::linked(path, kind));
                             added += 1;
                         }
                         None => unknown.push(file_name(&path)),
@@ -481,9 +548,63 @@ impl PackageEdit {
                     return Ok(PackageResult::default());
                 }
                 package.map_paths(|p| if p == from { to.clone() } else { p.to_string() });
+                for r in package.resources.iter_mut().filter(|r| r.path == to && !crate::files::is_embedded(&to)) {
+                    r.data = None;
+                }
                 let mut seen = HashSet::new();
                 package.resources.retain(|r| seen.insert(r.path.clone()));
                 changed
+            }
+            PackageEdit::Embed(files) => {
+                let mut embedded = 0;
+                for (path, bytes) in files {
+                    let Some(r) = package.resources.iter().find(|r| r.path == path && r.data.is_none()) else { continue };
+                    let held = Resource::embedded(&path, r.kind, bytes);
+                    let new = held.path.clone();
+                    package.map_paths(|p| if p == path { new.clone() } else { p.to_string() });
+                    if let Some(r) = package.resources.iter_mut().find(|r| r.path == new) {
+                        *r = held;
+                    }
+                    embedded += 1;
+                }
+                if embedded == 0 {
+                    return Ok(PackageResult::default());
+                }
+                let mut seen = HashSet::new();
+                package.resources.retain(|r| seen.insert(r.path.clone()));
+                changed
+            }
+            PackageEdit::Import(files) => {
+                let mut added = 0;
+                let mut unknown = Vec::new();
+                for (name, bytes) in files {
+                    let Some(kind) = ResourceKind::of_path(&name) else {
+                        unknown.push(file_name(&name));
+                        continue;
+                    };
+                    let held = Resource::embedded(&name, kind, bytes);
+                    if !package.resources.iter().any(|r| r.path == held.path) {
+                        package.resources.push(held);
+                        added += 1;
+                    }
+                }
+                if added == 0 && unknown.is_empty() {
+                    return Ok(PackageResult::default());
+                }
+                if added == 0 {
+                    return Err(format!("Not a file the package can use: {}", unknown.join(", ")));
+                }
+                let notice =
+                    (!unknown.is_empty()).then(|| format!("Not files the package can use: {}", unknown.join(", ")));
+                PackageResult { notice, ..changed }
+            }
+            PackageEdit::RemoveUnused => {
+                let unused: HashSet<String> = package.unused_resources().into_iter().map(|r| r.path.clone()).collect();
+                if unused.is_empty() {
+                    return Ok(PackageResult::default());
+                }
+                package.resources.retain(|r| !unused.contains(&r.path));
+                PackageResult { notice: Some(format!("{} file(s) no node read are gone", unused.len())), ..changed }
             }
             PackageEdit::Relocate(moves) => {
                 let moves: HashMap<String, String> = moves.into_iter().filter(|(from, to)| from != to).collect();
@@ -1256,7 +1377,8 @@ pub fn collect_plan(files: &[String], home: &Path, folder: &Path, exists: impl F
     let mut plan = Vec::new();
     for file in files {
         let path = Path::new(file);
-        if path.starts_with(home) {
+        // (What the package holds is in its file already.)
+        if path.starts_with(home) || crate::files::is_embedded(file) {
             continue;
         }
         let name = path.file_name().map_or_else(|| "file".to_string(), |n| n.to_string_lossy().to_string());
@@ -1279,7 +1401,7 @@ pub fn collect_plan(files: &[String], home: &Path, folder: &Path, exists: impl F
 /// system, where the two share a root (a drive on Windows); as it is where they do not.
 pub fn relative_path(path: &str, dir: &Path) -> String {
     let p = Path::new(path);
-    if path.trim().is_empty() || !p.is_absolute() || !dir.is_absolute() {
+    if path.trim().is_empty() || crate::files::is_embedded(path) || !p.is_absolute() || !dir.is_absolute() {
         return path.to_string();
     }
     let parts: Vec<Component<'_>> = p.components().collect();
@@ -1301,7 +1423,7 @@ pub fn relative_path(path: &str, dir: &Path) -> String {
 /// A path a file in `dir` says, as a path on this system: a relative one is taken from
 /// `dir` (`/` separates its parts on every system; `\\` too on Windows).
 pub fn resolve_path(stored: &str, dir: &Path) -> String {
-    if stored.trim().is_empty() || Path::new(stored).is_absolute() {
+    if stored.trim().is_empty() || crate::files::is_embedded(stored) || Path::new(stored).is_absolute() {
         return stored.to_string();
     }
     let mut out = dir.to_path_buf();
@@ -1692,6 +1814,67 @@ mod tests {
         assert!(!uses_graph(&shelf, Some(lib_path), stone, (None, wall)));
     }
 
+    /// Files a package holds itself: imported, or embedded in place of the files they were
+    /// linked to (every node that read one reads it there); written into the package's file
+    /// and read back; never missing nor collected; brought along by a node pasted into another
+    /// package; linked again to a file; and those no node reads taken out.
+    #[test]
+    fn files_a_package_holds_itself() {
+        let dir = std::env::temp_dir().join(format!("brewed_embed_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bricks = dir.join("bricks.png").display().to_string();
+        std::fs::write(&bricks, b"not really a png").unwrap();
+        let mut g = Graph::default();
+        let bitmap = g.add_node(NodeKind::BITMAP, [0.0, 0.0]);
+        g.node_mut(bitmap).unwrap().param_mut("path").unwrap().value = ParamValue::Text(bricks.clone());
+        let mut package = Package::new("Wall", g);
+        let main = package.first();
+        assert_eq!(package.resources, [Resource::linked(bricks.clone(), ResourceKind::Bitmap)]);
+
+        // Embedded: the node reads it in the package, by what it holds.
+        let bytes = Arc::new(std::fs::read(&bricks).unwrap());
+        PackageEdit::Embed(vec![(bricks.clone(), bytes.clone())]).apply(&mut package).unwrap();
+        let held = &package.resources[0];
+        assert!(held.is_embedded() && crate::files::is_embedded(&held.path) && held.name() == "bricks.png");
+        let read_by_node = package.graph(main).unwrap().graph.node(bitmap).unwrap().text("path").to_string();
+        assert_eq!(read_by_node, held.path);
+        assert_eq!(crate::files::read(&held.path).unwrap(), bytes);
+        std::fs::remove_file(&bricks).unwrap();
+        assert!(package.missing().is_empty(), "the file on disk is gone, but the package holds it");
+        assert!(collect_plan(&package.all_files(), &dir.join("elsewhere"), &dir, |_| false).is_empty());
+
+        // Imported, beside it; written into the file and read back as it was.
+        let font = Arc::new(b"a font".to_vec());
+        PackageEdit::Import(vec![("C:/fonts/Serif.ttf".into(), font.clone())]).apply(&mut package).unwrap();
+        assert_eq!(package.resources.len(), 2);
+        let json = crate::project::to_json(&package, &HashMap::new(), main, Some(&dir)).unwrap();
+        let loaded = crate::project::from_json(&json, Some(&dir), "x").unwrap().package;
+        assert_eq!(loaded, package);
+        assert_eq!(loaded.resources[1].data.as_deref(), Some(font.as_ref()));
+
+        // A node pasted into another package brings the file it reads.
+        let clip = package.graph(main).unwrap().graph.copy_nodes(&[bitmap]);
+        let mut other = Package::new("Other", Graph::default());
+        let first = other.first();
+        Arc::make_mut(&mut other.graph_mut(first).unwrap().graph).paste(&clip, [0.0, 0.0]);
+        assert!(other.sync_resources());
+        assert!(other.resources[0].is_embedded() && other.resources[0].path == read_by_node);
+
+        // Linked to a file again: no longer held.
+        let copy = dir.join("bricks copy.png").display().to_string();
+        PackageEdit::Relink { from: read_by_node.clone(), to: copy.clone() }.apply(&mut package).unwrap();
+        let linked = package.resources.iter().find(|r| r.path == copy).unwrap();
+        assert!(!linked.is_embedded());
+
+        // The font no node reads goes; the file the Bitmap reads stays.
+        let result = PackageEdit::RemoveUnused.apply(&mut package).unwrap();
+        assert!(result.notice.is_some());
+        assert_eq!(package.resources.len(), 1);
+        assert_eq!(package.resources[0].path, copy);
+        assert_eq!(PackageEdit::RemoveUnused.apply(&mut package).unwrap(), PackageResult::default());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn paths_relative_to_the_file() {
         let (dir, path, other) = if cfg!(windows) {
@@ -1742,7 +1925,7 @@ mod tests {
         let bitmap = g.add_node(NodeKind::BITMAP, [0.0, 0.0]);
         g.node_mut(bitmap).unwrap().param_mut("path").unwrap().value = ParamValue::Text(files[0].clone());
         let mut package = Package::new("Wall", g);
-        package.resources.push(Resource { path: files[1].clone(), kind: ResourceKind::Bitmap });
+        package.resources.push(Resource::linked(files[1].clone(), ResourceKind::Bitmap));
         package.sync_resources();
         assert_eq!(package.all_files(), vec![files[0].clone(), files[1].clone()]);
         let result = PackageEdit::Relocate(plan[..2].to_vec()).apply(&mut package).unwrap();
@@ -1759,7 +1942,7 @@ mod tests {
         let bitmap = g.add_node(NodeKind::BITMAP, [0.0, 0.0]);
         g.node_mut(bitmap).unwrap().param_mut("path").unwrap().value = ParamValue::Text("/old/bricks.png".into());
         let mut package = Package::new("Main", g);
-        assert_eq!(package.resources, vec![Resource { path: "/old/bricks.png".into(), kind: ResourceKind::Bitmap }]);
+        assert_eq!(package.resources, vec![Resource::linked("/old/bricks.png".into(), ResourceKind::Bitmap)]);
         assert!(
             PackageEdit::RemoveResource("/old/bricks.png".into()).apply(&mut package.clone()).is_err(),
             "a node reads it"

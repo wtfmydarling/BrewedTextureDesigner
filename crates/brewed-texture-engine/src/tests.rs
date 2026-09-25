@@ -1397,6 +1397,13 @@ fn bitmap_node_decodes_and_resamples() {
     assert!(close(green[0], 0.0, 0.02) && close(green[1], 1.0, 0.02), "{green:?}");
     assert!(close(yellow[0], 1.0, 0.02) && close(yellow[1], 1.0, 0.02) && close(yellow[2], 0.0, 0.02), "{yellow:?}");
 
+    // The same picture held by a package (see `brewed_texture_core::files`): the same pixels.
+    let bytes = std::sync::Arc::new(std::fs::read(&path).unwrap());
+    let held = brewed_texture_core::files::embedded_path("tex.png", &bytes);
+    brewed_texture_core::files::keep(&held, &bytes);
+    set(&mut g, b, "path", ParamValue::Text(held));
+    assert_eq!(eval_read(&mut e, &g, b), data);
+
     // A missing file is an error on the node, not a crash.
     set(&mut g, b, "path", ParamValue::Text(dir.join("missing.png").display().to_string()));
     evaluate_blocking(&mut e, &g);

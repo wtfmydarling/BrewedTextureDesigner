@@ -84,10 +84,10 @@ fn fonts(font: &str) -> Result<(Arc<usvg::fontdb::Database>, String), String> {
     if font.trim().is_empty() {
         return Ok((inter.clone(), "Inter".to_string()));
     }
-    let data = std::fs::read(font).map_err(|e| format!("Cannot read the font '{font}': {e}"))?;
+    let data = brewed_texture_core::files::read(font)?;
     let mut db = (**inter).clone();
     let before = db.len();
-    db.load_font_data(data);
+    db.load_font_data(data.to_vec());
     let family = db
         .faces()
         .skip(before)
@@ -123,11 +123,11 @@ fn tree(job: &VectorJob) -> Result<(usvg::Tree, [f32; 2], [f32; 2]), String> {
             if path.trim().is_empty() {
                 return Err("No file selected".into());
             }
-            let data = std::fs::read(path).map_err(|e| format!("Cannot open '{path}': {e}"))?;
-            let options = usvg::Options {
-                resources_dir: std::path::Path::new(path).parent().map(Into::into),
-                ..usvg::Options::default()
-            };
+            let data = brewed_texture_core::files::read(path)?;
+            // What it links to is found beside it (a picture its package holds has nothing
+            // beside it).
+            let beside = (!brewed_texture_core::files::is_embedded(path)).then(|| std::path::Path::new(path).parent()).flatten();
+            let options = usvg::Options { resources_dir: beside.map(Into::into), ..usvg::Options::default() };
             let tree = usvg::Tree::from_data(&data, &options).map_err(|e| format!("Cannot read '{path}': {e}"))?;
             let size = tree.size();
             let (sw, sh) = (size.width().max(1e-3), size.height().max(1e-3));
@@ -227,6 +227,24 @@ pub fn rasterize(job: &VectorJob) -> Result<Raster, String> {
         return Err(format!("Cannot draw at {w}×{h}"));
     }
     Ok(if color { Raster::Color(pixels) } else { Raster::Gray(pixels) })
+}
+
+/// A picture of a file of vector graphics, or of a font (`font`: "Aa" in it, white), `size`
+/// pixels square, the picture fitted inside: RGBA of 8 bits, not premultiplied. What the
+/// Explorer shows of the file (see `brewed_texture_core::files`: on disk, or held by a
+/// package).
+pub fn preview(path: &str, font: bool, size: u32) -> Result<Vec<u8>, String> {
+    let what = if font {
+        Vector::Text { text: "Aa".into(), font: path.into(), size: size as f32 * 0.62, align: 1, spacing: 0.0 }
+    } else {
+        Vector::Svg { path: path.into(), fit: 0, color: true }
+    };
+    let job = VectorJob { what, size: [size, size], offset: [0.0, 0.0], rotation: 0.0, scale: 1.0, tiling: 0 };
+    let byte = |h: &u16| (half::f16::from_bits(*h).to_f32().clamp(0.0, 1.0) * 255.0).round() as u8;
+    Ok(match rasterize(&job)? {
+        Raster::Color(pixels) => pixels.iter().map(byte).collect(),
+        Raster::Gray(coverage) => coverage.iter().flat_map(|c| [255, 255, 255, byte(c)]).collect(),
+    })
 }
 
 #[cfg(test)]

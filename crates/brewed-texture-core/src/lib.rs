@@ -17,6 +17,7 @@ pub mod document;
 pub mod edit;
 pub mod eval;
 pub mod expr;
+pub mod files;
 pub mod gradient;
 pub mod graph;
 pub mod history;

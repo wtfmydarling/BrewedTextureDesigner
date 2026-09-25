@@ -556,6 +556,33 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
                 .style(style::pick_list)
                 .into()
         }
+        // A file the package holds: its name, not a path to type into.
+        (ParamKind::File { .. }, ParamValue::Text(path)) if brewed_texture_core::files::is_embedded(path) => row![
+            tip(
+                container(
+                    row![
+                        icon(Icon::Package, 12.0, style::TEXT_FAINT),
+                        text(brewed_texture_core::package::file_name(path)).size(style::SMALL).wrapping(text::Wrapping::None),
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+                )
+                .padding([4, 6])
+                .width(Length::Fill)
+                .clip(true)
+                .style(style::field_box),
+                "Held in the package's file (see the Explorer's Resources)",
+                tooltip::Position::Top,
+            ),
+            tip(
+                button(icon(Icon::Folder, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(Message::BrowseFile(id, key.to_string())),
+                "Choose another file",
+                tooltip::Position::Top,
+            ),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center)
+        .into(),
         (ParamKind::File { .. }, ParamValue::Text(path)) => row![
             text_input("no file", path)
                 .on_input(move |t| set(id, key, ParamValue::Text(t)))

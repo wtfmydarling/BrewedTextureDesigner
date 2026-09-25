@@ -1343,6 +1343,8 @@ fn stays_inside(message: &Message) -> bool {
             ExplorerMessage::Save(_)
                 | ExplorerMessage::SaveAs(_)
                 | ExplorerMessage::LinkFiles(_)
+                | ExplorerMessage::ImportFiles(_)
+                | ExplorerMessage::SaveResourceAs(..)
                 | ExplorerMessage::Locate(..)
                 | ExplorerMessage::CollectFiles(_),
         ) => false,
@@ -2034,6 +2036,77 @@ fn nodes_made_a_graph_of_their_own() {
     assert!(chosen.iter().all(|id| w.app.graph().contains(*id)));
 }
 
+/// A package's files are in its Resources folder, which is there only while it has files:
+/// right in it while they are of one kind, in a folder of each kind once they are of more.
+/// Each says whether the package links to it or holds it; what reads a file, and what uses a
+/// graph, is in its notes; the files no node reads go with one click; files are imported
+/// into the package, and linked ones held in it, every node reading them there.
+#[test]
+fn the_files_of_a_package_in_its_resources_folder() {
+    use crate::app::Fold;
+    use crate::view::explorer::{Uses, notes};
+    use std::sync::Arc;
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let dir = scratch("resources");
+    let (a, b) = (dir.join("a.png"), dir.join("b.png"));
+    for p in [&a, &b] {
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([90, 60, 30, 255])).save(p).expect("a picture");
+    }
+    let key = w.app.doc_key;
+    let shown = |w: &mut Harness, what: &str| !texts(w, what).is_empty();
+    assert!(!shown(&mut w, "Resources"), "no files, no folder");
+    // Pictures: right in Resources.
+    w.send(Message::Explorer(ExplorerMessage::FilesPicked(key, vec![a.clone(), b.clone()])));
+    assert!(shown(&mut w, "Resources") && shown(&mut w, "a.png") && !shown(&mut w, "Bitmaps"));
+    // A font, imported (held by the package): a folder of each kind.
+    let font = dir.join("Serif.ttf").display().to_string();
+    let files = vec![(font.clone(), Arc::new(b"not really a font".to_vec()))];
+    w.send(Message::Explorer(ExplorerMessage::FilesRead { key, embed: false, files, failed: Vec::new() }));
+    assert!(shown(&mut w, "Bitmaps") && shown(&mut w, "Fonts") && shown(&mut w, "Serif.ttf"));
+    let held = w.app.doc.package().resources.iter().find(|r| r.name() == "Serif.ttf").expect("the font");
+    assert!(held.is_embedded());
+    // Folded, the folder of a kind hides its files.
+    w.send(Message::Explorer(ExplorerMessage::Toggle(Fold::Kind(key, brewed_texture_core::ResourceKind::Bitmap))));
+    assert!(!shown(&mut w, "a.png") && shown(&mut w, "Serif.ttf"));
+    w.send(Message::Explorer(ExplorerMessage::Toggle(Fold::Kind(key, brewed_texture_core::ResourceKind::Bitmap))));
+
+    // What reads a file is in its notes; so is what uses a graph.
+    let a_path = a.display().to_string();
+    w.send(Message::Explorer(ExplorerMessage::AddResourceNode(a_path.clone(), brewed_texture_core::ResourceKind::Bitmap, None)));
+    let graph = w.app.doc.entry().name.clone();
+    let uses = Uses::of(&w.app);
+    assert_eq!(notes(&uses.files[&(key, a_path.clone())], "Read by"), format!("Notes\n—\nRead by Bitmap in {graph}"));
+    assert!(!uses.files.contains_key(&(key, b.display().to_string())), "b is read by nothing");
+    let blur = w.app.graph().nodes_of(NodeKind::BLUR).next().expect("the demo blurs").id;
+    w.app.ui.selection = [blur].into_iter().collect();
+    w.send(Message::GraphFromSelection);
+    let made = w.app.doc.package().graphs.last().expect("the graph made").id;
+    assert_eq!(notes(&Uses::of(&w.app).graphs[&(key, made)], "Used by"), format!("Notes\n—\nUsed by {graph}"));
+    draw_frame(&mut w, std::time::Instant::now());
+    assert_eq!(broken(&w.app), None);
+
+    // The files no node reads go: b and the font; a stays.
+    for target in [ContextTarget::ResourcesFolder(key), ContextTarget::ResourceItem(key, font.clone())] {
+        w.app.ui.context = Some(ContextMenu { at: Point::new(120.0, 200.0), target });
+        draw_frame(&mut w, std::time::Instant::now());
+    }
+    w.app.ui.context = None;
+    w.send(Message::Explorer(ExplorerMessage::RemoveUnused(key)));
+    let names: Vec<String> = w.app.doc.package().resources.iter().map(|r| r.name()).collect();
+    assert_eq!(names, ["a.png"]);
+    assert!(!shown(&mut w, "Bitmaps"), "one kind again: no folder of it");
+
+    // a, held in the package: the Bitmap reads it there.
+    let bytes = Arc::new(std::fs::read(&a).expect("a"));
+    w.send(Message::Explorer(ExplorerMessage::FilesRead { key, embed: true, files: vec![(a_path, bytes)], failed: Vec::new() }));
+    let held = &w.app.doc.package().resources[0];
+    assert!(held.is_embedded());
+    let read = w.app.graph().nodes_of(NodeKind::BITMAP).next().map(|n| n.text("path").to_string());
+    assert_eq!(read.as_deref(), Some(held.path.as_str()));
+    assert!(shown(&mut w, "a.png"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The Explorer's rows and context menus, drawn with several packages, files that are there
 /// and one that is not, and every menu of it open in turn.
 #[test]
@@ -2056,6 +2129,7 @@ fn the_explorer_and_its_menus() {
         ContextTarget::GraphItem(w.app.doc_key, graph),
         ContextTarget::ResourceItem(key, picture.display().to_string()),
         ContextTarget::ResourceItem(key, gone.display().to_string()),
+        ContextTarget::ResourcesFolder(key),
     ];
     for target in targets {
         w.app.ui.context = Some(ContextMenu { at: Point::new(120.0, 200.0), target });
@@ -2064,7 +2138,7 @@ fn the_explorer_and_its_menus() {
     }
     w.app.ui.context = None;
     // The picture, double-clicked in the Explorer, is a Bitmap node reading it.
-    w.send(Message::Explorer(ExplorerMessage::Toggle(key)));
+    w.send(Message::Explorer(ExplorerMessage::Toggle(crate::app::Fold::Package(key))));
     let bitmap = brewed_texture_core::ResourceKind::Bitmap;
     w.send(Message::Explorer(ExplorerMessage::AddResourceNode(picture.display().to_string(), bitmap, None)));
     let read = w.app.graph().nodes_of(NodeKind::BITMAP).next().map(|n| n.text("path").to_string());

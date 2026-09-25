@@ -35,6 +35,29 @@ fn separator<'a>() -> Element<'a, Message> {
     .into()
 }
 
+/// What is done to the files of a package: linked, imported (held in the package), those
+/// linked held in it, and those no node reads taken out.
+fn file_items<'a>(app: &App, key: u64) -> Vec<Element<'a, Message>> {
+    let package = app.package_doc(key).map(|d| d.package());
+    let linked: Vec<String> = package
+        .map(|p| {
+            p.resources
+                .iter()
+                .filter(|r| !r.is_embedded() && app.res.files.get(&r.path).is_none_or(|f| f.there))
+                .map(|r| r.path.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let unused = package.is_some_and(|p| !p.unused_resources().is_empty());
+    let explorer = |m: ExplorerMessage| Message::Explorer(m);
+    vec![
+        item("Link Files…", "", Some(explorer(ExplorerMessage::LinkFiles(key)))),
+        item("Import Files…", "", Some(explorer(ExplorerMessage::ImportFiles(key)))),
+        item("Embed the Linked Files", "", (!linked.is_empty()).then(|| explorer(ExplorerMessage::Embed(key, linked)))),
+        item("Remove Unused Files", "", unused.then(|| explorer(ExplorerMessage::RemoveUnused(key)))),
+    ]
+}
+
 pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
     let items: Vec<Element<'a, Message>> = match &menu.target {
         ContextTarget::Node(id) => {
@@ -75,17 +98,19 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
         ],
         ContextTarget::Package(key) => {
             let key = *key;
-            vec![
-                item("New Graph", "", Some(Message::Explorer(ExplorerMessage::NewGraph(key)))),
-                item("Link Files…", "", Some(Message::Explorer(ExplorerMessage::LinkFiles(key)))),
+            let mut items = vec![item("New Graph", "", Some(Message::Explorer(ExplorerMessage::NewGraph(key))))];
+            items.extend(file_items(app, key));
+            items.extend([
                 item("Collect Files", "", Some(Message::Explorer(ExplorerMessage::CollectFiles(key)))),
                 separator(),
                 item("Save", "", Some(Message::Explorer(ExplorerMessage::Save(key)))),
                 item("Save As…", "", Some(Message::Explorer(ExplorerMessage::SaveAs(key)))),
                 separator(),
                 item("Close", "", Some(Message::Explorer(ExplorerMessage::Close(key)))),
-            ]
+            ]);
+            items
         }
+        ContextTarget::ResourcesFolder(key) => file_items(app, *key),
         ContextTarget::GraphItem(key, graph) => {
             let (key, graph) = (*key, *graph);
             let many = app.package_doc(key).is_some_and(|d| d.package().graphs.len() > 1);
@@ -100,18 +125,29 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
             ]
         }
         ContextTarget::ResourceItem(key, path) => {
-            let there = std::path::Path::new(path).is_file();
+            let key = *key;
+            // As the files were looked at last (not looked at yet: taken as there).
+            let there = app.res.files.get(path).is_none_or(|f| f.there);
             let kind = brewed_texture_core::ResourceKind::of_path(path);
-            vec![
-                item(
-                    "Add a Node Reading It",
-                    "double-click",
-                    kind.filter(|_| there).map(|k| Message::Explorer(ExplorerMessage::AddResourceNode(path.clone(), k, None))),
-                ),
-                item(if there { "Relink…" } else { "Locate…" }, "", Some(Message::Explorer(ExplorerMessage::Locate(*key, path.clone())))),
-                separator(),
-                item("Remove from Package", "", Some(Message::Explorer(ExplorerMessage::RemoveResource(*key, path.clone())))),
-            ]
+            let held = brewed_texture_core::files::is_embedded(path);
+            let explorer = |m: ExplorerMessage| Some(Message::Explorer(m));
+            let mut items = vec![item(
+                "Add a Node Reading It",
+                "double-click",
+                kind.filter(|_| there).and_then(|k| explorer(ExplorerMessage::AddResourceNode(path.clone(), k, None))),
+            )];
+            if held {
+                items.push(item("Save as a File and Link It…", "", explorer(ExplorerMessage::SaveResourceAs(key, path.clone()))));
+            } else {
+                items.push(item(
+                    "Embed in the Package",
+                    "",
+                    there.then(|| Message::Explorer(ExplorerMessage::Embed(key, vec![path.clone()]))),
+                ));
+                items.push(item(if there { "Relink…" } else { "Locate…" }, "", explorer(ExplorerMessage::Locate(key, path.clone()))));
+            }
+            items.extend([separator(), item("Remove from Package", "", explorer(ExplorerMessage::RemoveResource(key, path.clone())))]);
+            items
         }
         ContextTarget::Canvas { graph_pos } => vec![
             item(

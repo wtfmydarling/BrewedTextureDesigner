@@ -387,7 +387,7 @@ mod tests {
         g.node_mut(bitmap).unwrap().param_mut("path").unwrap().value = crate::ParamValue::Text(somewhere(&["tex", "a.png"]));
         package.add_graph("Uses it", g);
         package.sync_resources();
-        package.resources.push(Resource { path: somewhere(&["fonts", "b.ttf"]), kind: crate::package::ResourceKind::Font });
+        package.resources.push(Resource::linked(somewhere(&["fonts", "b.ttf"]), crate::package::ResourceKind::Font));
         package
     }
 

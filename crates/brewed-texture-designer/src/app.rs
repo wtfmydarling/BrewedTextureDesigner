@@ -144,6 +144,17 @@ pub enum ContextTarget {
     GraphItem(u64, GraphId),
     /// A file of a package in the Explorer.
     ResourceItem(u64, String),
+    /// The Resources folder of a package in the Explorer.
+    ResourcesFolder(u64),
+}
+
+/// What folds in the Explorer: a package, its Resources folder, and the folder of a kind of
+/// file in it (there when the package has files of more than one kind).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Fold {
+    Package(u64),
+    Resources(u64),
+    Kind(u64, brewed_texture_core::ResourceKind),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -319,7 +330,8 @@ pub struct Ui {
     /// lay the new nodes out in a column.
     pub drop_burst: Option<(Instant, u32)>,
     /// Packages of the Explorer whose graphs and files are not shown.
-    pub explorer_collapsed: HashSet<u64>,
+    /// What is folded in the Explorer.
+    pub explorer_folded: HashSet<Fold>,
     /// A graph being renamed in the Explorer: its package, itself, and the name typed.
     pub renaming_graph: Option<(u64, GraphId, String)>,
     /// Quitting: the packages whose unsaved changes go.
@@ -362,6 +374,12 @@ pub struct Results {
     /// done, rather than blink between the changes of a drag.
     pub slow: bool,
     pub exports_pending: usize,
+    /// What is known of the files the open packages use, by path (see [`crate::previews`]).
+    pub files: HashMap<String, crate::previews::FileState>,
+    /// The files are being looked at.
+    pub looking: bool,
+    /// The files the open packages used when they were looked at last.
+    pub looked: Vec<String>,
 }
 
 pub struct App {
@@ -513,8 +531,8 @@ pub enum AddMenuMessage {
 /// What is done in the Explorer.
 #[derive(Clone, Debug)]
 pub enum ExplorerMessage {
-    /// Show or hide what a package holds.
-    Toggle(u64),
+    /// Show or hide what a package, or a folder of it, holds.
+    Toggle(Fold),
     OpenGraph(u64, GraphId),
     NewGraph(u64),
     DuplicateGraph(u64, GraphId),
@@ -541,6 +559,21 @@ pub enum ExplorerMessage {
     CollectFiles(u64),
     /// The files were copied, or some could not be.
     FilesCollected(u64, Collected),
+    /// Hold files in a package itself (a file dialog).
+    ImportFiles(u64),
+    ImportPicked(u64, Vec<PathBuf>),
+    /// Hold these files of a package, linked now, in the package itself.
+    Embed(u64, Vec<String>),
+    /// Files were read for a package, to import (or, `embed`, to hold those it links to), and
+    /// what could not be read.
+    FilesRead { key: u64, embed: bool, files: Vec<(String, Arc<Vec<u8>>)>, failed: Vec<String> },
+    /// Write a file a package holds to disk, and link to it instead (a file dialog).
+    SaveResourceAs(u64, String),
+    ResourceSavePicked(u64, String, Option<PathBuf>),
+    /// A file a package held was written to disk (where), or could not be.
+    ResourceSaved(u64, String, Result<String, String>),
+    /// Take out of a package the files no node reads.
+    RemoveUnused(u64),
 }
 
 /// What copying the files of a package did.
@@ -556,6 +589,11 @@ pub struct Collected {
 pub enum Message {
     PollGpu,
     GpuName(String),
+    /// Look at the files the open packages use (see [`crate::previews`]).
+    LookAtFiles,
+    FilesLooked(Vec<crate::previews::Look>),
+    /// A picture of a file (of it as it was when it changed last), or why none could be made.
+    PreviewMade(String, Option<std::time::SystemTime>, Result<(Vec<u8>, u32, u32, String), String>),
     Engine(Event),
     Runtime(iced::Event, iced::event::Status, window::Id),
     Tick,
@@ -811,7 +849,7 @@ impl App {
                 show_functions: false,
                 screen_pick: None,
                 drop_burst: None,
-                explorer_collapsed: HashSet::new(),
+                explorer_folded: HashSet::new(),
                 renaming_graph: None,
                 discarded: HashSet::new(),
             },
@@ -922,6 +960,10 @@ impl App {
         }
         if self.ui.status.is_some() {
             subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
+        }
+        // The files the packages use, on disk: they can come, go or change.
+        if !self.res.looked.is_empty() {
+            subs.push(iced::time::every(Duration::from_secs(2)).map(|_| Message::LookAtFiles));
         }
         #[cfg(any(test, feature = "dev-tools"))]
         self.dev_subscriptions(&mut subs);
@@ -1536,6 +1578,10 @@ impl App {
         let task = self.handle(message);
         self.refresh();
         self.sync_expression();
+        // A file a package began to use is looked at now, not at the next look.
+        if !self.res.looking && self.new_files() {
+            return Task::batch([task, self.look_at_files()]);
+        }
         task
     }
 
@@ -1566,6 +1612,9 @@ impl App {
 
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::LookAtFiles => return self.look_at_files(),
+            Message::FilesLooked(looks) => return self.files_looked(looks),
+            Message::PreviewMade(path, of, made) => self.preview_made(path, of, made),
             Message::PollGpu => {
                 if let Some(handles) = gpu::take() {
                     #[cfg(any(test, feature = "dev-tools"))]

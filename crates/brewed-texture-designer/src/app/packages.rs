@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use iced::{Task, Vector};
 
@@ -19,7 +20,7 @@ use brewed_texture_core::{
     Document, Edit, Graph, GraphId, GraphRef, Instance, Interface, NodeId, NodeKind, ParamValue,
 };
 
-use super::{App, Collected, ContextMenu, Dialog, DragPayload, ExplorerMessage, Message, MissingFiles, PendingAction, blocking};
+use super::{App, Collected, ContextMenu, Dialog, DragPayload, ExplorerMessage, Fold, Message, MissingFiles, PendingAction, blocking};
 
 /// A package open in the Explorer, other than the one being edited.
 pub struct OpenPackage {
@@ -55,6 +56,31 @@ impl Library for Shelf<'_> {
             Some(p) => self.open.iter().find(|(k, _)| k == p).map(|(_, package)| *package).or_else(|| self.deps.get(p)),
         }
     }
+}
+
+/// Read `paths` for the package open as `key`, on a thread of its own: to import them into it,
+/// or (`embed`) to hold in it the files it links to.
+fn read_files(key: u64, paths: Vec<String>, embed: bool) -> Task<Message> {
+    if paths.is_empty() {
+        return Task::none();
+    }
+    Task::perform(
+        blocking(move || {
+            let mut files = Vec::new();
+            let mut failed = Vec::new();
+            for path in paths {
+                match std::fs::read(&path) {
+                    Ok(bytes) => files.push((path, Arc::new(bytes))),
+                    Err(e) => failed.push(format!("{} ({e})", package::file_name(&path))),
+                }
+            }
+            (files, failed)
+        }),
+        move |read| {
+            let (files, failed) = read.unwrap_or_else(|| (Vec::new(), vec!["the files".into()]));
+            Message::Explorer(ExplorerMessage::FilesRead { key, embed, files, failed })
+        },
+    )
 }
 
 /// Copy each file of `plan` (where it is, where its copy goes), making the folders; a file is
@@ -309,7 +335,9 @@ impl App {
             self.replace_package(package, None, HashMap::new(), open);
         }
         self.views.retain(|(k, _), _| *k != key);
-        self.ui.explorer_collapsed.remove(&key);
+        self.ui.explorer_folded.retain(|f| match f {
+            Fold::Package(k) | Fold::Resources(k) | Fold::Kind(k, _) => *k != key,
+        });
         // A package still used by the others is read from its file again.
         self.load_dependencies();
     }
@@ -665,13 +693,90 @@ impl App {
         self.set_status(format!("Relinked {count} file(s)"), false);
     }
 
+    // ------------------------------------------------------------------ the files packages use
+
+    /// The files the open packages use, each once, and their kinds.
+    pub(super) fn used_files(&self) -> Vec<(String, ResourceKind)> {
+        let mut seen = HashSet::new();
+        self.all_docs()
+            .flat_map(|d| d.package().resources.iter())
+            .filter(|r| seen.insert(r.path.clone()))
+            .map(|r| (r.path.clone(), r.kind))
+            .collect()
+    }
+
+    /// Do the open packages use files that were not there when the files were looked at last?
+    pub(super) fn new_files(&self) -> bool {
+        let looked: HashSet<&String> = self.res.looked.iter().collect();
+        self.used_files().iter().any(|(p, _)| !looked.contains(p))
+    }
+
+    /// Look at the files the open packages use, on a thread of its own (see
+    /// [`crate::previews`]); unless they are being looked at.
+    pub(super) fn look_at_files(&mut self) -> Task<Message> {
+        if self.res.looking {
+            return Task::none();
+        }
+        let paths: Vec<String> = self.used_files().into_iter().map(|(p, _)| p).collect();
+        self.res.looked = paths.clone();
+        if paths.is_empty() {
+            self.res.files.clear();
+            return Task::none();
+        }
+        self.res.looking = true;
+        Task::perform(blocking(move || crate::previews::look(&paths)), |looks| Message::FilesLooked(looks.unwrap_or_default()))
+    }
+
+    /// What looking at the files found: a picture is made of each that is there and changed
+    /// since its last one (a file on disk edited elsewhere), on a thread of its own.
+    pub(super) fn files_looked(&mut self, looks: Vec<crate::previews::Look>) -> Task<Message> {
+        self.res.looking = false;
+        let kinds: HashMap<String, ResourceKind> = self.used_files().into_iter().collect();
+        self.res.files.retain(|path, _| kinds.contains_key(path));
+        let mut tasks = Vec::new();
+        for look in looks {
+            let Some(kind) = kinds.get(&look.path).copied() else { continue };
+            let state = self.res.files.entry(look.path.clone()).or_default();
+            (state.there, state.modified, state.bytes) = (look.there, look.modified, look.bytes);
+            if state.wants_preview() {
+                state.making = true;
+                let (path, modified) = (look.path, look.modified);
+                let made = path.clone();
+                tasks.push(Task::perform(blocking(move || crate::previews::make(&made, kind)), move |made| {
+                    let made = made.unwrap_or_else(|| Err("The picture could not be made".into()));
+                    Message::PreviewMade(path.clone(), modified, made)
+                }));
+            }
+        }
+        Task::batch(tasks)
+    }
+
+    /// A picture of a file was made (of the file as it was when it changed at `of`), or not.
+    pub(super) fn preview_made(
+        &mut self,
+        path: String,
+        of: Option<std::time::SystemTime>,
+        made: Result<(Vec<u8>, u32, u32, String), String>,
+    ) {
+        let Some(state) = self.res.files.get_mut(&path) else { return };
+        state.making = false;
+        match made {
+            Ok((rgba, w, h, about)) => {
+                let image = iced::widget::image::Handle::from_rgba(w, h, rgba);
+                state.preview = Some(crate::previews::Preview { image, about, of });
+                state.failed = None;
+            }
+            Err(e) => state.failed = Some((of, e)),
+        }
+    }
+
     // ------------------------------------------------------------------ the Explorer
 
     pub(super) fn explorer_message(&mut self, msg: ExplorerMessage) -> Task<Message> {
         match msg {
-            ExplorerMessage::Toggle(key) => {
-                if !self.ui.explorer_collapsed.remove(&key) {
-                    self.ui.explorer_collapsed.insert(key);
+            ExplorerMessage::Toggle(fold) => {
+                if !self.ui.explorer_folded.remove(&fold) {
+                    self.ui.explorer_folded.insert(fold);
                 }
             }
             ExplorerMessage::OpenGraph(key, graph) => {
@@ -780,6 +885,109 @@ impl App {
                             if let Some(n) = result.notice {
                                 self.set_status(n, true);
                             }
+                        }
+                        Err(e) => self.set_status(e, true),
+                    }
+                }
+            }
+            ExplorerMessage::ImportFiles(key) => {
+                self.close_popups();
+                let extensions: Vec<&'static str> =
+                    ResourceKind::ALL.iter().flat_map(|k| k.extensions().iter().copied()).collect();
+                return Task::perform(
+                    blocking(move || {
+                        let mut dialog = rfd::FileDialog::new()
+                            .set_title("Import files into the package")
+                            .add_filter("Images, vector graphics and fonts", &extensions);
+                        for kind in ResourceKind::ALL {
+                            dialog = dialog.add_filter(kind.name(), kind.extensions());
+                        }
+                        dialog.pick_files()
+                    }),
+                    move |files| {
+                        Message::Explorer(ExplorerMessage::ImportPicked(key, files.flatten().unwrap_or_default()))
+                    },
+                );
+            }
+            ExplorerMessage::ImportPicked(key, files) => {
+                let paths: Vec<String> = files.iter().map(|p| clean(p)).collect();
+                return read_files(key, paths, false);
+            }
+            ExplorerMessage::Embed(key, paths) => {
+                self.close_popups();
+                return read_files(key, paths, true);
+            }
+            ExplorerMessage::FilesRead { key, embed, files, failed } => {
+                let count = files.len();
+                let edit = if embed { PackageEdit::Embed(files) } else { PackageEdit::Import(files) };
+                let applied = match self.package_doc_mut(key) {
+                    Some(doc) if count > 0 => doc.apply_package(edit).map(Some),
+                    _ => Ok(None),
+                };
+                let mut said = match applied {
+                    Ok(Some(result)) => result.notice.unwrap_or_else(|| {
+                        let what = if embed { "is held by" } else { "went into" };
+                        format!("{count} file(s): each {what} the package, and saved in its file")
+                    }),
+                    Ok(None) => String::new(),
+                    Err(e) => e,
+                };
+                if !failed.is_empty() {
+                    said = format!("{said}{}could not be read: {}", if said.is_empty() { "" } else { "; " }, failed.join(", "));
+                }
+                if !said.is_empty() {
+                    self.set_status(said, !failed.is_empty());
+                }
+            }
+            ExplorerMessage::SaveResourceAs(key, path) => {
+                self.close_popups();
+                let name = package::file_name(&path);
+                let folder = self.package_doc(key).and_then(|d| d.path()).and_then(|p| p.parent()).map(Path::to_path_buf);
+                return Task::perform(
+                    blocking(move || {
+                        let mut dialog = rfd::FileDialog::new().set_title("Save the file, and link to it").set_file_name(name);
+                        if let Some(folder) = folder {
+                            dialog = dialog.set_directory(folder);
+                        }
+                        dialog.save_file()
+                    }),
+                    move |to| Message::Explorer(ExplorerMessage::ResourceSavePicked(key, path.clone(), to.flatten())),
+                );
+            }
+            ExplorerMessage::ResourceSavePicked(key, path, Some(to)) => {
+                let Some(bytes) = brewed_texture_core::files::embedded(&path) else {
+                    self.set_status(format!("{} is not in its package", package::file_name(&path)), true);
+                    return Task::none();
+                };
+                let to = clean(&to);
+                return Task::perform(
+                    blocking({
+                        let to = to.clone();
+                        move || std::fs::write(&to, bytes.as_slice()).map_err(|e| format!("Cannot write '{to}': {e}"))
+                    }),
+                    move |written| {
+                        let result = written.unwrap_or_else(|| Err("The file could not be written".into())).map(|()| to.clone());
+                        Message::Explorer(ExplorerMessage::ResourceSaved(key, path.clone(), result))
+                    },
+                );
+            }
+            ExplorerMessage::ResourceSavePicked(_, _, None) => {}
+            ExplorerMessage::ResourceSaved(key, from, Ok(to)) => {
+                if let Some(doc) = self.package_doc_mut(key) {
+                    match doc.apply_package(PackageEdit::Relink { from, to: to.clone() }) {
+                        Ok(_) => self.set_status(format!("Saved as {to}: the package links to it now"), false),
+                        Err(e) => self.set_status(e, true),
+                    }
+                }
+            }
+            ExplorerMessage::ResourceSaved(_, _, Err(e)) => self.set_status(e, true),
+            ExplorerMessage::RemoveUnused(key) => {
+                self.close_popups();
+                if let Some(doc) = self.package_doc_mut(key) {
+                    match doc.apply_package(PackageEdit::RemoveUnused) {
+                        Ok(result) => {
+                            let said = result.notice.unwrap_or_else(|| "Every file of the package is read by a node".into());
+                            self.set_status(said, false);
                         }
                         Err(e) => self.set_status(e, true),
                     }

@@ -29,6 +29,7 @@ pub enum Icon {
     Vector,
     Warning,
     Sun,
+    Info,
 }
 
 fn path(icon: Icon) -> &'static str {
@@ -58,6 +59,7 @@ fn path(icon: Icon) -> &'static str {
         Icon::Font => r#"<path d="M5 19.5L11 4.5h2l6 15M7.4 13.5h9.2"/>"#,
         Icon::Vector => r#"<path d="M5 19C8 10 15 12 19 5"/><rect x="3" y="17" width="4" height="4" rx=".6"/><rect x="17" y="3" width="4" height="4" rx=".6"/>"#,
         Icon::Warning => r#"<path d="M12 4l9 16H3zM12 10v4.5M12 17.4v.2"/>"#,
+        Icon::Info => r#"<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.2"/>"#,
         Icon::Sun => {
             r#"<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/>"#
         }
