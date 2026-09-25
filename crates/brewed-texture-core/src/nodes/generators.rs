@@ -121,6 +121,70 @@ pub static TILE_GENERATOR: NodeDef = NodeDef {
     role: Role::Image,
 };
 
+/// What gives each tile of a Tile Sampler its color: its luminance only (the patterns in their
+/// own colors), a random color of its own, or the Color Map where it stands.
+pub const TILE_SAMPLER_COLORS: &[&str] = &["Luminance", "Random Colors", "Color Map"];
+/// How the tiles of a Tile Sampler that overlap combine.
+pub const TILE_SAMPLER_OVERLAPS: &[&str] = &["Max", "Add", "Stack"];
+
+pub static TILE_SAMPLER: NodeDef = NodeDef {
+    id: "tile_sampler",
+    name: "Tile Sampler",
+    category: Category::Generators,
+    description: "Places patterns on a grid, each tile varied at random and by maps: which tiles stay (Mask Map), \
+                  how big they are (Scale Map), how far they are turned (Rotation Map) and their color (Color Map). \
+                  With several patterns connected, each tile takes one of them at random.",
+    keywords: "scatter splatter tiles stones pebbles instances grid maps sampler",
+    inputs: &[
+        image_opt("pattern_1", "Pattern 1"),
+        image_opt("pattern_2", "Pattern 2"),
+        image_opt("pattern_3", "Pattern 3"),
+        image_opt("pattern_4", "Pattern 4"),
+        gray_opt("mask_map", "Mask Map"),
+        gray_opt("scale_map", "Scale Map"),
+        gray_opt("rotation_map", "Rotation Map"),
+        color_image_opt("color_map", "Color Map"),
+    ],
+    outputs: IMAGE_OUT,
+    params: &[
+        choice("pattern", "Pattern", 1, TILE_PATTERNS).pictured(),
+        int("x_amount", "X Amount", 8, 1, 64).bounded(),
+        int("y_amount", "Y Amount", 8, 1, 64).bounded(),
+        vec2("size", "Size", [1.0, 1.0], 0.0, 2.0).tip("Pattern size relative to the cell."),
+        float("scale", "Scale", 0.8, 0.0, 2.0),
+        float("random_scale", "Random Scale", 0.0, 0.0, 1.0).bounded(),
+        float("scale_map", "Scale Map Amount", 1.0, 0.0, 1.0)
+            .bounded()
+            .tip("How much the Scale Map scales the tiles: at 1, black makes a tile vanish and white leaves it whole."),
+        float("random_position", "Random Position", 0.0, 0.0, 1.0).bounded().tip("How far a tile may move from its cell, in cells."),
+        float("offset", "Offset", 0.0, -1.0, 1.0).tip("Shift of every row relative to the previous one, in tiles (0.5 gives a brick bond)."),
+        boolean("vertical_offset", "Vertical Offset", false).tip("Shift columns vertically instead of shifting rows horizontally."),
+        angle("rotation", "Rotation", 0.0, -180.0, 180.0),
+        angle("random_rotation", "Random Rotation", 0.0, 0.0, 180.0),
+        angle("rotation_map", "Rotation Map Angle", 180.0, -360.0, 360.0).tip("How far white on the Rotation Map turns a tile."),
+        float("random_mirror", "Random Mirror", 0.0, 0.0, 1.0)
+            .bounded()
+            .tip("The chance of a tile being mirrored across, and, apart from that, up and down."),
+        choice("color", "Color", 0, TILE_SAMPLER_COLORS),
+        float("luminance", "Luminance", 1.0, 0.0, 1.0).bounded(),
+        float("random_luminance", "Random Luminance", 0.0, 0.0, 1.0).bounded(),
+        float("mask_random", "Mask Random", 0.0, 0.0, 1.0).bounded().tip("The chance of a tile being left out."),
+        float("mask_threshold", "Mask Map Threshold", 0.5, 0.0, 1.0)
+            .bounded()
+            .tip("A tile stays where the Mask Map at its center is at least this."),
+        boolean("mask_invert", "Invert Mask Map", false),
+        float("softness", "Softness", 0.02, 0.0, 1.0).bounded().when("pattern", SOLID_SHAPES),
+        int("sides", "Sides", 6, 3, 16).bounded().when("pattern", &[SHAPE_POLYGON, SHAPE_STAR]),
+        float("inner_radius", "Inner Radius", 0.5, 0.05, 1.0).when("pattern", &[SHAPE_STAR]),
+        float("thickness", "Thickness", 0.2, 0.01, 1.0).when("pattern", &[SHAPE_RING, SHAPE_CROSS]),
+        float("corner_radius", "Corner Radius", 0.25, 0.0, 1.0).when("pattern", &[SHAPE_ROUNDED]),
+        choice("blend_mode", "Overlap", 0, TILE_SAMPLER_OVERLAPS)
+            .tip("How overlapping tiles combine: the brighter wins, they add up, or one lies over another in a random order."),
+        int("seed", "Seed", 0, 0, 9999).bounded(),
+    ],
+    role: Role::Image,
+};
+
 pub static GRADIENT: NodeDef = NodeDef {
     id: "gradient",
     name: "Gradient",

@@ -648,8 +648,8 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                 }
                 steps.push(Step::Do(Message::Seal));
                 if node.def().has_image() {
-                    // (A Bitmap has no file yet: it says so.)
-                    let expected = node.kind == NodeKind::BITMAP;
+                    // (A Bitmap or an SVG has no file yet: it says so.)
+                    let expected = node.kind == NodeKind::BITMAP || node.kind == NodeKind::SVG;
                     let name = node.def().name;
                     steps.extend([
                         preview(new),

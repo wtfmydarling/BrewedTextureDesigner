@@ -199,6 +199,7 @@ static KERNELS: &[KernelSource] = &[
     kernel!("uniform_color", "uniform_color.wgsl", "main", 0),
     kernel!("shape", "shape.wgsl", "main", 0),
     kernel!("tile_gen", "tile_gen.wgsl", "main", 1),
+    filtered_kernel!("tile_sampler", "tile_sampler.wgsl", "main", 8),
     kernel!("gradient", "gradient.wgsl", "main", 0),
     // One pipeline per type of noise (and white noise after them).
     kinded_kernel!("noise", "noise.wgsl", "main", 0, brewed_texture_core::nodes::NOISE_TYPES.len() as u32),
@@ -762,7 +763,17 @@ impl Gpu {
             push_constant_ranges: &[],
         });
         let bit = |n: u8| if gray & (1 << n) != 0 { 1.0 } else { 0.0 };
-        let constants = [("GRAY0", bit(0)), ("GRAY1", bit(1)), ("GRAY2", bit(2)), ("GRAY3", bit(3)), ("KIND", f64::from(kind))];
+        let constants = [
+            ("GRAY0", bit(0)),
+            ("GRAY1", bit(1)),
+            ("GRAY2", bit(2)),
+            ("GRAY3", bit(3)),
+            ("GRAY4", bit(4)),
+            ("GRAY5", bit(5)),
+            ("GRAY6", bit(6)),
+            ("GRAY7", bit(7)),
+            ("KIND", f64::from(kind)),
+        ];
         let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&pipeline_layout),
@@ -959,7 +970,9 @@ impl Gpu {
         Ok(())
     }
 
-    /// Run a kernel that filters its inputs, sampling them with the node's tiling.
+    /// Run a kernel that filters its inputs, sampling them with the node's tiling. An input
+    /// that cannot be filtered (32-bit floats: not every device can) is read from a copy in
+    /// half floats.
     pub fn run_filtered(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -969,9 +982,31 @@ impl Gpu {
         output: &GpuImage,
         tiling: u32,
     ) -> Result<(), String> {
-        let k = self.kernel_variant(kernel, output.format(), Self::gray_inputs(inputs), 0)?;
-        self.draw(encoder, &k, params, inputs, output, tiling);
-        Ok(())
+        let copies: Vec<Option<GpuImage>> = inputs
+            .iter()
+            .map(|img| {
+                (!filterable(img.format())).then(|| {
+                    let [w, h] = img.level_size();
+                    self.take_scratch(w, h, format_of(img.kind(), Precision::Half))
+                })
+            })
+            .collect();
+        let mut result = Ok(());
+        for (img, copy) in inputs.iter().zip(&copies) {
+            if let Some(copy) = copy {
+                result = result.and_then(|()| self.encode_show(encoder, img, copy, 0));
+            }
+        }
+        let read: Vec<&GpuImage> = inputs.iter().zip(&copies).map(|(img, copy)| copy.as_ref().unwrap_or(img)).collect();
+        let result = result.and_then(|()| {
+            let k = self.kernel_variant(kernel, output.format(), Self::gray_inputs(&read), 0)?;
+            self.draw(encoder, &k, params, &read, output, tiling);
+            Ok(())
+        });
+        for copy in copies.into_iter().flatten() {
+            self.recycle(copy);
+        }
+        result
     }
 
     /// Run a kernel generated at runtime (see [`Gpu::dynamic_kernel`]) over `output`.

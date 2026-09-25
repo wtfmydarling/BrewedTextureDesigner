@@ -2903,6 +2903,36 @@ impl App {
                 }
             }
             "lighting-menu" => self.ui.preview.lighting.menu = true,
+            "tile-sampler" => {
+                // Stones: discs of every size and turn, kept and colored where the noise says.
+                if let Some(noise) = first(NodeKind::NOISE)
+                    && let Ok(done) = self.doc.apply(Edit::AddNode { kind: NodeKind::TILE_SAMPLER, pos: [160.0, 520.0] })
+                    && let Some(&id) = done.created.first()
+                {
+                    for socket in ["i:mask_map", "i:rotation_map", "i:color_map"] {
+                        let _ = self.doc.apply(Edit::Connect {
+                            a: SocketRef { node: noise, key: "o:output".into(), output: true },
+                            b: SocketRef { node: id, key: socket.into(), output: false },
+                        });
+                    }
+                    for (key, value) in [
+                        ("pattern", ParamValue::Enum(8)),
+                        ("x_amount", ParamValue::Int(12)),
+                        ("y_amount", ParamValue::Int(12)),
+                        ("scale", ParamValue::Float(1.3)),
+                        ("random_scale", ParamValue::Float(0.5)),
+                        ("random_position", ParamValue::Float(0.6)),
+                        ("random_luminance", ParamValue::Float(0.4)),
+                        ("mask_threshold", ParamValue::Float(0.35)),
+                        ("color", ParamValue::Enum(1)),
+                        ("blend_mode", ParamValue::Enum(2)),
+                    ] {
+                        let _ = self.doc.apply(Edit::SetParam { node: id, key: key.into(), value });
+                    }
+                    self.ui.selection = [id].into_iter().collect();
+                    self.ui.preview.node = Some(id);
+                }
+            }
             // Several at once.
             other if other.contains(';') => return Task::batch(other.split(';').map(|s| self.apply_scenario(s)).collect::<Vec<_>>()),
             // The model of the 3D view, by its name ("mat-ball").

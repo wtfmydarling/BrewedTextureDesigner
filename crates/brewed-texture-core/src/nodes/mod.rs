@@ -24,7 +24,7 @@ pub use filters::{BLEND_MODES, DISTANCE_MODES, FLOOD_FILL_OUTPUTS, PIXEL_MATH_BU
 pub use generators::{
     SVG_FITS, SVG_OUTPUTS, TEXT_ALIGNS,
     NOISE_CELLS, NOISE_CRACKS, NOISE_FIBERS, NOISE_SCRATCHES, NOISE_TYPES, NOISE_VEINS, NOISE_WHITE, NOISE_WOOD,
-    SHAPE_POLYGON, SHAPE_ROUNDED, SHAPE_STAR, SHAPES, TILE_PATTERN_IMAGE,
+    SHAPE_POLYGON, SHAPE_ROUNDED, SHAPE_STAR, SHAPES, TILE_PATTERN_IMAGE, TILE_SAMPLER_COLORS, TILE_SAMPLER_OVERLAPS,
 };
 pub use output::{
     OUTPUT_FORMATS, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL,
@@ -449,6 +449,12 @@ pub fn image_kind(kind: NodeKind, params: &crate::eval::Params, inputs: &[Option
         let image = params.u("pattern") == TILE_PATTERN_IMAGE && inputs.first() == Some(&Some(ImageKind::Color));
         return if image { ImageKind::Color } else { ImageKind::Gray };
     }
+    if kind == NodeKind::TILE_SAMPLER {
+        // Tiles in colors of their own, or of the Color Map, are in color; so are tiles of
+        // images when one of them is.
+        let images = params.u("pattern") == TILE_PATTERN_IMAGE && inputs.iter().take(4).any(|k| *k == Some(ImageKind::Color));
+        return if params.u("color") != 0 || images { ImageKind::Color } else { ImageKind::Gray };
+    }
     if kind == NodeKind::IMAGE_INPUT {
         return if params.u("kind") == 1 { ImageKind::Color } else { ImageKind::Gray };
     }
@@ -630,6 +636,7 @@ impl NodeKind {
     pub const UNIFORM_COLOR: NodeKind = NodeKind(&generators::UNIFORM_COLOR);
     pub const SHAPE: NodeKind = NodeKind(&generators::SHAPE);
     pub const TILE_GENERATOR: NodeKind = NodeKind(&generators::TILE_GENERATOR);
+    pub const TILE_SAMPLER: NodeKind = NodeKind(&generators::TILE_SAMPLER);
     pub const GRADIENT: NodeKind = NodeKind(&generators::GRADIENT);
     pub const NOISE: NodeKind = NodeKind(&generators::NOISE);
     pub const BITMAP: NodeKind = NodeKind(&generators::BITMAP);
@@ -688,6 +695,7 @@ impl NodeKind {
         NodeKind::UNIFORM_COLOR,
         NodeKind::SHAPE,
         NodeKind::TILE_GENERATOR,
+        NodeKind::TILE_SAMPLER,
         NodeKind::GRADIENT,
         NodeKind::NOISE,
         NodeKind::BITMAP,
@@ -829,6 +837,18 @@ mod tests {
         assert_eq!(kind(NodeKind::IMAGE_INPUT, &[]), Gray);
         let color = crate::eval::Params { values: vec![("kind".into(), ParamValue::Enum(1))] };
         assert_eq!(image_kind(NodeKind::IMAGE_INPUT, &color, &[]), Color);
+        // Tiles of a sampler: of shapes, gray; of images, what they are (a color map alone does
+        // not make them color); in colors of their own, color.
+        let sampler = |values: Vec<(&str, u32)>, inputs: &[Option<ImageKind>]| {
+            let params = crate::eval::Params { values: values.into_iter().map(|(k, v)| (k.to_string(), ParamValue::Enum(v))).collect() };
+            image_kind(NodeKind::TILE_SAMPLER, &params, inputs)
+        };
+        let images = TILE_PATTERN_IMAGE;
+        assert_eq!(sampler(vec![("pattern", 0)], &[Some(Color)]), Gray);
+        assert_eq!(sampler(vec![("pattern", images)], &[None, Some(Color)]), Color);
+        assert_eq!(sampler(vec![("pattern", images)], &[Some(Gray), None, None, None, None, None, None, Some(Color)]), Gray);
+        assert_eq!(sampler(vec![("pattern", 0), ("color", 1)], &[]), Color);
+        assert_eq!(sampler(vec![("pattern", 0), ("color", 2)], &[]), Color);
     }
 
     #[test]

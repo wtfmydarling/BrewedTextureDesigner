@@ -20,6 +20,10 @@ override GRAY0: bool = false;
 override GRAY1: bool = false;
 override GRAY2: bool = false;
 override GRAY3: bool = false;
+override GRAY4: bool = false;
+override GRAY5: bool = false;
+override GRAY6: bool = false;
+override GRAY7: bool = false;
 
 // The kind of image a kernel that makes several kinds (the types of noise) is built for.
 // Each kind is a pipeline of its own, with only the code of its kind: the compiler drops the

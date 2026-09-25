@@ -56,6 +56,7 @@ pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
         "image_input" => image_input,
         "shape" => shape,
         "tile_generator" => tile_generator,
+        "tile_sampler" => tile_sampler,
         "gradient" => gradient,
         "noise" => noise,
         // The picture is drawn at the texture's size (see `crate::vector`): copied as is.
@@ -148,6 +149,45 @@ struct TileU {
     tiling: u32,
     reach: i32,
     vertical: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct TileSamplerU {
+    size_x: f32,
+    size_y: f32,
+    scale: f32,
+    random_scale: f32,
+    scale_map: f32,
+    random_position: f32,
+    offset: f32,
+    rotation: f32,
+    random_rotation: f32,
+    rotation_map: f32,
+    random_mirror: f32,
+    luminance: f32,
+    random_luminance: f32,
+    mask_random: f32,
+    mask_threshold: f32,
+    softness: f32,
+    sides: f32,
+    inner: f32,
+    thickness: f32,
+    corner: f32,
+    x_amount: i32,
+    y_amount: i32,
+    pattern: u32,
+    blend: u32,
+    seed: u32,
+    tiling: u32,
+    reach: i32,
+    vertical: u32,
+    /// The pattern inputs connected, as bits.
+    patterns: u32,
+    /// The maps connected (mask, scale, rotation, color), as bits.
+    maps: u32,
+    color: u32,
+    mask_invert: u32,
 }
 
 #[repr(C)]
@@ -513,6 +553,87 @@ fn tile_generator(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let pattern_img = input(cx.inputs, 0, &cx.gpu.black);
     cx.gpu.run(cx.encoder, "tile_gen", bytes(&u), &[pattern_img], cx.output)?;
     Ok(warning)
+}
+
+/// Patterns on a grid, varied at random and by maps (see tile_sampler.wgsl). Each pattern is
+/// read from its mips, as fine as it is drawn: one without them (or that cannot be filtered)
+/// is copied into an image that has them.
+fn tile_sampler(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    let [sx, sy] = p.v2("size");
+    let scale = p.f("scale");
+    let random_position = p.f("random_position").clamp(0.0, 1.0);
+    // How many neighbouring cells can reach into a cell (the maps only make tiles smaller).
+    let extent = sx.abs().max(sy.abs()) * scale.abs() * 0.5 * std::f32::consts::SQRT_2 + random_position * 0.5;
+    let reach = ((extent - 0.5).ceil() as i32).clamp(1, 3);
+    let pattern = p.u("pattern");
+    let bits = |from: usize| (0..4).filter(|&i| connected(cx.inputs, from + i)).fold(0u32, |bits, i| bits | (1 << i));
+    let (patterns, maps) = (bits(0), bits(4));
+    let color = p.u("color");
+    let warning = if pattern == TILE_PATTERN_IMAGE && patterns == 0 {
+        Some("The pattern is 'Input Image' but no image is connected".to_string())
+    } else if color == 2 && maps & 8 == 0 {
+        Some("The color is 'Color Map' but no Color Map is connected".to_string())
+    } else {
+        None
+    };
+    let u = TileSamplerU {
+        size_x: sx,
+        size_y: sy,
+        scale,
+        random_scale: p.f("random_scale").clamp(0.0, 1.0),
+        scale_map: p.f("scale_map").clamp(0.0, 1.0),
+        random_position,
+        offset: p.f("offset"),
+        rotation: p.f("rotation"),
+        random_rotation: p.f("random_rotation"),
+        rotation_map: p.f("rotation_map"),
+        random_mirror: p.f("random_mirror").clamp(0.0, 1.0),
+        luminance: p.f("luminance"),
+        random_luminance: p.f("random_luminance").clamp(0.0, 1.0),
+        mask_random: p.f("mask_random"),
+        mask_threshold: p.f("mask_threshold"),
+        softness: p.f("softness").max(0.0),
+        sides: p.i("sides").clamp(3, 64) as f32,
+        inner: p.f("inner_radius"),
+        thickness: p.f("thickness"),
+        corner: p.f("corner_radius").max(0.0),
+        x_amount: p.i("x_amount").clamp(1, 1024),
+        y_amount: p.i("y_amount").clamp(1, 1024),
+        pattern,
+        blend: p.u("blend_mode").min(2),
+        seed: p.i("seed") as u32,
+        tiling: p.tiling(),
+        reach,
+        vertical: u32::from(p.b("vertical_offset")),
+        patterns,
+        maps,
+        color,
+        mask_invert: u32::from(p.b("mask_invert")),
+    };
+    let mut copies: Vec<Option<GpuImage>> = Vec::with_capacity(4);
+    let mut result = Ok(());
+    for i in 0..4 {
+        let img = input(cx.inputs, i, &cx.gpu.black);
+        let used = pattern == TILE_PATTERN_IMAGE && connected(cx.inputs, i);
+        let copy = if used && (img.texture.mip_level_count() == 1 || !crate::gpu::filterable(img.format())) {
+            let [w, h] = img.size();
+            let copy = cx.gpu.take_scratch_with_mips(w, h, crate::gpu::format_of(img.kind(), brewed_texture_core::Precision::Half));
+            result = result.and_then(|()| cx.gpu.encode_copy_with_mips(cx.encoder, img, &copy, 0));
+            Some(copy)
+        } else {
+            None
+        };
+        copies.push(copy);
+    }
+    let reads: Vec<&GpuImage> =
+        (0..8).map(|i| copies.get(i).and_then(Option::as_ref).unwrap_or_else(|| input(cx.inputs, i, &cx.gpu.black))).collect();
+    // Clamped (tiling 0): a pattern is read within itself; the maps wrap in the shader.
+    let result = result.and_then(|()| cx.gpu.run_filtered(cx.encoder, "tile_sampler", bytes(&u), &reads, cx.output, 0));
+    for copy in copies.into_iter().flatten() {
+        cx.gpu.recycle(copy);
+    }
+    result.map(|()| warning)
 }
 
 fn gradient(cx: &mut ExecCtx) -> Result<Option<String>, String> {

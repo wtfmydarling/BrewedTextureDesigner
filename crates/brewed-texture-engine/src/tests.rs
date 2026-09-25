@@ -329,6 +329,120 @@ fn tile_offset_moves_the_random_variation() {
     assert_eq!(pixel(&vertical, x, y1), pixel(&base, x, y1 - RES / 4));
 }
 
+/// Tile Sampler: squares in every cell, tiling; tiles that stay only where the Mask Map says,
+/// shrink where the Scale Map is dark, take the color of the Color Map or colors of their own,
+/// one of several patterns each; a pattern much larger than its tiles read from its mips (no
+/// shimmer); and tiles stacked one over another rather than merged.
+#[test]
+fn tile_sampler_places_patterns_by_maps() {
+    use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT};
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let t = g.add_node(NodeKind::TILE_SAMPLER, [0.0, 0.0]);
+    let covered = |px: &[f32], x: std::ops::Range<u32>| {
+        let n = (0..RES).flat_map(|y| x.clone().map(move |x| (x, y))).filter(|&(x, y)| pixel(px, x, y)[0] > 0.5).count();
+        n as f32 / (x.len() as u32 * RES) as f32
+    };
+    // Squares of 0.8 of their cells: 64 % of the image, and it tiles.
+    let plain = eval_read(&mut e, &g, t);
+    assert_eq!(e.image(t).unwrap().format(), GRAY_FORMAT);
+    assert!((covered(&plain, 0..RES) - 0.64).abs() < 0.03, "{}", covered(&plain, 0..RES));
+    let (across, inside) = seams(&plain, RES);
+    assert!(across <= inside * 1.25 + 1e-3, "{across} across the edges, at most {inside} anywhere else");
+
+    // A mask map dark on the left, light on the right: the tiles stay on the right only, or,
+    // inverted, on the left.
+    let ramp = g.add_node(NodeKind::GRADIENT, [0.0, 0.0]);
+    g.connect(ramp, "o:output", t, "i:mask_map").unwrap();
+    let masked = eval_read(&mut e, &g, t);
+    assert!(covered(&masked, 0..RES / 2) < 0.01 && covered(&masked, RES / 2..RES) > 0.6, "{} {}", covered(&masked, 0..RES / 2), covered(&masked, RES / 2..RES));
+    set(&mut g, t, "mask_invert", ParamValue::Bool(true));
+    let inverted = eval_read(&mut e, &g, t);
+    assert!(covered(&inverted, 0..RES / 2) > 0.6 && covered(&inverted, RES / 2..RES) < 0.01);
+    g.disconnect(t, "i:mask_map");
+
+    // The same ramp as the scale: small tiles on the left, nearly whole ones on the right (the
+    // two columns there scaled by 0.81 and 0.94: 49 % of it).
+    g.connect(ramp, "o:output", t, "i:scale_map").unwrap();
+    let scaled = eval_read(&mut e, &g, t);
+    let (left, right) = (covered(&scaled, 0..RES / 4), covered(&scaled, 3 * RES / 4..RES));
+    assert!(left < 0.05 && (right - 0.49).abs() < 0.04, "{left} on the left, {right} on the right");
+    g.disconnect(t, "i:scale_map");
+
+    // The color of a color map, or colors of their own.
+    let red = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    set(&mut g, red, "color", ParamValue::Color([1.0, 0.1, 0.0, 1.0]));
+    g.connect(red, "o:output", t, "i:color_map").unwrap();
+    set(&mut g, t, "color", ParamValue::Enum(2));
+    let colored = eval_read(&mut e, &g, t);
+    assert_eq!(e.image(t).unwrap().format(), COLOR_FORMAT);
+    let middle = RES / 16;
+    let c = pixel(&colored, middle, middle);
+    assert!(close(c[0], 1.0, 0.01) && close(c[1], 0.1, 0.01) && close(c[2], 0.0, 0.01), "{c:?}");
+    set(&mut g, t, "color", ParamValue::Enum(1));
+    let own = eval_read(&mut e, &g, t);
+    let colors: std::collections::BTreeSet<[u32; 3]> =
+        (0..8).map(|k| pixel(&own, middle + k * RES / 8, middle)).map(|c| [c[0], c[1], c[2]].map(|v| (v * 20.0) as u32)).collect();
+    assert!(colors.len() >= 4, "{colors:?}");
+    set(&mut g, t, "color", ParamValue::Enum(0));
+
+    // Two patterns, one of them in each tile.
+    let (white, dark) = (g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]), g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]));
+    set(&mut g, white, "color", ParamValue::Color([1.0; 4]));
+    set(&mut g, dark, "color", ParamValue::Color([0.25, 0.25, 0.25, 1.0]));
+    g.connect(white, "o:output", t, "i:pattern_1").unwrap();
+    g.connect(dark, "o:output", t, "i:pattern_3").unwrap();
+    set(&mut g, t, "pattern", ParamValue::Enum(brewed_texture_core::nodes::TILE_PATTERN_IMAGE));
+    let two = eval_read(&mut e, &g, t);
+    let centers: Vec<f32> = (0..64).map(|k| pixel(&two, middle + (k % 8) * RES / 8, middle + (k / 8) * RES / 8)[0]).collect();
+    assert!(centers.iter().all(|v| close(*v, 1.0, 0.01) || close(*v, 0.25, 0.01)), "{centers:?}");
+    assert!(centers.iter().any(|v| close(*v, 1.0, 0.01)) && centers.iter().any(|v| close(*v, 0.25, 0.01)));
+    g.disconnect(t, "i:pattern_3");
+
+    // A fine checker as the pattern of tiles 8 pixels wide: each tile the gray it averages to,
+    // not a shimmer of its black and white pixels.
+    let checker = g.add_node(NodeKind::TILE_GENERATOR, [0.0, 0.0]);
+    for (key, value) in [("x_amount", 64), ("y_amount", 64)] {
+        set(&mut g, checker, key, ParamValue::Int(value));
+    }
+    set(&mut g, checker, "size", ParamValue::Vec2([0.5, 1.0]));
+    g.connect(checker, "o:output", t, "i:pattern_1").unwrap();
+    for (key, value) in [("x_amount", 32), ("y_amount", 32)] {
+        set(&mut g, t, key, ParamValue::Int(value));
+    }
+    set(&mut g, t, "scale", ParamValue::Float(1.0));
+    let fine = eval_read(&mut e, &g, t);
+    let inner: Vec<f32> =
+        (0..RES).flat_map(|y| (0..RES).map(move |x| (x, y))).filter(|(x, y)| (x % 8).abs_diff(4) < 3 && (y % 8).abs_diff(4) < 3).map(|(x, y)| pixel(&fine, x, y)[0]).collect();
+    let m = inner.iter().sum::<f32>() / inner.len() as f32;
+    let spread = (inner.iter().map(|v| (v - m).powi(2)).sum::<f32>() / inner.len() as f32).sqrt();
+    assert!((m - 0.5).abs() < 0.1 && spread < 0.1, "tiles of {m} ± {spread}");
+    g.disconnect(t, "i:pattern_1");
+
+    // Squares larger than their cells, of random luminance: merged, the brighter shows where
+    // they overlap; stacked, the one on top, which is sometimes the darker.
+    set(&mut g, t, "pattern", ParamValue::Enum(1));
+    set(&mut g, t, "scale", ParamValue::Float(1.6));
+    set(&mut g, t, "random_luminance", ParamValue::Float(1.0));
+    let merged = eval_read(&mut e, &g, t);
+    set(&mut g, t, "blend_mode", ParamValue::Enum(2));
+    let stacked = eval_read(&mut e, &g, t);
+    // Where two neighbours both cover a pixel whole (on the line between their cells, level
+    // with their middles): merged, the brighter; stacked, one of the two, often the darker.
+    let cell = RES / 32;
+    let (mut darker, mut checked) = (0, 0);
+    for (x, y) in (0..32).flat_map(|i| (0..32).map(move |j| (i * cell, j * cell + cell / 2))) {
+        let (m, s) = (pixel(&merged, x, y)[0], pixel(&stacked, x, y)[0]);
+        let (left, right) = (pixel(&merged, (x + RES - cell / 2) % RES, y)[0], pixel(&merged, x + cell / 2, y)[0]);
+        assert!(close(m, left.max(right), 0.01), "merged: {m}, of {left} and {right}");
+        assert!(close(s, left, 0.01) || close(s, right, 0.01), "stacked: {s}, of {left} and {right}");
+        checked += 1;
+        darker += usize::from(s < m - 0.05);
+    }
+    assert!(darker > checked / 5, "{darker} of {checked} places where a tile lies over a brighter one");
+    assert!(e.gpu.take_errors().is_empty());
+}
+
 #[test]
 fn gradient_map_with_many_stops() {
     let Some(mut e) = engine() else { return };
@@ -807,8 +921,14 @@ fn full_precision_keeps_gentle_slopes() {
     let read = image::open(&file).unwrap().into_luma16();
     let steps = read.pixels().map(|p| p.0[0]).collect::<std::collections::BTreeSet<_>>().len();
     assert!(steps > 200, "16 bits of it: {steps} steps");
-    // Filtered from a copy it can filter, and shown through one.
+    // Filtered from a copy it can filter, and shown through one; a map of full precision too.
     let _ = eval_read(&mut e, &g, ao);
+    assert!(e.gpu.take_errors().is_empty());
+    let blur = g.add_node(NodeKind::NON_UNIFORM_BLUR, [0.0, 0.0]);
+    g.connect(slope, "o:output", blur, "i:input").unwrap();
+    g.connect(slope, "o:output", blur, "i:map").unwrap();
+    let blurred = eval_read(&mut e, &g, blur);
+    assert!(blurred.iter().all(|v| v.is_finite()) && mean(&blurred) > 0.4, "{}", mean(&blurred));
     assert!(e.gpu.take_errors().is_empty());
     e.set_keep(crate::engine::Keep::Read);
     let shown = e.prepare_preview(Some(slope)).flatten().expect("shown");
