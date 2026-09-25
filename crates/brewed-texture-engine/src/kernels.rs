@@ -86,6 +86,7 @@ pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
         "levels" | "histogram_scan" | "invert" | "grayscale" | "hsl" | "posterize" => adjust,
         "gradient_map" => gradient_map,
         "channel_shuffle" => channel_shuffle,
+        "rgba_merge" => rgba_merge,
         "output" => output,
         _ => return None,
     };
@@ -188,6 +189,17 @@ struct TileSamplerU {
     maps: u32,
     color: u32,
     mask_invert: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct MergeU {
+    /// Red, green, blue and alpha where nothing is connected.
+    values: [f32; 4],
+    /// The channels connected, as bits.
+    connected: u32,
+    tiling: u32,
+    pad: [u32; 2],
 }
 
 #[repr(C)]
@@ -996,6 +1008,20 @@ fn channel_shuffle(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let a = input(cx.inputs, 0, &cx.gpu.black);
     let b = input(cx.inputs, 1, &cx.gpu.black);
     cx.gpu.run(cx.encoder, "shuffle", bytes(&u), &[a, b], cx.output)?;
+    Ok(None)
+}
+
+fn rgba_merge(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    let connected = (0..4).filter(|&i| connected(cx.inputs, i)).fold(0u32, |bits, i| bits | (1 << i));
+    let u = MergeU {
+        values: [p.f("red_value"), p.f("green_value"), p.f("blue_value"), p.f("alpha_value")],
+        connected,
+        tiling: p.tiling(),
+        pad: [0; 2],
+    };
+    let channels: Vec<&GpuImage> = (0..4).map(|i| input(cx.inputs, i, &cx.gpu.black)).collect();
+    cx.gpu.run(cx.encoder, "rgba_merge", bytes(&u), &channels, cx.output)?;
     Ok(None)
 }
 

@@ -329,6 +329,37 @@ fn tile_offset_moves_the_random_variation() {
     assert_eq!(pixel(&vertical, x, y1), pixel(&base, x, y1 - RES / 4));
 }
 
+/// RGBA Merge packs grayscale maps into the channels of one image (occlusion, roughness and
+/// metallic, as engines take them): each channel its map, or its value with none; a color
+/// image at a channel is its luminance.
+#[test]
+fn rgba_merge_packs_channels() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let gray = |g: &mut Graph, v: f32| {
+        let id = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+        set(g, id, "color", ParamValue::Color([v, v, v, 1.0]));
+        let to_gray = g.add_node(NodeKind::GRAYSCALE, [0.0, 0.0]);
+        g.connect(id, "o:output", to_gray, "i:input").unwrap();
+        to_gray
+    };
+    let (occlusion, roughness) = (gray(&mut g, 0.25), gray(&mut g, 0.5));
+    let merge = g.add_node(NodeKind::RGBA_MERGE, [0.0, 0.0]);
+    g.connect(occlusion, "o:output", merge, "i:red").unwrap();
+    g.connect(roughness, "o:output", merge, "i:green").unwrap();
+    set(&mut g, merge, "blue_value", ParamValue::Float(0.75));
+    let packed = eval_read(&mut e, &g, merge);
+    let p = pixel(&packed, 7, 200);
+    assert!(close(p[0], 0.25, 0.002) && close(p[1], 0.5, 0.002) && close(p[2], 0.75, 0.002) && close(p[3], 1.0, 0.002), "{p:?}");
+    // A color image at Alpha: its luminance.
+    let red = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    set(&mut g, red, "color", ParamValue::Color([1.0, 0.0, 0.0, 1.0]));
+    g.connect(red, "o:output", merge, "i:alpha").unwrap();
+    let p = pixel(&eval_read(&mut e, &g, merge), 7, 200);
+    assert!(close(p[3], 0.2126, 0.002), "{p:?}");
+    assert!(e.gpu.take_errors().is_empty());
+}
+
 /// Tile Sampler: squares in every cell, tiling; tiles that stay only where the Mask Map says,
 /// shrink where the Scale Map is dark, take the color of the Color Map or colors of their own,
 /// one of several patterns each; a pattern much larger than its tiles read from its mips (no

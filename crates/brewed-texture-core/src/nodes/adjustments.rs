@@ -124,6 +124,25 @@ pub static CHANNEL_SHUFFLE: NodeDef = NodeDef {
     role: Role::Image,
 };
 
+pub static RGBA_MERGE: NodeDef = NodeDef {
+    id: "rgba_merge",
+    name: "RGBA Merge",
+    category: Category::Adjustments,
+    description: "Puts four grayscale images into the red, green, blue and alpha of one color image, as game \
+                  engines take several maps in one (occlusion, roughness and metallic: ORM). A channel with \
+                  nothing connected has its value.",
+    keywords: "pack packing channels merge combine orm mask rgba",
+    inputs: &[gray_opt("red", "Red"), gray_opt("green", "Green"), gray_opt("blue", "Blue"), gray_opt("alpha", "Alpha")],
+    outputs: COLOR_OUT,
+    params: &[
+        float("red_value", "Red", 0.0, 0.0, 1.0).bounded().tip("The red where nothing is connected to Red."),
+        float("green_value", "Green", 0.0, 0.0, 1.0).bounded().tip("The green where nothing is connected to Green."),
+        float("blue_value", "Blue", 0.0, 0.0, 1.0).bounded().tip("The blue where nothing is connected to Blue."),
+        float("alpha_value", "Alpha", 1.0, 0.0, 1.0).bounded().tip("The alpha where nothing is connected to Alpha."),
+    ],
+    role: Role::Image,
+};
+
 pub static POSTERIZE: NodeDef = NodeDef {
     id: "posterize",
     name: "Posterize",
