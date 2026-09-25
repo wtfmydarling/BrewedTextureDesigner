@@ -95,7 +95,7 @@ Explorer:  │ граф       размер текстуры (по умолч. 20
 - неподключённая переменная берёт своё локальное значение или, если включён Auto-bind, значение Input Value с тем же именем;
 - в свойствах есть подсветка синтаксиса, таблица переменных, график f(x) и справочник функций.
 
-**Pixel Math** — то же выражение, но оно компилируется в WGSL и считается для каждого пикселя: переменные — изображения, встроенные переменные — `u v px py width height`.
+**Pixel Math** — то же выражение, но оно компилируется в WGSL и считается для каждого пикселя: переменные — изображения, встроенные переменные — `u v px py width height`. `sample(картинка, x, y)` читает вход-картинку в любой точке (`x` и `y` от 0 до 1, как `u` и `v`; между пикселями — билинейно, через края — по тайлингу ноды): `sample(img, 1 - u, v)` отражает, `(sample(h, u + 1/width, v) - h) * width` — наклон, смещения по карте — деформации. Первый аргумент — имя входа, а не выражение; переменная-значение, прочитанная где угодно, равна себе (так же `sample` работает и в Math на CPU).
 
 ### Gradient Map
 Градиент с любым числом точек (до 64): клик по полосе добавляет точку, ручки перетаскиваются, если утащить ручку вниз, точка удаляется; интерполяция Linear, Smooth или Constant; есть реверс и равномерное распределение. Градиент можно взять пипеткой с экрана (см. ниже).
@@ -159,7 +159,7 @@ brewed-texture-designer --render walls.brewtex --graph "Brick Wall" --set bricks
 | Generators | Uniform Color, **Shape** (14 фигур и профилей), **Tile Generator** (смещение рядов или столбцов), **Tile Sampler** (паттерны по сетке: до четырёх картинок на выбор случайно, карты маски, масштаба, поворота и цвета, свои цвета плиток, наложение Max, Add или Stack), Gradient, **Noise** (30 шумов, каждый своим способом, все тайлятся: Perlin, Simplex, Value, Billow, Ridged, Liquid, Marble, Wood, Veins, Streaks, Flow, Fibers, Scratches, Ripples, Turing, Raindrops, Caustics, Cells, Cracks, Crystal, Mosaic, Stones, Scales, Blocks, Truchet, Maze, Spots, Blotches, Craters, White Noise), Bitmap (PNG, JPEG, TGA, BMP, TIFF, EXR, HDR), **SVG** (векторная графика из файла: в своих цветах или маской покрытия), **Text** (строка текста своим шрифтом или встроенным Inter) |
 | Filters | **Transform 2D**, **Blend** (19 режимов, маска), **Blur**, Directional Blur, **Non-uniform Blur** (радиус по карте), Slope Blur, **Sharpen**, Warp, Directional Warp, Mirror, Pixel Math, **Distance** (поле расстояний), **Flood Fill** (случайный серый или цвет каждой отдельной фигуре маски), **Make It Tile** (делает тайлящейся картинку, которая не тайлится) |
 | Height & Normal | Normal, Ambient Occlusion, Curvature, Edge Detect, Emboss, **Bevel** (фаска по маске: линейная, плавная, скруглённая, вогнутая, внутрь или наружу), **Height Blend** (две карты высот, выше та, что выше), **Normal Combine** (детали одной normal map на другой: Reoriented, Whiteout, UDN) |
-| Adjustments | **Levels** (гистограмма, Auto levels), **Curve** (тоновая кривая: точки тянутся мышью, клик добавляет, вынос за квадрат удаляет; RGB или один канал), Histogram Scan, Invert, Grayscale, HSL, **Gradient Map**, Channel Shuffle, **RGBA Merge** (четыре серые карты в каналы одной картинки: ORM для движков), Posterize |
+| Adjustments | **Levels** (гистограмма, Auto levels), **Curve** (тоновая кривая: точки тянутся мышью, клик добавляет, вынос за квадрат удаляет; RGB или один канал), Histogram Scan, Invert, Grayscale, HSL, **Gradient Map**, **Gradient Dynamic** (градиент — картинка: цвета вдоль её строки или столбца, выбранных параметром или картой по пикселям), Channel Shuffle, **RGBA Merge** (четыре серые карты в каналы одной картинки: ORM для движков), Posterize |
 | Output | **Output**: имя, формат RGBA/RGB/RG/R/G/B/A, 8/16/32 бит, назначение для 3D |
 
 У всех нод есть **тайлинг** (No tiling / Horizontal / Vertical / H and V): на тайлящихся осях выборка заворачивается через край, и генераторы получаются бесшовными. У value-нод параметр показан, но отключён. Ноду с входом можно временно выключить (**bypass**, Ctrl+B): она передаст первый вход дальше без изменений.
@@ -221,7 +221,7 @@ Output хранит то, что он записывает: свой вход в
 ## Проверка
 
 ```bash
-cargo test --workspace                                            # 187 тестов
+cargo test --workspace                                            # 190 тестов
 WGPU_BACKEND=dx12 cargo test --workspace                          # они же на другом бэкенде (vulkan, dx12, metal)
 cargo test --workspace -- --ignored                               # живые тесты пипетки и захвата указателя (нужен рабочий стол), замеры, стресс-тесты
 cargo run --release -- --autopilot 30 --seed 3                    # программа 30 минут гоняет себя сама (ниже)

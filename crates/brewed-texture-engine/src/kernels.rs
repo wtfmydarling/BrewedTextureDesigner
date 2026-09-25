@@ -88,6 +88,7 @@ pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
         "channel_shuffle" => channel_shuffle,
         "rgba_merge" => rgba_merge,
         "curve" => curve,
+        "gradient_dynamic" => gradient_dynamic,
         "output" => output,
         _ => return None,
     };
@@ -190,6 +191,16 @@ struct TileSamplerU {
     maps: u32,
     color: u32,
     mask_invert: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GradientDynamicU {
+    position: f32,
+    vertical: u32,
+    /// Whether a Position Map is connected.
+    mapped: u32,
+    tiling: u32,
 }
 
 #[repr(C)]
@@ -1012,6 +1023,19 @@ fn channel_shuffle(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     Ok(None)
 }
 
+fn gradient_dynamic(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    let u = GradientDynamicU {
+        position: p.f("position"),
+        vertical: p.u("orientation").min(1),
+        mapped: u32::from(connected(cx.inputs, 2)),
+        tiling: p.tiling(),
+    };
+    let [img, gradient, map] = [0, 1, 2].map(|i| input(cx.inputs, i, &cx.gpu.black));
+    cx.gpu.run(cx.encoder, "gradient_dynamic", bytes(&u), &[img, gradient, map], cx.output)?;
+    Ok(None)
+}
+
 fn curve(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let table = cx.lut.ok_or("The curve was not prepared")?;
     let u = ScalarU { value: 0.0, a: cx.params.u("channels"), b: cx.params.tiling(), c: 0 };
@@ -1354,7 +1378,9 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let mut images: Vec<GpuImage> = Vec::new();
     let mut consts: Vec<f32> = Vec::new();
     let mut exprs: Vec<String> = Vec::new();
-    for i in 0..program.vars.len() {
+    // For each variable that is an image: which, and whether it is grayscale (for `sample`).
+    let mut image_of: Vec<Option<(usize, bool)>> = vec![None; program.vars.len()];
+    for (i, image) in image_of.iter_mut().enumerate() {
         let var = cx.pixel_vars.get(i).cloned().unwrap_or(PixelVar::Constant(0.0));
         let e = match var {
             PixelVar::Builtin(b) => match b {
@@ -1369,6 +1395,7 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
                 if images.len() >= MAX_PIXEL_IMAGES {
                     return Err(format!("Pixel Math supports at most {MAX_PIXEL_IMAGES} image inputs"));
                 }
+                *image = Some((images.len(), img.is_gray()));
                 images.push(img);
                 format!("img{}", images.len() - 1)
             }
@@ -1384,7 +1411,13 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         };
         exprs.push(e);
     }
-    let body = expr::wgsl::to_wgsl(program, &|i| exprs[i].clone());
+    // `sample(image, x, y)`: the image between its pixels, wrapping where the node tiles; a
+    // variable that is not an image is the same everywhere.
+    let sample = |i: usize, x: &str, y: &str| match image_of[i] {
+        Some((k, gray)) => format!("chan(widen(sample_bilinear(t{k}, vec2<f32>({x}, {y}), P.tiling), {gray}))"),
+        None => exprs[i].clone(),
+    };
+    let body = expr::wgsl::to_wgsl_sampling(program, &|i| exprs[i].clone(), &sample);
 
     let mut source = String::new();
     source.push_str(crate::gpu::COMMON_WGSL);

@@ -379,6 +379,14 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
+        // What `sample` reads is an image input: named, not computed.
+        if info.func == builtins::Func::Sample && !matches!(args.first(), Some(Node::Var(_))) {
+            let span = Span::new(name_tok.span.start, self.prev().map_or(name_tok.span.end, |t| t.span.end));
+            return Err(ExprError {
+                message: format!("The first argument of '{name}' is the name of an image input — usage: {}", info.signature),
+                span,
+            });
+        }
         Ok(Node::Call(info.func, args))
     }
 }

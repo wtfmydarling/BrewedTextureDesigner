@@ -124,6 +124,26 @@ pub static CHANNEL_SHUFFLE: NodeDef = NodeDef {
     role: Role::Image,
 };
 
+pub static GRADIENT_DYNAMIC: NodeDef = NodeDef {
+    id: "gradient_dynamic",
+    name: "Gradient Dynamic",
+    category: Category::Adjustments,
+    description: "A gradient map whose gradient is an image: each value picks the color at its place along a line \
+                  of the Gradient image, a row or a column, where Position says, or where the Position Map says \
+                  for each pixel.",
+    keywords: "gradient map colorize dynamic remap lookup image",
+    inputs: &[gray("input", "Input"), color_image("gradient", "Gradient"), gray_opt("position_map", "Position Map")],
+    outputs: COLOR_OUT,
+    params: &[
+        choice("orientation", "Orientation", 0, &["Horizontal", "Vertical"])
+            .tip("Whether the colors are read along a row of the Gradient image or along a column."),
+        float("position", "Position", 0.5, 0.0, 1.0)
+            .bounded()
+            .tip("Which row (or column) of the Gradient image the colors are read along, where no Position Map says."),
+    ],
+    role: Role::Image,
+};
+
 /// Which channels of a color image a Curve changes.
 pub const CURVE_CHANNELS: &[&str] = &["RGB", "Red", "Green", "Blue", "Alpha"];
 

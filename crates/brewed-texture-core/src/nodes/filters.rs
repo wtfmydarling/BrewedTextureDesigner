@@ -167,8 +167,9 @@ pub static PIXEL_MATH: NodeDef = NodeDef {
     id: "pixel_math",
     name: "Pixel Math",
     category: Category::Filters,
-    description: "Evaluates an expression for every pixel on the GPU. Unknown words become image inputs; \
-                  u, v, px, py, width and height are built in.",
+    description: "Evaluates an expression for every pixel on the GPU. Unknown words become image inputs, which \
+                  sample(image, x, y) reads anywhere (x and y from 0 to 1, like u and v); u, v, px, py, width and \
+                  height are built in.",
     keywords: "expression formula shader per pixel custom",
     inputs: NO_SOCKETS,
     outputs: GRAY_OUT,

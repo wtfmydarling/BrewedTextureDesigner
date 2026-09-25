@@ -49,19 +49,31 @@ fn literal(v: f64) -> String {
 }
 
 /// Translate `program` to a WGSL `f32` expression. `var` maps a variable index to the
-/// WGSL expression that provides its value.
+/// WGSL expression that provides its value; `sample(image, x, y)` reads the variable's value.
 pub fn to_wgsl(program: &Program, var: &dyn Fn(usize) -> String) -> String {
-    emit(&program.root, var)
+    to_wgsl_sampling(program, var, &|i, _, _| var(i))
 }
 
-fn emit(node: &Node, var: &dyn Fn(usize) -> String) -> String {
+/// [`to_wgsl`], with `sample` giving the WGSL expression that reads variable `i` at the uv
+/// coordinates `x` and `y` (WGSL expressions): `sample(image, x, y)` of Pixel Math.
+pub fn to_wgsl_sampling(program: &Program, var: &dyn Fn(usize) -> String, sample: &dyn Fn(usize, &str, &str) -> String) -> String {
+    emit(&program.root, &Env { var, sample })
+}
+
+struct Env<'a> {
+    var: &'a dyn Fn(usize) -> String,
+    sample: &'a dyn Fn(usize, &str, &str) -> String,
+}
+
+fn emit(node: &Node, env: &Env) -> String {
+    let var = env.var;
     match node {
         Node::Num(v) => literal(*v),
         Node::Var(i) => format!("({})", var(*i)),
-        Node::Unary(UnOp::Neg, a) => format!("(-{})", emit(a, var)),
-        Node::Unary(UnOp::Not, a) => format!("fx_bool({} == 0.0)", emit(a, var)),
+        Node::Unary(UnOp::Neg, a) => format!("(-{})", emit(a, env)),
+        Node::Unary(UnOp::Not, a) => format!("fx_bool({} == 0.0)", emit(a, env)),
         Node::Binary(op, a, b) => {
-            let (a, b) = (emit(a, var), emit(b, var));
+            let (a, b) = (emit(a, env), emit(b, env));
             match op {
                 BinOp::Add => format!("({a} + {b})"),
                 BinOp::Sub => format!("({a} - {b})"),
@@ -80,10 +92,16 @@ fn emit(node: &Node, var: &dyn Fn(usize) -> String) -> String {
             }
         }
         Node::Cond(c, a, b) => {
-            format!("select({}, {}, {} != 0.0)", emit(b, var), emit(a, var), emit(c, var))
+            format!("select({}, {}, {} != 0.0)", emit(b, env), emit(a, env), emit(c, env))
         }
         Node::Call(func, args) => {
-            let a: Vec<String> = args.iter().map(|n| emit(n, var)).collect();
+            // The image `sample` reads is named, not computed (see the parser).
+            if *func == Func::Sample
+                && let [Node::Var(i), x, y] = args.as_slice()
+            {
+                return format!("({})", (env.sample)(*i, &emit(x, env), &emit(y, env)));
+            }
+            let a: Vec<String> = args.iter().map(|n| emit(n, env)).collect();
             let x = a.first().cloned().unwrap_or_else(|| "0.0".into());
             let y = a.get(1).cloned().unwrap_or_else(|| "0.0".into());
             let z = a.get(2).cloned().unwrap_or_else(|| "0.0".into());
@@ -139,6 +157,7 @@ fn emit(node: &Node, var: &dyn Fn(usize) -> String) -> String {
                 Func::Radians => format!("radians({x})"),
                 Func::If => format!("select({z}, {y}, {x} != 0.0)"),
                 Func::Hash => format!("fx_hash({x})"),
+                Func::Sample => x,
             }
         }
     }

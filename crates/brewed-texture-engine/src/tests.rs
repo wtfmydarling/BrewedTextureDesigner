@@ -242,6 +242,35 @@ fn shape_and_pixel_math() {
     assert!(close(pixel(&data, RES / 2, RES / 2)[0], 1.0 + 0.5 * (RES / 2) as f32 / RES as f32, 1e-2));
 }
 
+/// Pixel Math reads an image anywhere with `sample`: mirrored across, and a neighbour's
+/// difference (an edge), each pixel what the image has where it says; a value not connected
+/// to an image reads the same everywhere.
+#[test]
+fn pixel_math_samples_images_anywhere() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let ramp = g.add_node(NodeKind::GRADIENT, [0.0, 0.0]);
+    let pm = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
+    set(&mut g, pm, "expression", ParamValue::Text("sample(img, 1 - u, v)".into()));
+    g.connect(ramp, "o:output", pm, "v:img").unwrap();
+    let before = eval_read(&mut e, &g, ramp);
+    let mirrored = eval_read(&mut e, &g, pm);
+    for x in [0, 3, RES / 4, RES / 2 + 7, RES - 1] {
+        let (got, want) = (pixel(&mirrored, x, 11)[0], pixel(&before, RES - 1 - x, 11)[0]);
+        assert!(close(got, want, 2e-3), "x {x}: {got}, not {want}");
+    }
+    // One pixel to the right, less this one: the ramp's step everywhere but at its seam.
+    set(&mut g, pm, "expression", ParamValue::Text("(sample(img, u + 1 / width, v) - img) * width".into()));
+    let slope = eval_read(&mut e, &g, pm);
+    assert!(close(pixel(&slope, RES / 3, 40)[0], 1.0, 0.05), "{}", pixel(&slope, RES / 3, 40)[0]);
+    // A value is itself wherever it is read.
+    set(&mut g, pm, "expression", ParamValue::Text("sample(k, 0.9, 0.1)".into()));
+    g.node_mut(pm).unwrap().var_values.insert("k".into(), 0.375);
+    let value = eval_read(&mut e, &g, pm);
+    assert!(close(pixel(&value, 5, 5)[0], 0.375, 1e-3));
+    assert!(e.gpu.take_errors().is_empty());
+}
+
 #[test]
 fn evaluation_is_incremental() {
     let Some(mut e) = engine() else { return };
@@ -357,6 +386,39 @@ fn curve_maps_values() {
     set(&mut g, curve, "channels", ParamValue::Enum(1));
     let p = pixel(&eval_read(&mut e, &g, curve), 3, 3);
     assert!(close(p[0], 0.8, 0.003) && close(p[1], 0.5, 0.002) && close(p[2], 0.5, 0.002), "{p:?}");
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+/// Gradient Dynamic reads its colors along a line of an image: a value picks the color at its
+/// place along the row, or along the column at Position, or where a Position Map says.
+#[test]
+fn gradient_dynamic_reads_colors_from_an_image() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    // The gradient: a ramp from black on the left to white on the right.
+    let ramp = g.add_node(NodeKind::GRADIENT, [0.0, 0.0]);
+    let quarter = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    set(&mut g, quarter, "color", ParamValue::Color([0.25, 0.25, 0.25, 1.0]));
+    let dynamic = g.add_node(NodeKind::GRADIENT_DYNAMIC, [0.0, 0.0]);
+    g.connect(quarter, "o:output", dynamic, "i:input").unwrap();
+    g.connect(ramp, "o:output", dynamic, "i:gradient").unwrap();
+    let along = pixel(&eval_read(&mut e, &g, dynamic), 40, 70);
+    assert!(close(along[0], 0.25, 0.01) && close(along[2], 0.25, 0.01), "{along:?}");
+    // Down a column: the column at Position, whatever the value.
+    set(&mut g, dynamic, "orientation", ParamValue::Enum(1));
+    set(&mut g, dynamic, "position", ParamValue::Float(0.75));
+    let down = pixel(&eval_read(&mut e, &g, dynamic), 40, 70);
+    assert!(close(down[0], 0.75, 0.01), "{down:?}");
+    // The column a Position Map says: here, as the map is.
+    let map = g.add_node(NodeKind::GRADIENT, [0.0, 0.0]);
+    set(&mut g, map, "angle", ParamValue::Float(90.0));
+    g.connect(map, "o:output", dynamic, "i:position_map").unwrap();
+    let mapped = eval_read(&mut e, &g, dynamic);
+    let map_values = eval_read(&mut e, &g, map);
+    for (x, y) in [(10, 10), (100, 50), (200, 240), (128, 128)] {
+        let (got, want) = (pixel(&mapped, x, y)[0], pixel(&map_values, x, y)[0]);
+        assert!(close(got, want, 0.01), "({x}, {y}): {got}, not {want}");
+    }
     assert!(e.gpu.take_errors().is_empty());
 }
 

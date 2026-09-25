@@ -42,6 +42,7 @@ pub enum Func {
     Radians,
     If,
     Hash,
+    Sample,
 }
 
 pub const VARIADIC: usize = usize::MAX;
@@ -109,6 +110,14 @@ pub static FUNCTIONS: &[FuncInfo] = &[
     f("rad", Func::Radians, 1, 1, "rad(deg)", "Degrees to radians"),
     f("if", Func::If, 3, 3, "if(cond, a, b)", "a when cond ≠ 0, otherwise b"),
     f("hash", Func::Hash, 1, 1, "hash(x)", "Deterministic pseudo-random number in [0, 1)"),
+    f(
+        "sample",
+        Func::Sample,
+        3,
+        3,
+        "sample(image, x, y)",
+        "Pixel Math: the image input at (x, y), from 0 to 1 like u and v, between pixels; a value is the same everywhere",
+    ),
 ];
 
 pub struct ConstInfo {
@@ -254,5 +263,7 @@ pub fn call(func: Func, a: &[f64]) -> f64 {
             }
         }
         Func::Hash => pcg_hash((x as f32).to_bits()) as f64 / 4_294_967_296.0,
+        // A value is the same wherever it is read: only an image of Pixel Math differs.
+        Func::Sample => x,
     }
 }

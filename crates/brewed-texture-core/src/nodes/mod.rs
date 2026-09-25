@@ -686,6 +686,7 @@ impl NodeKind {
     pub const HSL: NodeKind = NodeKind(&adjustments::HSL);
     pub const GRADIENT_MAP: NodeKind = NodeKind(&adjustments::GRADIENT_MAP);
     pub const CURVE: NodeKind = NodeKind(&adjustments::CURVE);
+    pub const GRADIENT_DYNAMIC: NodeKind = NodeKind(&adjustments::GRADIENT_DYNAMIC);
     pub const CHANNEL_SHUFFLE: NodeKind = NodeKind(&adjustments::CHANNEL_SHUFFLE);
     pub const RGBA_MERGE: NodeKind = NodeKind(&adjustments::RGBA_MERGE);
     pub const POSTERIZE: NodeKind = NodeKind(&adjustments::POSTERIZE);
@@ -743,6 +744,7 @@ impl NodeKind {
         NodeKind::GRAYSCALE,
         NodeKind::HSL,
         NodeKind::GRADIENT_MAP,
+        NodeKind::GRADIENT_DYNAMIC,
         NodeKind::CURVE,
         NodeKind::CHANNEL_SHUFFLE,
         NodeKind::RGBA_MERGE,

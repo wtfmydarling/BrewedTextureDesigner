@@ -410,4 +410,20 @@ mod tests {
         assert_eq!(variables_lenient("sin(myVar"), vec!["myVar"]);
         assert_eq!(variables_lenient("x + y *"), vec!["x", "y"]);
     }
+
+    /// `sample(image, x, y)` reads an image input anywhere (in Pixel Math); what it reads is
+    /// named, and a value, read anywhere, is itself.
+    #[test]
+    fn sample_names_the_image_it_reads() {
+        let p = compile("sample(height, u + 0.01, v) - height").unwrap();
+        assert_eq!(p.vars, vec!["height", "u", "v"]);
+        assert_eq!(eval("sample(k, 0.2, 0.9) * 2", &[("k", 3.0)]), 6.0);
+        assert!(err("sample(0.5, u, v)").message.contains("name of an image input"));
+        assert!(err("sample(a + b, u, v)").message.contains("name of an image input"));
+        assert!(err("sample(a, u)").message.contains("expects 3 arguments"));
+        // Never folded away: what it reads is only known on the GPU.
+        let code = wgsl::to_wgsl_sampling(&p, &|i| format!("V{i}"), &|i, x, y| format!("S{i}[{x}|{y}]"));
+        assert!(code.contains("S0[((V1) + f32(0.01))|(V2)]"), "{code}");
+        assert!(wgsl::to_wgsl(&p, &|i| format!("V{i}")).contains("(V0)"));
+    }
 }
