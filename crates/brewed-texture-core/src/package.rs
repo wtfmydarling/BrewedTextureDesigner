@@ -60,7 +60,7 @@ impl ResourceKind {
     /// The file extensions of the kind, lower case.
     pub fn extensions(self) -> &'static [&'static str] {
         match self {
-            ResourceKind::Bitmap => &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "exr"],
+            ResourceKind::Bitmap => &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "exr", "hdr"],
             ResourceKind::Svg => &["svg"],
             ResourceKind::Font => &["ttf", "otf", "ttc"],
         }

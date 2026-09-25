@@ -12,8 +12,8 @@ use iced_runtime::user_interface::{Cache, UserInterface};
 use brewed_texture_core::{Edit, NodeKind, ParamValue};
 
 use crate::app::{
-    App, ColorTarget, ContextMenu, ContextTarget, Dialog, DragPayload, ExplorerMessage, GraphMessage, Message, PendingAction, ScreenPick,
-    SelectMode, StartupOptions,
+    App, ColorTarget, ContextMenu, ContextTarget, Dialog, DragPayload, ExplorerMessage, GraphMessage, Message, PendingAction, PreviewMessage,
+    ScreenPick, SelectMode, StartupOptions,
 };
 use crate::picker::{PickTarget, Shot};
 use crate::view;
@@ -1119,6 +1119,74 @@ fn the_3d_view_draws_in_real_time() {
     assert!(!texts(&mut w, "0 FPS · 0.0 ms").is_empty());
 }
 
+/// The 3D view is lit by the studio or by an environment image, chosen in the menu of its
+/// header: the studio, the images used last, and one to look for; how bright, and how far it
+/// is turned. An image that cannot be read says so and is forgotten, the view staying lit as
+/// it was; one that can lights the view, and shows behind the model as blurred as asked. The
+/// studio comes back at once, and so does the image read last.
+#[test]
+fn the_3d_view_is_lit_by_an_environment_image() {
+    use crate::app::PreviewMessage as P;
+    let dir = scratch("environment");
+    let sky = dir.join("sky.hdr");
+    let pixels: Vec<image::Rgb<f32>> =
+        (0..32u32).flat_map(|y| (0..64u32).map(move |x| image::Rgb([x as f32 / 16.0, 1.0 - y as f32 / 32.0, 2.0]))).collect();
+    image::codecs::hdr::HdrEncoder::new(std::fs::File::create(&sky).unwrap()).encode(&pixels, 64, 32).unwrap();
+    let (sky, missing) = (sky.display().to_string(), dir.join("missing.hdr").display().to_string());
+    let read = |file: &str| P::EnvironmentRead(file.to_string(), crate::environment::load(std::path::Path::new(file)).map(std::sync::Arc::new));
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let shown = |w: &mut Harness, text: &str| !texts(w, text).is_empty();
+
+    // The menu: the studio, and a file to look for; the exposure and the turn.
+    w.send(Message::Preview(P::LightingMenu(true)));
+    for text in ["Environment", "●  Studio", "Load an Environment Image…", "Exposure", "Turn"] {
+        assert!(shown(&mut w, text), "{text} is in the menu");
+    }
+    assert!(!shown(&mut w, "Show It Behind the Model"), "the studio has nothing to show behind the model");
+
+    // An image that is not there: the view stays lit by the studio, and the menu forgets it.
+    w.send(Message::Preview(P::Environment(Some(missing.clone()))));
+    assert_eq!(w.app.ui.preview.lighting.reading.as_deref(), Some(missing.as_str()));
+    w.send(Message::Preview(read(&missing)));
+    let l = &w.app.ui.preview.lighting;
+    assert_eq!((l.file.as_deref(), l.shown.is_none(), l.reading.as_deref()), (None, true, None));
+    assert!(l.recent.is_empty());
+    assert!(w.app.ui.status.as_ref().is_some_and(|s| s.error && s.text.contains("missing.hdr")));
+
+    // One that is: once read it lights the view, and the menu has it, with the background.
+    w.send(Message::Preview(P::Environment(Some(sky.clone()))));
+    assert!(w.app.ui.preview.lighting.shown.is_none(), "the studio until the image is read");
+    w.send(Message::Preview(read(&sky)));
+    let l = &w.app.ui.preview.lighting;
+    assert_eq!(l.shown.as_ref().map(|h| h.path.as_str()), Some(sky.as_str()));
+    assert_eq!((l.shown.as_ref().map(|h| h.width), l.reading.as_deref()), (Some(64), None));
+    w.send(Message::Preview(P::LightingMenu(true)));
+    for text in ["○  Studio", "●  sky.hdr", "●  Show It Behind the Model", "Blur"] {
+        assert!(shown(&mut w, text), "{text} is in the menu");
+    }
+    w.snapshot("lighting_menu");
+
+    // The studio at once, from the menu; the image again at once, as it was read last.
+    let studio = *texts(&mut w, "○  Studio").last().expect("the studio in the menu");
+    click(&mut w, studio.center());
+    let l = &w.app.ui.preview.lighting;
+    assert!(l.file.is_none() && l.shown.is_none() && !l.menu, "a click on the studio chooses it and closes the menu");
+    w.send(Message::Preview(P::Environment(Some(sky.clone()))));
+    let l = &w.app.ui.preview.lighting;
+    assert!(l.shown.is_some() && l.reading.is_none(), "the image read last comes back at once");
+
+    // Brightness and blur stay within bounds, whatever is asked.
+    for (ev, blur) in [(3.0, 0.5), (f32::NAN, f32::NAN), (99.0, -1.0)] {
+        w.send(Message::Preview(P::Exposure(ev)));
+        w.send(Message::Preview(P::Blur(blur)));
+    }
+    let l = &w.app.ui.preview.lighting;
+    assert_eq!((l.exposure, l.blur), (12.0, 0.0));
+    w.send(Message::Preview(P::Background(false)));
+    assert!(!w.app.ui.preview.lighting.background);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The status bar says what happens now, and nothing older than a second: how many nodes the
 /// graph has, how many of them its last change computed again and how long its changes take,
 /// or how long a change has been computed when it takes long; and the GPU memory.
@@ -1190,6 +1258,7 @@ fn stays_inside(message: &Message) -> bool {
         | Message::Quit
         | Message::SaveThen(_)
         | Message::Proceed(PendingAction::Quit)
+        | Message::Preview(PreviewMessage::BrowseEnvironment)
         | Message::Explorer(
             ExplorerMessage::Save(_) | ExplorerMessage::SaveAs(_) | ExplorerMessage::LinkFiles(_) | ExplorerMessage::Locate(..),
         ) => false,

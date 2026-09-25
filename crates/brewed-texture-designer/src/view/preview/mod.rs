@@ -119,10 +119,13 @@ fn footer_2d(app: &App) -> Element<'_, Message> {
 /// The line under the 3D view: the maps on the model, and how to move it.
 fn footer_3d(app: &App) -> Element<'_, Message> {
     let maps = crate::view::view3d::map_names(app);
-    let words = vec![
-        if maps.is_empty() { "no maps: give an Output a Usage".to_string() } else { maps.join(" · ") },
-        "left drag orbits, middle drag moves, right drag turns the light, the wheel zooms".to_string(),
-    ];
+    let lighting = &app.ui.preview.lighting;
+    let mut words = vec![if maps.is_empty() { "no maps: give an Output a Usage".to_string() } else { maps.join(" · ") }];
+    if let Some(file) = &lighting.reading {
+        words.push(format!("reading {}…", brewed_texture_core::package::file_name(file)));
+    }
+    let light = if lighting.shown.is_some() { "the environment" } else { "the light" };
+    words.push(format!("left drag orbits, middle drag moves, right drag turns {light}, the wheel zooms"));
     footer(Vec::new(), words)
 }
 

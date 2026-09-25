@@ -434,6 +434,7 @@ dependencies = [
  "bytes",
  "env_logger",
  "futures",
+ "half",
  "iced",
  "iced_runtime",
  "image",

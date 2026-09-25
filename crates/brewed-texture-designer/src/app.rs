@@ -112,6 +112,8 @@ pub struct PreviewState {
     pub bounds: Rectangle,
     pub probe: Option<[u32; 2]>,
     pub view3d: view::view3d::Camera,
+    /// What lights the 3D view.
+    pub lighting: view::view3d::Lighting,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -462,6 +464,21 @@ pub enum PreviewMessage {
     Bounds(Rectangle),
     Probe(Option<[u32; 2]>),
     Camera(view::view3d::Camera),
+    /// Open or close the menu of what lights the 3D view.
+    LightingMenu(bool),
+    /// Light the 3D view by an environment image (its file), or by the studio (`None`).
+    Environment(Option<String>),
+    /// Look for an environment image in a file dialog.
+    BrowseEnvironment,
+    EnvironmentPicked(Option<PathBuf>),
+    /// An environment image was read from its file, or could not be.
+    EnvironmentRead(String, Result<Arc<crate::environment::Hdri>, String>),
+    /// The 3D view's brightness, in stops.
+    Exposure(f32),
+    /// Whether the environment image shows behind the model.
+    Background(bool),
+    /// How blurred it shows there.
+    Blur(f32),
 }
 
 #[derive(Clone, Debug)]
@@ -748,6 +765,7 @@ impl App {
                     bounds: Rectangle::default(),
                     probe: None,
                     view3d: view::view3d::Camera::default(),
+                    lighting: opts.workspace.as_ref().map_or_else(view::view3d::Lighting::default, Workspace::lighting),
                 },
                 panes: opts.workspace.as_ref().map_or_else(default_panes, |w| panes(&w.splits)),
                 library_search: String::new(),
@@ -812,6 +830,11 @@ impl App {
             Some(s) => app.apply_scenario(s),
             None => Task::none(),
         };
+        // The environment image of the last session, read again.
+        let lighting = match app.ui.preview.lighting.file.clone() {
+            Some(file) => app.choose_environment(Some(file)),
+            None => Task::none(),
+        };
         app.sync_expression();
         // The app runs as a daemon (the eyedropper opens more windows): it opens its main
         // window itself.
@@ -841,7 +864,7 @@ impl App {
             });
             Task::batch([appear, host.map(Message::Host)])
         });
-        (app, Task::batch([setup, scenario]))
+        (app, Task::batch([setup, scenario, lighting]))
     }
 
     /// The main window (as opposed to the eyedropper's windows).
@@ -1104,6 +1127,7 @@ impl App {
         self.ui.context = None;
         self.ui.add_menu = None;
         self.ui.choice_menu = None;
+        self.ui.preview.lighting.menu = false;
     }
 
     /// Keep the status bar's readings current: forget the updates older than a second and the
@@ -1478,7 +1502,9 @@ impl App {
             size: if maximized { last.size } else { Some([size.width, size.height]) },
             maximized,
             realtime: Some(self.ui.realtime),
-        };
+            ..Workspace::default()
+        }
+        .with_lighting(&self.ui.preview.lighting);
         if let Err(e) = workspace.save() {
             log::warn!("the layout was not saved: {e}");
         }
@@ -2515,8 +2541,99 @@ impl App {
                 }
             }
             PreviewMessage::Camera(c) => p.view3d = c,
+            PreviewMessage::LightingMenu(open) => {
+                self.close_popups();
+                self.ui.preview.lighting.menu = open;
+            }
+            PreviewMessage::Environment(file) => {
+                self.close_popups();
+                return self.choose_environment(file);
+            }
+            PreviewMessage::BrowseEnvironment => {
+                // Where the image in use is, to choose another beside it.
+                let folder = p.lighting.file.as_deref().and_then(|f| std::path::Path::new(f).parent()).filter(|d| d.is_dir()).map(PathBuf::from);
+                self.close_popups();
+                return Task::perform(
+                    blocking(move || {
+                        let mut dialog = rfd::FileDialog::new()
+                            .set_title("Load an environment image")
+                            .add_filter("HDR images", &["hdr", "exr"])
+                            .add_filter("All pictures", &["hdr", "exr", "png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff"]);
+                        if let Some(folder) = folder {
+                            dialog = dialog.set_directory(folder);
+                        }
+                        dialog.pick_file()
+                    }),
+                    |p| Message::Preview(PreviewMessage::EnvironmentPicked(p.flatten())),
+                );
+            }
+            PreviewMessage::EnvironmentPicked(Some(path)) => return self.choose_environment(Some(path.display().to_string())),
+            PreviewMessage::EnvironmentPicked(None) => {}
+            PreviewMessage::EnvironmentRead(file, result) => self.environment_read(file, result),
+            PreviewMessage::Exposure(ev) => {
+                if ev.is_finite() {
+                    p.lighting.exposure = ev.clamp(-12.0, 12.0);
+                }
+            }
+            PreviewMessage::Background(on) => p.lighting.background = on,
+            PreviewMessage::Blur(blur) => {
+                if blur.is_finite() {
+                    p.lighting.blur = blur.clamp(0.0, 1.0);
+                }
+            }
         }
         Task::none()
+    }
+
+    /// Light the 3D view by the environment image in `file` (or by the studio): at once when
+    /// it is the one read last, else once it is read, on a thread of its own; until then the
+    /// view shows what it did.
+    fn choose_environment(&mut self, file: Option<String>) -> Task<Message> {
+        let l = &mut self.ui.preview.lighting;
+        l.file = file.clone();
+        let Some(file) = file else {
+            l.shown = None;
+            return Task::none();
+        };
+        l.remember(&file);
+        if let Some(kept) = l.kept.as_ref().filter(|k| k.path == file) {
+            l.shown = Some(kept.clone());
+            return Task::none();
+        }
+        if l.reading.as_deref() == Some(file.as_str()) {
+            return Task::none();
+        }
+        l.reading = Some(file.clone());
+        let path = PathBuf::from(&file);
+        Task::perform(blocking(move || crate::environment::load(&path)), move |read| {
+            let read = read.unwrap_or_else(|| Err("The file could not be read".to_string())).map(Arc::new);
+            Message::Preview(PreviewMessage::EnvironmentRead(file.clone(), read))
+        })
+    }
+
+    /// An environment image was read: it lights the view if it is still the one chosen. One
+    /// that cannot be read is said so, and forgotten.
+    fn environment_read(&mut self, file: String, read: Result<Arc<crate::environment::Hdri>, String>) {
+        let l = &mut self.ui.preview.lighting;
+        if l.reading.as_deref() == Some(file.as_str()) {
+            l.reading = None;
+        }
+        match read {
+            Ok(hdri) => {
+                if l.file.as_deref() == Some(file.as_str()) {
+                    l.shown = Some(hdri.clone());
+                }
+                l.kept = Some(hdri);
+            }
+            Err(e) => {
+                l.recent.retain(|f| *f != file);
+                if l.file.as_deref() == Some(file.as_str()) {
+                    // Back to what the view shows.
+                    l.file = l.shown.as_ref().map(|h| h.path.clone());
+                }
+                self.set_status(format!("The environment image cannot be used: {e}"), true);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ eyedropper
@@ -2785,6 +2902,22 @@ impl App {
                     self.ui.preview.node = Some(id);
                 }
             }
+            "lighting-menu" => self.ui.preview.lighting.menu = true,
+            // Several at once.
+            other if other.contains(';') => return Task::batch(other.split(';').map(|s| self.apply_scenario(s)).collect::<Vec<_>>()),
+            // The model of the 3D view, by its name ("mat-ball").
+            other if other.starts_with("shape:") => {
+                let name = other["shape:".len()..].replace('-', " ");
+                match view::view3d::Shape::ALL.into_iter().find(|s| s.to_string().eq_ignore_ascii_case(&name)) {
+                    Some(shape) => self.ui.preview.view3d.shape = shape,
+                    None => log::warn!("no shape '{name}'"),
+                }
+            }
+            // The 3D view lit by an environment image, as bright and as blurred behind the model
+            // as said.
+            other if other.starts_with("environment:") => return self.choose_environment(Some(other["environment:".len()..].to_string())),
+            other if other.starts_with("exposure:") => self.ui.preview.lighting.exposure = other["exposure:".len()..].parse().unwrap_or(0.0),
+            other if other.starts_with("blur:") => self.ui.preview.lighting.blur = other["blur:".len()..].parse().unwrap_or(0.25),
             other => log::warn!("unknown scenario '{other}'"),
         }
         Task::none()
@@ -2799,6 +2932,8 @@ impl App {
             && (self.ui.preview.node.is_none() || self.res.preview.is_some())
             // The model wears the maps in every screenshot: they take longest to arrive.
             && self.res.materials.len() >= self.material_nodes().len()
+            // ...and is lit by its environment image.
+            && self.ui.preview.lighting.reading.is_none()
             // An open menu of pictures shows all of them.
             && self.ui.choice_menu.as_ref().is_none_or(|m| {
                 self.graph().node(m.node).is_some_and(|n| self.res.choices.contains_key(&(n.kind.id(), m.key)))

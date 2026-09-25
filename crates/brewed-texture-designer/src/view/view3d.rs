@@ -1,53 +1,34 @@
-//! 3D material preview: the graph's outputs (by their Usage) on a sphere, cube, plane or
-//! cylinder, lit with a physically based model. Height displaces the vertices; the maps are
-//! the images the outputs write, in their channels and at their bit depths, with their
-//! mips, sampled directly on the GPU (one channel read as gray, with the engine's `widen`).
+//! 3D material preview: the graph's outputs (by their Usage) on a model, lit with a
+//! physically based model, by the studio (a key light, a fill light and a sky) or by an
+//! environment image (see [`crate::environment`]), which can show behind the model too.
+//! Height displaces the vertices; the maps are the images the outputs write, in their
+//! channels and at their bit depths, with their mips, sampled directly on the GPU (one channel
+//! read as gray, with the engine's `widen`).
 //!
-//! Left drag orbits, right drag moves the light, the wheel zooms.
+//! Left drag orbits, right drag turns the light (or the environment), the wheel zooms.
+
+use std::sync::Arc;
 
 use iced::widget::shader::{self, Viewport};
-use iced::widget::{button, container, pick_list, row, shader as shader_widget, text};
+use iced::widget::tooltip::Position;
+use iced::widget::{button, column, container, pick_list, row, rule, shader as shader_widget, text};
 use iced::{Alignment, Element, Length, Rectangle, Vector, mouse, window};
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::nodes::{USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL, USAGE_ROUGHNESS};
+use brewed_texture_core::package::file_name;
 use brewed_texture_engine::wgpu;
 use wgpu::util::DeviceExt;
 
 use crate::app::{App, Message, PreviewMessage};
+use crate::environment::{self, Hdri};
+use crate::icons::{Icon, icon};
 use crate::style;
 use crate::view::frames::FrameCounter;
+use crate::widget::dropdown::dropdown;
 use crate::widget::number::number;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Shape {
-    /// A cube with rounded edges: flat faces to judge the texture on, and curves to
-    /// catch the light. What a material is usually looked at on.
-    RoundedCube,
-    Sphere,
-    Cube,
-    Plane,
-    Cylinder,
-}
-
-impl Shape {
-    pub const ALL: [Shape; 5] = [Shape::RoundedCube, Shape::Sphere, Shape::Cube, Shape::Plane, Shape::Cylinder];
-
-    fn label(self) -> &'static str {
-        match self {
-            Shape::RoundedCube => "Rounded Cube",
-            Shape::Sphere => "Sphere",
-            Shape::Cube => "Cube",
-            Shape::Plane => "Plane",
-            Shape::Cylinder => "Cylinder",
-        }
-    }
-}
-
-impl std::fmt::Display for Shape {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.label())
-    }
-}
+pub use super::models::Shape;
+use super::models::{Vertex, build_mesh, cross, dot, normalize, sub};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
@@ -56,6 +37,8 @@ pub struct Camera {
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
+    /// Where the key light of the studio is, around the camera; how far an environment image
+    /// is turned.
     pub light_yaw: f32,
     pub light_pitch: f32,
     pub shape: Shape,
@@ -108,7 +91,8 @@ impl Camera {
         match m {
             Move::Orbit(d) => Camera { yaw: self.yaw - d.x * 0.01, pitch: (self.pitch + d.y * 0.01).clamp(-1.5, 1.5), ..self },
             Move::Light(d) => Camera {
-                light_yaw: self.light_yaw + d.x * 0.01,
+                // Round and round, never so far that a turn of it is lost in the digits.
+                light_yaw: wrapped(self.light_yaw + d.x * 0.01),
                 light_pitch: (self.light_pitch - d.y * 0.01).clamp(-1.4, 1.5),
                 ..self
             },
@@ -128,6 +112,62 @@ impl Camera {
     }
 }
 
+/// An angle in radians, from -π to π.
+fn wrapped(a: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    if a.is_finite() { (a + PI).rem_euclid(TAU) - PI } else { 0.0 }
+}
+
+// ---------------------------------------------------------------------------- lighting
+
+/// What lights the model: the studio or an environment image, how brightly, and what shows
+/// behind the model. Kept from one session to the next (see `workspace`).
+#[derive(Clone, Debug)]
+pub struct Lighting {
+    /// The environment image's file; `None`, the studio.
+    pub file: Option<String>,
+    /// The environment images used last, the latest first.
+    pub recent: Vec<String>,
+    /// The environment the view shows: the one read from `file`, or while that is read, the
+    /// one before (`None`, the studio).
+    pub shown: Option<Arc<Hdri>>,
+    /// The environment read last, to come back to at once.
+    pub kept: Option<Arc<Hdri>>,
+    /// The file being read.
+    pub reading: Option<String>,
+    /// Brightness, in stops: each one doubles it.
+    pub exposure: f32,
+    /// Whether an environment image shows behind the model.
+    pub background: bool,
+    /// How blurred it shows there, from 0 (sharp) to 1 (as the roughest surface reflects it).
+    pub blur: f32,
+    /// Whether the menu of the lighting is open.
+    pub menu: bool,
+}
+
+/// How many environment images the menu offers again.
+pub const RECENT: usize = 8;
+
+impl Default for Lighting {
+    fn default() -> Self {
+        Lighting { file: None, recent: Vec::new(), shown: None, kept: None, reading: None, exposure: 0.0, background: true, blur: 0.25, menu: false }
+    }
+}
+
+impl Lighting {
+    /// Put `file` first among the images used last.
+    pub fn remember(&mut self, file: &str) {
+        self.recent.retain(|f| f != file);
+        self.recent.insert(0, file.to_string());
+        self.recent.truncate(RECENT);
+    }
+
+    /// What lights the model: the image's file name, or the studio.
+    pub fn name(&self) -> String {
+        self.file.as_deref().map_or_else(|| "the studio".to_string(), file_name)
+    }
+}
+
 pub fn toolbar(app: &App) -> Element<'_, Message> {
     let cam = app.ui.preview.view3d;
     // A list rather than a button each: the view next to it is the one that needs the room.
@@ -136,8 +176,9 @@ pub fn toolbar(app: &App) -> Element<'_, Message> {
             .text_size(style::SMALL)
             .padding([2, 6])
             // As wide as its longest shape, however little room the view has: one line.
-            .width(Length::Fixed(112.0))
-            .style(style::pick_list)
+            .width(Length::Fixed(132.0))
+            .style(style::pick_list),
+        lighting_button(app),
     ]
     .spacing(4)
     .align_y(Alignment::Center);
@@ -160,14 +201,120 @@ pub fn toolbar(app: &App) -> Element<'_, Message> {
         .width(Length::Fixed(60.0)),
     );
     r = r.push(crate::view::tip(
-        button(crate::icons::icon(crate::icons::Icon::Reset, 14.0, style::TEXT_DIM))
+        button(icon(Icon::Reset, 14.0, style::TEXT_DIM))
             .padding(4)
             .style(style::flat_button)
             .on_press(Message::Preview(PreviewMessage::Camera(Camera { shape: cam.shape, ..Camera::default() }))),
         "Put the camera, the light and the height back where they started",
-        iced::widget::tooltip::Position::Bottom,
+        Position::Bottom,
     ));
     r.into()
+}
+
+/// The button of the lighting's menu, and the menu while it is open.
+fn lighting_button(app: &App) -> Element<'_, Message> {
+    let l = &app.ui.preview.lighting;
+    let face = button(icon(Icon::Sun, 14.0, if l.file.is_some() { style::TEXT } else { style::TEXT_DIM }))
+        .padding(4)
+        .style(style::toggle_button(l.menu))
+        .on_press(Message::Preview(PreviewMessage::LightingMenu(!l.menu)));
+    let face = crate::view::tip(face, format!("Lit by {}: the environment, its brightness, and what shows behind the model", l.name()), Position::Bottom);
+    dropdown(face, lighting_menu(app), l.menu).on_dismiss(Message::Preview(PreviewMessage::LightingMenu(false))).into()
+}
+
+fn lighting_menu(app: &App) -> Element<'_, Message> {
+    let l = &app.ui.preview.lighting;
+    let cam = app.ui.preview.view3d;
+    let send = |m: PreviewMessage| Message::Preview(m);
+    let choice = |on: bool, label: String, hint: String, message: Message| -> Element<'_, Message> {
+        crate::view::tip(
+            button(
+                text(format!("{}  {label}", if on { "●" } else { "○" }))
+                    .size(style::TEXT_SIZE)
+                    .color(style::TEXT)
+                    .wrapping(text::Wrapping::None),
+            )
+            .width(Length::Fill)
+            .padding([4, 10])
+            .style(style::row_button(on))
+            .on_press(message),
+            hint,
+            Position::Right,
+        )
+    };
+    let field = |label: &'static str, input: Element<'static, Message>| -> Element<'static, Message> {
+        row![text(label).size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(64.0)), input]
+            .spacing(6)
+            .padding([3, 10])
+            .align_y(Alignment::Center)
+            .into()
+    };
+    let mut items: Vec<Element<'_, Message>> =
+        vec![container(text("Environment").size(style::SMALL).color(style::TEXT_DIM)).padding([4, 10]).into()];
+    items.push(choice(
+        l.file.is_none(),
+        "Studio".into(),
+        "A key light and a fill light, turned with the camera, under a sky".into(),
+        send(PreviewMessage::Environment(None)),
+    ));
+    for f in &l.recent {
+        let reading = if l.reading.as_deref() == Some(f.as_str()) { "  (reading…)" } else { "" };
+        items.push(choice(
+            l.file.as_deref() == Some(f.as_str()),
+            format!("{}{reading}", file_name(f)),
+            f.clone(),
+            send(PreviewMessage::Environment(Some(f.clone()))),
+        ));
+    }
+    items.push(
+        button(
+            row![icon(Icon::Folder, 13.0, style::TEXT_DIM), text("Load an Environment Image…").size(style::TEXT_SIZE)]
+                .spacing(8)
+                .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding([4, 10])
+        .style(style::row_button(false))
+        .on_press(send(PreviewMessage::BrowseEnvironment))
+        .into(),
+    );
+    items.push(
+        container(rule::horizontal(1).style(|_| rule::Style { color: style::LINE, radius: 0.0.into(), fill_mode: rule::FillMode::Full, snap: true }))
+            .padding([3, 6])
+            .into(),
+    );
+    items.push(field(
+        "Exposure",
+        number(l.exposure as f64, -4.0, 4.0)
+            .limits(-12.0, 12.0)
+            .default_value(0.0)
+            .suffix(" EV")
+            .decimals(2)
+            .on_change(move |v| send(PreviewMessage::Exposure(v as f32)))
+            .into(),
+    ));
+    items.push(field(
+        "Turn",
+        number(f64::from(wrapped(cam.light_yaw).to_degrees()), -180.0, 180.0)
+            .limits(-180.0, 180.0)
+            .decimals(1)
+            .suffix("°")
+            .on_change(move |v| send(PreviewMessage::Camera(Camera { light_yaw: (v as f32).to_radians(), ..cam })))
+            .into(),
+    ));
+    if l.file.is_some() {
+        items.push(choice(
+            l.background,
+            "Show It Behind the Model".into(),
+            "The environment image around the model, rather than the gray".into(),
+            send(PreviewMessage::Background(!l.background)),
+        ));
+        items.push(field(
+            "Blur",
+            number(l.blur as f64, 0.0, 1.0).limits(0.0, 1.0).default_value(0.25).on_change(move |v| send(PreviewMessage::Blur(v as f32))).into(),
+        ));
+    }
+    container(column(items).spacing(1).width(Length::Fixed(270.0))).padding(4).style(style::popup).into()
 }
 
 /// Material slots, in the order the shader binds them.
@@ -203,7 +350,16 @@ pub fn view(app: &App) -> Element<'_, Message> {
         }
     }
     let missing = maps.iter().all(Option::is_none);
-    let scene = Scene { camera: app.ui.preview.view3d, maps, gray, realtime: app.ui.realtime };
+    let l = &app.ui.preview.lighting;
+    let scene = Scene {
+        camera: app.ui.preview.view3d,
+        maps,
+        gray,
+        realtime: app.ui.realtime,
+        environment: l.shown.clone(),
+        exposure: l.exposure.clamp(-12.0, 12.0).exp2(),
+        background: l.background.then_some(l.blur.clamp(0.0, 1.0)),
+    };
     let mut layers: Vec<Element<'_, Message>> = vec![shader_widget(scene).width(Length::Fill).height(Length::Fill).into()];
     if missing {
         layers.push(
@@ -240,6 +396,12 @@ pub struct Scene {
     gray: u32,
     /// Draw frame after frame, rather than only when something changes.
     realtime: bool,
+    /// The environment image that lights the model; `None`, the studio.
+    environment: Option<Arc<Hdri>>,
+    /// What light is multiplied by: the exposure.
+    exposure: f32,
+    /// How blurred the environment image shows behind the model; `None`, it does not.
+    background: Option<f32>,
 }
 
 #[derive(Default)]
@@ -321,7 +483,14 @@ impl shader::Program<Message> for Scene {
     }
 
     fn draw(&self, _state: &DragState, _cursor: mouse::Cursor, _bounds: Rectangle) -> Primitive {
-        Primitive { camera: self.camera, maps: self.maps.clone(), gray: self.gray }
+        Primitive {
+            camera: self.camera,
+            maps: self.maps.clone(),
+            gray: self.gray,
+            environment: self.environment.clone(),
+            exposure: self.exposure,
+            background: self.background,
+        }
     }
 
     fn mouse_interaction(&self, state: &DragState, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
@@ -340,6 +509,9 @@ pub struct Primitive {
     camera: Camera,
     maps: [Option<wgpu::TextureView>; 7],
     gray: u32,
+    environment: Option<Arc<Hdri>>,
+    exposure: f32,
+    background: Option<f32>,
 }
 
 // ---------------------------------------------------------------------------- math
@@ -356,27 +528,10 @@ fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
     r
 }
 
-fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn normalize(a: [f32; 3]) -> [f32; 3] {
-    let l = dot(a, a).sqrt().max(1e-9);
-    [a[0] / l, a[1] / l, a[2] / l]
-}
-
-/// Right handed perspective with depth in [0, 1].
 /// Vertical field of view of the 3D view, in radians.
 const FOV: f32 = 0.62;
 
+/// Right handed perspective with depth in [0, 1].
 fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     let f = 1.0 / (fovy / 2.0).tan();
     [[f / aspect, 0.0, 0.0, 0.0], [0.0, f, 0.0, 0.0], [0.0, 0.0, far / (near - far), -1.0], [0.0, 0.0, near * far / (near - far), 0.0]]
@@ -400,291 +555,32 @@ fn spherical(yaw: f32, pitch: f32) -> [f32; 3] {
 
 // ---------------------------------------------------------------------------- meshes
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    pos: [f32; 3],
-    normal: [f32; 3],
-    tangent: [f32; 4],
-    uv: [f32; 2],
-}
-
 struct Mesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
 }
 
-/// A grid of `n` x `n` quads from `f(u, v) -> (position, normal, tangent)`.
-fn grid(n: u32, uv_scale: [f32; 2], f: impl Fn(f32, f32) -> ([f32; 3], [f32; 3], [f32; 3]), out: &mut (Vec<Vertex>, Vec<u32>)) {
-    let base = out.0.len() as u32;
-    for j in 0..=n {
-        for i in 0..=n {
-            let (u, v) = (i as f32 / n as f32, j as f32 / n as f32);
-            let (pos, normal, tangent) = f(u, v);
-            out.0.push(Vertex { pos, normal, tangent: [tangent[0], tangent[1], tangent[2], 1.0], uv: [u * uv_scale[0], v * uv_scale[1]] });
-        }
+impl Mesh {
+    fn new(device: &wgpu::Device, shape: Shape) -> Mesh {
+        let (v, i) = build_mesh(shape);
+        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("brewed 3d mesh"),
+            contents: bytemuck::cast_slice(&v),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("brewed 3d mesh"),
+            contents: bytemuck::cast_slice(&i),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        Mesh { vertices, indices, count: i.len() as u32 }
     }
-    for j in 0..n {
-        for i in 0..n {
-            let a = base + j * (n + 1) + i;
-            let b = a + 1;
-            let c = a + n + 1;
-            let d = c + 1;
-            out.1.extend_from_slice(&[a, c, b, b, c, d]);
-        }
-    }
-}
-
-/// The six faces of a cube as (normal, u axis, v axis); v runs downwards in the texture.
-const CUBE_FACES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
-    ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
-    ([0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
-    ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, -1.0, 0.0]),
-    ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]),
-    ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
-    ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
-];
-
-fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
-    use std::f32::consts::{PI, TAU};
-    let mut out = (Vec::new(), Vec::new());
-    match shape {
-        Shape::RoundedCube => {
-            // The surface of a box of half-size `H - R` grown by a ball of radius `R`:
-            // every point of a face is pushed out from the nearest point of that box, which
-            // leaves the middle of a face flat and rounds the edges and corners.
-            const H: f32 = 0.8;
-            const R: f32 = 0.22;
-            for (n, a, b) in CUBE_FACES {
-                grid(
-                    96,
-                    [1.0, 1.0],
-                    |u, v| {
-                        let (s, t) = (u * 2.0 - 1.0, v * 2.0 - 1.0);
-                        let q = [
-                            (n[0] + a[0] * s + b[0] * t) * H,
-                            (n[1] + a[1] * s + b[1] * t) * H,
-                            (n[2] + a[2] * s + b[2] * t) * H,
-                        ];
-                        let core = q.map(|c| c.clamp(-(H - R), H - R));
-                        let out = [q[0] - core[0], q[1] - core[1], q[2] - core[2]];
-                        let normal = normalize(out);
-                        let p = [core[0] + normal[0] * R, core[1] + normal[1] * R, core[2] + normal[2] * R];
-                        // The face's own u axis, along the surface: it turns with the edges.
-                        let along = dot(a, normal);
-                        let tangent = normalize([a[0] - normal[0] * along, a[1] - normal[1] * along, a[2] - normal[2] * along]);
-                        (p, normal, tangent)
-                    },
-                    &mut out,
-                );
-            }
-        }
-        Shape::Sphere => grid(
-            160,
-            [2.0, 1.0],
-            |u, v| {
-                let (theta, phi) = (v * PI, u * TAU);
-                let n = [theta.sin() * phi.sin(), theta.cos(), theta.sin() * phi.cos()];
-                let t = [phi.cos(), 0.0, -phi.sin()];
-                (n, n, t)
-            },
-            &mut out,
-        ),
-        Shape::Plane => grid(
-            256,
-            [1.0, 1.0],
-            |u, v| ([u * 2.4 - 1.2, 1.2 - v * 2.4, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
-            &mut out,
-        ),
-        Shape::Cube => {
-            for (n, a, b) in CUBE_FACES {
-                grid(
-                    64,
-                    [1.0, 1.0],
-                    |u, v| {
-                        let (s, t) = ((u * 2.0 - 1.0) * 0.8, (v * 2.0 - 1.0) * 0.8);
-                        let p = [n[0] * 0.8 + a[0] * s + b[0] * t, n[1] * 0.8 + a[1] * s + b[1] * t, n[2] * 0.8 + a[2] * s + b[2] * t];
-                        (p, n, a)
-                    },
-                    &mut out,
-                );
-            }
-        }
-        Shape::Cylinder => {
-            grid(
-                160,
-                [2.0, 1.0],
-                |u, v| {
-                    let phi = u * TAU;
-                    let n = [phi.sin(), 0.0, phi.cos()];
-                    ([n[0] * 0.8, 1.0 - v * 2.0, n[2] * 0.8], n, [phi.cos(), 0.0, -phi.sin()])
-                },
-                &mut out,
-            );
-            for (y, sign) in [(1.0f32, 1.0f32), (-1.0, -1.0)] {
-                grid(
-                    48,
-                    [1.0, 1.0],
-                    |u, v| {
-                        let (r, phi) = (v * 0.8, u * TAU);
-                        ([phi.sin() * r, y, phi.cos() * r], [0.0, sign, 0.0], [1.0, 0.0, 0.0])
-                    },
-                    &mut out,
-                );
-            }
-        }
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------- pipeline
 
-const SHADER: &str = r#"
-struct U {
-    view_proj: mat4x4<f32>,
-    eye: vec4<f32>,
-    light: vec4<f32>,
-    params: vec4<f32>,   // displacement, texture repeat, _, _
-    flags: vec4<u32>,    // present maps (bits), sRGB target, gray maps (bits), _
-};
-
-@group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(1) var base_map: texture_2d<f32>;
-@group(0) @binding(2) var normal_map: texture_2d<f32>;
-@group(0) @binding(3) var height_map: texture_2d<f32>;
-@group(0) @binding(4) var rough_map: texture_2d<f32>;
-@group(0) @binding(5) var metal_map: texture_2d<f32>;
-@group(0) @binding(6) var ao_map: texture_2d<f32>;
-@group(0) @binding(7) var emissive_map: texture_2d<f32>;
-@group(0) @binding(8) var samp: sampler;
-
-const PI: f32 = 3.14159265;
-
-struct VIn {
-    @location(0) pos: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) tangent: vec4<f32>,
-    @location(3) uv: vec2<f32>,
-};
-
-struct VOut {
-    @builtin(position) clip: vec4<f32>,
-    @location(0) world: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) tangent: vec4<f32>,
-    @location(3) uv: vec2<f32>,
-};
-
-fn has(bit: u32) -> bool {
-    return (u.flags.x & (1u << bit)) != 0u;
-}
-
-// A map as its output writes it (a map of one channel is gray), from 0 to 1.
-fn read_map(c: vec4<f32>, bit: u32) -> vec4<f32> {
-    let gray = (u.flags.z & (1u << bit)) != 0u;
-    return clamp(widen(c, gray), vec4<f32>(0.0), vec4<f32>(1.0));
-}
-
-@vertex
-fn vs(v: VIn) -> VOut {
-    let uv = v.uv * u.params.y;
-    var p = v.pos;
-    if (has(2u)) {
-        let h = read_map(textureSampleLevel(height_map, samp, uv, 0.0), 2u).r;
-        p = p + v.normal * h * u.params.x;
-    }
-    var o: VOut;
-    o.clip = u.view_proj * vec4<f32>(p, 1.0);
-    o.world = p;
-    o.normal = v.normal;
-    o.tangent = v.tangent;
-    o.uv = uv;
-    return o;
-}
-
-fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
-    let lo = c / 12.92;
-    let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
-    return select(hi, lo, c <= vec3<f32>(0.04045));
-}
-
-fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
-    let lo = c * 12.92;
-    let hi = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(hi, lo, c <= vec3<f32>(0.0031308));
-}
-
-fn aces(x: vec3<f32>) -> vec3<f32> {
-    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
-}
-
-fn environment(dir: vec3<f32>) -> vec3<f32> {
-    let sky = vec3<f32>(0.55, 0.62, 0.75);
-    let ground = vec3<f32>(0.16, 0.14, 0.12);
-    let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
-    return mix(ground, sky, t * t * (3.0 - 2.0 * t));
-}
-
-fn brdf(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, albedo: vec3<f32>, rough: f32, metal: f32) -> vec3<f32> {
-    let h = normalize(v + l);
-    let ndl = max(dot(n, l), 0.0);
-    let ndv = max(dot(n, v), 1e-4);
-    let ndh = max(dot(n, h), 0.0);
-    let vdh = max(dot(v, h), 0.0);
-    let a = max(rough * rough, 0.002);
-    let a2 = a * a;
-    let d = a2 / (PI * pow(ndh * ndh * (a2 - 1.0) + 1.0, 2.0));
-    let k = (rough + 1.0) * (rough + 1.0) / 8.0;
-    let g = (ndl / (ndl * (1.0 - k) + k)) * (ndv / (ndv * (1.0 - k) + k));
-    let f0 = mix(vec3<f32>(0.04), albedo, metal);
-    let f = f0 + (1.0 - f0) * pow(1.0 - vdh, 5.0);
-    let spec = d * g * f / max(4.0 * ndl * ndv, 1e-4);
-    let kd = (1.0 - f) * (1.0 - metal);
-    return (kd * albedo / PI + spec) * ndl;
-}
-
-@fragment
-fn fs(i: VOut) -> @location(0) vec4<f32> {
-    var albedo = vec3<f32>(0.72);
-    if (has(0u)) {
-        albedo = srgb_to_linear(read_map(textureSample(base_map, samp, i.uv), 0u).rgb);
-    }
-    var n = normalize(i.normal);
-    if (has(1u)) {
-        let t = normalize(i.tangent.xyz - n * dot(n, i.tangent.xyz));
-        let b = cross(n, t) * i.tangent.w;
-        let m = read_map(textureSample(normal_map, samp, i.uv), 1u).rgb * 2.0 - 1.0;
-        // OpenGL normal maps: +y points up in the texture, i.e. against v.
-        n = normalize(t * m.x + b * m.y + n * m.z);
-    }
-    var rough = 0.5;
-    if (has(3u)) { rough = max(read_map(textureSample(rough_map, samp, i.uv), 3u).r, 0.02); }
-    var metal = 0.0;
-    if (has(4u)) { metal = read_map(textureSample(metal_map, samp, i.uv), 4u).r; }
-    var ao = 1.0;
-    if (has(5u)) { ao = read_map(textureSample(ao_map, samp, i.uv), 5u).r; }
-    var emissive = vec3<f32>(0.0);
-    if (has(6u)) { emissive = srgb_to_linear(read_map(textureSample(emissive_map, samp, i.uv), 6u).rgb); }
-
-    let v = normalize(u.eye.xyz - i.world);
-    let key = normalize(u.light.xyz);
-    let fill = normalize(vec3<f32>(-key.x, 0.3, -key.z));
-    var color = brdf(n, v, key, albedo, rough, metal) * vec3<f32>(3.2, 3.05, 2.85);
-    color = color + brdf(n, v, fill, albedo, rough, metal) * vec3<f32>(0.45, 0.5, 0.6);
-    // Ambient: diffuse from the hemisphere, specular from the reflected direction.
-    let f0 = mix(vec3<f32>(0.04), albedo, metal);
-    let ndv = max(dot(n, v), 1e-4);
-    let fr = f0 + (max(vec3<f32>(1.0 - rough), f0) - f0) * pow(1.0 - ndv, 5.0);
-    let r = reflect(-v, n);
-    color = color + (environment(n) * albedo * (1.0 - metal) * 0.35 + environment(r) * fr * (1.0 - rough * 0.6) * 0.6) * ao;
-    color = aces(color + emissive);
-    if (u.flags.y == 0u) {
-        color = linear_to_srgb(color);
-    }
-    return vec4<f32>(color, 1.0);
-}
-"#;
+const SHADER: &str = include_str!("view3d.wgsl");
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -694,20 +590,38 @@ struct Uniforms {
     light: [f32; 4],
     params: [f32; 4],
     flags: [u32; 4],
+    turn: [f32; 4],
+    levels: [f32; 4],
+    right: [f32; 4],
+    up: [f32; 4],
+    forward: [f32; 4],
+    sh: [[f32; 4]; 9],
 }
 
 pub struct Pipeline {
     pipeline: wgpu::RenderPipeline,
+    /// What draws the environment image behind the model.
+    background: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     uniforms: wgpu::Buffer,
     sampler: wgpu::Sampler,
+    environment_sampler: wgpu::Sampler,
     defaults: [wgpu::TextureView; 7],
+    /// Bound for the environment image when there is none.
+    no_environment: wgpu::TextureView,
+    /// The models shown so far, each made the first time it is.
     meshes: Vec<(Shape, Mesh)>,
+    /// What makes environment images ready, once one is shown.
+    filters: Option<environment::Filters>,
+    /// The environment image shown, on the GPU.
+    environment: Option<environment::Maps>,
     depth: Option<(wgpu::TextureView, [u32; 2])>,
     bind_group: Option<wgpu::BindGroup>,
     shape: Shape,
     viewport: [f32; 4],
     srgb: bool,
+    /// Whether the environment image shows behind the model.
+    behind: bool,
 }
 
 fn solid(device: &wgpu::Device, queue: &wgpu::Queue, rgba: [u8; 4]) -> wgpu::TextureView {
@@ -734,38 +648,40 @@ impl shader::Pipeline for Pipeline {
         crate::gpu::publish(device, queue);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("brewed 3d view"),
-            source: wgpu::ShaderSource::Wgsl([brewed_texture_engine::gpu::SHOW_WGSL, SHADER].concat().into()),
+            source: wgpu::ShaderSource::Wgsl([brewed_texture_engine::gpu::SHOW_WGSL, "\n", SHADER].concat().into()),
         });
+        let texture = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let sampler_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        };
         let mut entries = vec![wgpu::BindGroupLayoutEntry {
             binding: 0,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
             count: None,
         }];
-        for b in 1..=7 {
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: b,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            });
-        }
-        entries.push(wgpu::BindGroupLayoutEntry {
-            binding: 8,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-            count: None,
-        });
+        entries.extend((1..=7).map(texture));
+        entries.push(sampler_entry(8));
+        entries.extend([texture(9), texture(10), sampler_entry(11)]);
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("brewed 3d view"), entries: &entries });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("brewed 3d view"),
             bind_group_layouts: &[&layout],
             push_constant_ranges: &[],
         });
+        let target = [Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("brewed 3d view"),
             layout: Some(&pipeline_layout),
@@ -782,7 +698,7 @@ impl shader::Pipeline for Pipeline {
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs"),
-                targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                targets: &target,
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
@@ -790,6 +706,29 @@ impl shader::Pipeline for Pipeline {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        // Behind everything: it neither reads nor writes depth.
+        let background = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("brewed 3d background"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState { module: &module, entry_point: Some("behind_vs"), buffers: &[], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("behind_fs"),
+                targets: &target,
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -822,35 +761,24 @@ impl shader::Pipeline for Pipeline {
             solid(device, queue, [255, 255, 255, 255]),
             solid(device, queue, [0, 0, 0, 255]),
         ];
-        let meshes = Shape::ALL
-            .iter()
-            .map(|shape| {
-                let (v, i) = build_mesh(*shape);
-                let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("brewed 3d mesh"),
-                    contents: bytemuck::cast_slice(&v),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-                let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("brewed 3d mesh"),
-                    contents: bytemuck::cast_slice(&i),
-                    usage: wgpu::BufferUsages::INDEX,
-                });
-                (*shape, Mesh { vertices, indices, count: i.len() as u32 })
-            })
-            .collect();
         Pipeline {
             pipeline,
+            background,
             layout,
             uniforms,
             sampler,
+            environment_sampler: environment::sampler(device),
             defaults,
-            meshes,
+            no_environment: solid(device, queue, [0, 0, 0, 255]),
+            meshes: Vec::new(),
+            filters: None,
+            environment: None,
             depth: None,
             bind_group: None,
             shape: Shape::Sphere,
             viewport: [0.0; 4],
             srgb: format.is_srgb(),
+            behind: false,
         }
     }
 }
@@ -877,6 +805,19 @@ impl shader::Primitive for Primitive {
         }
         pipeline.viewport = [bounds.x * scale, bounds.y * scale, bounds.width * scale, bounds.height * scale];
         pipeline.shape = self.camera.shape;
+        if !pipeline.meshes.iter().any(|(s, _)| *s == self.camera.shape) {
+            pipeline.meshes.push((self.camera.shape, Mesh::new(device, self.camera.shape)));
+        }
+        // An environment image is made ready once, and let go when it is no longer shown.
+        match &self.environment {
+            Some(hdri) if pipeline.environment.as_ref().is_none_or(|m| m.id != hdri.id) => {
+                let filters = pipeline.filters.get_or_insert_with(|| environment::Filters::new(device));
+                pipeline.environment = Some(filters.make(device, queue, hdri));
+            }
+            Some(_) => {}
+            None => pipeline.environment = None,
+        }
+        let env = pipeline.environment.as_ref();
 
         let c = &self.camera;
         let eye = c.eye();
@@ -889,12 +830,42 @@ impl shader::Primitive for Primitive {
                 present |= 1 << i;
             }
         }
+        // The rays behind the model: the camera's axes, reaching to the edges of the view.
+        let forward = normalize(sub(c.target, eye));
+        let right = normalize(cross(forward, [0.0, 1.0, 0.0]));
+        let up = cross(right, forward);
+        let half = (FOV / 2.0).tan();
+        // The level of the image behind the model: sharp, the one whose pixels are as large as
+        // the view's; fully blurred, the one 32 pixels wide (11° a pixel).
+        let background = match (env, self.background) {
+            (Some(m), Some(blur)) => {
+                let width = m.source.width() as f32;
+                let sharp = (FOV / (bounds.height * scale).max(1.0) * width / std::f32::consts::TAU).log2().max(0.0);
+                let most = (width.log2() - 5.0).max(0.0);
+                Some(sharp.max(blur * most))
+            }
+            _ => None,
+        };
+        pipeline.behind = background.is_some();
+        let glossy_top = env.map_or(0, |m| m.specular.mip_level_count() - 1);
+        let mut sh = [[0.0; 4]; 9];
+        if let Some(m) = env {
+            for (s, t) in sh.iter_mut().zip(m.sh) {
+                *s = [t[0], t[1], t[2], 0.0];
+            }
+        }
         let u = Uniforms {
             view_proj,
             eye: [eye[0], eye[1], eye[2], 1.0],
             light: [light[0], light[1], light[2], 1.0],
-            params: [c.displacement, c.tiling, 0.0, 0.0],
-            flags: [present, u32::from(pipeline.srgb), self.gray, 0],
+            params: [c.displacement, c.tiling, self.exposure, 0.0],
+            flags: [present, u32::from(pipeline.srgb), self.gray, u32::from(env.is_some())],
+            turn: [c.light_yaw.cos(), c.light_yaw.sin(), 0.0, 0.0],
+            levels: [background.unwrap_or_default(), glossy_top as f32, 0.0, 0.0],
+            right: [right[0] * half * aspect, right[1] * half * aspect, right[2] * half * aspect, 0.0],
+            up: [up[0] * half, up[1] * half, up[2] * half, 0.0],
+            forward: [forward[0], forward[1], forward[2], 0.0],
+            sh,
         };
         queue.write_buffer(&pipeline.uniforms, 0, bytemuck::bytes_of(&u));
         let view = |i: usize| self.maps[i].as_ref().unwrap_or(&pipeline.defaults[i]);
@@ -903,6 +874,10 @@ impl shader::Primitive for Primitive {
             entries.push(wgpu::BindGroupEntry { binding: 1 + i as u32, resource: wgpu::BindingResource::TextureView(view(i)) });
         }
         entries.push(wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(&pipeline.sampler) });
+        let (image, glossy) = env.map_or((&pipeline.no_environment, &pipeline.no_environment), |m| (&m.source_view, &m.specular_view));
+        entries.push(wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(image) });
+        entries.push(wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(glossy) });
+        entries.push(wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::Sampler(&pipeline.environment_sampler) });
         pipeline.bind_group =
             Some(device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("brewed 3d view"), layout: &pipeline.layout, entries: &entries }));
     }
@@ -938,6 +913,11 @@ impl shader::Primitive for Primitive {
         let [x, y, w, h] = pipeline.viewport;
         pass.set_viewport(x, y, w.max(1.0), h.max(1.0), 0.0, 1.0);
         pass.set_scissor_rect(clip_bounds.x, clip_bounds.y, clip_bounds.width, clip_bounds.height);
+        if pipeline.behind {
+            pass.set_pipeline(&pipeline.background);
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
         pass.set_pipeline(&pipeline.pipeline);
         pass.set_bind_group(0, bind_group, &[]);
         pass.set_vertex_buffer(0, mesh.vertices.slice(..));
@@ -962,11 +942,13 @@ mod tests {
     }
 
     #[test]
-    fn meshes_are_valid() {
-        for shape in Shape::ALL {
-            let (v, i) = build_mesh(shape);
-            assert!(i.iter().all(|&x| (x as usize) < v.len()), "{shape:?}");
-            assert_eq!(i.len() % 3, 0);
+    fn the_light_turns_round_and_round() {
+        let mut cam = Camera::default();
+        for _ in 0..1000 {
+            cam = cam.moved(Move::Light(Vector::new(97.0, 0.0)));
         }
+        assert!((-std::f32::consts::PI..=std::f32::consts::PI).contains(&cam.light_yaw), "{}", cam.light_yaw);
+        assert!((wrapped(3.0 * std::f32::consts::PI) - std::f32::consts::PI).abs() < 1e-4 || (wrapped(3.0 * std::f32::consts::PI) + std::f32::consts::PI).abs() < 1e-4);
+        assert_eq!(wrapped(f32::NAN), 0.0);
     }
 }

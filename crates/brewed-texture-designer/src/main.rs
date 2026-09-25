@@ -5,6 +5,7 @@
 mod app;
 mod autopilot;
 mod brand;
+mod environment;
 mod eyedropper;
 mod gpu;
 mod highlight;

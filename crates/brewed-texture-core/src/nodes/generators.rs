@@ -400,6 +400,6 @@ pub static BITMAP: NodeDef = NodeDef {
     keywords: "image file picture photo load",
     inputs: NO_SOCKETS,
     outputs: COLOR_OUT,
-    params: &[file("path", "File", &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "exr"])],
+    params: &[file("path", "File", &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "exr", "hdr"])],
     role: Role::Image,
 };

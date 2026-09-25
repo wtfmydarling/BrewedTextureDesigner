@@ -364,6 +364,19 @@ fn make_files(folder: &Path) -> Result<(), String> {
     image::Rgba32FImage::from_fn(256, 256, |x, y| image::Rgba([x as f32 / 64.0, y as f32 / 64.0, 0.5, 1.0]))
         .save(folder.join("hdr.exr"))
         .map_err(e)?;
+    // An environment for the 3D view: a sky with a sun, over a darker ground.
+    let (w, h) = (512, 256);
+    let sky: Vec<image::Rgb<f32>> = (0..h)
+        .flat_map(|y| {
+            (0..w).map(move |x| {
+                let up = 1.0 - (y as f32 + 0.5) / h as f32 * 2.0;
+                let sun = (x as f32 - 300.0).powi(2) + (y as f32 - 80.0).powi(2) < 16.0;
+                image::Rgb(if sun { [900.0, 850.0, 700.0] } else if up > 0.0 { [0.5 + up, 0.7 + up, 1.0 + up] } else { [0.15, 0.12, 0.1] })
+            })
+        })
+        .collect();
+    let file = std::fs::File::create(folder.join("sky.hdr")).map_err(|e| e.to_string())?;
+    image::codecs::hdr::HdrEncoder::new(file).encode(&sky, w, h).map_err(e)?;
     let write = |name: &str, bytes: &[u8]| std::fs::write(folder.join(name), bytes).map_err(|e| e.to_string());
     write("broken.png", b"\x89PNG\r\n\x1a\nnot really")?;
     write("empty.png", b"")?;
@@ -956,6 +969,7 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
     });
 
     let mut viewed = 0;
+    let skies = folder.to_path_buf();
     scenes.push_back(Scene {
         name: "the 3D view",
         next: Box::new(move |app: &App, _: &mut Dice| {
@@ -963,9 +977,61 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
             let cam = app.ui.preview.view3d;
             let camera = |c: Camera| Step::Do(Message::Preview(PreviewMessage::Camera(c)));
             let turn = |m: Move| Step::Do(Message::Preview(PreviewMessage::Move3d(m)));
+            let light = |m: PreviewMessage| Step::Do(Message::Preview(m));
+            let shapes = Shape::ALL.len();
             match viewed {
-                1..=5 => {
-                    let shape = Shape::ALL[viewed - 1];
+                n if n == shapes + 2 => {
+                    // Lit by environment images: a sky, a square picture, one that is gone and one
+                    // that is broken; as bright and as blurred as can be, turned round and round,
+                    // on every shape; then the studio again.
+                    let file = |name: &str| skies.join(name).display().to_string();
+                    let (sky, square) = (file("sky.hdr"), file("hdr.exr"));
+                    let mut steps = vec![
+                        light(PreviewMessage::LightingMenu(true)),
+                        light(PreviewMessage::Environment(Some(sky.clone()))),
+                        Step::Pause(Duration::from_millis(1500)),
+                    ];
+                    let read = sky.clone();
+                    steps.push(Step::Check(Box::new(move |app: &App| {
+                        let l = &app.ui.preview.lighting;
+                        (l.shown.as_ref().map(|h| h.path.as_str()) != Some(read.as_str()))
+                            .then(|| format!("the sky was not read in a second and a half: {:?}, reading {:?}", l.shown, l.reading))
+                    })));
+                    for (k, shape) in Shape::ALL.into_iter().enumerate() {
+                        steps.push(camera(Camera { shape, ..cam }));
+                        steps.push(light(PreviewMessage::Exposure([-12.0, -3.0, 0.0, 2.5, 12.0][k % 5])));
+                        steps.push(light(PreviewMessage::Blur([0.0, 0.25, 1.0][k % 3])));
+                        for _ in 0..20 {
+                            steps.push(turn(Move::Light(iced::Vector::new(40.0, 7.0))));
+                            steps.push(turn(Move::Orbit(iced::Vector::new(-9.0, 3.0))));
+                        }
+                    }
+                    for name in ["hdr.exr", "gone.hdr", "broken.png", "sky.hdr"] {
+                        steps.push(light(PreviewMessage::Environment(Some(file(name)))));
+                        steps.push(Step::Pause(Duration::from_millis(700)));
+                    }
+                    steps.extend([
+                        light(PreviewMessage::Environment(Some(square))),
+                        light(PreviewMessage::Background(false)),
+                        light(PreviewMessage::Environment(None)),
+                        light(PreviewMessage::Environment(Some(sky))),
+                        light(PreviewMessage::Environment(None)),
+                        light(PreviewMessage::LightingMenu(false)),
+                        light(PreviewMessage::Exposure(0.0)),
+                        light(PreviewMessage::Background(true)),
+                        light(PreviewMessage::Blur(0.25)),
+                        camera(Camera::default()),
+                        Step::Check(Box::new(|app: &App| {
+                            let l = &app.ui.preview.lighting;
+                            let gone = l.recent.iter().find(|f| f.ends_with("gone.hdr") || f.ends_with("broken.png"));
+                            gone.map(|f| format!("{f} cannot be read, and is still offered"))
+                        })),
+                        Step::Note("the 3D view lit by environment images, good and broken".into()),
+                    ]);
+                    Some(steps)
+                }
+                n if n <= shapes => {
+                    let shape = Shape::ALL[n - 1];
                     let mut steps = vec![camera(Camera { shape, ..cam })];
                     for k in 0..60 {
                         steps.push(turn(Move::Orbit(iced::Vector::new(k as f32, 2.0))));
@@ -977,7 +1043,7 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                     steps.push(Step::Note(format!("the 3D view on a {shape:?}")));
                     Some(steps)
                 }
-                6 => Some(vec![
+                n if n == shapes + 1 => Some(vec![
                     camera(Camera { displacement: 1.0, tiling: 32.0, ..cam }),
                     Step::Pause(Duration::from_millis(500)),
                     camera(Camera { displacement: 0.0, tiling: 0.25, ..cam }),
@@ -1710,6 +1776,18 @@ fn random_steps(app: &App, dice: &mut Dice) -> Option<Vec<Step>> {
             if let Some(entry) = graphs.get(dice.below(graphs.len())) {
                 steps.push(Step::Do(Message::Explorer(ExplorerMessage::OpenGraph(app.doc_key, entry.id))));
             }
+        }
+        35 => {
+            // What lights the 3D view: never the file dialog, the images used before.
+            let l = &app.ui.preview.lighting;
+            let message = match dice.below(5) {
+                0 => PreviewMessage::Exposure(dice.float(-6.0, 6.0)),
+                1 => PreviewMessage::Blur(dice.float(0.0, 1.0)),
+                2 => PreviewMessage::Background(dice.chance(50)),
+                3 => PreviewMessage::Environment(l.recent.get(dice.below(l.recent.len() + 1)).cloned()),
+                _ => PreviewMessage::LightingMenu(dice.chance(50)),
+            };
+            steps.push(Step::Do(Message::Preview(message)));
         }
         32 => {
             let inputs = node.def().inputs;

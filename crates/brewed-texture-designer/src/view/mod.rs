@@ -11,6 +11,7 @@ pub mod frames;
 pub mod graph;
 pub mod inputs;
 pub mod library;
+pub mod models;
 pub mod picker;
 pub mod preview;
 pub mod properties;
