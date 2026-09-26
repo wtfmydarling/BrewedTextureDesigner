@@ -392,6 +392,11 @@ pub struct Results {
     pub looking: bool,
     /// The files the open packages used when they were looked at last.
     pub looked: Vec<String>,
+    /// Pictures of files waiting to be made (the file, its kind, when it changed last), and
+    /// how many are being made: a few at a time, each a whole picture decoded (see
+    /// [`crate::previews::AT_ONCE`]).
+    pub previews_waiting: VecDeque<(String, ResourceKind, Option<std::time::SystemTime>)>,
+    pub previews_making: usize,
     /// Why the engine stopped, if it did (it never should): nothing is computed any more.
     pub stopped: Option<String>,
 }
@@ -1639,7 +1644,7 @@ impl App {
         match message {
             Message::LookAtFiles => return self.look_at_files(),
             Message::FilesLooked(looks) => return self.files_looked(looks),
-            Message::PreviewMade(path, of, made) => self.preview_made(path, of, made),
+            Message::PreviewMade(path, of, made) => return self.preview_made(path, of, made),
             Message::PollGpu => {
                 if let Some(handles) = gpu::take() {
                     #[cfg(any(test, feature = "dev-tools"))]

@@ -1468,7 +1468,9 @@ fn decode_bitmap(path: &str) -> Result<(u32, u32, Pixels), String> {
             Pixels::Gray(half)
         }
         image::DynamicImage::ImageLuma16(gray) => {
-            Pixels::FineGray(gray.into_raw().into_iter().map(|v| f32::from(v) / 65535.0).collect())
+            let mut values = vec![0.0; pixels];
+            simd::u16_to_f32(gray.as_raw(), &mut values);
+            Pixels::FineGray(values)
         }
         image::DynamicImage::ImageLumaA8(_) | image::DynamicImage::ImageRgb8(_) | image::DynamicImage::ImageRgba8(_) => {
             color(&|half| simd::u8_to_rgba_f16(img.as_bytes(), channels, half))

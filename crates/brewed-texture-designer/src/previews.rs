@@ -12,6 +12,10 @@ use brewed_texture_core::package::{ResourceKind, file_name};
 /// How large a picture of a file is made: pixels on its longer side.
 pub const SIZE: u32 = 128;
 
+/// How many pictures are made at a time: each decodes a whole file first (an 8K picture of
+/// floats takes 1 GB), and a package of many files would otherwise decode them all at once.
+pub const AT_ONCE: usize = 2;
+
 /// What is known of a file.
 #[derive(Clone, Debug, Default)]
 pub struct FileState {

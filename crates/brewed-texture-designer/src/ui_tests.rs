@@ -2373,3 +2373,31 @@ fn image_inputs_are_input_values_and_drags_say_what_cannot_be() {
     assert_eq!(status(&w), Some(format!("Not pasted: {why}")));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Pictures of the files of a package are made a few at a time: of five files looked at, two
+/// are being made and three wait; each one made starts the next.
+#[test]
+fn pictures_of_files_are_made_a_few_at_a_time() {
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    let dir = scratch("previews-at-once");
+    let files: Vec<std::path::PathBuf> = (0..5)
+        .map(|i| {
+            let path = dir.join(format!("tile{i}.png"));
+            image::RgbaImage::from_pixel(4, 4, image::Rgba([10 * i as u8, 0, 0, 255])).save(&path).expect("a picture");
+            path
+        })
+        .collect();
+    let key = w.app.doc_key;
+    w.send(Message::Explorer(ExplorerMessage::FilesPicked(key, files.clone())));
+    let looks = files
+        .iter()
+        .map(|p| crate::previews::Look { path: p.display().to_string(), there: true, modified: None, bytes: Some(64) })
+        .collect();
+    w.send(Message::FilesLooked(looks));
+    assert_eq!((w.app.res.previews_making, w.app.res.previews_waiting.len()), (crate::previews::AT_ONCE, 5 - crate::previews::AT_ONCE));
+    let first = files[0].display().to_string();
+    w.send(Message::PreviewMade(first.clone(), None, Ok((vec![255; 4 * 4 * 4], 4, 4, "4 × 4".into()))));
+    assert_eq!((w.app.res.previews_making, w.app.res.previews_waiting.len()), (crate::previews::AT_ONCE, 4 - crate::previews::AT_ONCE));
+    assert!(w.app.res.files.get(&first).is_some_and(|f| f.preview.is_some() && !f.making));
+    let _ = std::fs::remove_dir_all(&dir);
+}

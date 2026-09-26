@@ -790,14 +790,13 @@ impl App {
     }
 
     /// What looking at the files found: a picture is made of each that is there and changed
-    /// since its last one (a file on disk edited elsewhere), on a thread of its own; and a file
-    /// edited elsewhere, or back where it was, is read again, so that what reads it shows it as
-    /// it is now.
+    /// since its last one (a file on disk edited elsewhere), in the background, a few at a time;
+    /// and a file edited elsewhere, or back where it was, is read again, so that what reads it
+    /// shows it as it is now.
     pub(super) fn files_looked(&mut self, looks: Vec<crate::previews::Look>) -> Task<Message> {
         self.res.looking = false;
         let kinds: HashMap<String, ResourceKind> = self.used_files().into_iter().collect();
         self.res.files.retain(|path, _| kinds.contains_key(path));
-        let mut tasks = Vec::new();
         let mut changed = Vec::new();
         for look in looks {
             let Some(kind) = kinds.get(&look.path).copied() else { continue };
@@ -810,37 +809,56 @@ impl App {
             (state.there, state.modified, state.bytes) = (look.there, look.modified, look.bytes);
             if state.wants_preview() {
                 state.making = true;
-                let (path, modified) = (look.path, look.modified);
-                let made = path.clone();
-                tasks.push(Task::perform(blocking(move || crate::previews::make(&made, kind)), move |made| {
-                    let made = made.unwrap_or_else(|| Err("The picture could not be made".into()));
-                    Message::PreviewMade(path.clone(), modified, made)
-                }));
+                self.res.previews_waiting.push_back((look.path, kind, look.modified));
             }
         }
         for path in changed {
             self.send(brewed_texture_engine::Request::ReloadFile(path));
         }
+        self.make_previews()
+    }
+
+    /// Start making the pictures waiting, as many at a time as [`crate::previews::AT_ONCE`].
+    fn make_previews(&mut self) -> Task<Message> {
+        let mut tasks = Vec::new();
+        while self.res.previews_making < crate::previews::AT_ONCE
+            && let Some((path, kind, modified)) = self.res.previews_waiting.pop_front()
+        {
+            // (A file no package uses any more is not pictured.)
+            if !self.res.files.contains_key(&path) {
+                continue;
+            }
+            self.res.previews_making += 1;
+            let made = path.clone();
+            tasks.push(Task::perform(blocking(move || crate::previews::make(&made, kind)), move |made| {
+                let made = made.unwrap_or_else(|| Err("The picture could not be made".into()));
+                Message::PreviewMade(path.clone(), modified, made)
+            }));
+        }
         Task::batch(tasks)
     }
 
-    /// A picture of a file was made (of the file as it was when it changed at `of`), or not.
+    /// A picture of a file was made (of the file as it was when it changed at `of`), or not:
+    /// the next one waiting is started.
     pub(super) fn preview_made(
         &mut self,
         path: String,
         of: Option<std::time::SystemTime>,
         made: Result<(Vec<u8>, u32, u32, String), String>,
-    ) {
-        let Some(state) = self.res.files.get_mut(&path) else { return };
-        state.making = false;
-        match made {
-            Ok((rgba, w, h, about)) => {
-                let image = iced::widget::image::Handle::from_rgba(w, h, rgba);
-                state.preview = Some(crate::previews::Preview { image, about, of });
-                state.failed = None;
+    ) -> Task<Message> {
+        self.res.previews_making = self.res.previews_making.saturating_sub(1);
+        if let Some(state) = self.res.files.get_mut(&path) {
+            state.making = false;
+            match made {
+                Ok((rgba, w, h, about)) => {
+                    let image = iced::widget::image::Handle::from_rgba(w, h, rgba);
+                    state.preview = Some(crate::previews::Preview { image, about, of });
+                    state.failed = None;
+                }
+                Err(e) => state.failed = Some((of, e)),
             }
-            Err(e) => state.failed = Some((of, e)),
         }
+        self.make_previews()
     }
 
     // ------------------------------------------------------------------ the Explorer
