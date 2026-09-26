@@ -139,7 +139,9 @@ pub fn save(path: &Path, package: &Package, views: &HashMap<GraphId, ViewState>,
 }
 
 pub fn load(path: &Path) -> Result<Loaded, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+    // (Read as the files packages use are: the packages a package uses are read from where it
+    // says, which could be anything.)
+    let bytes = crate::files::read_disk(&path.to_string_lossy()).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
     // A picture, or anything else that is not text, is not a project either.
     let text = String::from_utf8(bytes).map_err(|_| format!("This is not a {} project", crate::APP_NAME))?;
     if text.trim().is_empty() {

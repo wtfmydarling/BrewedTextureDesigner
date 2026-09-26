@@ -2139,6 +2139,61 @@ mod tests {
     }
 
     #[test]
+    fn the_pictures_of_image_inputs_are_files_of_the_package() {
+        // A graph whose image input has a picture, and a node that uses it, giving another.
+        let mut tex = Graph::default();
+        tex.add_node(NodeKind::IMAGE_INPUT, [0.0, 0.0]);
+        let image = image_input(&mut tex, "input");
+        (image.picture, image.default) = ("/old/a.png".into(), "/old/a.png".into());
+        let mut package = Package::new("Main", Graph::default());
+        let t = package.add_graph("Tex", tex);
+        let main = package.first();
+        let instance = instance_of(&package, t, None);
+        let used = graph_of(&mut package, main).add_instance(instance, [0.0, 0.0]);
+        graph_of(&mut package, main).node_mut(used).unwrap().param_mut("input").unwrap().value = ParamValue::Text("/old/b.png".into());
+        package.sync_resources();
+        let listed = |p: &Package| {
+            let mut paths: Vec<String> = p.resources.iter().map(|r| r.path.clone()).collect();
+            paths.sort();
+            paths
+        };
+        assert_eq!(listed(&package), ["/old/a.png", "/old/b.png"]);
+        let missing: Vec<String> = package.missing().into_iter().map(|m| m.path).collect();
+        assert!(missing.contains(&"/old/a.png".to_string()) && missing.contains(&"/old/b.png".to_string()), "{missing:?}");
+        assert!(PackageEdit::RemoveResource("/old/a.png".into()).apply(&mut package.clone()).is_err(), "the input reads it");
+
+        // Moved: the input's picture and its default follow, and so does the node's.
+        for (from, to) in [("/old/a.png", "/new/a.png"), ("/old/b.png", "/new/b.png")] {
+            PackageEdit::Relink { from: from.into(), to: to.into() }.apply(&mut package).unwrap();
+        }
+        let image = image_input(graph_of(&mut package, t), "input").clone();
+        assert_eq!((image.picture.as_str(), image.default.as_str()), ("/new/a.png", "/new/a.png"));
+        assert_eq!(package.graph(main).unwrap().graph.node(used).unwrap().text("input"), "/new/b.png");
+        assert_eq!(listed(&package), ["/new/a.png", "/new/b.png"]);
+
+        // Held in the package: what reads them reads them there.
+        let bytes = Arc::new(b"a picture".to_vec());
+        PackageEdit::Embed(vec![("/new/a.png".into(), bytes.clone()), ("/new/b.png".into(), bytes.clone())]).apply(&mut package).unwrap();
+        let held = crate::files::embedded_path("a.png", &bytes);
+        let image = image_input(graph_of(&mut package, t), "input").clone();
+        assert_eq!((image.picture.as_str(), image.default.as_str()), (held.as_str(), held.as_str()));
+        let given = package.graph(main).unwrap().graph.node(used).unwrap().text("input").to_string();
+        assert!(crate::files::is_embedded(&given));
+        assert!(package.resources.iter().all(|r| r.data.is_some()), "{:?}", package.resources);
+        assert!(package.unused_resources().is_empty());
+
+        // Collected beside the package: a picture on disk goes with it.
+        image_input(graph_of(&mut package, t), "input").picture = "/far/c.png".into();
+        package.sync_resources();
+        let home = Path::new(if cfg!(windows) { r"C:\work" } else { "/work" });
+        let plan = collect_plan(&package.all_files(), home, &home.join("files"), |_| false);
+        assert!(plan.iter().any(|(from, _)| from == "/far/c.png"), "{plan:?}");
+        PackageEdit::Relocate(plan.clone()).apply(&mut package).unwrap();
+        let to = plan.iter().find(|(from, _)| from == "/far/c.png").map(|(_, to)| to.clone()).unwrap();
+        assert_eq!(image_input(graph_of(&mut package, t), "input").picture, to);
+    }
+
+    #[test]
     fn relinking_and_the_files_of_a_package() {
         let mut g = Graph::default();
         let bitmap = g.add_node(NodeKind::BITMAP, [0.0, 0.0]);

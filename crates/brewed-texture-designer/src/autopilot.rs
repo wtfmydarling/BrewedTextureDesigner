@@ -1444,9 +1444,18 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                 return None;
             }
             let _ = std::fs::create_dir_all(&large);
-            let wanted = app.graph().nodes_of(NodeKind::OUTPUT).count();
+            let outputs: Vec<NodeId> = app.graph().nodes_of(NodeKind::OUTPUT).map(|n| n.id).collect();
+            let wanted = outputs.len();
             let folder = large.clone();
-            let mut steps = vec![
+            // In floats as well as in bytes: the largest images read back are colors of floats
+            // (1 GB at 8192²), more than a buffer of the GPU may be.
+            use brewed_texture_core::nodes::{DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F};
+            let depths = [DEPTH_32F, DEPTH_16F, DEPTH_16, DEPTH_8];
+            let formats = outputs.iter().zip(depths.iter().cycle()).map(|(id, depth)| {
+                edit(Edit::SetParam { node: *id, key: "bit_depth".into(), value: ParamValue::Enum(*depth) })
+            });
+            let mut steps: Vec<Step> = formats.collect();
+            steps.extend([
                 edit(Edit::SetResolution([8192, 8192])),
                 seal(),
                 Step::Wait,
@@ -1465,7 +1474,7 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                         Err(e) => Some(format!("{} cannot be read back: {e}", f.display())),
                     })
                 })),
-            ];
+            ]);
             steps.extend(back_home("exporting at 8192"));
             Some(steps)
         }),

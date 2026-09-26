@@ -437,6 +437,9 @@ impl Edit {
             }
             Edit::SetLocalVar { node, name, value } => {
                 let n = graph.node_mut(node).ok_or("The node no longer exists")?;
+                if !n.is_expression_node() {
+                    return Err("The node has no expression".into());
+                }
                 if !value.is_finite() {
                     return Err("The value must be a finite number".into());
                 }
@@ -657,6 +660,202 @@ pub fn is_input_kind(kind: NodeKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A number from `seed`, and the next seed (SplitMix64).
+    fn roll(seed: &mut u64, n: usize) -> usize {
+        *seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *seed;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) % n.max(1) as u64) as usize
+    }
+
+    /// A value of the shape of `value`: an ordinary one, or one far out (huge, negative, not a
+    /// number, infinite), as a value typed, dragged past its slider or driven can be.
+    fn odd_value(seed: &mut u64, value: &ParamValue) -> ParamValue {
+        const FLOATS: [f32; 9] = [0.0, 0.5, 1.0, -1.0, 3.7, 1e9, -1e9, f32::NAN, f32::INFINITY];
+        let f = |seed: &mut u64| FLOATS[roll(seed, FLOATS.len())];
+        match value {
+            ParamValue::Float(_) => ParamValue::Float(f(seed)),
+            ParamValue::Int(_) => ParamValue::Int([0, 1, -5, 7, 1_000_000, i32::MAX, i32::MIN][roll(seed, 7)]),
+            ParamValue::Bool(_) => ParamValue::Bool(roll(seed, 2) == 0),
+            ParamValue::Vec2(_) => ParamValue::Vec2([f(seed), f(seed)]),
+            ParamValue::Color(_) => ParamValue::Color([f(seed), f(seed), f(seed), f(seed)]),
+            ParamValue::Enum(_) => ParamValue::Enum([0, 1, 2, 7, 999][roll(seed, 5)]),
+            ParamValue::Text(_) => ParamValue::Text(["", "x", "a * b + c", "sin(", "u, v, 0.5", "/nope.png", "  "][roll(seed, 7)].into()),
+            other => other.clone(),
+        }
+    }
+
+    /// Any edit of `g`, most of them sensible, some not.
+    fn any_edit(seed: &mut u64, g: &Graph) -> Edit {
+        let pos = [roll(seed, 2000) as f32 - 1000.0, roll(seed, 2000) as f32 - 1000.0];
+        let node = |seed: &mut u64| g.nodes.get(roll(seed, g.nodes.len())).map(|n| n.id).unwrap_or(NodeId(999));
+        let var = |seed: &mut u64| g.variables.get(roll(seed, g.variables.len())).map(|v| v.name.clone()).unwrap_or_default();
+        const NAMES: [&str; 5] = ["value", "input", "mask", "Mask 2", ""];
+        let socket = |seed: &mut u64, output: bool| {
+            let n = g.nodes.get(roll(seed, g.nodes.len()))?;
+            let sockets = if output { g.output_sockets(n) } else { g.input_sockets(n) };
+            let s = sockets.get(roll(seed, sockets.len()))?;
+            Some(SocketRef { node: n.id, key: s.key.clone(), output })
+        };
+        match roll(seed, 30) {
+            0..=3 => Edit::AddNode { kind: NodeKind::ALL[roll(seed, NodeKind::ALL.len())], pos },
+            24 => {
+                let output = roll(seed, 2) == 0;
+                match socket(seed, output) {
+                    Some(socket) => Edit::AddNodeConnected { kind: NodeKind::ALL[roll(seed, NodeKind::ALL.len())], pos, socket },
+                    None => Edit::AddNode { kind: NodeKind::BLUR, pos },
+                }
+            }
+            25 => {
+                let ids = vec![node(seed), node(seed), node(seed)];
+                let key = g.node(ids[0]).and_then(|n| n.params.get(roll(seed, n.params.len().max(1)))).map(|p| (p.key.clone(), p.value.clone()));
+                match key {
+                    Some((key, value)) => Edit::SetParamMany { nodes: ids, key, value: odd_value(seed, &value) },
+                    None => Edit::AddNode { kind: NodeKind::LEVELS, pos },
+                }
+            }
+            26 => {
+                let clip = g.copy_nodes(&[node(seed), node(seed)]);
+                Edit::Paste { clipboard: clip, at: pos }
+            }
+            27 => Edit::Batch(vec![any_edit(seed, g), any_edit(seed, g)]),
+            28 => {
+                // A graph used as a node: one with an image input and a value.
+                let mut sub = Graph::default();
+                sub.add_node(NodeKind::IMAGE_INPUT, [0.0, 0.0]);
+                sub.add_node(NodeKind::FLOAT_INPUT, [0.0, 100.0]);
+                sub.add_node(NodeKind::OUTPUT, [300.0, 0.0]);
+                let r = crate::instance::GraphRef { package: None, graph: crate::instance::GraphId(9), name: "Sub".into() };
+                Edit::AddInstance { instance: Instance::new(r, crate::instance::Interface::of(&sub)), pos }
+            }
+            29 => Edit::AddComment { text: "x".into(), pos, size: [[0.0, 300.0, f32::NAN][roll(seed, 3)], 200.0] },
+            4..=7 => match (socket(seed, true), socket(seed, false)) {
+                (Some(a), Some(b)) => Edit::Connect { a, b },
+                _ => Edit::AddNode { kind: NodeKind::IMAGE_INPUT, pos },
+            },
+            8..=10 => {
+                let id = node(seed);
+                let Some(n) = g.node(id) else { return Edit::SetResolution([roll(seed, 9000) as u32; 2]) };
+                let keys: Vec<(String, ParamValue)> = n.params.iter().map(|p| (p.key.clone(), p.value.clone())).collect();
+                match keys.get(roll(seed, keys.len())) {
+                    Some((key, value)) => Edit::SetParam { node: id, key: key.clone(), value: odd_value(seed, value) },
+                    None => Edit::SetBypass { node: id, bypass: true },
+                }
+            }
+            11 => {
+                let id = node(seed);
+                let key = g.node(id).and_then(|n| n.params.get(roll(seed, n.params.len().max(1)))).map(|p| p.key.clone()).unwrap_or_default();
+                Edit::SetExposed { node: id, key, exposed: roll(seed, 3) != 0 }
+            }
+            12 => Edit::RemoveNodes(vec![node(seed)]),
+            13 => Edit::MoveNodes { ids: vec![node(seed)], delta: [[1e9, -3.0, f32::NAN][roll(seed, 3)], 5.0] },
+            14 => Edit::Duplicate { ids: vec![node(seed), node(seed)], offset: [30.0, 30.0] },
+            15 => Edit::AddVariableNode { name: var(seed), pos },
+            16 => Edit::RenameVariable { from: var(seed), to: NAMES[roll(seed, NAMES.len())].into() },
+            17 => Edit::BindVariable { node: node(seed), name: NAMES[roll(seed, NAMES.len())].into() },
+            18 => {
+                let v = var(seed);
+                match g.variable(&v) {
+                    Some(var) if var.image.is_some() => match roll(seed, 3) {
+                        0 => Edit::SetVariablePicture { name: v, picture: ["", "/a.png", " /b.png "][roll(seed, 3)].into(), default: roll(seed, 2) == 0 },
+                        1 => Edit::SetVariableKind { name: v, kind: if roll(seed, 2) == 0 { ImageKind::Gray } else { ImageKind::Color } },
+                        _ => Edit::MakeVariableDefault(v),
+                    },
+                    Some(var) => {
+                        let value = crate::instance::param_value(var.value);
+                        match odd_value(seed, &value).as_value() {
+                            Some(value) => Edit::SetVariable { name: v, value },
+                            None => Edit::ResetVariable(v),
+                        }
+                    }
+                    None => Edit::ResetVariable(v),
+                }
+            }
+            19 => Edit::DisconnectInputs(node(seed)),
+            20 => Edit::SetLocalVar { node: node(seed), name: ["a", "b", "x"][roll(seed, 3)].into(), value: [0.5, f32::NAN][roll(seed, 2)] },
+            21 => Edit::SetResolution([[0, 16, 5000, 100_000][roll(seed, 4)], 64]),
+            22 => Edit::SetBypass { node: node(seed), bypass: roll(seed, 2) == 0 },
+            _ => match socket(seed, false) {
+                Some(s) => Edit::Disconnect { node: s.node, socket: s.key },
+                None => Edit::AddNode { kind: NodeKind::FLOAT_INPUT, pos },
+            },
+        }
+    }
+
+    /// Graphs edited at random, and used as nodes in one another at random, lay out whole:
+    /// every link between nodes that are there, no Image Input left (each is what it shows),
+    /// and they evaluate.
+    #[test]
+    fn any_graphs_used_in_one_another_lay_out_whole() {
+        use crate::instance::{GraphRef, Interface};
+        use crate::package::{Library, Package, flatten, sync_instances, uses_graph};
+        use std::sync::Arc;
+        struct One(Package);
+        impl Library for One {
+            fn package(&self, path: Option<&str>) -> Option<&Package> {
+                path.is_none().then_some(&self.0)
+            }
+        }
+        let none = One(Package::new("None", Graph::default()));
+        let mut seed = 7;
+        for round in 0..16 {
+            let mut package = Package::new("A", Graph::default());
+            let ids = [package.first(), package.add_graph("B", Graph::default()), package.add_graph("C", Graph::default())];
+            for step in 0..160 {
+                let which = ids[roll(&mut seed, ids.len())];
+                let edit = if roll(&mut seed, 5) == 0 {
+                    // A node that uses another graph of the package (not one that uses this one).
+                    let other = ids[roll(&mut seed, ids.len())];
+                    if other == which || uses_graph(&One(package.clone()), None, other, (None, which)) {
+                        continue;
+                    }
+                    let entry = package.graph(other).unwrap();
+                    let r = GraphRef { package: None, graph: other, name: entry.name.clone() };
+                    Edit::AddInstance { instance: Instance::new(r, Interface::of(&entry.graph)), pos: [0.0, 0.0] }
+                } else {
+                    any_edit(&mut seed, &package.graph(which).unwrap().graph)
+                };
+                let _ = edit.clone().apply(Arc::make_mut(&mut package.graph_mut(which).unwrap().graph));
+                sync_instances(&mut package, None, &none);
+                let lib = One(package.clone());
+                for id in ids {
+                    let flat = flatten(&lib, None, id).expect("laid out");
+                    let f = &flat.graph;
+                    for l in &f.links {
+                        assert!(f.contains(l.from) && f.contains(l.to), "round {round} step {step}, after {edit:?}: {l:?}");
+                        assert!(f.is_link_live(l), "round {round} step {step}, after {edit:?}: {l:?} goes nowhere");
+                    }
+                    assert!(f.nodes_of(NodeKind::IMAGE_INPUT).next().is_none(), "round {round} step {step}");
+                    let ev = crate::eval::evaluate(f);
+                    assert_eq!(ev.order.len() + ev.cyclic.len(), f.nodes.len());
+                }
+            }
+        }
+    }
+
+    /// Whatever edits are made, in whatever order, the graph stays as a file of it is read:
+    /// normalizing it changes nothing (links to sockets that are there, or waiting for them;
+    /// input values of the nodes that read them; parameters of their shapes, in their ranges).
+    #[test]
+    fn any_edits_keep_the_graph_whole() {
+        let mut seed = 42;
+        for round in 0..40 {
+            let mut g = Graph::default();
+            for step in 0..400 {
+                let edit = any_edit(&mut seed, &g);
+                let before = g.clone();
+                match edit.clone().apply(&mut g) {
+                    Ok(_) => {}
+                    Err(_) => assert_eq!(g, before, "round {round} step {step}: a refused edit changes nothing: {edit:?}"),
+                }
+                let mut read = g.clone();
+                read.normalize();
+                assert_eq!(read, g, "round {round} step {step}: {edit:?}");
+            }
+        }
+    }
 
     #[test]
     fn exposed_parameters_are_locked() {

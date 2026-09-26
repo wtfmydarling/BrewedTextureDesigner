@@ -21,6 +21,12 @@ use super::{ExprError, Span};
 
 const MAX_DEPTH: usize = 96;
 
+/// The deepest a value can be made of values: `a + b + c + …` is as deep as it is long, and
+/// what reads, computes, writes as a shader or drops a value walks down it, on the stack of
+/// the thread that does it (1 MB for the main thread of Windows); the shader compiler also
+/// refuses shaders nested deeper than 256.
+pub const MAX_TREE: usize = 128;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnOp {
     Neg,
@@ -59,6 +65,8 @@ pub struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
     depth: usize,
+    /// How deep the value read last is (see [`MAX_TREE`]).
+    tree: usize,
     pub vars: Vec<String>,
 }
 
@@ -66,7 +74,7 @@ type PResult = Result<Node, ExprError>;
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Token]) -> Self {
-        Self { tokens, pos: 0, depth: 0, vars: Vec::new() }
+        Self { tokens, pos: 0, depth: 0, tree: 0, vars: Vec::new() }
     }
 
     fn peek(&self) -> &Token {
@@ -121,6 +129,17 @@ impl<'a> Parser<'a> {
         self.depth -= 1;
     }
 
+    /// A value made of values the deepest of which is `below` deep: how deep it is, refused
+    /// past [`MAX_TREE`].
+    fn made(&mut self, below: usize) -> Result<usize, ExprError> {
+        self.tree = below + 1;
+        if self.tree > MAX_TREE {
+            let tok = self.prev().unwrap_or(self.peek()).clone();
+            return Err(self.error_at(&tok, format!("Expression is too long: at most {MAX_TREE} operations in a row")));
+        }
+        Ok(self.tree)
+    }
+
     /// Parse a whole expression and make sure nothing is left over.
     /// One value, or a list of up to four separated by commas (the red, green, blue and alpha
     /// of Pixel Math): `u, v, 0.5`.
@@ -158,13 +177,16 @@ impl<'a> Parser<'a> {
         self.enter()?;
         let cond = self.or()?;
         let result = if self.eat(&TokenKind::Question) {
+            let deep = self.tree;
             let a = self.expr()?;
+            let deep = deep.max(self.tree);
             if !self.eat(&TokenKind::Colon) {
                 let tok = self.peek().clone();
                 self.leave();
                 return Err(self.error_at(&tok, "Expected ':' in conditional 'cond ? a : b'"));
             }
             let b = self.expr()?;
+            self.made(deep.max(self.tree))?;
             Node::Cond(Box::new(cond), Box::new(a), Box::new(b))
         } else {
             cond
@@ -176,7 +198,9 @@ impl<'a> Parser<'a> {
     fn or(&mut self) -> PResult {
         let mut lhs = self.and()?;
         while self.eat(&TokenKind::OrOr) {
+            let deep = self.tree;
             let rhs = self.and()?;
+            self.made(deep.max(self.tree))?;
             lhs = Node::Binary(BinOp::Or, Box::new(lhs), Box::new(rhs));
         }
         Ok(lhs)
@@ -185,7 +209,9 @@ impl<'a> Parser<'a> {
     fn and(&mut self) -> PResult {
         let mut lhs = self.cmp()?;
         while self.eat(&TokenKind::AndAnd) {
+            let deep = self.tree;
             let rhs = self.cmp()?;
+            self.made(deep.max(self.tree))?;
             lhs = Node::Binary(BinOp::And, Box::new(lhs), Box::new(rhs));
         }
         Ok(lhs)
@@ -204,7 +230,9 @@ impl<'a> Parser<'a> {
                 _ => break,
             };
             self.advance();
+            let deep = self.tree;
             let rhs = self.add()?;
+            self.made(deep.max(self.tree))?;
             lhs = Node::Binary(op, Box::new(lhs), Box::new(rhs));
         }
         Ok(lhs)
@@ -219,7 +247,9 @@ impl<'a> Parser<'a> {
                 _ => break,
             };
             self.advance();
+            let deep = self.tree;
             let rhs = self.mul()?;
+            self.made(deep.max(self.tree))?;
             lhs = Node::Binary(op, Box::new(lhs), Box::new(rhs));
         }
         Ok(lhs)
@@ -242,10 +272,14 @@ impl<'a> Parser<'a> {
             };
             if let Some(op) = op {
                 self.advance();
+                let deep = self.tree;
                 let rhs = self.unary()?;
+                self.made(deep.max(self.tree))?;
                 lhs = Node::Binary(op, Box::new(lhs), Box::new(rhs));
             } else if self.implicit_product_follows() {
+                let deep = self.tree;
                 let rhs = self.unary()?;
+                self.made(deep.max(self.tree))?;
                 lhs = Node::Binary(BinOp::Mul, Box::new(lhs), Box::new(rhs));
             } else {
                 break;
@@ -260,6 +294,7 @@ impl<'a> Parser<'a> {
             TokenKind::Minus => {
                 self.advance();
                 let inner = self.unary()?;
+                self.made(self.tree)?;
                 Node::Unary(UnOp::Neg, Box::new(inner))
             }
             TokenKind::Plus => {
@@ -269,6 +304,7 @@ impl<'a> Parser<'a> {
             TokenKind::Bang => {
                 self.advance();
                 let inner = self.unary()?;
+                self.made(self.tree)?;
                 Node::Unary(UnOp::Not, Box::new(inner))
             }
             _ => self.power()?,
@@ -280,7 +316,9 @@ impl<'a> Parser<'a> {
     fn power(&mut self) -> PResult {
         let base = self.primary()?;
         if self.eat(&TokenKind::Caret) {
+            let deep = self.tree;
             let exponent = self.unary()?;
+            self.made(deep.max(self.tree))?;
             Ok(Node::Binary(BinOp::Pow, Box::new(base), Box::new(exponent)))
         } else {
             Ok(base)
@@ -292,6 +330,7 @@ impl<'a> Parser<'a> {
         match &tok.kind {
             TokenKind::Number(v) => {
                 self.advance();
+                self.tree = 1;
                 Ok(Node::Num(*v))
             }
             TokenKind::LParen => {
@@ -316,8 +355,10 @@ impl<'a> Parser<'a> {
             TokenKind::Ident(name) => {
                 self.advance();
                 if matches!(self.peek().kind, TokenKind::LParen) {
-                    self.call(name, &tok)
-                } else if let Some(value) = builtins::find_constant(name) {
+                    return self.call(name, &tok);
+                }
+                self.tree = 1;
+                if let Some(value) = builtins::find_constant(name) {
                     Ok(Node::Num(value))
                 } else if builtins::find_function(name).is_some() {
                     Err(self.error_at(&tok, format!("'{name}' is a function: write {name}(...) with its arguments")))
@@ -352,6 +393,7 @@ impl<'a> Parser<'a> {
         };
         let open = self.advance().clone(); // '('
         let mut args = Vec::new();
+        let mut deep = 0;
         if !matches!(self.peek().kind, TokenKind::RParen) {
             loop {
                 if matches!(self.peek().kind, TokenKind::Comma | TokenKind::RParen) {
@@ -359,6 +401,7 @@ impl<'a> Parser<'a> {
                     return Err(self.error_at(&t, format!("Missing argument in call to '{name}'")));
                 }
                 args.push(self.expr()?);
+                deep = self.tree.max(deep);
                 if self.eat(&TokenKind::Comma) {
                     continue;
                 }
@@ -401,6 +444,7 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
+        self.made(deep)?;
         Ok(Node::Call(info.func, args))
     }
 }

@@ -2810,3 +2810,61 @@ fn image_inputs_show_their_pictures_as_bitmaps_would() {
     assert!(e.gpu.take_errors().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// What is not a number in Pixel Math (1/0 of nothing, the root of a negative, the log of 0) is
+/// none, and what is infinite the largest a half float holds: nothing spreads from it through
+/// what reads it.
+#[test]
+fn pixel_math_makes_no_nan() {
+    let Some(mut e) = engine() else { return };
+    // (What overflows as it is computed is infinite or not a number, as the GPU has it: finite
+    // here, whichever.)
+    let cases = [
+        ("sqrt(-1)", Some(0.0)),
+        ("log(0)", Some(-65504.0)),
+        ("1 / (u - u)", Some(65504.0)),
+        ("0 * (1 / (u - u))", Some(0.0)),
+        ("u * 1e30 * 1e30 + 1", None),
+    ];
+    for (expression, want) in cases {
+        let mut g = graph();
+        let pm = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
+        set(&mut g, pm, "expression", ParamValue::Text(expression.into()));
+        let blur = g.add_node(NodeKind::BLUR, [0.0, 0.0]);
+        g.connect(pm, "o:output", blur, "i:input").unwrap();
+        let data = eval_read(&mut e, &g, blur);
+        assert!(data.iter().all(|v| v.is_finite()), "{expression}: not finite");
+        let shown = pixel(&eval_read(&mut e, &g, pm), RES / 2, RES / 2)[0];
+        assert!(shown.is_finite() && want.is_none_or(|want| close(shown, want, 1.0)), "{expression}: {shown}, not {want:?}");
+    }
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+
+/// The deepest expressions Pixel Math reads (chains of as many operations as an expression
+/// can have, negations as deep as they nest, `fract` of `fract`…, a `max` of more than a
+/// thousand values) are shaders the GPU takes, and compute what the CPU does.
+#[test]
+fn the_deepest_pixel_math_is_a_shader() {
+    let Some(mut e) = engine() else { return };
+    let longest = brewed_texture_core::expr::parser::MAX_TREE - 1;
+    let cases = [
+        "u+".repeat(longest) + "u",
+        "u<".repeat(longest) + "u",
+        "-".repeat(94) + "u",
+        "(u+".repeat(40) + &"u*".repeat(80) + "u" + &")".repeat(40),
+        "fract(".repeat(40) + "u * 3" + &")".repeat(40),
+        "max(".to_string() + &"u, ".repeat(1300) + "0.75)",
+    ];
+    let (x, y) = (RES / 3, RES / 5);
+    let u = (x as f32 + 0.5) / RES as f32;
+    for expression in cases {
+        let mut g = graph();
+        let pm = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
+        set(&mut g, pm, "expression", ParamValue::Text(expression.clone()));
+        let want = brewed_texture_core::expr::compile(&expression).unwrap().eval(&[f64::from(u)]) as f32;
+        let got = pixel(&eval_read(&mut e, &g, pm), x, y)[0];
+        assert!(close(got, want, 1e-2 * want.abs().max(1.0)), "{}…: {got}, not {want}", &expression[..24]);
+    }
+    assert!(e.gpu.take_errors().is_empty());
+}

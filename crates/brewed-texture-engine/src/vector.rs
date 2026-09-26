@@ -9,6 +9,8 @@
 //! The same text looks the same on every system.
 
 use std::hash::{Hash, Hasher};
+use std::io::Read;
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use rayon::prelude::*;
@@ -91,6 +93,12 @@ fn fonts(font: &str) -> Result<(Arc<usvg::fontdb::Database>, String), String> {
     let inter = INTER_DB.get_or_init(|| {
         let mut db = usvg::fontdb::Database::new();
         db.load_font_data(INTER.to_vec());
+        // Every kind of font is Inter: text in a font that is not there is drawn in it.
+        db.set_serif_family("Inter");
+        db.set_sans_serif_family("Inter");
+        db.set_monospace_family("Inter");
+        db.set_cursive_family("Inter");
+        db.set_fantasy_family("Inter");
         Arc::new(db)
     });
     if font.trim().is_empty() {
@@ -138,9 +146,16 @@ fn tree(job: &VectorJob) -> Result<(usvg::Tree, [f32; 2], [f32; 2]), String> {
             let data = brewed_texture_core::files::read(path)?;
             // What it links to is found beside it (a picture its package holds has nothing
             // beside it).
-            let beside = (!brewed_texture_core::files::is_embedded(path)).then(|| std::path::Path::new(path).parent()).flatten();
-            let options = usvg::Options { resources_dir: beside.map(Into::into), ..usvg::Options::default() };
-            let tree = usvg::Tree::from_data(&data, &options).map_err(|e| format!("Cannot read '{path}': {e}"))?;
+            let beside = (!brewed_texture_core::files::is_embedded(path)).then(|| Path::new(path).parent()).flatten();
+            // Its text in Inter where the fonts it names are not (none of the system's are
+            // looked for: the same file looks the same everywhere).
+            let options = usvg::Options {
+                resources_dir: beside.map(Into::into),
+                image_href_resolver: links(),
+                fontdb: fonts("")?.0,
+                ..usvg::Options::default()
+            };
+            let tree = read_svg(&data, &options).map_err(|e| format!("Cannot read '{path}': {e}"))?;
             let size = tree.size();
             let (sw, sh) = (size.width().max(1e-3), size.height().max(1e-3));
             let fit = match fit {
@@ -181,6 +196,88 @@ fn tree(job: &VectorJob) -> Result<(usvg::Tree, [f32; 2], [f32; 2]), String> {
 /// pixels small.
 const BAND_ROWS: u32 = 256;
 
+/// The most text an SVG file is read as; one packed (.svgz) unpacks to no more.
+const MAX_SVG: usize = 256 << 20;
+
+/// How deep groups drawn apart nest at most: groups with opacity, a clip, a mask or a filter,
+/// each drawn into a layer of its own, and all those it is inside kept while it is drawn.
+const MAX_LAYERS: usize = 8;
+
+/// The memory the layers of the bands drawn at once take at most (see [`rasterize`]).
+const LAYER_MEMORY: usize = 1 << 30;
+
+/// An SVG as usvg reads it, whatever the file holds: packed (.svgz), it unpacks to at most
+/// [`MAX_SVG`] (and a file packed twice is not unpacked twice), its groups drawn apart nest at
+/// most [`MAX_LAYERS`] deep (usvg itself takes no more than 1024 elements one inside another
+/// and a million in all), and what it links to is read as [`links`] says.
+fn read_svg(data: &[u8], options: &usvg::Options) -> Result<usvg::Tree, String> {
+    let mut unpacked = Vec::new();
+    let data = if data.starts_with(&[0x1f, 0x8b]) {
+        flate2::read::GzDecoder::new(data)
+            .take(MAX_SVG as u64 + 1)
+            .read_to_end(&mut unpacked)
+            .map_err(|e| format!("it cannot be unpacked: {e}"))?;
+        &unpacked[..]
+    } else {
+        data
+    };
+    if data.len() > MAX_SVG {
+        return Err(format!("it is more than {} MB of text", MAX_SVG >> 20));
+    }
+    let text = std::str::from_utf8(data).map_err(|_| "it is not text".to_string())?;
+    let tree = usvg::Tree::from_str(text, options).map_err(|e| e.to_string())?;
+    match layers(tree.root()) {
+        deep if deep > MAX_LAYERS => Err(format!(
+            "{deep} groups with opacity, a clip, a mask or a filter are inside one another; at most {MAX_LAYERS} are drawn"
+        )),
+        _ => Ok(tree),
+    }
+}
+
+/// How deep groups drawn apart (see [`MAX_LAYERS`]) nest in `group`: in what it holds, in its
+/// clip and its mask, and in the SVGs it shows.
+fn layers(group: &usvg::Group) -> usize {
+    let held = group.children().iter().map(|node| match node {
+        usvg::Node::Group(inner) => layers(inner),
+        usvg::Node::Text(text) => layers(text.flattened()),
+        usvg::Node::Image(image) => match image.kind() {
+            usvg::ImageKind::SVG(tree) => layers(tree.root()),
+            _ => 0,
+        },
+        usvg::Node::Path(_) => 0,
+    });
+    let clip = group.clip_path().map(|c| layers(c.root()));
+    let mask = group.mask().map(|m| layers(m.root()));
+    usize::from(group.should_isolate()) + held.chain(clip).chain(mask).max().unwrap_or(0)
+}
+
+/// What an SVG links to (`<image href="…">`) is read from. Only SVGs among them are drawn (the
+/// program's resvg draws no pixels of pictures), and those link to nothing themselves: so only
+/// they are read, from the file itself (`data:`) or from a file on this computer, never one on
+/// a network share (Windows would hand the user's credentials to whoever serves it, for a
+/// link nobody sees), nor anything that is not a file (a device can be read forever).
+fn links() -> usvg::ImageHrefResolver<'static> {
+    usvg::ImageHrefResolver {
+        resolve_data: Box::new(|_, data, options| shown(&data, options)),
+        resolve_string: Box::new(|href, options| {
+            let path = options.get_abs_path(Path::new(href));
+            let svg = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg") || e.eq_ignore_ascii_case("svgz"));
+            let name = path.to_string_lossy();
+            if !svg || name.starts_with(r"\\") || name.starts_with("//") {
+                return None;
+            }
+            shown(&brewed_texture_core::files::read_disk(&name).ok()?, options)
+        }),
+    }
+}
+
+/// An SVG an SVG shows, read as [`read_svg`] reads one, linking to nothing.
+fn shown(data: &[u8], options: &usvg::Options) -> Option<usvg::ImageKind> {
+    let nothing = usvg::ImageHrefResolver { resolve_data: Box::new(|_, _, _| None), resolve_string: Box::new(|_, _| None) };
+    let inner = usvg::Options { fontdb: options.fontdb.clone(), image_href_resolver: nothing, ..usvg::Options::default() };
+    read_svg(data, &inner).ok().map(usvg::ImageKind::SVG)
+}
+
 /// Draw the picture: its pixels at the job's size.
 pub fn rasterize(job: &VectorJob) -> Result<Raster, String> {
     let [w, h] = job.size;
@@ -205,36 +302,50 @@ pub fn rasterize(job: &VectorJob) -> Result<Raster, String> {
     // Straight (not premultiplied) values of each byte, as half floats.
     let half: [u16; 256] = std::array::from_fn(|i| half::f16::from_f32(i as f32 / 255.0).to_bits());
     let mut pixels = vec![0u16; w as usize * h as usize * channels];
-    let band = BAND_ROWS as usize * w as usize * channels;
+    // A group drawn apart is drawn into a layer of its own (see [`MAX_LAYERS`]), which resvg
+    // lets be up to 5 times as wide and as high as the band it is drawn into, those it is
+    // inside kept meanwhile: where there are any, the bands are as few rows, and as few of
+    // them drawn at once, as keep their layers within [`LAYER_MEMORY`].
+    let deep = layers(tree.root());
+    let (rows, at_once) = match 100 * w as usize * deep {
+        0 => (BAND_ROWS, usize::MAX),
+        row => {
+            let rows = (LAYER_MEMORY / row).clamp(1, BAND_ROWS as usize);
+            (rows as u32, (LAYER_MEMORY / (row * rows)).max(1))
+        }
+    };
+    let at_once = at_once.min(h.div_ceil(rows) as usize);
+    let band = rows as usize * w as usize * channels;
     let failed = std::sync::atomic::AtomicBool::new(false);
-    pixels.par_chunks_mut(band).enumerate().for_each(|(i, out)| {
-        let y0 = i as u32 * BAND_ROWS;
-        let rows = BAND_ROWS.min(h - y0);
-        let Some(mut pixmap) = tiny_skia::Pixmap::new(w, rows) else {
-            failed.store(true, std::sync::atomic::Ordering::Relaxed);
-            return;
-        };
-        for dy in ys {
-            for dx in xs {
-                let at = placed.post_translate(dx * w as f32, dy * h as f32 - y0 as f32);
-                resvg::render(&tree, at, &mut pixmap.as_mut());
+    for (wave, bands) in pixels.chunks_mut(band * at_once).enumerate() {
+        bands.par_chunks_mut(band).enumerate().for_each(|(i, out)| {
+            let y0 = (wave * at_once + i) as u32 * rows;
+            let Some(mut pixmap) = tiny_skia::Pixmap::new(w, rows.min(h - y0)) else {
+                failed.store(true, std::sync::atomic::Ordering::Relaxed);
+                return;
+            };
+            for dy in ys {
+                for dx in xs {
+                    let at = placed.post_translate(dx * w as f32, dy * h as f32 - y0 as f32);
+                    resvg::render(&tree, at, &mut pixmap.as_mut());
+                }
             }
-        }
-        for (px, rgba) in out.chunks_mut(channels).zip(pixmap.pixels()) {
-            let a = rgba.alpha();
-            if color {
-                let c = rgba.demultiply();
-                px.copy_from_slice(&[
-                    half[c.red() as usize],
-                    half[c.green() as usize],
-                    half[c.blue() as usize],
-                    half[a as usize],
-                ]);
-            } else {
-                px[0] = half[a as usize];
+            for (px, rgba) in out.chunks_mut(channels).zip(pixmap.pixels()) {
+                let a = rgba.alpha();
+                if color {
+                    let c = rgba.demultiply();
+                    px.copy_from_slice(&[
+                        half[c.red() as usize],
+                        half[c.green() as usize],
+                        half[c.blue() as usize],
+                        half[a as usize],
+                    ]);
+                } else {
+                    px[0] = half[a as usize];
+                }
             }
-        }
-    });
+        });
+    }
     if failed.into_inner() {
         return Err(format!("Cannot draw at {w}×{h}"));
     }
@@ -348,6 +459,97 @@ mod tests {
             })
             .is_err()
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn svg_job(path: &Path) -> VectorJob {
+        VectorJob {
+            what: Vector::Svg { path: path.display().to_string(), fit: 2, color: true },
+            size: [32, 32],
+            offset: [0.0, 0.0],
+            rotation: 0.0,
+            scale: 1.0,
+            tiling: 0,
+            reads: 0,
+        }
+    }
+
+    /// How much of the picture of the SVG `body` (in a 10 × 10 SVG), at `path`, is covered.
+    fn covered(path: &Path, body: &str) -> Result<f32, String> {
+        let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">{body}</svg>"#);
+        std::fs::write(path, svg).unwrap();
+        match rasterize(&svg_job(path))? {
+            Raster::Color(px) => Ok(px.chunks(4).map(|p| half::f16::from_bits(p[3]).to_f32()).sum::<f32>() / (32.0 * 32.0)),
+            Raster::Gray(_) => panic!("in color"),
+        }
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut packed = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        packed.write_all(bytes).unwrap();
+        packed.finish().unwrap()
+    }
+
+    /// Whatever an SVG file holds, it is read safely: packed, it unpacks no larger than an SVG
+    /// may be, and once; groups drawn apart nest no deeper than can be drawn; of what it links
+    /// to, SVGs beside it are drawn, and nothing that is not a file on this computer is read.
+    #[test]
+    fn svg_files_are_read_safely() {
+        let dir = std::env::temp_dir().join(format!("brewed-svg-safe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rect = r##"<rect width="10" height="10" fill="#f00"/>"##;
+        // Packed: read as it unpacks; packed twice, not unpacked twice; unpacking to more than
+        // an SVG may be (a quarter of a megabyte of zeros), not unpacked further.
+        let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">{rect}</svg>"#);
+        let packed = dir.join("packed.svgz");
+        std::fs::write(&packed, gzip(svg.as_bytes())).unwrap();
+        assert!(rasterize(&svg_job(&packed)).is_ok());
+        std::fs::write(&packed, gzip(&gzip(svg.as_bytes()))).unwrap();
+        assert!(rasterize(&svg_job(&packed)).err().unwrap().contains("not text"));
+        let bomb = {
+            use std::io::Write;
+            let mut packed = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            let zeros = vec![b' '; 1 << 20];
+            for _ in 0..(MAX_SVG >> 20) + 1 {
+                packed.write_all(&zeros).unwrap();
+            }
+            packed.finish().unwrap()
+        };
+        assert!(bomb.len() < 2 << 20, "{}", bomb.len());
+        std::fs::write(&packed, bomb).unwrap();
+        assert!(rasterize(&svg_job(&packed)).err().unwrap().contains("more than 256 MB"));
+
+        // Groups drawn apart, one inside another: as many as are drawn, and one more.
+        let path = dir.join("layers.svg");
+        let nested = |n: usize| format!("{}{rect}{}", r#"<g opacity="0.9">"#.repeat(n), "</g>".repeat(n));
+        assert!(covered(&path, &nested(MAX_LAYERS)).unwrap() > 0.3);
+        assert!(covered(&path, &nested(MAX_LAYERS + 1)).unwrap_err().contains("inside one another"));
+
+        // Links: an SVG beside it is drawn (itself linking to nothing), pictures of pixels are
+        // not read (they are not drawn), nor files on network shares.
+        std::fs::write(dir.join("inner.svg"), &svg).unwrap();
+        std::fs::write(dir.join("linking.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><image href="inner.svg" width="10" height="10"/></svg>"#).unwrap();
+        let link = |href: &str| format!(r#"<image href="{href}" width="10" height="10"/>"#);
+        assert!(covered(&path, &link("inner.svg")).unwrap() > 0.9);
+        assert_eq!(covered(&path, &link("linking.svg")).unwrap(), 0.0, "an SVG an SVG shows links to nothing");
+        assert_eq!(covered(&path, &link(r"\\no-such-host.invalid\share\inner.svg")).unwrap(), 0.0);
+        assert_eq!(covered(&path, &link("//no-such-host.invalid/share/inner.svg")).unwrap(), 0.0);
+        // A pipe, which a reader waits at forever.
+        #[cfg(unix)]
+        {
+            let pipe = dir.join("pipe.svg");
+            assert!(std::process::Command::new("mkfifo").arg(&pipe).status().unwrap().success());
+            let (tx, rx) = std::sync::mpsc::channel();
+            let path = path.clone();
+            std::thread::spawn(move || tx.send(covered(&path, &link("pipe.svg"))));
+            let read = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("not waiting at the pipe");
+            assert_eq!(read.unwrap(), 0.0);
+        }
+
+        // Text is drawn in Inter where the font it names is not there.
+        let text = r#"<text x="5" y="8" font-family="No Such Font" font-size="9" text-anchor="middle">Hi</text>"#;
+        assert!(covered(&path, text).unwrap() > 0.05);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1163,6 +1163,20 @@ impl App {
         }
     }
 
+    /// Take the names being typed (a graph's in the Explorer, an input value's, an Input node's)
+    /// as Enter takes them: what is saved is what is shown.
+    fn take_typed_names(&mut self) {
+        if self.ui.renaming_graph.is_some() {
+            let _ = self.explorer_message(ExplorerMessage::CommitRename);
+        }
+        if self.ui.renaming_var.is_some() {
+            let _ = self.handle(Message::CommitRename);
+        }
+        if self.ui.binding.is_some() {
+            let _ = self.handle(Message::CommitBinding);
+        }
+    }
+
     fn close_popups(&mut self) {
         self.ui.menu = None;
         self.ui.context = None;
@@ -1711,15 +1725,19 @@ impl App {
             // kept so the editor stays focused.
             Message::Undo => {
                 self.close_popups();
+                let (graph, view) = (self.doc.current(), self.view_state());
                 if !self.doc.undo() {
                     self.set_status("Nothing to undo", false);
                 }
+                self.stepped_from(graph, view);
             }
             Message::Redo => {
                 self.close_popups();
+                let (graph, view) = (self.doc.current(), self.view_state());
                 if !self.doc.redo() {
                     self.set_status("Nothing to redo", false);
                 }
+                self.stepped_from(graph, view);
             }
             // A new package, another one or the demo come to the Explorer: nothing is discarded.
             Message::New => {
@@ -1756,6 +1774,7 @@ impl App {
             }
             Message::Save => {
                 self.close_popups();
+                self.take_typed_names();
                 match self.doc.path().cloned() {
                     Some(path) => {
                         if self.save_to(path) {
@@ -1767,6 +1786,7 @@ impl App {
             }
             Message::SaveAs => {
                 self.close_popups();
+                self.take_typed_names();
                 return self.pick_save_path();
             }
             Message::SavePicked(path) => match path {

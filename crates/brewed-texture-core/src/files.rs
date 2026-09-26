@@ -59,14 +59,28 @@ pub fn embedded(path: &str) -> Option<Arc<Vec<u8>>> {
 pub const MAX_FILE: u64 = 2 << 30;
 
 /// The bytes of the file at `path` on disk; else why they cannot be read (a file larger than
-/// [`MAX_FILE`] is not: it would only fill the memory).
+/// [`MAX_FILE`] is not: it would only fill the memory; nor what is not a file, such as a
+/// device, which can be read forever).
 pub fn read_disk(path: &str) -> Result<Vec<u8>, String> {
-    let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
-    if size > MAX_FILE {
+    use std::io::Read;
+    let too_big = |size: u64| {
         let gb = size as f64 / (1u64 << 30) as f64;
-        return Err(format!("it is {gb:.1} GB; files of more than {} GB are not read", MAX_FILE >> 30));
+        format!("it is {gb:.1} GB; files of more than {} GB are not read", MAX_FILE >> 30)
+    };
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("it is not a file".into());
     }
-    std::fs::read(path).map_err(|e| e.to_string())
+    if meta.len() > MAX_FILE {
+        return Err(too_big(meta.len()));
+    }
+    // No more than that, whatever the file has grown to since.
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    std::fs::File::open(path).and_then(|file| file.take(MAX_FILE + 1).read_to_end(&mut bytes)).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_FILE {
+        return Err(too_big(bytes.len() as u64));
+    }
+    Ok(bytes)
 }
 
 /// The bytes of the file at `path`: of the package that holds it, or from disk.
@@ -120,5 +134,23 @@ mod tests {
         assert_eq!(read(&a).unwrap().as_slice(), b"bricks");
         assert!(is_there(&a));
         assert!(!is_embedded("C:/textures/bricks.png"));
+    }
+
+    /// What is not a file (a folder; a pipe, which a reader waits at forever) is not read.
+    #[test]
+    fn only_files_are_read() {
+        let dir = std::env::temp_dir().join(format!("brewed-read-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, b"abc").unwrap();
+        assert_eq!(read_disk(&file.to_string_lossy()).unwrap(), b"abc");
+        assert!(read_disk(&dir.to_string_lossy()).unwrap_err().contains("not a file"));
+        #[cfg(unix)]
+        {
+            let pipe = dir.join("pipe");
+            assert!(std::process::Command::new("mkfifo").arg(&pipe).status().unwrap().success());
+            assert!(read_disk(&pipe.to_string_lossy()).unwrap_err().contains("not a file"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

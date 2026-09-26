@@ -390,6 +390,62 @@ mod tests {
         assert!(compile(&src).is_err());
     }
 
+    /// The shader of an expression grows as the expression does: a value a function reads
+    /// twice (`fract`, `lerp`) is written once, else `fract(fract(fract(…)))` would double at
+    /// every call, to more than the memory holds.
+    #[test]
+    fn the_shader_of_an_expression_grows_as_it_does() {
+        for f in ["fract(", "lerp(", "sin(", "clamp("] {
+            let rest = match f {
+                "lerp(" => ", v, 0.5)",
+                "clamp(" => ", 0, 1)",
+                _ => ")",
+            };
+            let src = format!("{}u{}", f.repeat(40), rest.repeat(40));
+            let p = compile(&src).unwrap();
+            let code = wgsl::to_wgsl(&p, &|i| format!("v{i}"));
+            assert!(code.len() < 20 * src.len(), "{f}: {} bytes of shader for {} of expression", code.len(), src.len());
+        }
+    }
+
+    /// The deepest expressions read are read, computed, written as shaders and dropped on a
+    /// stack smaller than any thread of the program has (the main thread of Windows has 1 MB);
+    /// longer chains of operations, which the 4096 characters of an expression can hold 2048
+    /// of, are refused, saying why.
+    #[test]
+    fn the_deepest_expressions_fit_the_stack() {
+        let longest = parser::MAX_TREE - 1;
+        let read = [
+            ("u+".repeat(longest) + "u", 128.0),
+            ("u*".repeat(longest) + "u", 1.0),
+            ("(u+".repeat(40) + &"u*".repeat(80) + "u" + &")".repeat(40), 41.0),
+            ("-(".repeat(20) + "u" + &")".repeat(20), 1.0),
+            ("max(".to_string() + &"u, ".repeat(1300) + "2)", 2.0),
+        ];
+        let refused = ["u+".repeat(2047) + "u", "u+".repeat(longest + 1) + "u", "u^".repeat(40) + &"u-".repeat(2000) + "u"];
+        std::thread::Builder::new()
+            .stack_size(256 << 10)
+            .spawn(move || {
+                for (src, value) in &read {
+                    assert!(src.len() <= 4096, "{}", src.len());
+                    let p = compile(src).unwrap_or_else(|e| panic!("{e} in {src}"));
+                    assert_eq!(p.eval(&[1.0]), *value, "{src}");
+                    let code = wgsl::to_wgsl(&p, &|i| format!("v{i}"));
+                    assert!(code.len() < 10 * src.len(), "{src}");
+                    let _ = (variables_lenient(src), highlight(src), p.clone());
+                }
+                for src in &refused {
+                    let e = compile(src).unwrap_err();
+                    assert!(e.message.contains("at most 128 operations in a row"), "{e}");
+                    assert_eq!(variables_lenient(src), ["u"]);
+                    let _ = highlight(src);
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     #[test]
     fn fuzz_never_panics() {
         // Deterministic pseudo random strings over the language alphabet.

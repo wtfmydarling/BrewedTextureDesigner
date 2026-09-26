@@ -1189,18 +1189,29 @@ impl Gpu {
         self.read_stored_blocking(img).map(|stored| stored.to_f32())
     }
 
-    /// Read an image back to the CPU as its texture stores it, blocking until the GPU is done.
+    /// Read an image back to the CPU as its texture stores it, blocking until the GPU is done:
+    /// in bands of rows, each no larger than a buffer may be (256 MB on a device that keeps to
+    /// the limits every GPU has, as the window's does: half of what 8192 × 8192 colors of half
+    /// floats take).
     pub fn read_stored_blocking(&self, img: &GpuImage) -> Result<StoredImage, String> {
-        let mut encoder = self.encoder();
-        let rb = self.encode_readback(&mut encoder, img);
-        self.submit(encoder);
-        rb.map();
-        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU poll failed: {e}"))?;
-        match rb.poll() {
-            Some(Ok(())) => Ok(rb.stored()),
-            Some(Err(e)) => Err(e),
-            None => Err("GPU readback did not finish".into()),
+        let ([w, h], format) = (img.size(), img.format());
+        let row = w * bytes_per_pixel(format);
+        let padded = row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let rows = (self.device.limits().max_buffer_size / u64::from(padded)).clamp(1, u64::from(h.max(1))) as u32;
+        let mut bytes = Vec::with_capacity(row as usize * h as usize);
+        for y in (0..h).step_by(rows as usize) {
+            let mut encoder = self.encoder();
+            let rb = self.encode_readback_rect(&mut encoder, img, [0, y], [w, rows.min(h - y)]);
+            self.submit(encoder);
+            rb.map();
+            self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU poll failed: {e}"))?;
+            match rb.poll() {
+                Some(Ok(())) => rb.rows_into(&mut bytes),
+                Some(Err(e)) => return Err(e),
+                None => return Err("GPU readback did not finish".into()),
+            }
         }
+        Ok(StoredImage { width: w, height: h, format, bytes })
     }
 
     /// Non-blocking device poll so pending readbacks make progress.
@@ -1249,8 +1260,14 @@ impl Readback {
 
     /// The pixels as they are stored, without the rows' padding. Requires a successful map.
     pub fn stored(&self) -> StoredImage {
+        let mut bytes = Vec::with_capacity((self.width * bytes_per_pixel(self.format)) as usize * self.height as usize);
+        self.rows_into(&mut bytes);
+        StoredImage { width: self.width, height: self.height, format: self.format, bytes }
+    }
+
+    /// Its rows, without their padding, after `bytes`. Requires a successful map.
+    fn rows_into(&self, bytes: &mut Vec<u8>) {
         let row = (self.width * bytes_per_pixel(self.format)) as usize;
-        let mut bytes = Vec::with_capacity(row * self.height as usize);
         {
             let view = self.buffer.get_mapped_range(..);
             for y in 0..self.height as usize {
@@ -1259,7 +1276,6 @@ impl Readback {
             }
         }
         self.buffer.unmap();
-        StoredImage { width: self.width, height: self.height, format: self.format, bytes }
     }
 
     /// Pixels as RGBA f32 (see [`StoredImage::to_f32`]). Requires a successful map.
@@ -1372,6 +1388,24 @@ mod tests {
     fn broken_dynamic_kernel_is_an_error_not_a_panic() {
         let Ok(gpu) = Gpu::headless() else { return };
         assert!(gpu.dynamic_kernel("this is not wgsl", 0, COLOR_FORMAT).is_err());
+    }
+
+    /// Images larger than a buffer may be are read back whole, in bands of rows: an export of
+    /// 8192 × 8192 colors of half floats (512 MB) or floats (1 GB) is (here one of 8192 × 2100
+    /// floats, more than the 256 MB of a buffer).
+    #[test]
+    fn images_larger_than_a_buffer_are_read_back() {
+        let Ok(gpu) = Gpu::headless() else { return };
+        let (w, h) = (8192u32, 2100u32);
+        let big = gpu.create_image_as(w, h, wgpu::TextureFormat::Rgba32Float, "big");
+        assert!(big.bytes() > gpu.device.limits().max_buffer_size);
+        // Each pixel says where it is.
+        let values: Vec<f32> = (0..h).flat_map(|y| (0..w).flat_map(move |x| [x as f32, y as f32, 0.5, 1.0])).collect();
+        gpu.upload_floats(&big, &values);
+        let back = gpu.read_stored_blocking(&big).expect("read back");
+        assert_eq!((back.width, back.height, back.bytes.len()), (w, h, values.len() * 4));
+        assert!(back.bytes.as_chunks::<4>().0.iter().map(|b| f32::from_ne_bytes(*b)).eq(values.iter().copied()));
+        assert!(gpu.take_errors().is_empty());
     }
 
     /// Grayscale images take a quarter of the memory of color ones, and read back as gray.

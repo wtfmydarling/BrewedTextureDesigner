@@ -2401,3 +2401,53 @@ fn pictures_of_files_are_made_a_few_at_a_time() {
     assert!(w.app.res.files.get(&first).is_some_and(|f| f.preview.is_some() && !f.making));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Names being typed are taken when the package is saved (as Enter takes them): the file says
+/// what the window shows.
+#[test]
+fn names_being_typed_are_saved() {
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    let dir = scratch("typed-names");
+    let file = dir.join("typed.brewtex");
+    w.send(Message::SavePicked(Some(file.clone())));
+    let (key, graph) = (w.app.doc_key, w.app.doc.current());
+    w.send(Message::Explorer(ExplorerMessage::StartRename(key, graph)));
+    w.send(Message::Explorer(ExplorerMessage::RenameText("Wall".into())));
+    let var = w.app.graph().variables[0].name.clone();
+    w.send(Message::RenameVariable(var.clone(), "courses".into()));
+    w.send(Message::Save);
+    assert!(w.app.ui.renaming_graph.is_none() && w.app.ui.renaming_var.is_none());
+    let text = std::fs::read_to_string(&file).expect("saved");
+    assert!(text.contains("\"name\": \"Wall\""), "the graph's name");
+    assert!(text.contains("\"courses\"") && !text.contains(&format!("\"{var}\"")), "the input value's name");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Undo goes back to the graph the change was made in: that graph is shown as its view was,
+/// and the view of the graph left is kept for it, as when graphs are opened in the Explorer.
+#[test]
+fn undo_back_to_another_graph_keeps_their_views() {
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    let key = w.app.doc_key;
+    let wall = w.app.doc.current();
+    // A change in the wall, seen from far to the left.
+    w.app.ui.graph_view.pan = iced::Vector::new(-400.0, 20.0);
+    let node = w.app.graph().nodes[0].id;
+    w.send(Message::Edit(Edit::MoveNodes { ids: vec![node], delta: [50.0, 0.0] }));
+    w.send(Message::Seal);
+    // Another graph, seen from elsewhere.
+    w.send(Message::Explorer(ExplorerMessage::NewGraph(key)));
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    let other = w.app.doc.current();
+    w.app.ui.graph_view.pan = iced::Vector::new(300.0, -70.0);
+    // Undo, twice: the new graph goes, then the move; the wall is shown as it was seen.
+    w.send(Message::Undo);
+    w.send(Message::Undo);
+    assert_eq!(w.app.doc.current(), wall);
+    assert_eq!(w.app.ui.graph_view.pan, iced::Vector::new(-400.0, 20.0), "the wall's view");
+    // Redone, the new graph is there again, as it was seen.
+    w.send(Message::Redo);
+    w.send(Message::Redo);
+    assert_eq!(w.app.doc.current(), other);
+    assert_eq!(w.app.ui.graph_view.pan, iced::Vector::new(300.0, -70.0), "the other graph's view");
+}

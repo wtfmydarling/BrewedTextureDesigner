@@ -1470,13 +1470,24 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     }
     // One value: gray; a list: red, green, blue and alpha (the missing ones none, and opaque).
     let result = match values.as_slice() {
-        [r] => format!("    let r = {r};\n    return vec4<f32>(r, r, r, 1.0);\n}}\n"),
-        [r, g] => format!("    return vec4<f32>({r}, {g}, 0.0, 1.0);\n}}\n"),
-        [r, g, b] => format!("    return vec4<f32>({r}, {g}, {b}, 1.0);\n}}\n"),
-        [r, g, b, a, ..] => format!("    return vec4<f32>({r}, {g}, {b}, {a});\n}}\n"),
+        [r] => format!("    let r = finite({r});\n    return vec4<f32>(r, r, r, 1.0);\n}}\n"),
+        [r, g] => format!("    return vec4<f32>(finite({r}), finite({g}), 0.0, 1.0);\n}}\n"),
+        [r, g, b] => format!("    return vec4<f32>(finite({r}), finite({g}), finite({b}), 1.0);\n}}\n"),
+        [r, g, b, a, ..] => format!("    return vec4<f32>(finite({r}), finite({g}), finite({b}), finite({a}));\n}}\n"),
         [] => "    return vec4<f32>(0.0, 0.0, 0.0, 1.0);\n}\n".to_string(),
     };
     source.push_str(&result);
+    // What is not a number (1/0, sqrt(-1), log(0)…) is none, and what is infinite the largest a
+    // half float holds: either would spread through every blur and mip of what reads it. Told
+    // by the bits, which a compiler may not take away (it may take `x != x` to be false).
+    source.push_str(
+        "fn finite(x: f32) -> f32 {\n\
+             let bits = bitcast<u32>(x);\n\
+             if ((bits & 0x7f800000u) != 0x7f800000u) { return x; }\n\
+             if ((bits & 0x007fffffu) != 0u) { return 0.0; }\n\
+             return select(65504.0, -65504.0, (bits & 0x80000000u) != 0u);\n\
+         }\n",
+    );
 
     let kernel = cx.gpu.dynamic_kernel(&source, images.len(), cx.output.format())?;
     let mut u =

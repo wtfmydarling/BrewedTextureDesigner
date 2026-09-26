@@ -24,6 +24,9 @@ texpresso = { version = "2", features = ["rayon"] }
 # The SVG and Text nodes: vector graphics and text drawn into pixels (the library iced draws its
 # SVGs with, text included: nothing more to build).
 resvg = { version = "0.45", default-features = false, features = ["text"] }
+# Packed SVGs (.svgz) unpacked no larger than they may be (usvg would unpack any size); the
+# version usvg unpacks them with.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [features]
 # The benchmarks and the contact sheet of every node type (`tools`), for developing the program.

@@ -21,6 +21,8 @@ fn fx_pow(a: f32, b: f32) -> f32 {
     return bitcast<f32>(0x7fc00000u);
 }
 fn fx_round(x: f32) -> f32 { return sign(x) * floor(abs(x) + 0.5); }
+fn fx_fract(x: f32) -> f32 { return x - floor(x); }
+fn fx_lerp(a: f32, b: f32, t: f32) -> f32 { return a + (b - a) * t; }
 fn fx_cbrt(x: f32) -> f32 { return sign(x) * pow(abs(x), 1.0 / 3.0); }
 fn fx_smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     if (e0 == e1) { return select(1.0, 0.0, x < e0); }
@@ -69,6 +71,19 @@ pub fn components_wgsl(program: &Program, var: &dyn Fn(usize) -> String, sample:
 struct Env<'a> {
     var: &'a dyn Fn(usize) -> String,
     sample: &'a dyn Fn(usize, &str, &str) -> String,
+}
+
+/// `name` (`min` or `max`) of all of `values`, taken in pairs, and the pairs in pairs: as
+/// deep as the logarithm of how many there are, not as many.
+fn pairs(name: &str, values: &[String]) -> String {
+    match values {
+        [] => "0.0".into(),
+        [one] => one.clone(),
+        _ => {
+            let (a, b) = values.split_at(values.len() / 2);
+            format!("{name}({}, {})", pairs(name, a), pairs(name, b))
+        }
+    }
 }
 
 fn emit(node: &Node, env: &Env) -> String {
@@ -143,18 +158,11 @@ fn emit(node: &Node, env: &Env) -> String {
                 Func::Ceil => format!("ceil({x})"),
                 Func::Round => format!("fx_round({x})"),
                 Func::Trunc => format!("trunc({x})"),
-                Func::Fract => format!("({x} - floor({x}))"),
-                Func::Min | Func::Max => {
-                    let name = if *func == Func::Min { "min" } else { "max" };
-                    let mut acc = a[0].clone();
-                    for next in &a[1..] {
-                        acc = format!("{name}({acc}, {next})");
-                    }
-                    acc
-                }
+                Func::Fract => format!("fx_fract({x})"),
+                Func::Min | Func::Max => pairs(if *func == Func::Min { "min" } else { "max" }, &a),
                 Func::Clamp => format!("min(max({x}, {y}), {z})"),
                 Func::Saturate => format!("saturate({x})"),
-                Func::Lerp => format!("({x} + ({y} - {x}) * {z})"),
+                Func::Lerp => format!("fx_lerp({x}, {y}, {z})"),
                 Func::Step => format!("select(1.0, 0.0, {y} < {x})"),
                 Func::Smoothstep => format!("fx_smoothstep({x}, {y}, {z})"),
                 Func::Mod => format!("fx_mod({x}, {y})"),

@@ -153,12 +153,24 @@ impl App {
     }
 
     /// Where the view of the graph being edited is.
-    fn view_state(&self) -> ViewState {
+    pub(super) fn view_state(&self) -> ViewState {
         ViewState {
             preview: self.ui.preview.node,
             graph_pan: Some([self.ui.graph_view.pan.x, self.ui.graph_view.pan.y]),
             graph_zoom: Some(self.ui.graph_view.zoom),
         }
+    }
+
+    /// Undo or redo went back to the graph a change was made in, from `graph`, whose view was
+    /// `view`: the view of that graph is kept for it, and the one of the graph gone back to is
+    /// where it was, as when a graph is opened.
+    pub(super) fn stepped_from(&mut self, graph: GraphId, view: ViewState) {
+        if self.doc.current() == graph {
+            return;
+        }
+        self.views.insert((self.doc_key, graph), view);
+        let view = self.views.get(&(self.doc_key, self.doc.current())).cloned();
+        self.restore_view(view);
     }
 
     /// Put the views where they were for the graph being edited, or frame it when it has not
