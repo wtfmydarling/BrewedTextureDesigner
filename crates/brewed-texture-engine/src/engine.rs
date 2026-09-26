@@ -154,9 +154,11 @@ enum BitmapEntry {
 
 /// A file's pixels, as they will be uploaded.
 enum Pixels {
-    /// One value per pixel: the file is grayscale, and so is its image; `fine`: of more than
-    /// 8 bits (a 16-bit height map), kept in floats, all its steps.
-    Gray(Vec<f32>, bool),
+    /// One half float per pixel: the file is grayscale, of 8 bits, and so is its image.
+    Gray(Vec<u16>),
+    /// One float per pixel: a grayscale file of more than 8 bits (a 16-bit height map), kept
+    /// in floats, all its steps.
+    FineGray(Vec<f32>),
     /// RGBA half floats.
     Color(Vec<u16>),
 }
@@ -554,12 +556,12 @@ impl Engine {
             let entry = match done.result {
                 Ok((w, h, pixels)) => {
                     let image = match pixels {
-                        Pixels::Gray(values, false) => {
+                        Pixels::Gray(half) => {
                             let image = self.gpu.create_image_as(w, h, GRAY_FORMAT, "bitmap");
-                            self.gpu.upload_gray_f32(&image, &values);
+                            self.gpu.upload_gray_f16(&image, &half);
                             image
                         }
-                        Pixels::Gray(values, true) => {
+                        Pixels::FineGray(values) => {
                             let image = self.gpu.create_image_as(w, h, GRAY_FULL_FORMAT, "bitmap");
                             self.gpu.upload_floats(&image, &values);
                             image
@@ -1445,33 +1447,43 @@ impl Engine {
 
 /// Decode an image file (on disk, or held by its package, see
 /// [`brewed_texture_core::files`]): a grayscale file (without alpha) into one value per pixel,
-/// any other into RGBA half floats (SIMD conversion on all cores).
+/// any other into RGBA half floats, on all cores. Pictures of 8 and 16 bits go from their
+/// channels straight to half floats, looked up (8K of RGBA takes 0.8 GB at most, not 1.9).
 fn decode_bitmap(path: &str) -> Result<(u32, u32, Pixels), String> {
     let bytes = brewed_texture_core::files::read(path)?;
     let img = open_picture(&bytes, &brewed_texture_core::package::file_name(path))?;
+    drop(bytes);
     let (w, h) = (img.width(), img.height());
-    match img.color() {
-        image::ColorType::L8 => {
-            let values = img.into_luma8().into_raw().into_iter().map(|v| f32::from(v) / 255.0).collect();
-            return Ok((w, h, Pixels::Gray(values, false)));
+    let pixels = (w as usize) * (h as usize);
+    let channels = usize::from(img.color().channel_count());
+    let color = |convert: &dyn Fn(&mut [u16])| {
+        let mut half = vec![0u16; pixels * 4];
+        convert(&mut half);
+        Pixels::Color(half)
+    };
+    let decoded = match img {
+        image::DynamicImage::ImageLuma8(gray) => {
+            let mut half = vec![0u16; pixels];
+            simd::u8_to_f16(gray.as_raw(), &mut half);
+            Pixels::Gray(half)
         }
-        image::ColorType::L16 => {
-            let values = img.into_luma16().into_raw().into_iter().map(|v| f32::from(v) / 65535.0).collect();
-            return Ok((w, h, Pixels::Gray(values, true)));
+        image::DynamicImage::ImageLuma16(gray) => {
+            Pixels::FineGray(gray.into_raw().into_iter().map(|v| f32::from(v) / 65535.0).collect())
         }
-        _ => {}
-    }
-    let mut rgba = vec![0.0f32; (w * h * 4) as usize];
-    match img.color() {
-        image::ColorType::La16 | image::ColorType::Rgb16 | image::ColorType::Rgba16 => {
-            simd::u16_to_f32(&img.into_rgba16().into_raw(), &mut rgba);
+        image::DynamicImage::ImageLumaA8(_) | image::DynamicImage::ImageRgb8(_) | image::DynamicImage::ImageRgba8(_) => {
+            color(&|half| simd::u8_to_rgba_f16(img.as_bytes(), channels, half))
         }
-        image::ColorType::Rgb32F | image::ColorType::Rgba32F => rgba = img.into_rgba32f().into_raw(),
-        _ => simd::u8_to_f32(&img.into_rgba8().into_raw(), &mut rgba),
-    }
-    let mut half = vec![0u16; rgba.len()];
-    simd::f32_to_f16(&rgba, &mut half);
-    Ok((w, h, Pixels::Color(half)))
+        image::DynamicImage::ImageLumaA16(_) | image::DynamicImage::ImageRgb16(_) | image::DynamicImage::ImageRgba16(_) => {
+            let words: &[u16] = bytemuck::cast_slice(img.as_bytes());
+            color(&|half| simd::u16_to_rgba_f16(words, channels, half))
+        }
+        // Floats (EXR, HDR), and whatever else: through floats.
+        other => {
+            let floats = other.into_rgba32f().into_raw();
+            color(&|half| simd::f32_to_f16(&floats, half))
+        }
+    };
+    Ok((w, h, decoded))
 }
 
 /// The picture in the bytes of a file named `name`: of the kind its extension says, else of the

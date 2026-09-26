@@ -951,18 +951,36 @@ impl Graph {
 
     /// Is `candidate` (transitively) upstream of `node`?
     pub fn depends_on(&self, node: NodeId, candidate: NodeId) -> bool {
-        let mut stack = vec![node];
-        let mut seen = HashSet::new();
-        while let Some(n) = stack.pop() {
-            if n == candidate {
-                return true;
-            }
-            if !seen.insert(n) {
-                continue;
-            }
-            stack.extend(self.live_links().filter(|l| l.to == n).map(|l| l.from));
+        self.upstream(node).contains(&candidate)
+    }
+
+    /// `node` and every node it depends on, through the live links: what cannot take what it
+    /// makes (that would be a cycle).
+    pub fn upstream(&self, node: NodeId) -> HashSet<NodeId> {
+        self.reached(node, true)
+    }
+
+    /// `node` and every node that depends on it: what cannot give it anything.
+    pub fn downstream(&self, node: NodeId) -> HashSet<NodeId> {
+        self.reached(node, false)
+    }
+
+    fn reached(&self, node: NodeId, up: bool) -> HashSet<NodeId> {
+        let mut next: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        for l in self.live_links() {
+            let (from, to) = if up { (l.to, l.from) } else { (l.from, l.to) };
+            next.entry(from).or_default().push(to);
         }
-        false
+        let mut seen = HashSet::from([node]);
+        let mut stack = vec![node];
+        while let Some(n) = stack.pop() {
+            for m in next.get(&n).into_iter().flatten() {
+                if seen.insert(*m) {
+                    stack.push(*m);
+                }
+            }
+        }
+        seen
     }
 
     /// Why a connection would be refused, or `Ok` if it is valid.
@@ -1048,10 +1066,13 @@ impl Graph {
 
     /// Is the link currently attached to a visible socket (dormant links are not)?
     pub fn is_link_live(&self, link: &Link) -> bool {
-        self.input_socket(link.to, &link.to_socket).is_some()
-            && self.node(link.from).is_some_and(|n| {
+        self.node(link.to).is_some_and(|n| has_input_socket(n, &link.to_socket))
+            && self.node(link.from).is_some_and(|n| match &n.instance {
                 // The outputs of a node type are always there; a graph's may not be now.
-                n.instance.is_none() || self.output_sockets(n).iter().any(|s| s.key == link.from_socket)
+                Some(instance) => {
+                    link.from_socket.strip_prefix("o:").is_some_and(|k| instance.interface.outputs.iter().any(|p| p.name == k))
+                }
+                None => true,
             })
     }
 
@@ -1325,6 +1346,22 @@ fn dormant_input(to: &Node, key: &str) -> bool {
     }
 }
 
+/// Does `node` have the input socket `key` now, as [`Graph::input_sockets`] lists them? (Asked
+/// of every link again and again: without making the list.)
+fn has_input_socket(node: &Node, key: &str) -> bool {
+    if let Some(k) = key.strip_prefix("i:") {
+        return match &node.instance {
+            Some(instance) => instance.interface.inputs.iter().any(|p| p.name == k),
+            None => node.def().inputs.iter().any(|s| s.key == k),
+        };
+    }
+    if let Some(k) = key.strip_prefix("p:") {
+        let (Some(pd), Some(slot)) = (node.param_def(k), node.param(k)) else { return false };
+        return slot.exposed && pd.can_expose() && node.param_visible(&pd) && pd.socket(&slot.value).is_some();
+    }
+    key.strip_prefix("v:").is_some_and(|k| node.expression_vars().iter().any(|v| v == k))
+}
+
 /// Is `kind` a value-producing parameter kind that the UI edits with sliders?
 pub fn is_numeric_param(kind: &ParamKind) -> bool {
     matches!(kind, ParamKind::Float { .. } | ParamKind::Int { .. } | ParamKind::Vec2 { .. })
@@ -1406,6 +1443,50 @@ mod tests {
         assert_eq!(g.links.len(), 1);
         set(&mut g, m, "expression", ParamValue::Text("x + myVar".into()));
         assert!(g.link_into(m, "v:myVar").is_some());
+    }
+
+    /// Whether a node has an input socket is what the list of its sockets says, for every node
+    /// type with every parameter exposed (those hidden by another's value have none), for
+    /// expression variables, and for a graph used as a node.
+    #[test]
+    fn a_socket_is_there_as_the_list_of_them_says() {
+        let agree = |n: &Node, g: &Graph| {
+            let listed: Vec<String> = g.input_sockets(n).into_iter().map(|s| s.key).collect();
+            for key in &listed {
+                assert!(has_input_socket(n, key), "{} lists {key}", n.def().name);
+            }
+            let asked = n
+                .param_defs()
+                .into_iter()
+                .map(|p| param_socket_key(p.key))
+                .chain(n.def().inputs.iter().map(|s| input_socket_key(s.key)))
+                .chain(["i:nope", "p:nope", "v:nope", "o:output", "nope"].map(String::from));
+            for key in asked {
+                assert_eq!(has_input_socket(n, &key), listed.contains(&key), "{} {key}", n.def().name);
+            }
+        };
+        let mut g = Graph::default();
+        for kind in NodeKind::ALL {
+            let id = g.add_node(*kind, [0.0, 0.0]);
+            let node = g.node_mut(id).unwrap();
+            for slot in &mut node.params {
+                slot.exposed = true;
+            }
+        }
+        let math = g.nodes_of(NodeKind::MATH).next().unwrap().id;
+        g.node_mut(math).unwrap().param_mut("expression").unwrap().value = ParamValue::Text("a * b + c".into());
+        for n in &g.nodes {
+            agree(n, &g);
+        }
+        // A graph used as a node, its image input exposed, a value not.
+        let mut sub = Graph::default();
+        sub.add_node(NodeKind::IMAGE_INPUT, [0.0, 0.0]);
+        sub.add_node(NodeKind::FLOAT_INPUT, [0.0, 100.0]);
+        let r = crate::instance::GraphRef { package: None, graph: crate::instance::GraphId(2), name: "Sub".into() };
+        let used = g.add_instance(Instance::new(r, Interface::of(&sub)), [0.0, 0.0]);
+        g.set_exposed(used, "input", true).unwrap();
+        agree(g.node(used).unwrap(), &g);
+        assert!(has_input_socket(g.node(used).unwrap(), "p:input") && !has_input_socket(g.node(used).unwrap(), "p:value"));
     }
 
     #[test]

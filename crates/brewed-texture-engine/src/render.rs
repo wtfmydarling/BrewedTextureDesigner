@@ -1,9 +1,10 @@
 //! Rendering a package without a window, for scripts and build pipelines (`--render`): its
-//! graphs, all of them or those named, with their Input Values set as asked, at the size and
+//! graphs, those named or else its finished textures (the graphs no other graph of it uses:
+//! those it uses are computed in them), with their Input Values set as asked, at the size and
 //! precision asked, computed on the GPU, and their Output nodes written as the export writes
 //! them. The packages whose graphs they use are read from their files, as deep as they go.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use brewed_texture_core::package::{self, Library, Package};
@@ -17,7 +18,7 @@ use crate::gpu::Gpu;
 #[derive(Clone, Debug, Default)]
 pub struct Job {
     pub package: PathBuf,
-    /// The graphs, by name; none: every graph of the package.
+    /// The graphs, by name; none: the graphs of the package no other graph of it uses.
     pub graphs: Vec<String>,
     /// Input Values to set: their names, and their values as typed ("0.5", "4", "true",
     /// "0.2,0.8", "#9E4229" or "0.6,0.3,0.2").
@@ -29,11 +30,20 @@ pub struct Job {
     pub out: PathBuf,
 }
 
-/// What rendering did: the files written, and what went wrong without stopping it.
+/// What rendering did: the files written, what went wrong without stopping it, and what is
+/// good to know (graphs not written on their own).
 #[derive(Debug, Default)]
 pub struct Report {
     pub written: Vec<PathBuf>,
     pub problems: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+/// The graphs to render (their ids and names), and the names of those only computed in them.
+pub struct Chosen {
+    pub graphs: Vec<(GraphId, String)>,
+    /// Graphs used as nodes in the others, not written on their own (none named).
+    pub inside: Vec<String>,
 }
 
 /// A package and the packages whose graphs it uses, as deep as they go.
@@ -97,12 +107,23 @@ impl Packages {
         Ok(packages)
     }
 
-    /// The graphs named, in their order (each at most once); every graph of the package when
-    /// none is.
-    pub fn graphs(&self, names: &[String]) -> Result<Vec<(GraphId, String)>, String> {
+    /// The graphs named, in their order (each at most once). None named: the package's
+    /// finished textures, the graphs no other graph of it uses; the graphs it uses as nodes are
+    /// computed in those (the second list, of their names: named, they are rendered too).
+    pub fn graphs(&self, names: &[String]) -> Result<Chosen, String> {
         let all = || self.root.graphs.iter().map(|g| (g.id, g.name.clone()));
         if names.is_empty() {
-            return Ok(all().collect());
+            let used: HashSet<GraphId> = self
+                .root
+                .graphs
+                .iter()
+                .flat_map(|g| g.graph.instances())
+                .filter_map(|n| n.instance.as_deref())
+                .filter(|i| i.graph.package.as_deref().is_none_or(|p| p == self.key))
+                .filter_map(|i| self.root.find(&i.graph).map(|e| e.id))
+                .collect();
+            let (graphs, inside): (Vec<_>, Vec<_>) = all().partition(|(id, _)| !used.contains(id));
+            return Ok(Chosen { graphs, inside: inside.into_iter().map(|(_, name)| name).collect() });
         }
         let mut chosen: Vec<(GraphId, String)> = Vec::new();
         for name in names {
@@ -114,7 +135,7 @@ impl Packages {
                 chosen.push(found);
             }
         }
-        Ok(chosen)
+        Ok(Chosen { graphs: chosen, inside: Vec::new() })
     }
 }
 
@@ -181,7 +202,10 @@ fn hex_color(hex: &str) -> Option<Value> {
 pub fn render(job: &Job, gpu: Gpu) -> Result<Report, String> {
     let mut report = Report::default();
     let mut packages = Packages::read(&job.package, &mut report.problems)?;
-    let graphs = packages.graphs(&job.graphs)?;
+    let Chosen { graphs, inside } = packages.graphs(&job.graphs)?;
+    for name in inside {
+        report.notes.push(format!("'{name}' is used in other graphs of the package and computed there: not written on its own (--graph \"{name}\" writes it)"));
+    }
     if let Some([w, h]) = job.size
         && !((1..=8192).contains(&w) && (1..=8192).contains(&h))
     {
@@ -299,7 +323,8 @@ mod tests {
     }
 
     /// A package of two graphs, one using the other, saved, then rendered: all of it, one graph
-    /// by name with an Input Value set and another size, and what cannot be.
+    /// by name with an Input Value set and another size, and what cannot be; a graph used in
+    /// another, written only when it is named.
     #[test]
     fn a_package_renders_to_files() {
         let Ok(gpu) = Gpu::headless() else { return };
@@ -374,6 +399,16 @@ mod tests {
             read(&dir.join(out).join("height.png"))
         };
         assert_ne!(worn("0.1", "clean"), worn("0.9", "worn"));
+        // Every graph again: the one the wall uses is computed in it, not written on its own,
+        // unless it is named.
+        let all = render(&Job { package: file.clone(), out: dir.join("again"), size: Some([64, 64]), ..Job::default() }, Gpu::headless().unwrap()).unwrap();
+        assert!(all.problems.is_empty(), "{:?}", all.problems);
+        assert_eq!(all.written.len(), 6, "the wall's five and the disc: {:?}", all.written);
+        assert!(!dir.join("again").join("Worn").exists());
+        assert!(all.notes.iter().any(|n| n.contains("'Worn'")), "{:?}", all.notes);
+        let named = Job { graphs: vec!["Worn".into()], values: Vec::new(), ..job("4", "named") };
+        let named = render(&named, Gpu::headless().unwrap()).unwrap();
+        assert!(named.notes.is_empty() && !named.written.is_empty(), "{:?}", named);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

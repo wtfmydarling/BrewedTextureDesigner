@@ -142,6 +142,79 @@ pub fn u16_to_f32(src: &[u16], dst: &mut [f32]) {
     });
 }
 
+/// The half floats of every 8-bit value, as 8-bit channels read (x / 255): what
+/// [`u8_to_f32`] and [`f32_to_f16`] make of them, looked up.
+fn halves_of_u8() -> &'static [u16; 256] {
+    static TABLE: std::sync::OnceLock<[u16; 256]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::array::from_fn(|v| f16::from_f32(v as f32 * (1.0 / 255.0)).to_bits()))
+}
+
+/// The half floats of every 16-bit value (x / 65535), as [`u16_to_f32`] and [`f32_to_f16`]
+/// make them: 128 KiB, made once.
+fn halves_of_u16() -> &'static [u16] {
+    static TABLE: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| (0..=u16::MAX).map(|v| f16::from_f32(f32::from(v) * (1.0 / 65535.0)).to_bits()).collect())
+}
+
+/// Pixels of `channels` values each (gray, gray and alpha, RGB or RGBA) as RGBA half floats,
+/// each value by `half`: gray in red, green and blue, and opaque where there is no alpha.
+/// Parallel, without a copy in between.
+fn to_rgba_f16<T: Copy + Send + Sync>(src: &[T], channels: usize, dst: &mut [u16], half: impl Fn(T) -> u16 + Sync) {
+    assert!((1..=4).contains(&channels) && src.len() / channels * 4 == dst.len());
+    let one = f16::ONE.to_bits();
+    let pixels = TASK / 4;
+    dst.par_chunks_mut(pixels * 4).zip(src.par_chunks(pixels * channels)).for_each(|(d, s)| {
+        let (out, _) = d.as_chunks_mut::<4>();
+        match channels {
+            1 => {
+                for (o, v) in out.iter_mut().zip(s) {
+                    let l = half(*v);
+                    *o = [l, l, l, one];
+                }
+            }
+            2 => {
+                for (o, p) in out.iter_mut().zip(s.as_chunks::<2>().0) {
+                    let l = half(p[0]);
+                    *o = [l, l, l, half(p[1])];
+                }
+            }
+            3 => {
+                for (o, p) in out.iter_mut().zip(s.as_chunks::<3>().0) {
+                    *o = [half(p[0]), half(p[1]), half(p[2]), one];
+                }
+            }
+            _ => {
+                for (o, p) in out.iter_mut().zip(s.as_chunks::<4>().0) {
+                    *o = p.map(&half);
+                }
+            }
+        }
+    });
+}
+
+/// Pixels of `channels` 8-bit values each as RGBA half floats (see [`to_rgba_f16`]).
+pub fn u8_to_rgba_f16(src: &[u8], channels: usize, dst: &mut [u16]) {
+    let table = halves_of_u8();
+    to_rgba_f16(src, channels, dst, |v| table[usize::from(v)]);
+}
+
+/// Pixels of `channels` 16-bit values each as RGBA half floats (see [`to_rgba_f16`]).
+pub fn u16_to_rgba_f16(src: &[u16], channels: usize, dst: &mut [u16]) {
+    let table = halves_of_u16();
+    to_rgba_f16(src, channels, dst, |v| table[usize::from(v)]);
+}
+
+/// 8-bit values as half floats, one for one (a grayscale picture), parallel.
+pub fn u8_to_f16(src: &[u8], dst: &mut [u16]) {
+    assert_eq!(src.len(), dst.len());
+    let table = halves_of_u8();
+    dst.par_chunks_mut(TASK).zip(src.par_chunks(TASK)).for_each(|(d, s)| {
+        for (o, v) in d.iter_mut().zip(s) {
+            *o = table[usize::from(*v)];
+        }
+    });
+}
+
 /// Pick `channels` (indices into RGBA) out of packed RGBA pixels, parallel.
 pub fn select_channels<T: Copy + Send + Sync + Default>(rgba: &[T], channels: &[usize]) -> Vec<T> {
     let n = channels.len();
@@ -326,6 +399,45 @@ fn finish_stats(partial: Partial, pixels: usize, width: u32, height: u32) -> Ima
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pictures of 8 and 16 bits become half floats, looked up, exactly as they did through
+    /// floats: every value, in every layout of channels.
+    #[test]
+    fn channels_become_the_same_half_floats_as_through_floats() {
+        let through = |floats: Vec<f32>| {
+            let mut half = vec![0u16; floats.len()];
+            f32_to_f16(&floats, &mut half);
+            half
+        };
+        let bytes: Vec<u8> = (0..=255u8).cycle().take(4 * 1000).collect();
+        let mut floats = vec![0.0; bytes.len()];
+        u8_to_f32(&bytes, &mut floats);
+        let mut rgba = vec![0u16; bytes.len()];
+        u8_to_rgba_f16(&bytes, 4, &mut rgba);
+        assert_eq!(rgba, through(floats.clone()));
+        let mut gray = vec![0u16; bytes.len()];
+        u8_to_f16(&bytes, &mut gray);
+        assert_eq!(gray, through(floats));
+        let words: Vec<u16> = (0..=u16::MAX).collect();
+        let mut floats = vec![0.0; words.len()];
+        u16_to_f32(&words, &mut floats);
+        let mut rgba = vec![0u16; words.len()];
+        u16_to_rgba_f16(&words, 4, &mut rgba);
+        assert_eq!(rgba, through(floats));
+        // Gray, gray and alpha, RGB: spread, and opaque without alpha.
+        let one = f16::ONE.to_bits();
+        let h = |v: u8| halves_of_u8()[usize::from(v)];
+        for (channels, pixel, want) in [
+            (1, vec![51u8], [h(51), h(51), h(51), one]),
+            (2, vec![51, 102], [h(51), h(51), h(51), h(102)]),
+            (3, vec![51, 102, 153], [h(51), h(102), h(153), one]),
+        ] {
+            let src: Vec<u8> = pixel.iter().copied().cycle().take(channels * 70_000).collect();
+            let mut dst = vec![0u16; 4 * 70_000];
+            u8_to_rgba_f16(&src, channels, &mut dst);
+            assert!(dst.as_chunks::<4>().0.iter().all(|p| *p == want), "{channels} channels");
+        }
+    }
 
     fn noise(n: usize, seed: u32) -> Vec<f32> {
         let mut s = seed;

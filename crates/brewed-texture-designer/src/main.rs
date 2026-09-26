@@ -38,7 +38,8 @@ usage: brewed-texture-designer [FILE.brewtex]
                    by default), in a folder for each graph when there are several; print
                    each file written. Exit code 0: all went well, 1: something went wrong
                    on the way (said on stderr), 2: nothing could be rendered
-  --graph NAME     render this graph only (again for more)
+  --graph NAME     render this graph (again for more). Without it: the graphs no other
+                   graph of the package uses; those it uses are computed in them
   --set NAME=VALUE set an Input Value: 0.5, 4, true, 0.2,0.8, #9E4229 or 0.6,0.3,0.2;
                    an image input takes a picture file: --set emblem=logo.png
   --size N|WxH     the texture size: 2048, or 2048x1024
@@ -256,6 +257,9 @@ fn render_package(mut job: Job) -> i32 {
             }
             for problem in &report.problems {
                 eprintln!("warning: {problem}");
+            }
+            for note in &report.notes {
+                eprintln!("note: {note}");
             }
             if report.problems.is_empty() && !report.written.is_empty() { 0 } else { 1 }
         }

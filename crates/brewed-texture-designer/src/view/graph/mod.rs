@@ -6,6 +6,8 @@
 
 pub mod layout;
 
+use std::collections::HashSet;
+
 use iced::alignment::Vertical;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
 use iced::widget::text::{Alignment as TextAlign, LineHeight, Shaping};
@@ -210,13 +212,21 @@ impl GraphCanvas<'_> {
             .map(|n| n.id)
             .collect()
     }
-    fn can_link(&self, from: &SocketRef, ty: DataType, to: &Hit) -> bool {
+    /// Can a link dragged from `from` (of type `ty`) end at `to`? `blocked`: the nodes it cannot
+    /// end at without a cycle (see [`Self::blocked`]), found once for all the sockets asked about.
+    fn can_link(&self, from: &SocketRef, ty: DataType, to: &Hit, blocked: &HashSet<NodeId>) -> bool {
         if from.output == to.output || from.node == to.node {
             return false;
         }
-        let (out_ty, in_ty, out_node, in_node) =
-            if from.output { (ty, to.ty, from.node, to.node) } else { (to.ty, ty, to.node, from.node) };
-        can_connect(out_ty, in_ty) && !self.app.graph().depends_on(out_node, in_node)
+        let (out_ty, in_ty) = if from.output { (ty, to.ty) } else { (to.ty, ty) };
+        can_connect(out_ty, in_ty) && !blocked.contains(&to.node)
+    }
+
+    /// The nodes a link dragged from `from` cannot end at: from an output, the nodes its node
+    /// takes from (they would take from it); from an input, those that take from its node.
+    fn blocked(&self, from: &SocketRef) -> HashSet<NodeId> {
+        let graph = self.app.graph();
+        if from.output { graph.upstream(from.node) } else { graph.downstream(from.node) }
     }
 
     fn select_mode(&self, m: keyboard::Modifiers) -> SelectMode {
@@ -450,8 +460,9 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                     }
                     (mouse::Button::Left, Interaction::Linking { from, ty, current, detached, .. }) => {
                         let layouts = self.layouts(None);
+                        let blocked = self.blocked(&from);
                         match self.socket_at(&layouts, current) {
-                            Some(target) if self.can_link(&from, ty, &target) => {
+                            Some(target) if self.can_link(&from, ty, &target, &blocked) => {
                                 // Dropped back where it was: nothing changes.
                                 if detached.as_ref().is_some_and(|l| l.to == target.node && l.to_socket == target.key) {
                                     return Some(canvas::Action::request_redraw());
@@ -623,8 +634,9 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
             frame.stroke(&path, Stroke::default().with_width(width).with_color(color));
         }
 
+        // A link being dragged: which nodes it cannot end at, found once for every socket drawn.
         let linking = match &state.interaction {
-            Interaction::Linking { from, ty, .. } => Some((from.clone(), *ty)),
+            Interaction::Linking { from, ty, .. } => Some((from.clone(), *ty, self.blocked(from))),
             _ => None,
         };
         let mut geometries = vec![frame.into_geometry()];
@@ -642,9 +654,9 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
         let mut frame = Frame::new(renderer, bounds.size());
 
         // The link being dragged.
-        if let Interaction::Linking { from, ty, anchor, current, .. } = &state.interaction {
+        if let (Interaction::Linking { from, ty, anchor, current, .. }, Some((.., blocked))) = (&state.interaction, &linking) {
             let (a, b) = if from.output { (*anchor, *current) } else { (*current, *anchor) };
-            let target_ok = self.socket_at(&layouts, *current).is_some_and(|h| self.can_link(from, *ty, &h));
+            let target_ok = self.socket_at(&layouts, *current).is_some_and(|h| self.can_link(from, *ty, &h, blocked));
             let color = if target_ok { Color::WHITE } else { style::type_color(*ty) };
             let p = layout::bezier(a, b, z);
             let path = Path::new(|builder| {
@@ -852,7 +864,14 @@ impl GraphCanvas<'_> {
             frame.stroke(&path, Stroke::default().with_width(1.6).with_color(grip));
         }
     }
-    fn draw_node(&self, frame: &mut Frame, node: &Node, l: &NodeLayout, linking: Option<&(SocketRef, DataType)>, detached: Option<&Link>) {
+    fn draw_node(
+        &self,
+        frame: &mut Frame,
+        node: &Node,
+        l: &NodeLayout,
+        linking: Option<&(SocketRef, DataType, HashSet<NodeId>)>,
+        detached: Option<&Link>,
+    ) {
         let app = self.app;
         let graph = app.graph();
         let input_linked = |key: &str| graph.link_into(node.id, key).is_some_and(|link| Some(link) != detached);
@@ -1044,10 +1063,10 @@ impl GraphCanvas<'_> {
                     })
                 };
                 let mut radius = r;
-                if let Some((from, ty)) = linking {
+                if let Some((from, ty, blocked)) = linking {
                     let hit = Hit { node: node.id, key: s.key.clone(), output, ty: s.ty, pos: *p };
                     let is_origin = from.node == node.id && from.key == s.key && from.output == output;
-                    if self.can_link(from, *ty, &hit) {
+                    if self.can_link(from, *ty, &hit, blocked) {
                         radius = r * 1.35;
                     } else if !is_origin {
                         color = style::alpha(color, 0.3);
