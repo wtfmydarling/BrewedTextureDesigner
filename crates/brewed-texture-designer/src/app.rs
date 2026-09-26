@@ -612,6 +612,15 @@ pub struct Collected {
     pub failed: Vec<String>,
 }
 
+/// Where a dialog was asked for: the package open as `key`, and its graph being edited. A
+/// dialog does not keep the window from being used: what it answers is taken there (see
+/// [`Message::Asked`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Asked {
+    pub key: u64,
+    pub graph: GraphId,
+}
+
 #[derive(Clone, Debug)]
 pub enum Message {
     PollGpu,
@@ -653,6 +662,9 @@ pub enum Message {
     Autosaved(Vec<autosave::Written>),
     /// What becomes of what programs that stopped kept.
     Recover(autosave::Recovery),
+    /// What a dialog answered (the message), for where it was asked: the package and graph
+    /// are edited again first and the answer is taken there; closed meanwhile, it goes.
+    Asked(Asked, Box<Message>),
     // selection & clipboard
     Graph(GraphMessage),
     SelectNode(NodeId),
@@ -1506,6 +1518,7 @@ impl App {
     }
 
     fn pick_save_path(&self) -> Task<Message> {
+        let here = self.here();
         let hint = self.doc.path();
         let name = hint.and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
         let name = name.unwrap_or_else(|| format!("untitled.{}", project::FILE_EXTENSION));
@@ -1521,8 +1534,37 @@ impl App {
                 }
                 dialog.save_file()
             }),
-            |p| Message::SavePicked(p.flatten()),
+            move |p| Message::Asked(here, Box::new(Message::SavePicked(p.flatten()))),
         )
+    }
+
+    /// Where a dialog asked for now is asked for (see [`Asked`]).
+    pub fn here(&self) -> Asked {
+        Asked { key: self.doc_key, graph: self.doc.current() }
+    }
+
+    /// What a dialog answered, for where it was asked (see [`Asked`]): the package and graph
+    /// it was asked for are edited again, and the answer is taken there, not in whatever is
+    /// edited when it comes. Closed meanwhile, the answer goes (and what was to follow a save);
+    /// a dialog given up changes nothing.
+    fn answered(&mut self, asked: Asked, answer: Message) -> Task<Message> {
+        let given = matches!(
+            answer,
+            Message::SavePicked(Some(_))
+                | Message::ExportFolderPicked(Some(_))
+                | Message::ExportNodePicked(_, Some(_))
+                | Message::FilePicked(_, Some(_))
+        );
+        if given {
+            let there = self.package_doc(asked.key).is_some_and(|d| d.package().graph(asked.graph).is_some());
+            if !there {
+                self.ui.after_save = None;
+                self.set_status("What the dialog was for is not open any more: nothing was done", true);
+                return Task::none();
+            }
+            self.activate(asked.key, Some(asked.graph));
+        }
+        self.handle(answer)
     }
 
     /// Close the dialog that is open, as its Cancel does (Escape too): a quit asked about is
@@ -1845,9 +1887,10 @@ impl App {
                 if self.graph().nodes_of(NodeKind::OUTPUT).next().is_none() {
                     self.set_status("The graph has no Output nodes to export", true);
                 } else {
+                    let here = self.here();
                     return Task::perform(
                         blocking(|| rfd::FileDialog::new().set_title("Export outputs to folder").pick_folder()),
-                        |p| Message::ExportFolderPicked(p.flatten()),
+                        move |p| Message::Asked(here, Box::new(Message::ExportFolderPicked(p.flatten()))),
                     );
                 }
             }
@@ -1867,6 +1910,7 @@ impl App {
                     brewed_texture_engine::export::extension(depth)
                 );
                 let ext = brewed_texture_engine::export::extension(depth);
+                let here = self.here();
                 return Task::perform(
                     blocking(move || {
                         rfd::FileDialog::new()
@@ -1875,7 +1919,7 @@ impl App {
                             .set_file_name(name)
                             .save_file()
                     }),
-                    move |p| Message::ExportNodePicked(id, p.flatten()),
+                    move |p| Message::Asked(here, Box::new(Message::ExportNodePicked(id, p.flatten()))),
                 );
             }
             Message::ExportNodePicked(id, Some(path)) => {
@@ -1903,6 +1947,7 @@ impl App {
                 }
                 self.ui.dialog = Some(d);
             }
+            Message::Asked(asked, answer) => return self.answered(asked, *answer),
             Message::Autosave => return self.autosave(),
             Message::Autosaved(done) => self.autosaved(done),
             Message::Recover(choice) => self.recovery(choice),
@@ -2083,6 +2128,7 @@ impl App {
             }
             Message::BrowseFile(target) => {
                 let extensions = self.takes(&target);
+                let here = self.here();
                 return Task::perform(
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new().set_title("Choose a file");
@@ -2091,7 +2137,7 @@ impl App {
                         }
                         dialog.pick_file()
                     }),
-                    move |p| Message::FilePicked(target.clone(), p.flatten()),
+                    move |p| Message::Asked(here, Box::new(Message::FilePicked(target.clone(), p.flatten()))),
                 );
             }
             Message::FilePicked(target, Some(path)) => return self.set_file(target, Some(path.display().to_string())),

@@ -2690,3 +2690,36 @@ fn a_save_that_fails_leaves_no_quit_behind() {
     assert_eq!(app.ui.dialog, None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A dialog does not keep the window from being used: what it answers is taken for the package
+/// and the graph it was asked for, not the one edited when it answers; given up, it changes
+/// nothing; for a package closed meanwhile, nothing is done.
+#[test]
+fn answers_of_dialogs_go_where_they_were_asked() {
+    let dir = scratch("answers");
+    let (mut app, _) = App::boot(StartupOptions::default());
+    // Asked to save the demo, changed…
+    let _ = app.update(Message::Edit(Edit::SetResolution([512, 512])));
+    let demo = app.here();
+    // …another package edited meanwhile.
+    let _ = app.update(Message::New);
+    let _ = app.update(Message::Edit(Edit::SetResolution([256, 256])));
+    let other = app.here();
+    assert_ne!(demo.key, other.key);
+    let _ = app.update(Message::Asked(demo, Box::new(Message::SavePicked(Some(dir.join("wall.brewtex"))))));
+    assert_eq!(app.here(), demo, "the demo is edited again");
+    assert!(!app.package_doc(demo.key).unwrap().is_dirty(), "and saved");
+    let unsaved = app.package_doc(other.key).unwrap();
+    assert!(unsaved.is_dirty() && unsaved.path().is_none(), "not the other");
+    // Given up, nothing changes.
+    let _ = app.update(Message::Explorer(ExplorerMessage::OpenGraph(other.key, other.graph)));
+    let _ = app.update(Message::Asked(demo, Box::new(Message::SavePicked(None))));
+    assert_eq!(app.here(), other);
+    // Closed meanwhile, nothing is done.
+    let _ = app.update(Message::Explorer(ExplorerMessage::Close(other.key)));
+    let _ = app.update(Message::Proceed(PendingAction::Close(other.key)));
+    assert!(app.package_doc(other.key).is_none());
+    let _ = app.update(Message::Asked(other, Box::new(Message::SavePicked(Some(dir.join("gone.brewtex"))))));
+    assert!(!dir.join("gone.brewtex").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
