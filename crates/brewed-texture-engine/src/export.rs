@@ -95,9 +95,12 @@ pub fn write_image(
 
 /// Encode an image as it is stored (an output read back), converted a band of rows at a
 /// time: an export takes the memory of its image as the GPU has it and of its file's
-/// samples, and no more (not the image as RGBA floats).
+/// samples, and no more (not the image as RGBA floats). The file is replaced whole (see
+/// `brewed_texture_core::files::replace`): what the export stops at leaves the one before, and
+/// an engine that watches the folder never imports half a texture.
 pub fn write_stored(path: &Path, image: &StoredImage, format: u32, bit_depth: u32) -> Result<(), String> {
-    write_in_bands(path, image, format, bit_depth, (simd::BAND / image.width.max(1)).max(1))
+    let rows = (simd::BAND / image.width.max(1)).max(1);
+    brewed_texture_core::files::replace(path, |beside| write_in_bands(beside, image, format, bit_depth, rows))
 }
 
 /// The samples of a file: the channels it keeps of the pixels, as `quantize` makes them,
@@ -123,7 +126,7 @@ fn samples<T: Copy + Default + Send + Sync>(
 fn write_in_bands(path: &Path, image: &StoredImage, format: u32, bit_depth: u32, rows: u32) -> Result<(), String> {
     let (width, height) = (image.width, image.height);
     let channels = file_channels(format);
-    let err = |e: image::ImageError| format!("Cannot write '{}': {e}", path.display());
+    let err = |e: image::ImageError| e.to_string();
     let size_err = || "image buffer size mismatch".to_string();
     match bit_depth {
         DEPTH_DXT1..=DEPTH_DXT5 => write_dds(path, image, bit_depth, rows),
@@ -148,7 +151,7 @@ fn write_in_bands(path: &Path, image: &StoredImage, format: u32, bit_depth: u32,
                     (data[i], data[i + 1], data[i + 2])
                 })
             };
-            written.map_err(|e| format!("Cannot write '{}': {e}", path.display()))
+            written.map_err(|e| e.to_string())
         }
         DEPTH_32F => {
             // OpenEXR stores RGB or RGBA; single channels are replicated to gray.
@@ -168,9 +171,9 @@ fn write_in_bands(path: &Path, image: &StoredImage, format: u32, bit_depth: u32,
         DEPTH_16 => {
             let data = samples(image, channels, rows, simd::quantize_u16);
             match channels.len() {
-                4 => image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(width, height, data).map(|b| b.save(path)),
-                3 => image::ImageBuffer::<image::Rgb<u16>, _>::from_raw(width, height, data).map(|b| b.save(path)),
-                _ => image::ImageBuffer::<image::Luma<u16>, _>::from_raw(width, height, data).map(|b| b.save(path)),
+                4 => image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
+                3 => image::ImageBuffer::<image::Rgb<u16>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
+                _ => image::ImageBuffer::<image::Luma<u16>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
             }
             .ok_or_else(size_err)?
             .map_err(err)
@@ -178,9 +181,9 @@ fn write_in_bands(path: &Path, image: &StoredImage, format: u32, bit_depth: u32,
         _ => {
             let data = samples(image, channels, rows, simd::quantize_u8);
             match channels.len() {
-                4 => image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, data).map(|b| b.save(path)),
-                3 => image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(width, height, data).map(|b| b.save(path)),
-                _ => image::ImageBuffer::<image::Luma<u8>, _>::from_raw(width, height, data).map(|b| b.save(path)),
+                4 => image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
+                3 => image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
+                _ => image::ImageBuffer::<image::Luma<u8>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
             }
             .ok_or_else(size_err)?
             .map_err(err)
@@ -224,7 +227,7 @@ fn write_dds(path: &Path, image: &StoredImage, depth: u32, rows: u32) -> Result<
         format.compress(pixels, *w, *h, texpresso::Params::default(), &mut blocks);
         file.extend_from_slice(&blocks);
     }
-    std::fs::write(path, file).map_err(|e| format!("Cannot write '{}': {e}", path.display()))
+    std::fs::write(path, file).map_err(|e| e.to_string())
 }
 
 /// The next mip level of RGBA pixels of 8 bits, `w` × `h`: half as wide and as high (a pixel at

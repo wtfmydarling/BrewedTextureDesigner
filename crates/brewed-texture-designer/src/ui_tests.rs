@@ -2451,3 +2451,106 @@ fn undo_back_to_another_graph_keeps_their_views() {
     assert_eq!(w.app.doc.current(), other);
     assert_eq!(w.app.ui.graph_view.pan, iced::Vector::new(300.0, -70.0), "the other graph's view");
 }
+
+/// Unsaved work is kept as it changes, and what a program that stopped without quitting kept (a
+/// crash: its session's lock goes with it) is offered the next time the program starts:
+/// recovered, each package opens with the changes it had, not saved yet, where it was saved.
+/// What a running program keeps is not offered to another; Later offers it again, Discard
+/// takes it away; a package saved loses its snapshot, and quitting leaves nothing.
+#[test]
+fn unsaved_work_is_recovered_after_a_crash() {
+    use crate::app::autosave::Recovery;
+    let dir = scratch("recovery");
+    let root = dir.join("Recovery");
+    let opts = StartupOptions { recovery: Some(root.clone()), ..StartupOptions::default() };
+    let walls = dir.join("walls.brewtex");
+    let add = |app: &mut App, kind: NodeKind| {
+        let _ = app.update(Message::Edit(Edit::AddNode { kind, pos: [0.0, 0.0] }));
+        let _ = app.update(Message::Seal);
+    };
+
+    // A package saved, then changed (a file put in it, a node added); another never saved.
+    let (mut first, _) = App::boot(opts.clone());
+    assert_eq!(first.ui.dialog, None, "nothing to recover the first time");
+    let _ = first.update(Message::SavePicked(Some(walls.clone())));
+    let bricks = std::sync::Arc::new(b"the bytes of bricks.png".to_vec());
+    let files = vec![("C:/textures/bricks.png".to_string(), bricks.clone())];
+    let _ = first.update(Message::Explorer(ExplorerMessage::FilesRead { key: first.doc_key, embed: false, files, failed: vec![] }));
+    add(&mut first, NodeKind::BLUR);
+    let changed = first.graph().nodes.len();
+    let _ = first.update(Message::New);
+    add(&mut first, NodeKind::NOISE);
+    first.autosave_now();
+    // Another program, started meanwhile, is offered nothing: the first runs.
+    let (second, _) = App::boot(opts.clone());
+    assert_eq!(second.ui.dialog, None);
+    drop(second);
+
+    // The first stops without quitting.
+    drop(first);
+    let (mut third, _) = App::boot(opts.clone());
+    assert_eq!(third.ui.dialog, Some(Dialog::Recover));
+    let mut titles: Vec<String> = third.recoverable().map(|s| s.unsaved.title.clone()).collect();
+    titles.sort();
+    assert_eq!(titles, ["Graph", "walls.brewtex"]);
+    let _ = third.update(Message::Recover(Recovery::Later));
+    assert_eq!(third.ui.dialog, None);
+    drop(third);
+
+    // Offered again, and recovered.
+    let (mut fourth, _) = App::boot(opts.clone());
+    assert_eq!(fourth.ui.dialog, Some(Dialog::Recover));
+    let _ = fourth.update(Message::Recover(Recovery::Recover));
+    assert_eq!(fourth.ui.dialog, None);
+    let packages = fourth.packages();
+    assert_eq!(packages.len(), 2, "in place of the untouched demo");
+    let (walls_key, recovered) = packages.iter().find(|(_, d)| d.path() == Some(&walls)).copied().expect("where it was saved");
+    assert!(recovered.is_dirty(), "its changes are not saved yet");
+    assert_eq!(recovered.graph().nodes.len(), changed, "with the node added after it was saved");
+    let held = recovered.package().resources.iter().find(|r| r.name() == "bricks.png").and_then(|r| r.data.clone());
+    assert_eq!(held.as_deref(), Some(&*bricks), "and the file put in it");
+    // Which is kept apart, once, not in the snapshot.
+    let kept: Vec<std::path::PathBuf> = std::fs::read_dir(&root)
+        .unwrap()
+        .flatten()
+        .flat_map(|session| std::fs::read_dir(session.path()).into_iter().flatten().flatten())
+        .map(|f| f.path())
+        .collect();
+    assert_eq!(kept.iter().filter(|f| f.extension().is_some_and(|e| e == "held")).count(), 1);
+    for snapshot in kept.iter().filter(|f| f.extension().is_some_and(|e| e == "brewtex")) {
+        assert!(!std::fs::read_to_string(snapshot).unwrap().contains("\"data\""), "{}", snapshot.display());
+    }
+    let (_, untitled) = packages.iter().find(|(_, d)| d.path().is_none()).copied().expect("the one never saved");
+    assert!(untitled.is_dirty() && untitled.graph().nodes_of(NodeKind::NOISE).count() == 1);
+    drop(packages);
+    // What it keeps now is its own: another program is offered nothing.
+    let (fifth, _) = App::boot(opts.clone());
+    assert_eq!(fifth.ui.dialog, None);
+    drop(fifth);
+
+    // Saved, a package has nothing to recover; quitting, nothing is left.
+    let graph = fourth.package_doc(walls_key).unwrap().current();
+    let _ = fourth.update(Message::Explorer(ExplorerMessage::OpenGraph(walls_key, graph)));
+    let _ = fourth.update(Message::Save);
+    assert!(!fourth.doc.is_dirty());
+    let _ = fourth.update(Message::Quit);
+    assert_eq!(fourth.ui.dialog, Some(Dialog::Unsaved(PendingAction::Quit)), "the untitled one asks");
+    let _ = fourth.update(Message::Proceed(PendingAction::Quit));
+    assert!(brewed_texture_core::recovery::orphans(&root, None).is_empty());
+    assert_eq!(std::fs::read_dir(&root).map(|d| d.count()).unwrap_or(0), 0, "no session left");
+    drop(fourth);
+
+    // Discarded, it is not offered again.
+    let (mut sixth, _) = App::boot(opts.clone());
+    add(&mut sixth, NodeKind::BLUR);
+    sixth.autosave_now();
+    drop(sixth);
+    let (mut seventh, _) = App::boot(opts.clone());
+    assert_eq!(seventh.ui.dialog, Some(Dialog::Recover));
+    let _ = seventh.update(Message::Recover(Recovery::Discard));
+    drop(seventh);
+    let (eighth, _) = App::boot(opts);
+    assert_eq!(eighth.ui.dialog, None);
+    drop(eighth);
+    let _ = std::fs::remove_dir_all(&dir);
+}

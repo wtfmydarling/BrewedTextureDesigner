@@ -41,6 +41,19 @@ impl ViewState {
     }
 }
 
+/// What a snapshot of a package with unsaved changes says of the package (see
+/// [`crate::recovery`] and [`snapshot_json`]).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Unsaved {
+    /// The file the package is saved as, if it is.
+    pub path: Option<String>,
+    /// What it is called where it is listed: its file's name, or its first graph's.
+    pub title: String,
+    /// When the snapshot was made, in seconds since 1970.
+    pub time: u64,
+}
+
 #[derive(Serialize, Deserialize)]
 struct FileGraph {
     id: GraphId,
@@ -75,12 +88,17 @@ struct ProjectFile {
     graph: Option<Graph>,
     #[serde(default)]
     view: ViewState,
+    /// A snapshot of unsaved changes: what it says of its package.
+    #[serde(default)]
+    unsaved: Option<Unsaved>,
 }
 
 #[derive(Serialize)]
 struct ProjectOut<'a> {
     format: &'a str,
     version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unsaved: Option<&'a Unsaved>,
     graphs: Vec<FileGraphOut<'a>>,
     #[serde(skip_serializing_if = "<[Resource]>::is_empty")]
     resources: &'a [Resource],
@@ -96,6 +114,8 @@ pub struct Loaded {
     /// The graph that was being edited.
     pub open: GraphId,
     pub notes: Vec<String>,
+    /// What a snapshot of unsaved changes says of its package (see [`snapshot_json`]).
+    pub unsaved: Option<Unsaved>,
 }
 
 impl Loaded {
@@ -107,9 +127,33 @@ impl Loaded {
 
 /// The file of `package`, which is (or will be) in `dir`: paths relative to `dir`.
 pub fn to_json(package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId, dir: Option<&Path>) -> Result<String, String> {
+    written(package, views, open, dir, None)
+}
+
+/// A snapshot of `package`, which has unsaved changes (see [`crate::recovery`]): its file, its
+/// paths as they are (the snapshot is elsewhere), and what `unsaved` says of it. Read as any
+/// file of a package is; [`Loaded::unsaved`] is what it says.
+pub fn snapshot_json(package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId, unsaved: &Unsaved) -> Result<String, String> {
+    written(package, views, open, None, Some(unsaved))
+}
+
+fn written(
+    package: &Package,
+    views: &HashMap<GraphId, ViewState>,
+    open: GraphId,
+    dir: Option<&Path>,
+    unsaved: Option<&Unsaved>,
+) -> Result<String, String> {
     let mut package = package.clone();
     if let Some(dir) = dir {
         package.map_paths(|p| relative_path(p, dir));
+    }
+    // A snapshot holds the files its package holds apart (see [`crate::recovery`]): they never
+    // change, and they are written once.
+    if unsaved.is_some() {
+        for resource in &mut package.resources {
+            resource.data = None;
+        }
     }
     let graphs = package
         .graphs
@@ -119,6 +163,7 @@ pub fn to_json(package: &Package, views: &HashMap<GraphId, ViewState>, open: Gra
     let file = ProjectOut {
         format: FORMAT,
         version: VERSION,
+        unsaved,
         graphs,
         resources: &package.resources,
         open,
@@ -127,15 +172,11 @@ pub fn to_json(package: &Package, views: &HashMap<GraphId, ViewState>, open: Gra
     serde_json::to_string_pretty(&file).map_err(|e| e.to_string())
 }
 
+/// Save `package` as the file at `path`: whatever stops the program, the system or the power
+/// meanwhile, the file is the one before or this one, whole (see [`crate::files::replace`]).
 pub fn save(path: &Path, package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId) -> Result<(), String> {
     let json = to_json(package, views, open, path.parent())?;
-    // Write next to the target and rename, so a crash never leaves half a file.
-    let tmp = path.with_extension("tmp-save");
-    std::fs::write(&tmp, json).map_err(|e| format!("Cannot write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("Cannot write {}: {e}", path.display())
-    })
+    crate::files::write_whole(path, json.as_bytes())
 }
 
 pub fn load(path: &Path) -> Result<Loaded, String> {
@@ -209,7 +250,7 @@ pub fn from_json(text: &str, dir: Option<&Path>, name: &str) -> Result<Loaded, S
         view.preview = view.preview.filter(|n| graph.contains(*n));
     }
     let open = file.open.filter(|id| package.graph(*id).is_some()).unwrap_or_else(|| package.first());
-    Ok(Loaded { package, views, open, notes })
+    Ok(Loaded { package, views, open, notes, unsaved: file.unsaved })
 }
 
 #[cfg(test)]

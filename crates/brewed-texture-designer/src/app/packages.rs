@@ -143,7 +143,7 @@ impl App {
     }
 
     /// The package open in the Explorer that is the file at `path`.
-    fn open_key(&self, path: &str) -> Option<u64> {
+    pub(super) fn open_key(&self, path: &str) -> Option<u64> {
         self.packages().into_iter().find(|(_, d)| d.key().as_deref() == Some(path)).map(|(k, _)| k)
     }
 
@@ -235,7 +235,7 @@ impl App {
 
     /// Add `package` to the Explorer and edit it. A package that is untitled and untouched
     /// (the one the program opens with, a new one) makes room for it.
-    fn add_package(
+    pub(super) fn add_package(
         &mut self,
         package: Package,
         path: Option<PathBuf>,
@@ -352,6 +352,8 @@ impl App {
         });
         // A package still used by the others is read from its file again.
         self.load_dependencies();
+        // Its unsaved changes are gone: nothing of it is recovered.
+        self.forget_saved();
     }
 
     /// The packages with unsaved changes, in the Explorer's order.
@@ -361,9 +363,16 @@ impl App {
 
     /// Where the view of each graph of the package being edited is, to save with it.
     pub(super) fn views_to_save(&self) -> HashMap<GraphId, ViewState> {
+        self.views_of(self.doc_key)
+    }
+
+    /// Where the view of each graph of the package open as `key` is.
+    pub(super) fn views_of(&self, key: u64) -> HashMap<GraphId, ViewState> {
         let mut views: HashMap<GraphId, ViewState> =
-            self.views.iter().filter(|((key, _), _)| *key == self.doc_key).map(|((_, g), v)| (*g, v.clone())).collect();
-        views.insert(self.doc.current(), self.view_state());
+            self.views.iter().filter(|((k, _), _)| *k == key).map(|((_, g), v)| (*g, v.clone())).collect();
+        if key == self.doc_key {
+            views.insert(self.doc.current(), self.view_state());
+        }
         views
     }
 

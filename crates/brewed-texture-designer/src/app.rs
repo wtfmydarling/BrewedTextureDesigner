@@ -6,6 +6,7 @@
 //! is laid out in it (see [`packages`]), and it is sent to the engine thread, which answers
 //! with images, thumbnails and reports as [`Event`]s.
 
+pub(crate) mod autosave;
 #[cfg(any(test, feature = "dev-tools"))]
 pub(crate) mod dev;
 pub(crate) mod packages;
@@ -43,6 +44,9 @@ pub struct StartupOptions {
     /// How the window was laid out last time: kept, and saved again on quitting. `None`
     /// starts from the defaults and saves nothing.
     pub workspace: Option<Workspace>,
+    /// Where unsaved work is kept to be recovered after a crash (see [`autosave`]), and what
+    /// programs that stopped kept is found. `None` keeps nothing.
+    pub recovery: Option<PathBuf>,
     /// What the tools for developing the program are asked for (see [`dev`]).
     #[cfg(any(test, feature = "dev-tools"))]
     pub dev: dev::DevOptions,
@@ -206,6 +210,8 @@ pub enum PendingAction {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dialog {
     Unsaved(PendingAction),
+    /// What programs that stopped without quitting kept (see [`autosave`]).
+    Recover,
     About,
     Shortcuts,
     /// Files a package names that are not there (see [`MissingFiles`]).
@@ -419,6 +425,8 @@ pub struct App {
     unreadable: HashSet<String>,
     /// Where the view of each graph was when another was edited, by package key and graph.
     views: HashMap<(u64, GraphId), ViewState>,
+    /// Unsaved work kept for recovery after a crash (see [`autosave`]).
+    autosave: autosave::Autosave,
     pub eval: Arc<Evaluation>,
     /// What the engine computes: the graph being edited with the graphs it uses laid out in
     /// it, and its evaluation.
@@ -639,6 +647,12 @@ pub enum Message {
     /// Save, then continue with the action (unsaved changes dialog).
     SaveThen(PendingAction),
     Dialog(Option<Dialog>),
+    /// Keep the unsaved work for recovery (see [`autosave`]).
+    Autosave,
+    /// Snapshots were written, or could not be (see [`autosave::Written`]).
+    Autosaved(Vec<autosave::Written>),
+    /// What becomes of what programs that stopped kept.
+    Recover(autosave::Recovery),
     // selection & clipboard
     Graph(GraphMessage),
     SelectNode(NodeId),
@@ -811,6 +825,7 @@ impl App {
             deps: HashMap::new(),
             unreadable: HashSet::new(),
             views: HashMap::new(),
+            autosave: autosave::Autosave::default(),
             eval,
             flat: (Arc::new(Graph::default()), Arc::new(Evaluation::default())),
             owners: Arc::new(HashMap::new()),
@@ -885,6 +900,9 @@ impl App {
         };
         if let Some(path) = opts.open.clone() {
             app.open_path(path);
+        }
+        if let Some(root) = &opts.recovery {
+            app.start_autosave(root);
         }
         #[cfg(any(test, feature = "dev-tools"))]
         app.select_at_start();
@@ -983,6 +1001,10 @@ impl App {
         }
         if self.ui.status.is_some() {
             subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
+        }
+        // Unsaved work, kept for recovery.
+        if self.autosave.session.is_some() {
+            subs.push(iced::time::every(autosave::EVERY).map(|_| Message::Autosave));
         }
         // The files the packages use, on disk: they can come, go or change.
         if !self.res.looked.is_empty() {
@@ -1470,6 +1492,7 @@ impl App {
                 self.set_status(format!("Saved {}", path.display()), false);
                 self.saved_as(&path);
                 self.doc.mark_saved(path);
+                self.forget_saved();
                 true
             }
             Err(e) => {
@@ -1572,8 +1595,10 @@ impl App {
         }
     }
 
-    /// Hide the window first: a window whose pixels go before it does flashes white.
-    fn hide_and_exit(&self) -> Task<Message> {
+    /// Hide the window first: a window whose pixels go before it does flashes white. Nothing
+    /// is left to recover: what was not saved, the user chose not to save.
+    fn hide_and_exit(&mut self) -> Task<Message> {
+        self.end_autosave();
         match self.window {
             Some(id) => window::set_mode(id, window::Mode::Hidden).chain(iced::exit()),
             None => iced::exit(),
@@ -1856,8 +1881,15 @@ impl App {
                 if d.is_none() {
                     self.ui.discarded.clear();
                 }
+                // What was found is offered again next time.
+                if self.ui.dialog == Some(Dialog::Recover) && d != Some(Dialog::Recover) {
+                    self.recovery(autosave::Recovery::Later);
+                }
                 self.ui.dialog = d;
             }
+            Message::Autosave => return self.autosave(),
+            Message::Autosaved(done) => self.autosaved(done),
+            Message::Recover(choice) => self.recovery(choice),
             Message::Explorer(msg) => return self.explorer_message(msg),
             Message::OpenReference(node) => {
                 self.close_popups();

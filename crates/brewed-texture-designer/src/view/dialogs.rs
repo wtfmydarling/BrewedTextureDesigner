@@ -1,9 +1,11 @@
-//! Modal dialogs: unsaved changes, files a package cannot find, keyboard shortcuts, about.
+//! Modal dialogs: unsaved changes, work kept by a program that stopped, files a package cannot
+//! find, keyboard shortcuts, about.
 
 use iced::widget::{button, center, column, container, mouse_area, opaque, row, scrollable, space, text};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::package::{MissingKind, file_name};
 
+use crate::app::autosave::Recovery;
 use crate::app::{App, Dialog, ExplorerMessage, Message, MissingFiles, PendingAction};
 use crate::icons::{Icon, icon};
 use crate::style;
@@ -96,6 +98,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             modal(dialog_box(body, 440.0), None)
         }
         Dialog::Missing(missing) => missing_files(app, missing),
+        Dialog::Recover => recover(app),
         Dialog::Shortcuts => {
             let mut table = column![].spacing(4);
             for (keys, what) in SHORTCUTS {
@@ -133,7 +136,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             .align_y(Alignment::Center);
             let body = column![
                 title,
-                text("A node based procedural texture editor. Every image node runs as a compute shader on the GPU; \
+                text("A node based procedural texture editor. Every image node runs as a shader on the GPU; \
                       CPU side pixel work (export, histograms, file decoding) uses SIMD on all cores.")
                 .size(style::TEXT_SIZE),
                 text(format!("GPU: {gpu}")).size(style::TEXT_SIZE),
@@ -149,6 +152,75 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             modal(dialog_box(body, 440.0), Some(Message::Dialog(None)))
         }
     }
+}
+
+/// How long `seconds` is, in words: "3 minutes".
+fn span(seconds: u64) -> String {
+    let (n, unit) = match seconds {
+        0..120 => return "a minute or less".into(),
+        120..7200 => (seconds / 60, "minutes"),
+        7200..172_800 => (seconds / 3600, "hours"),
+        _ => (seconds / 86_400, "days"),
+    };
+    format!("{n} {unit}")
+}
+
+/// What programs that stopped without quitting kept: each package, where it was saved and
+/// when it was kept, to be recovered, kept for later or discarded.
+fn recover(app: &App) -> Element<'_, Message> {
+    let now = brewed_texture_core::recovery::now();
+    let mut list = column![].spacing(10);
+    for snapshot in app.recoverable() {
+        let unsaved = &snapshot.unsaved;
+        let place = unsaved.path.clone().unwrap_or_else(|| "Never saved".into());
+        let mut when = format!("Kept {} ago", span(now.saturating_sub(unsaved.time)));
+        if let Some(saved) = snapshot.saved.filter(|s| *s > unsaved.time) {
+            when.push_str(&format!("; its file was saved {} after that", span(saved - unsaved.time)));
+        }
+        list = list.push(
+            row![
+                icon(Icon::Package, 16.0, style::TEXT_DIM),
+                column![
+                    text(&unsaved.title).size(style::TEXT_SIZE).font(style::bold()),
+                    text(place).size(style::SMALL).color(style::TEXT_FAINT),
+                    text(when).size(style::SMALL).color(style::TEXT_DIM),
+                ]
+                .spacing(2)
+                .width(Length::Fill),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        );
+    }
+    let button_of = |label: &'static str, style: fn(&iced::Theme, button::Status) -> button::Style, choice: Recovery| {
+        button(text(label).size(style::TEXT_SIZE)).padding([6, 14]).style(style).on_press(Message::Recover(choice))
+    };
+    let body = column![
+        text("Recover unsaved work?").size(18).font(style::bold()),
+        text(format!(
+            "{} stopped without quitting last time. What these packages had not saved yet was kept:",
+            brewed_texture_core::APP_NAME
+        ))
+        .size(style::TEXT_SIZE)
+        .color(style::TEXT_DIM),
+        scrollable(list).height(Length::Shrink).style(style::scrollable),
+        text(
+            "Recovered, each opens with the changes it had, not saved yet: saving saves it where it was. \
+             Later, they are offered again the next time the program starts."
+        )
+        .size(style::SMALL)
+        .color(style::TEXT_FAINT),
+        row![
+            button_of("Discard", style::button, Recovery::Discard),
+            space().width(Length::Fill),
+            button_of("Later", style::flat_button, Recovery::Later),
+            button_of("Recover", style::primary_button, Recovery::Recover),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(12);
+    modal(dialog_box(body, 560.0), None)
 }
 
 /// The files a package names that are not there, each with a button to say where it is now.

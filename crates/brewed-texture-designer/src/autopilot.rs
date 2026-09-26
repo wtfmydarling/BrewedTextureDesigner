@@ -120,9 +120,15 @@ fn mb(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
 }
 
+/// The folder of the flight of `seed`: its log, the files it reads and writes, and the unsaved
+/// work kept for recovery as it flies (in `recovery`).
+pub fn folder(seed: u64) -> PathBuf {
+    std::env::temp_dir().join(format!("brewed-autopilot-{seed}"))
+}
+
 impl Autopilot {
     pub fn new(flight: Flight) -> Result<Autopilot, String> {
-        let folder = std::env::temp_dir().join(format!("brewed-autopilot-{}", flight.seed));
+        let folder = folder(flight.seed);
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
         let file = std::fs::File::create(folder.join("autopilot.log")).map_err(|e| e.to_string())?;

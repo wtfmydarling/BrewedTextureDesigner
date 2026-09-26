@@ -19,6 +19,13 @@ pub fn is_embedded(path: &str) -> bool {
     path.starts_with(PREFIX)
 }
 
+/// The hash of the bytes the embedded file `path` names (see the module): the same for the
+/// same bytes, whatever name they came with.
+pub fn embedded_hash(path: &str) -> Option<&str> {
+    let (hash, _) = path.strip_prefix(PREFIX)?.split_once('/')?;
+    (hash.len() == 16 && hash.bytes().all(|c| c.is_ascii_hexdigit())).then_some(hash)
+}
+
 /// The name of the embedded file that holds `bytes` and came as `name` (a path, of which the
 /// file name is kept).
 pub fn embedded_path(name: &str, bytes: &[u8]) -> String {
@@ -96,6 +103,47 @@ pub fn is_there(path: &str) -> bool {
     if is_embedded(path) { embedded(path).is_some() } else { Path::new(path).is_file() }
 }
 
+/// Write the file at `path` as `write` writes a file (at the path it is given), so that
+/// whenever the program, the system or the power stops, the file is as it was or as it is now,
+/// whole: it is written beside it, forced to the disk, and put in its place in one step (and
+/// where the system needs it, the folder's new entry is forced to the disk too). What watches
+/// the folder (a game engine importing textures) sees the new file whole or not at all. A file
+/// held open elsewhere for a moment (an indexer, a virus scanner, a synced folder) is waited
+/// for, a second at most.
+pub fn replace<E: std::fmt::Display>(path: &Path, write: impl FnOnce(&Path) -> Result<(), E>) -> Result<(), String> {
+    let name = path.file_name().ok_or_else(|| format!("'{}' names no file", path.display()))?;
+    let beside = path.with_file_name(format!(".{}.{}.tmp", name.to_string_lossy(), std::process::id()));
+    let failed = |e: String| {
+        let _ = std::fs::remove_file(&beside);
+        format!("Cannot write '{}': {e}", path.display())
+    };
+    write(&beside).map_err(|e| failed(e.to_string()))?;
+    std::fs::OpenOptions::new().write(true).open(&beside).and_then(|file| file.sync_all()).map_err(|e| failed(e.to_string()))?;
+    let mut waited = 0;
+    while let Err(e) = std::fs::rename(&beside, path) {
+        // (Windows replaces no file that is open elsewhere, unless it was opened to let it.)
+        let held = matches!(e.kind(), std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ResourceBusy);
+        if !held || waited == 20 {
+            return Err(failed(e.to_string()));
+        }
+        waited += 1;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+        if let Ok(dir) = std::fs::File::open(dir) {
+            let _ = dir.sync_all();
+        }
+    }
+    Ok(())
+}
+
+/// [`replace`] the file at `path` with `bytes`.
+pub fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    replace(path, |beside| std::fs::write(beside, bytes))
+}
+
 /// Bytes as a package file writes them: base64.
 pub(crate) mod base64_bytes {
     use std::sync::Arc;
@@ -134,6 +182,50 @@ mod tests {
         assert_eq!(read(&a).unwrap().as_slice(), b"bricks");
         assert!(is_there(&a));
         assert!(!is_embedded("C:/textures/bricks.png"));
+    }
+
+    /// A file is replaced whole: what writes it fails, and it is as it was; written, it is what
+    /// was written. Nothing is left beside it either way.
+    #[test]
+    fn files_are_replaced_whole() {
+        let dir = std::env::temp_dir().join(format!("brewed-replace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("walls.brewtex");
+        std::fs::write(&file, b"before").unwrap();
+        let failed = replace(&file, |beside| {
+            std::fs::write(beside, b"half")?;
+            Err::<(), _>(std::io::Error::other("the disk is full"))
+        });
+        assert!(failed.unwrap_err().contains("the disk is full"));
+        assert_eq!(std::fs::read(&file).unwrap(), b"before");
+        write_whole(&file, b"after").unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"after");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "nothing left beside it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file held open elsewhere for a moment, not to be replaced meanwhile (as a virus scanner
+    /// or an indexer holds files on Windows), is waited for.
+    #[cfg(windows)]
+    #[test]
+    fn a_file_held_open_for_a_moment_is_waited_for() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = std::env::temp_dir().join(format!("brewed-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("basecolor.png");
+        std::fs::write(&file, b"before").unwrap();
+        // Shared for reading only: not to be deleted or replaced while it is open.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(1).open(&file).unwrap();
+        let letting_go = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            drop(held);
+        });
+        write_whole(&file, b"after").unwrap();
+        letting_go.join().unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"after");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// What is not a file (a folder; a pipe, which a reader waits at forever) is not read.

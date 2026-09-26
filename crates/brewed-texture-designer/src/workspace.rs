@@ -63,7 +63,7 @@ impl Workspace {
 }
 
 /// The folder of the program's settings: where each system keeps them.
-fn folder() -> Option<PathBuf> {
+pub fn folder() -> Option<PathBuf> {
     let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
     if cfg!(windows) {
         var("APPDATA").map(|d| d.join("Brewed Texture Designer"))
@@ -96,10 +96,8 @@ impl Workspace {
         let folder = path.parent().ok_or("There is no folder for settings")?;
         std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
         let json = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
-        // Written beside it first: a crash never leaves half a file.
-        let written = path.with_extension("json.new");
-        std::fs::write(&written, json).map_err(|e| format!("{}: {e}", written.display()))?;
-        std::fs::rename(&written, &path).map_err(|e| format!("{}: {e}", path.display()))
+        // Whole or not at all, whatever stops meanwhile.
+        brewed_texture_core::files::write_whole(&path, &json)
     }
 }
 

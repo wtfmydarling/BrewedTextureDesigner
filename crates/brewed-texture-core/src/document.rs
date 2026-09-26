@@ -95,6 +95,14 @@ impl Document {
         self.saved_revision = self.revision;
     }
 
+    /// The package is not what its file holds (it was recovered from a snapshot of unsaved
+    /// changes, see [`crate::recovery`]): it has changes to save.
+    pub fn mark_unsaved(&mut self) {
+        if !self.is_dirty() {
+            self.revision += 1;
+        }
+    }
+
     /// A new revision that is not a change of the document: a clean document stays clean.
     fn touch(&mut self) {
         if !self.is_dirty() {
