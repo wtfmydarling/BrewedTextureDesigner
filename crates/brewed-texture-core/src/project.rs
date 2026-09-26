@@ -20,8 +20,9 @@ use crate::package::{GraphEntry, Package, Resource, relative_path, resolve_path}
 pub const FILE_EXTENSION: &str = "brewtex";
 const FORMAT: &str = "brewed-texture-designer";
 /// 3: the formats of an Output are those of [`crate::nodes::OUTPUT_DEPTHS`] (in 2, "32 bit
-/// float" was the third, which 16 bits float is now).
-const VERSION: u32 = 3;
+/// float" was the third, which 16 bits float is now). 4: image inputs are input values of their
+/// graphs, parameters of the nodes that use them (see [`Graph::migrate_image_inputs`]).
+const VERSION: u32 = 4;
 
 /// View settings stored with a graph (not part of undo).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -187,6 +188,9 @@ pub fn from_json(text: &str, dir: Option<&Path>, name: &str) -> Result<Loaded, S
                 }
             }
         }
+        if version < 4 {
+            graph.migrate_image_inputs();
+        }
         let links_before = graph.links.len();
         graph.normalize();
         if graph.links.len() < links_before {
@@ -253,6 +257,79 @@ mod tests {
         };
         assert_eq!(depths_of(&old), [crate::nodes::DEPTH_8, crate::nodes::DEPTH_16, crate::nodes::DEPTH_32F]);
         assert_eq!(depths_of(&json), [0, 1, 2], "this version's third format stays what it is");
+    }
+
+    /// A file of version 3: an Image Input named its input and held its kind, picture and color;
+    /// a node that used its graph had a socket for it and gave it a picture. Read now, the input
+    /// is an input value of its graph with those settings (of two Image Inputs of one name, the
+    /// upper one's), and the node has a parameter for it with the picture it gave, exposed where
+    /// something arrived, the link arriving there.
+    #[test]
+    fn image_inputs_of_version_3_are_input_values() {
+        use crate::graph::{ParamSlot, input_socket_key, param_socket_key};
+        use crate::instance::{GraphRef, Instance, Interface, Port};
+        use crate::nodes::ImageKind;
+        use crate::{NodeKind, ParamValue, Value};
+        let old_input = |g: &mut Graph, y: f32, kind: u32, picture: &str| {
+            let id = g.add_node(NodeKind::IMAGE_INPUT, [0.0, y]);
+            let node = g.node_mut(id).unwrap();
+            node.params.extend([
+                ParamSlot { key: "name".into(), value: ParamValue::Text("albedo".into()), exposed: false },
+                ParamSlot { key: "kind".into(), value: ParamValue::Enum(kind), exposed: false },
+                ParamSlot { key: "image".into(), value: ParamValue::Text(picture.into()), exposed: false },
+                ParamSlot { key: "default".into(), value: ParamValue::Color([0.1, 0.2, 0.3, 1.0]), exposed: false },
+            ]);
+            id
+        };
+        let mut tex = Graph::default();
+        let upper = old_input(&mut tex, 0.0, 1, "/own.png");
+        let lower = old_input(&mut tex, 300.0, 0, "/other.png");
+        // (Image Inputs read no input value then.)
+        for node in &mut tex.nodes {
+            node.variable = None;
+        }
+        tex.variables.clear();
+        let mut main = Graph::default();
+        let noise = main.add_node(NodeKind::NOISE, [0.0, 0.0]);
+        let ports = Interface { inputs: vec![Port { name: "albedo".into(), kind: Some(ImageKind::Color) }], ..Interface::default() };
+        let fed = main.add_instance(Instance::new(GraphRef { package: None, graph: GraphId(2), name: "Tex".into() }, ports.clone()), [0.0, 0.0]);
+        let given = main.add_instance(Instance::new(GraphRef { package: None, graph: GraphId(2), name: "Tex".into() }, ports), [0.0, 300.0]);
+        main.links.push(crate::graph::Link { from: noise, from_socket: "o:output".into(), to: fed, to_socket: input_socket_key("albedo") });
+        let mut package = Package::new("Main", main);
+        let t = package.add_graph("Tex", tex);
+        assert_eq!(t, GraphId(2));
+        let json = to_json(&package, &HashMap::new(), package.first(), None).unwrap();
+        // As version 3 wrote it: the picture the second node gave its input.
+        let mut file: Json = serde_json::from_str(&json).unwrap();
+        file["version"] = 3.into();
+        let nodes = &mut file["graphs"][0]["graph"]["nodes"];
+        let second = nodes.as_array_mut().unwrap().iter_mut().find(|n| n["id"] == given.0).unwrap();
+        second["instance"]["images"] = serde_json::json!({ "albedo": "/given.png" });
+        let loaded = from_json(&file.to_string(), None, "x").unwrap().package;
+
+        let tex = &loaded.graph(t).unwrap().graph;
+        let var = tex.variable("albedo").expect("an input value");
+        let image = var.image.as_ref().expect("an image input");
+        assert_eq!((image.kind, image.picture.as_str(), image.default.as_str()), (ImageKind::Color, "/own.png", "/own.png"));
+        assert_eq!(var.value, Value::Color([0.1, 0.2, 0.3, 1.0]));
+        assert_eq!(tex.variables.len(), 1, "one input of the name");
+        for id in [upper, lower] {
+            let node = tex.node(id).unwrap();
+            assert_eq!(node.variable.as_deref(), Some("albedo"));
+            assert!(node.param("name").is_none() && node.param("image").is_none());
+        }
+        let main = &loaded.graph(loaded.first()).unwrap().graph;
+        let (fed, given) = (main.node(fed).unwrap(), main.node(given).unwrap());
+        assert!(fed.is_exposed("albedo"), "something arrived: exposed");
+        assert_eq!(main.link_into(fed.id, &param_socket_key("albedo")).map(|l| l.from), Some(noise));
+        assert!(main.input_socket(fed.id, &param_socket_key("albedo")).is_some());
+        assert!(!given.is_exposed("albedo"));
+        assert_eq!(given.value("albedo"), Some(&ParamValue::Text("/given.png".into())));
+        assert!(given.instance.as_ref().unwrap().interface.inputs.is_empty());
+        // Written again, it is this version's file, read as it is.
+        let again = to_json(&loaded, &HashMap::new(), loaded.first(), None).unwrap();
+        assert!(!again.contains("\"images\""));
+        assert_eq!(from_json(&again, None, "x").unwrap().package, loaded);
     }
 
     /// A graph that is gone leaves its id behind: a new graph never takes it, in a file saved

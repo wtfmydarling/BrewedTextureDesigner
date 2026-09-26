@@ -129,7 +129,8 @@ pub fn parse_value(var: &Variable, text: &str) -> Result<Value, String> {
         parts.iter().map(|p| p.parse::<f32>().ok().filter(|v| v.is_finite()).ok_or_else(|| format!("'{p}' is not a number"))).collect()
     };
     let value = match var.ty {
-        DataType::Float | DataType::Image => Value::Float(numbers(1)?[0]),
+        DataType::Float => Value::Float(numbers(1)?[0]),
+        DataType::Image => return Err("an image input takes a picture: a file".into()),
         DataType::Int => Value::Int(text.parse::<i32>().map_err(|_| format!("'{text}' is not a whole number"))?),
         DataType::Bool => match text.to_ascii_lowercase().as_str() {
             "true" | "1" | "yes" | "on" => Value::Bool(true),
@@ -155,6 +156,13 @@ pub fn parse_value(var: &Variable, text: &str) -> Result<Value, String> {
         },
     };
     Ok(value)
+}
+
+/// The picture file a value of the command line names: where it is from the folder the program
+/// runs in.
+fn picture(text: &str) -> String {
+    let path = std::path::Path::new(text.trim());
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()).display().to_string()
 }
 
 /// "RRGGBB" or "RRGGBBAA".
@@ -184,7 +192,14 @@ pub fn render(job: &Job, gpu: Gpu) -> Result<Report, String> {
         let mut found = false;
         for (id, _) in &graphs {
             let Some(var) = packages.root.graph(*id).and_then(|g| g.graph.variables.iter().find(|v| v.name == *name)) else { continue };
-            parse_value(var, text).map_err(|e| format!("{name}: {e}"))?;
+            if var.image.is_some() {
+                // A picture: a file that is there.
+                if !std::path::Path::new(picture(text).as_str()).is_file() {
+                    return Err(format!("{name}: '{text}' is not a file"));
+                }
+            } else {
+                parse_value(var, text).map_err(|e| format!("{name}: {e}"))?;
+            }
             found = true;
         }
         if !found {
@@ -201,7 +216,10 @@ pub fn render(job: &Job, gpu: Gpu) -> Result<Report, String> {
             let graph = std::sync::Arc::make_mut(&mut entry.graph);
             for (key, text) in &job.values {
                 if let Some(var) = graph.variables.iter_mut().find(|v| v.name == *key) {
-                    var.value = parse_value(var, text)?;
+                    match &mut var.image {
+                        Some(image) => image.picture = picture(text),
+                        None => var.value = parse_value(var, text)?,
+                    }
                 }
             }
         }

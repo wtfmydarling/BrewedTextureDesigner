@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::instance::{Instance, InstanceParam, Interface, param_value};
-use crate::nodes::{ImageKind, NodeDef, NodeKind, PIXEL_MATH_BUILTINS, ParamDef, ParamKind, Role, Slot, TILING_PARAM};
+use crate::instance::{Instance, InstanceParam, Interface};
+use crate::nodes::{ImageKind, NodeDef, NodeKind, PIXEL_MATH_BUILTINS, ParamDef, ParamKind, Slot, TILING_PARAM};
 use crate::types::{DataType, ParamValue, Tiling, Value, can_connect};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -125,7 +125,7 @@ impl Node {
             .interface
             .params
             .iter()
-            .map(|p| ParamSlot { key: p.name.clone(), value: param_value(p.value), exposed: false })
+            .map(|p| ParamSlot { key: p.name.clone(), value: p.start_value(), exposed: false })
             .collect();
         Node {
             id,
@@ -182,15 +182,13 @@ impl Node {
                     }
                     other => ParamSlot {
                         key: p.name.clone(),
-                        value: param_value(p.value),
+                        value: p.start_value(),
                         exposed: other.is_some_and(|s| s.exposed),
                     },
                 }
             })
             .collect();
         instance.graph.name = name.to_string();
-        // An input the graph no longer has takes no picture, as nothing arrives at it any more.
-        instance.images.retain(|input, _| interface.inputs.iter().any(|p| p.name == *input));
         instance.interface = interface;
         true
     }
@@ -233,12 +231,9 @@ impl Node {
         Tiling::from_index(self.enum_value(TILING_PARAM.key))
     }
 
-    /// Input nodes read a graph variable of this type.
+    /// Input nodes read a graph variable of this type (an Image Input, an image input).
     pub fn variable_type(&self) -> Option<DataType> {
-        match self.def().role {
-            Role::Variable(ty) => Some(ty),
-            _ => None,
-        }
+        self.def().variable_type()
     }
 
     pub fn is_expression_node(&self) -> bool {
@@ -286,7 +281,7 @@ impl Node {
                 None => self.kind.def().all_params().copied().collect(),
             };
             let value = |p: &ParamDef<'_>| match &self.instance {
-                Some(instance) => instance.interface.param(p.key).map_or_else(|| p.default_value(), |i| param_value(i.value)),
+                Some(instance) => instance.interface.param(p.key).map_or_else(|| p.default_value(), InstanceParam::start_value),
                 None => p.default_value(),
             };
             defs.iter()
@@ -323,19 +318,42 @@ pub struct Link {
     pub to_socket: String,
 }
 
-/// A value shared by every Input node with the same name, edited in the Input Values
-/// panel. Variables exist exactly as long as an Input node uses them.
+/// An input value of the graph: a value shared by every Input node with the same name, or
+/// the picture shared by every Image Input of the name, edited in the Input Values panel.
+/// Input values exist exactly as long as a node reads them. Used as a node in another graph,
+/// the graph has a parameter for each (see [`crate::instance`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Variable {
     pub name: String,
     pub ty: DataType,
+    /// Its value, and the value it has by default. Of an image input: its color while it has
+    /// no picture (a setting of it, the same in both).
     pub value: Value,
     pub default: Value,
     pub min: Value,
     pub max: Value,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// Of an image input: its picture, the picture it has by default and what it takes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageInput>,
 }
+
+/// The picture of an image input of a graph: what the graph sees there while nothing arrives.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImageInput {
+    /// What it takes: an image that arrives is made grayscale or color.
+    pub kind: ImageKind,
+    /// A file, as a Bitmap reads one (empty: none; the graph sees the input's color).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub picture: String,
+    /// The picture it has by default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default: String,
+}
+
+/// The color of an image input without a picture, when nothing says another.
+pub const IMAGE_INPUT_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
 
 impl Variable {
     pub fn new(name: String, ty: DataType) -> Variable {
@@ -344,9 +362,12 @@ impl Variable {
             DataType::Int => (Value::Int(4), Value::Int(0), Value::Int(16)),
             DataType::Bool => (Value::Bool(false), Value::Bool(false), Value::Bool(true)),
             DataType::Vec2 => (Value::Vec2([0.0, 0.0]), Value::Vec2([-1.0, -1.0]), Value::Vec2([1.0, 1.0])),
-            _ => (Value::Color([0.8, 0.5, 0.2, 1.0]), Value::Color([0.0; 4]), Value::Color([1.0; 4])),
+            DataType::Image => (Value::Color(IMAGE_INPUT_COLOR), Value::Color([0.0; 4]), Value::Color([1.0; 4])),
+            DataType::Color => (Value::Color([0.8, 0.5, 0.2, 1.0]), Value::Color([0.0; 4]), Value::Color([1.0; 4])),
         };
-        Variable { name, ty, value, default: value, min, max, description: String::new() }
+        let image = (ty == DataType::Image)
+            .then(|| ImageInput { kind: ImageKind::Gray, picture: String::new(), default: String::new() });
+        Variable { name, ty, value, default: value, min, max, description: String::new(), image }
     }
 
     /// Numeric variables have a min / max range.
@@ -354,13 +375,48 @@ impl Variable {
         matches!(self.ty, DataType::Float | DataType::Int | DataType::Vec2)
     }
 
+    /// The type of [`Variable::value`]: the variable's, or of an image input, a color.
+    pub fn value_type(&self) -> DataType {
+        if self.ty == DataType::Image { DataType::Color } else { self.ty }
+    }
+
+    /// Is it what it is by default: its value, or of an image input, its picture?
+    pub fn is_default(&self) -> bool {
+        match &self.image {
+            Some(image) => image.picture == image.default,
+            None => self.value == self.default,
+        }
+    }
+
+    /// Make it what it is by default. True if that changed it.
+    pub fn reset(&mut self) -> bool {
+        if self.is_default() {
+            return false;
+        }
+        match &mut self.image {
+            Some(image) => image.picture = image.default.clone(),
+            None => self.value = self.default,
+        }
+        true
+    }
+
+    /// Make what it is now what it is by default. True if that changed it.
+    pub fn make_default(&mut self) -> bool {
+        if self.is_default() {
+            return false;
+        }
+        match &mut self.image {
+            Some(image) => image.default = image.picture.clone(),
+            None => self.default = self.value,
+        }
+        true
+    }
+
     /// Make every stored value match `ty` and keep value / default inside [min, max].
     pub fn normalize(&mut self) {
-        if self.ty == DataType::Image {
-            self.ty = DataType::Float;
-        }
         let fresh = Variable::new(self.name.clone(), self.ty);
-        let fix = |v: &Value, fallback: Value| match v.convert(self.ty) {
+        let ty = self.value_type();
+        let fix = |v: &Value, fallback: Value| match v.convert(ty) {
             Some(c) if c.is_finite() => c,
             _ => fallback,
         };
@@ -375,6 +431,16 @@ impl Variable {
         }
         self.value = self.value.clamped(&self.min, &self.max);
         self.default = self.default.clamped(&self.min, &self.max);
+        match (self.ty, &mut self.image) {
+            (DataType::Image, Some(image)) => {
+                // (The color is a setting: the same by default.)
+                self.default = self.value;
+                image.picture = image.picture.trim().to_string();
+                image.default = image.default.trim().to_string();
+            }
+            (DataType::Image, image) => *image = fresh.image,
+            (_, image) => *image = None,
+        }
     }
 }
 
@@ -635,8 +701,8 @@ impl Graph {
     pub fn add_node(&mut self, kind: NodeKind, pos: [f32; 2]) -> NodeId {
         let id = NodeId(self.alloc_id());
         let mut node = Node::new(id, kind, pos);
-        if kind == NodeKind::OUTPUT || kind == NodeKind::IMAGE_INPUT {
-            let name = self.unique_port_name(kind, if kind == NodeKind::OUTPUT { "output" } else { "input" });
+        if kind == NodeKind::OUTPUT {
+            let name = self.unique_output_name("output");
             if let Some(p) = node.param_mut("name") {
                 p.value = ParamValue::Text(name);
             }
@@ -667,14 +733,9 @@ impl Graph {
         self.sync_variables();
     }
 
+    /// A name no Output of the graph has: the name of an output of the graph used as a node.
     pub fn unique_output_name(&self, base: &str) -> String {
-        self.unique_port_name(NodeKind::OUTPUT, base)
-    }
-
-    /// A name no Output (or Image Input, by `kind`) of the graph has: the name of a socket of
-    /// the graph used as a node.
-    pub fn unique_port_name(&self, kind: NodeKind, base: &str) -> String {
-        unique_name(base, |name| self.nodes.iter().any(|n| n.kind == kind && n.text("name") == name))
+        unique_name(base, |name| self.nodes.iter().any(|n| n.kind == NodeKind::OUTPUT && n.text("name") == name))
     }
 
     /// Add a node that uses a graph (see [`crate::instance`]).
@@ -821,12 +882,12 @@ impl Graph {
             if !slot.exposed || !pd.can_expose() || !node.param_visible(&pd) {
                 continue;
             }
-            if let Some(ty) = slot.value.socket_type() {
+            if let Some((ty, takes)) = pd.socket(&slot.value) {
                 out.push(SocketInfo {
                     key: param_socket_key(pd.key),
                     label: pd.label.to_string(),
                     ty,
-                    slot: Slot::Any,
+                    slot: takes,
                     kind: SocketKind::Param,
                 });
             }
@@ -1030,6 +1091,81 @@ impl Graph {
         (order, cyclic)
     }
 
+    /// What a file of version 3 or before said of image inputs, said as it is said now (see
+    /// [`crate::project`]): an Image Input named its input and held its settings, now it reads
+    /// an input value of that name that holds them (of Image Inputs of one name, the upper
+    /// one's); a node that used the graph had a socket for each, now a parameter, exposed where
+    /// something arrived, with the picture the node gave it. Before [`Graph::normalize`].
+    pub(crate) fn migrate_image_inputs(&mut self) {
+        let mut inputs: Vec<usize> = (0..self.nodes.len()).filter(|&i| self.nodes[i].kind == NodeKind::IMAGE_INPUT).collect();
+        inputs.sort_by(|&a, &b| {
+            let (a, b) = (&self.nodes[a], &self.nodes[b]);
+            a.pos[1].total_cmp(&b.pos[1]).then(a.pos[0].total_cmp(&b.pos[0])).then(a.id.cmp(&b.id))
+        });
+        for i in inputs {
+            let node = &self.nodes[i];
+            if node.variable.is_some() {
+                continue;
+            }
+            let wanted = sanitize_identifier(match node.text("name").trim() {
+                "" => "input",
+                name => name,
+            });
+            let name = match self.variable(&wanted) {
+                Some(v) if v.ty != DataType::Image => self.unique_variable_name(&wanted),
+                _ => wanted,
+            };
+            if self.variable(&name).is_none() {
+                let mut var = Variable::new(name.clone(), DataType::Image);
+                if let Some(ParamValue::Color(c)) = node.value("default") {
+                    (var.value, var.default) = (Value::Color(*c), Value::Color(*c));
+                }
+                if let Some(image) = &mut var.image {
+                    image.kind = if node.enum_value("kind") == 1 { ImageKind::Color } else { ImageKind::Gray };
+                    image.picture = node.text("image").trim().to_string();
+                    image.default = image.picture.clone();
+                }
+                self.variables.push(var);
+            }
+            self.nodes[i].variable = Some(name);
+        }
+        for i in 0..self.nodes.len() {
+            let id = self.nodes[i].id;
+            let Some(instance) = self.nodes[i].instance.as_deref_mut() else { continue };
+            let ports = std::mem::take(&mut instance.interface.inputs);
+            let given = std::mem::take(&mut instance.images);
+            let mut slots = Vec::new();
+            for port in ports {
+                let socket = input_socket_key(&port.name);
+                let arrives = self.links.iter().any(|l| l.to == id && l.to_socket == socket);
+                if instance.interface.param(&port.name).is_none() {
+                    let mut var = Variable::new(port.name.clone(), DataType::Image);
+                    if let Some(image) = &mut var.image {
+                        image.kind = port.kind.unwrap_or(ImageKind::Gray);
+                    }
+                    instance.interface.params.push(InstanceParam {
+                        name: port.name.clone(),
+                        label: crate::instance::label_of(&port.name),
+                        value: var.value,
+                        default: var.default,
+                        min: var.min,
+                        max: var.max,
+                        description: String::new(),
+                        image: var.image,
+                    });
+                }
+                let picture = given.get(&port.name).cloned().unwrap_or_default();
+                slots.push(ParamSlot { key: port.name.clone(), value: ParamValue::Text(picture), exposed: arrives });
+                for l in self.links.iter_mut().filter(|l| l.to == id && l.to_socket == socket) {
+                    l.to_socket = param_socket_key(&port.name);
+                }
+            }
+            let node = &mut self.nodes[i];
+            node.params.retain(|s| !slots.iter().any(|n| n.key == s.key));
+            node.params.extend(slots);
+        }
+    }
+
     /// Repair a graph that was loaded from disk.
     pub fn normalize(&mut self) {
         let mut seen = HashSet::new();
@@ -1107,8 +1243,8 @@ impl Graph {
             copy.pos = [n.pos[0] + offset[0], n.pos[1] + offset[1]];
             copy.variable = n.variable.as_ref().map(|v| var_map.get(v).cloned().unwrap_or_else(|| v.clone()));
             copy.normalize();
-            if copy.kind == NodeKind::OUTPUT || copy.kind == NodeKind::IMAGE_INPUT {
-                let name = self.unique_port_name(copy.kind, copy.text("name"));
+            if copy.kind == NodeKind::OUTPUT {
+                let name = self.unique_output_name(copy.text("name"));
                 if let Some(p) = copy.param_mut("name") {
                     p.value = ParamValue::Text(name);
                 }

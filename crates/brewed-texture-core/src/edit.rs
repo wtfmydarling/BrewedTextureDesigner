@@ -5,7 +5,7 @@
 use crate::gradient::Gradient;
 use crate::instance::Instance;
 use crate::graph::{Clipboard, CommentId, Graph, Link, MAX_RESOLUTION, MIN_RESOLUTION, NodeId, Precision, SocketRef, coordinate};
-use crate::nodes::{NodeKind, Role};
+use crate::nodes::{ImageKind, NodeKind};
 use crate::types::{DataType, ParamValue, Value, can_connect};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -29,13 +29,6 @@ pub enum Edit {
     AddInstance {
         instance: Instance,
         pos: [f32; 2],
-    },
-    /// Give an image input of a node that uses a graph the picture it takes while nothing
-    /// arrives at it (a file), or take it away (`None`).
-    SetInstanceImage {
-        node: NodeId,
-        input: String,
-        path: Option<String>,
     },
     /// Add a node and connect it to the socket a link was dragged from.
     AddNodeConnected {
@@ -112,7 +105,22 @@ pub enum Edit {
         name: String,
         text: String,
     },
+    /// The picture of an image input (a file; empty: none), or (`default`) the picture it has
+    /// by default.
+    SetVariablePicture {
+        name: String,
+        picture: String,
+        default: bool,
+    },
+    /// What an image input takes: an image that arrives is made grayscale or color.
+    SetVariableKind {
+        name: String,
+        kind: ImageKind,
+    },
+    /// Make an input value what it is by default.
     ResetVariable(String),
+    /// Make what an input value is now what it is by default.
+    MakeVariableDefault(String),
     RenameVariable {
         from: String,
         to: String,
@@ -248,7 +256,6 @@ impl Edit {
             Edit::SetExposed { exposed: false, .. } => "Unexpose",
             Edit::SetBypass { .. } => "Bypass",
             Edit::SetLocalVar { .. } => "Change Variable",
-            Edit::SetInstanceImage { .. } => "Change Image",
             Edit::SetResolution(_) => "Change Size",
             Edit::SetPrecision(_) => "Change Precision",
             Edit::Paste { .. } => "Paste",
@@ -257,7 +264,10 @@ impl Edit {
             | Edit::SetVariableDefault { .. }
             | Edit::SetVariableRange { .. }
             | Edit::SetVariableDescription { .. }
-            | Edit::ResetVariable(_) => "Change Input Value",
+            | Edit::SetVariablePicture { .. }
+            | Edit::SetVariableKind { .. }
+            | Edit::ResetVariable(_)
+            | Edit::MakeVariableDefault(_) => "Change Input Value",
             Edit::RenameVariable { .. } | Edit::BindVariable { .. } => "Rename Input",
             Edit::AddComment { .. } => "Add Comment",
             Edit::RemoveComments(_) => "Delete Comment",
@@ -317,19 +327,6 @@ impl Edit {
             Edit::AddInstance { mut instance, pos } => {
                 instance.interface.normalize();
                 EditResult::created(vec![graph.add_instance(instance, pos)])
-            }
-            Edit::SetInstanceImage { node, input, path } => {
-                let n = graph.node_mut(node).ok_or("The node no longer exists")?;
-                let instance = n.instance.as_deref_mut().ok_or("The node does not use a graph")?;
-                if !instance.interface.inputs.iter().any(|p| p.name == input) {
-                    return Err(format!("The graph has no image input '{input}'"));
-                }
-                let path = path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
-                let before = match &path {
-                    Some(p) => instance.images.insert(input, p.clone()),
-                    None => instance.images.remove(&input),
-                };
-                if before == path { EditResult::unchanged() } else { EditResult::changed() }
             }
             Edit::AddNodeConnected { kind, pos, socket } => {
                 let info = graph.socket(&socket).ok_or("The socket the link came from no longer exists")?;
@@ -481,22 +478,29 @@ impl Edit {
             }
             Edit::SetVariable { name, value } => {
                 let v = variable_mut(graph, &name)?;
-                let converted = value.convert(v.ty).filter(Value::is_finite).ok_or("Wrong value type")?;
+                let converted = value.convert(v.value_type()).filter(Value::is_finite).ok_or("Wrong value type")?;
                 let clamped = converted.clamped(&v.min, &v.max);
                 if v.value == clamped {
                     return Ok(EditResult::unchanged());
                 }
                 v.value = clamped;
+                // (The color of an image input is a setting: the same by default.)
+                if v.ty == DataType::Image {
+                    v.default = clamped;
+                }
                 EditResult::changed()
             }
             Edit::SetVariableDefault { name, value } => {
                 let v = variable_mut(graph, &name)?;
-                let converted = value.convert(v.ty).filter(Value::is_finite).ok_or("Wrong value type")?;
+                let converted = value.convert(v.value_type()).filter(Value::is_finite).ok_or("Wrong value type")?;
                 let clamped = converted.clamped(&v.min, &v.max);
                 if v.default == clamped {
                     return Ok(EditResult::unchanged());
                 }
                 v.default = clamped;
+                if v.ty == DataType::Image {
+                    v.value = clamped;
+                }
                 EditResult::changed()
             }
             Edit::SetVariableRange { name, min, max } => {
@@ -523,13 +527,31 @@ impl Edit {
                 v.description = text;
                 EditResult::changed()
             }
-            Edit::ResetVariable(name) => {
+            Edit::SetVariablePicture { name, picture, default } => {
                 let v = variable_mut(graph, &name)?;
-                if v.value == v.default {
+                let image = v.image.as_mut().ok_or_else(|| format!("'{name}' is not an image input"))?;
+                let picture = picture.trim().to_string();
+                let slot = if default { &mut image.default } else { &mut image.picture };
+                if *slot == picture {
                     return Ok(EditResult::unchanged());
                 }
-                v.value = v.default;
+                *slot = picture;
                 EditResult::changed()
+            }
+            Edit::SetVariableKind { name, kind } => {
+                let v = variable_mut(graph, &name)?;
+                let image = v.image.as_mut().ok_or_else(|| format!("'{name}' is not an image input"))?;
+                if image.kind == kind {
+                    return Ok(EditResult::unchanged());
+                }
+                image.kind = kind;
+                EditResult::changed()
+            }
+            Edit::ResetVariable(name) => {
+                if variable_mut(graph, &name)?.reset() { EditResult::changed() } else { EditResult::unchanged() }
+            }
+            Edit::MakeVariableDefault(name) => {
+                if variable_mut(graph, &name)?.make_default() { EditResult::changed() } else { EditResult::unchanged() }
             }
             Edit::RenameVariable { from, to } => {
                 let new = graph.rename_variable(&from, &to)?;
@@ -627,9 +649,9 @@ pub fn gradient_edit(node: NodeId, key: &str, gradient: Gradient) -> Edit {
     Edit::SetParam { node, key: key.to_string(), value: ParamValue::Gradient(gradient.normalized()) }
 }
 
-/// Is `kind` an Input node type?
+/// Is `kind` an Input node type (an Image Input among them)?
 pub fn is_input_kind(kind: NodeKind) -> bool {
-    matches!(kind.def().role, Role::Variable(_))
+    kind.def().variable_type().is_some()
 }
 
 #[cfg(test)]

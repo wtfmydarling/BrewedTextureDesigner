@@ -39,7 +39,8 @@ usage: brewed-texture-designer [FILE.brewtex]
                    each file written. Exit code 0: all went well, 1: something went wrong
                    on the way (said on stderr), 2: nothing could be rendered
   --graph NAME     render this graph only (again for more)
-  --set NAME=VALUE set an Input Value: 0.5, 4, true, 0.2,0.8, #9E4229 or 0.6,0.3,0.2
+  --set NAME=VALUE set an Input Value: 0.5, 4, true, 0.2,0.8, #9E4229 or 0.6,0.3,0.2;
+                   an image input takes a picture file: --set emblem=logo.png
   --size N|WxH     the texture size: 2048, or 2048x1024
   --precision      8, 16 or 32: images in bytes, half floats or floats, whatever the
                    graphs say (a node that says its own keeps it)

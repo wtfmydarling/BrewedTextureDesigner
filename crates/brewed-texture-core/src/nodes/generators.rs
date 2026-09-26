@@ -45,15 +45,23 @@ const TILE_PATTERNS: &[&str] = &[
 ];
 pub const TILE_PATTERN_IMAGE: u32 = 14;
 
+/// What a Uniform Color makes, in the order of its "output" parameter.
+pub const UNIFORM_OUTPUTS: &[&str] = &["Color", "Grayscale"];
+
 pub static UNIFORM_COLOR: NodeDef = NodeDef {
     id: "uniform_color",
     name: "Uniform Color",
     category: Category::Generators,
     description: "Fills the image with a single color.",
-    keywords: "solid fill constant flat",
+    keywords: "solid fill constant flat grayscale",
     inputs: NO_SOCKETS,
-    outputs: COLOR_OUT,
-    params: &[color("color", "Color", [0.5, 0.5, 0.5, 1.0])],
+    outputs: IMAGE_OUT,
+    params: &[
+        color("color", "Color", [0.5, 0.5, 0.5, 1.0]),
+        choice("output", "Output", 0, UNIFORM_OUTPUTS)
+            .fixed()
+            .tip("Color: the color. Grayscale: its luminance, in a grayscale image."),
+    ],
     role: Role::Image,
 };
 

@@ -11,7 +11,7 @@ use crate::curve::Curve;
 use crate::expr;
 use crate::gradient::Gradient;
 use crate::graph::{Graph, Node, NodeId, param_socket_key, var_socket_key};
-use crate::nodes::{NodeKind, PIXEL_MATH_BUILTINS, Role};
+use crate::nodes::{NodeKind, PIXEL_MATH_BUILTINS, ParamKind, Role};
 use crate::types::{DataType, ParamValue, Value};
 
 /// Effective parameter values of a node: stored values with driven overrides.
@@ -197,7 +197,15 @@ fn evaluate_node(graph: &Graph, node: &Node, results: &Evaluation) -> NodeEval {
     for pd in node.param_defs() {
         let Some(slot) = node.param(pd.key) else { continue };
         let mut value = slot.value.clone();
-        if slot.exposed && pd.can_expose() && node.param_visible(&pd) {
+        // What arrives at the socket of an image input is an image: laid out, it is what the
+        // Image Inputs of the graph show (see `crate::package::flatten`).
+        let image = matches!(pd.kind, ParamKind::Image { .. });
+        if slot.exposed && pd.can_expose() && node.param_visible(&pd) && image {
+            if graph.link_into(node.id, &param_socket_key(pd.key)).is_none() {
+                e.unconnected.push(pd.key.to_string());
+                e.warnings.push(format!("'{}' is exposed but not connected; using its own value", pd.label));
+            }
+        } else if slot.exposed && pd.can_expose() && node.param_visible(&pd) {
             match linked_value(graph, results, node.id, &param_socket_key(pd.key)) {
                 Some((_, Some(v))) => match slot.value.from_driven(&v, pd.enum_options().len()) {
                     Some(pv) => {
@@ -270,7 +278,7 @@ fn scalar_var(graph: &Graph, node: &Node, results: &Evaluation, name: &str) -> (
         return (v, VarSource::Link(from));
     }
     if node.bool_value("auto_bind")
-        && let Some(var) = graph.variable(name)
+        && let Some(var) = graph.variable(name).filter(|v| v.ty != DataType::Image)
         && let Some(v) = var.value.as_f64()
     {
         return (v, VarSource::Variable(var.name.clone()));

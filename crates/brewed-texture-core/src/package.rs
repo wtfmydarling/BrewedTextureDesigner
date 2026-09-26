@@ -17,8 +17,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::eval::{self, NodeEval, Params, VarSource};
-use crate::graph::{Graph, Link, Node, NodeId, input_socket_key, output_socket_key, param_socket_key};
-use crate::instance::{GraphId, GraphRef, Instance, Interface, Port, image_input_kind, port_nodes};
+use crate::graph::{Graph, IMAGE_INPUT_COLOR, Link, Node, NodeId, input_socket_key, output_socket_key, param_socket_key};
+use crate::instance::{GraphId, GraphRef, Instance, Interface, Port, port_nodes};
 use crate::nodes::{ImageKind, NodeKind, ParamKind, Role, Slot};
 use crate::types::{DataType, ParamValue, Value};
 
@@ -196,21 +196,22 @@ impl Package {
         id
     }
 
-    /// Every file a node of the package reads (a Bitmap's image, a font…): the node, the
-    /// parameter and the path.
-    pub fn files(&self) -> impl Iterator<Item = (GraphId, &Node, &'static str, &str)> {
+    /// Every file the graphs of the package read (a Bitmap's image, a font, the picture of an
+    /// image input…): the graph, what reads it, and the path.
+    pub fn files(&self) -> impl Iterator<Item = (GraphId, Reader<'_>, &str)> {
         self.graphs.iter().flat_map(|g| {
-            g.graph.nodes.iter().flat_map(move |n| {
-                let params = n
-                    .def()
-                    .params
-                    .iter()
-                    .filter(|p| matches!(p.kind, ParamKind::File { .. }))
-                    .map(move |p| (g.id, n, p.key, n.text(p.key)));
-                // The pictures a node that uses a graph gives its image inputs.
-                let images = n.instance.iter().flat_map(|i| i.images.values()).map(move |path| (g.id, n, "image", path.as_str()));
-                params.chain(images).filter(|(.., path)| !path.trim().is_empty())
-            })
+            let nodes = g.graph.nodes.iter().flat_map(move |n| {
+                n.param_defs()
+                    .into_iter()
+                    .filter(|p| matches!(p.kind, ParamKind::File { .. } | ParamKind::Image { .. }))
+                    .map(move |p| (g.id, Reader::Node(n), n.text(p.key)))
+            });
+            // The pictures of its image inputs, and those they have by default.
+            let inputs = g.graph.variables.iter().flat_map(move |v| {
+                let pictures = v.image.as_ref().map(|i| [i.picture.as_str(), i.default.as_str()]);
+                pictures.into_iter().flatten().map(move |path| (g.id, Reader::Input(v.name.as_str()), path))
+            });
+            nodes.chain(inputs).filter(|(.., path)| !path.trim().is_empty())
         })
     }
 
@@ -259,38 +260,40 @@ impl Package {
             .collect()
     }
 
-    /// Change every path of the package: of its files, of the files its nodes read and of the
+    /// Change every path of the package: of its files, of the files its graphs read and of the
     /// packages whose graphs it uses.
     pub fn map_paths(&mut self, f: impl Fn(&str) -> String) {
+        let map = |path: &mut String| {
+            if !path.trim().is_empty() {
+                *path = f(path);
+            }
+        };
         for r in &mut self.resources {
             r.path = f(&r.path);
         }
         for entry in &mut self.graphs {
             let graph = Arc::make_mut(&mut entry.graph);
             for node in &mut graph.nodes {
-                let files: Vec<&'static str> = node
-                    .def()
-                    .params
+                let files: Vec<String> = node
+                    .param_defs()
                     .iter()
-                    .filter(|p| matches!(p.kind, ParamKind::File { .. }))
-                    .map(|p| p.key)
+                    .filter(|p| matches!(p.kind, ParamKind::File { .. } | ParamKind::Image { .. }))
+                    .map(|p| p.key.to_string())
                     .collect();
                 for key in files {
-                    if let Some(slot) = node.param_mut(key)
+                    if let Some(slot) = node.param_mut(&key)
                         && let ParamValue::Text(path) = &mut slot.value
-                        && !path.trim().is_empty()
                     {
-                        *path = f(path);
+                        map(path);
                     }
                 }
-                if let Some(instance) = &mut node.instance {
-                    if let Some(path) = &mut instance.graph.package {
-                        *path = f(path);
-                    }
-                    for path in instance.images.values_mut() {
-                        *path = f(path);
-                    }
+                if let Some(path) = node.instance.as_mut().and_then(|i| i.graph.package.as_mut()) {
+                    *path = f(path);
                 }
+            }
+            for image in graph.variables.iter_mut().filter_map(|v| v.image.as_mut()) {
+                map(&mut image.picture);
+                map(&mut image.default);
             }
         }
     }
@@ -375,6 +378,16 @@ impl Package {
         self.resources.retain(|r| !r.path.trim().is_empty() && paths.insert(r.path.clone()));
         self.sync_resources();
     }
+}
+
+/// What reads a file of a package (see [`Package::files`]).
+#[derive(Clone, Copy, Debug)]
+pub enum Reader<'a> {
+    /// A parameter of a node: the file of a Bitmap, the picture a node gives the image input
+    /// of the graph it uses…
+    Node(&'a Node),
+    /// An image input of the graph, by its name: its picture, or the one it has by default.
+    Input(&'a str),
 }
 
 /// A file a package names that is not there.
@@ -539,12 +552,8 @@ impl PackageEdit {
             }
             PackageEdit::RemoveResource(path) => {
                 let before = package.resources.len();
-                let readers = package.files().filter(|(.., p)| *p == path).count();
-                if readers > 0 {
-                    return Err(format!(
-                        "{readers} node(s) read {}: point them at another file first",
-                        file_name(&path)
-                    ));
+                if package.files().any(|(.., p)| p == path) {
+                    return Err(format!("The graphs read {}: give them another file first", file_name(&path)));
                 }
                 package.resources.retain(|r| r.path != path);
                 if package.resources.len() == before { PackageResult::default() } else { changed }
@@ -737,7 +746,10 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
             return Vec::new();
         }
         let mut vars = n.expression_vars();
-        vars.retain(|v| graph.link_into(n.id, &crate::graph::var_socket_key(v)).is_none() && graph.variable(v).is_some());
+        vars.retain(|v| {
+            graph.link_into(n.id, &crate::graph::var_socket_key(v)).is_none()
+                && graph.variable(v).is_some_and(|v| v.ty != DataType::Image)
+        });
         vars
     };
     let mut needed: Vec<String> = Vec::new();
@@ -822,15 +834,19 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
                     |n| crate::graph::sanitize_identifier(&n.def().name.to_lowercase()),
                 );
                 let name = if target.ty == DataType::Image {
-                    let name = inner.unique_port_name(NodeKind::IMAGE_INPUT, &from);
+                    let name = inner.unique_variable_name(&from);
                     let input = inner.add_node(NodeKind::IMAGE_INPUT, [x0 - 260.0, y0 + row]);
-                    let node = inner.node_mut(input).expect("just added");
-                    node.param_mut("name").expect("a name").value = ParamValue::Text(name.clone());
+                    inner.node_mut(input).expect("just added").variable = Some(name.clone());
+                    inner.sync_variables();
                     // What the input takes: what the sockets take, or what arrives when one
                     // takes either (known only to the engine: color, which gray reads as).
                     let color = takes_color.contains(&source);
-                    node.param_mut("kind").expect("a kind").value = ParamValue::Enum(u32::from(color));
-                    remainder.into.push((l.from, l.from_socket.clone(), input_socket_key(&name)));
+                    if let Some(image) = inner.variable_mut(&name).and_then(|v| v.image.as_mut()) {
+                        image.kind = if color { ImageKind::Color } else { ImageKind::Gray };
+                    }
+                    // Exposed on the node that takes the nodes' place: what arrived arrives there.
+                    remainder.into.push((l.from, l.from_socket.clone(), param_socket_key(&name)));
+                    remainder.exposed.push(name.clone());
                     name
                 } else {
                     let ty = graph.output_socket(l.from, &l.from_socket).map_or(target.ty, |s| s.ty);
@@ -879,7 +895,7 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
         let reader = if target.ty == DataType::Image {
             inner
                 .nodes_of(NodeKind::IMAGE_INPUT)
-                .find(|n| n.text("name") == name)
+                .find(|n| n.variable.as_deref() == Some(name.as_str()))
                 .map(|n| (n.id, "o:output".to_string()))
         } else {
             inner
@@ -907,7 +923,7 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
                     |n| crate::graph::sanitize_identifier(&n.def().name.to_lowercase()),
                 );
                 let output = inner.add_node(NodeKind::OUTPUT, [x1 + 260.0, y0 + row]);
-                let name = inner.unique_port_name(NodeKind::OUTPUT, &from);
+                let name = inner.unique_output_name(&from);
                 inner.node_mut(output).expect("just added").param_mut("name").expect("a name").value =
                     ParamValue::Text(name.clone());
                 let _ = inner.connect(l.from, &l.from_socket, output, "i:input");
@@ -1015,9 +1031,9 @@ struct Builder<'a, L: Library> {
     owners: HashMap<NodeId, NodeId>,
     /// What arrives at each Image Input of a graph used as a node, from the graph that uses it.
     redirects: HashMap<NodeId, (NodeId, String)>,
-    /// The picture the node that uses a graph gives each Image Input of it (see
-    /// [`Instance::images`]).
-    pictures: HashMap<NodeId, String>,
+    /// What each Image Input shows while nothing arrives: what it takes, its picture (empty:
+    /// none) and its color (see [`crate::graph::ImageInput`]).
+    inputs: HashMap<NodeId, (ImageKind, String, [f32; 4])>,
     /// The graphs being laid out, outermost first: a graph cannot use itself.
     stack: Vec<(Option<String>, GraphId)>,
 }
@@ -1039,7 +1055,7 @@ pub fn flatten<L: Library>(lib: &L, from: Option<&str>, id: GraphId) -> Option<F
         problems: BTreeMap::new(),
         owners: HashMap::new(),
         redirects: HashMap::new(),
-        pictures: HashMap::new(),
+        inputs: HashMap::new(),
         stack: vec![(from.map(str::to_string), id)],
     };
     b.expand(graph, from, None, None, None);
@@ -1062,11 +1078,23 @@ impl<L: Library> Builder<'_, L> {
             Some(values) => {
                 let mut g = graph.clone();
                 for var in &mut g.variables {
-                    if let Some(v) =
-                        values.get(&var.name).and_then(ParamValue::as_value).and_then(|v| v.convert(var.ty))
-                        && v.is_finite()
-                    {
-                        var.value = v.clamped(&var.min, &var.max);
+                    let given = values.get(&var.name);
+                    match &mut var.image {
+                        // A picture of the node's own; none, the graph's.
+                        Some(image) => {
+                            if let Some(ParamValue::Text(path)) = given
+                                && !path.trim().is_empty()
+                            {
+                                image.picture = path.trim().to_string();
+                            }
+                        }
+                        None => {
+                            if let Some(v) = given.and_then(ParamValue::as_value).and_then(|v| v.convert(var.ty))
+                                && v.is_finite()
+                            {
+                                var.value = v.clamped(&var.min, &var.max);
+                            }
+                        }
                     }
                 }
                 set = g;
@@ -1081,7 +1109,7 @@ impl<L: Library> Builder<'_, L> {
         // The Outputs that are the outputs of the graph used as a node (of two of one name, the
         // upper one, as its interface has them).
         let outputs: HashSet<NodeId> = match prefix {
-            Some(_) => port_nodes(graph, NodeKind::OUTPUT).iter().map(|n| n.id).collect(),
+            Some(_) => port_nodes(graph).iter().map(|n| n.id).collect(),
             None => HashSet::new(),
         };
 
@@ -1106,11 +1134,6 @@ impl<L: Library> Builder<'_, L> {
                                 Some(top),
                             );
                             self.stack.pop();
-                            for (input, picture) in &instance.images {
-                                for id in child.inputs.get(input).into_iter().flatten() {
-                                    self.pictures.insert(*id, picture.clone());
-                                }
-                            }
                             children.insert(node.id, child);
                         }
                         Err(e) => self.problem(top, prefix, &e),
@@ -1131,8 +1154,19 @@ impl<L: Library> Builder<'_, L> {
                         copy.id = id_of(node.id);
                         bake(&mut copy, ev.node(node.id));
                         self.owners.insert(copy.id, owner.expect("inside a graph used as a node"));
-                        if node.kind == NodeKind::IMAGE_INPUT {
-                            out.inputs.entry(node.text("name").to_string()).or_default().push(copy.id);
+                    }
+                    // An Image Input: the input value it reads says what it shows.
+                    if let Some(name) = node.variable.as_deref().filter(|_| node.kind == NodeKind::IMAGE_INPUT) {
+                        let var = graph.variable(name);
+                        let image = var.and_then(|v| v.image.as_ref());
+                        let color = match var.map(|v| v.value) {
+                            Some(Value::Color(c)) => c,
+                            _ => IMAGE_INPUT_COLOR,
+                        };
+                        let shows = (image.map_or(ImageKind::Gray, |i| i.kind), image.map_or_else(String::new, |i| i.picture.clone()), color);
+                        self.inputs.insert(copy.id, shows);
+                        if prefix.is_some() {
+                            out.inputs.entry(name.to_string()).or_default().push(copy.id);
                         }
                     }
                     self.flat.nodes.push(copy);
@@ -1159,7 +1193,8 @@ impl<L: Library> Builder<'_, L> {
             let Some(source) = source else { continue };
             match b.def().role {
                 Role::Instance => {
-                    let key = l.to_socket.strip_prefix("i:").unwrap_or(&l.to_socket);
+                    // (An image input is a parameter: exposed, images arrive at its socket.)
+                    let key = l.to_socket.strip_prefix("p:").unwrap_or(&l.to_socket);
                     if let Some(inputs) = children.get(&b.id).and_then(|c| c.inputs.get(key)) {
                         for input in inputs {
                             self.redirects.insert(*input, source.clone());
@@ -1227,47 +1262,51 @@ impl<L: Library> Builder<'_, L> {
     /// What arrives at the Image Inputs of graphs used as nodes arrives at what reads them: made
     /// grayscale for an input that takes grayscale, as it is for one that takes color (which
     /// reads gray as it is). An Image Input nothing arrives at shows its picture, as a Bitmap
-    /// reads it: the one the node that uses its graph gives it, else its own; without one, it is
-    /// its default color.
+    /// reads it (the one the node that uses its graph gives it, else the graph's), or without
+    /// one, its color: every Image Input is what it shows, and the engine never sees one.
     fn finish(mut self) -> Flat {
-        let pictured: Vec<(NodeId, String)> = self
-            .flat
-            .nodes
+        let mut shown: Vec<(NodeId, ImageKind, String, [f32; 4])> = self
+            .inputs
             .iter()
-            .filter(|n| n.kind == NodeKind::IMAGE_INPUT && !self.redirects.contains_key(&n.id))
-            .filter_map(|n| {
-                let own = n.text("image").trim();
-                let picture = self.pictures.get(&n.id).cloned().or_else(|| (!own.is_empty()).then(|| own.to_string()))?;
-                Some((n.id, picture))
-            })
+            .filter(|(id, _)| !self.redirects.contains_key(id))
+            .map(|(id, (kind, picture, color))| (*id, *kind, picture.clone(), *color))
             .collect();
-        for (id, picture) in pictured {
-            let input = self.flat.node(id).expect("an Image Input");
-            let mut bitmap = Node::new(id, NodeKind::BITMAP, input.pos);
-            for slot in &mut bitmap.params {
-                match slot.key.as_str() {
-                    "path" => slot.value = ParamValue::Text(picture.clone()),
-                    "tiling" => slot.value = input.value("tiling").cloned().unwrap_or(slot.value.clone()),
-                    _ => {}
+        shown.sort_by_key(|(id, ..)| *id);
+        for (id, kind, picture, color) in shown {
+            let Some(input) = self.flat.node(id) else { continue };
+            let gray = kind == ImageKind::Gray;
+            let (made, value) = if picture.is_empty() {
+                // Its color, as it takes it (a single pixel, as a uniform color is).
+                let output = ParamValue::Enum(u32::from(gray));
+                (NodeKind::UNIFORM_COLOR, vec![("color", ParamValue::Color(color)), ("output", output)])
+            } else {
+                (NodeKind::BITMAP, vec![("path", ParamValue::Text(picture))])
+            };
+            let mut node = Node::new(id, made, input.pos);
+            for slot in &mut node.params {
+                let given = value.iter().find(|(k, _)| *k == slot.key).map(|(_, v)| v.clone());
+                // As the input is: its tiling and its precision.
+                if let Some(v) = given.or_else(|| input.value(&slot.key).filter(|v| v.same_kind(&slot.value)).cloned()) {
+                    slot.value = v;
                 }
             }
-            if image_input_kind(input) == ImageKind::Color {
-                // What the picture is, where the input was: what reads it reads the picture.
-                *self.flat.node_mut(id).expect("an Image Input") = bitmap;
+            if made == NodeKind::UNIFORM_COLOR || !gray {
+                // What the input shows, where it was: what reads it reads that.
+                *self.flat.node_mut(id).expect("an Image Input") = node;
             } else {
-                // Made grayscale where the input was, as what arrives would be. What goes wrong
-                // reading the picture is the input's: of the node that uses its graph, or its own.
-                bitmap.id = NodeId(mix(id.0, 0xB17_4A9) | INNER);
-                self.owners.insert(bitmap.id, self.owners.get(&id).copied().unwrap_or(id));
-                self.redirects.insert(id, (bitmap.id, "o:output".to_string()));
-                self.flat.nodes.push(bitmap);
+                // A picture made grayscale where the input was, as what arrives would be. What
+                // goes wrong reading it is the input's: of the node that uses its graph, or its own.
+                node.id = NodeId(mix(id.0, 0xB17_4A9) | INNER);
+                self.owners.insert(node.id, self.owners.get(&id).copied().unwrap_or(id));
+                self.redirects.insert(id, (node.id, "o:output".to_string()));
+                self.flat.nodes.push(node);
             }
         }
         let gray: HashSet<NodeId> = self
             .redirects
             .keys()
             .copied()
-            .filter(|id| self.flat.node(*id).is_some_and(|n| image_input_kind(n) == ImageKind::Gray))
+            .filter(|id| self.inputs.get(id).is_some_and(|(kind, ..)| *kind == ImageKind::Gray))
             .collect();
         // Follow an input that passes on what arrives at another, as far as it goes.
         let resolve = |mut source: (NodeId, String), redirects: &HashMap<NodeId, (NodeId, String)>| {
@@ -1550,7 +1589,8 @@ mod tests {
         let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
         let used = g.add_instance(instance, [200.0, 0.0]);
         let out = g.add_node(NodeKind::OUTPUT, [400.0, 0.0]);
-        connect(g, noise, "o:output", used, "i:input");
+        g.set_exposed(used, "input", true).unwrap();
+        connect(g, noise, "o:output", used, "p:input");
         connect(g, used, "o:output", out, "i:input");
         // The instance's radius, driven from the graph that uses it.
         let r = g.add_node(NodeKind::FLOAT_INPUT, [0.0, 300.0]);
@@ -1609,8 +1649,9 @@ mod tests {
         assert!(!flat.problems.contains_key(&used), "{:?}", flat.problems);
         assert!(flat.problems[&missing].contains("cannot be found"));
         assert!(flat.problems[&itself].contains("uses itself"));
-        // Nothing arrives at its input: the Image Input stays, its default color.
-        assert!(flat.graph.nodes_of(NodeKind::IMAGE_INPUT).next().is_some());
+        // Nothing arrives at its input: the Image Input is its color.
+        assert!(flat.graph.nodes_of(NodeKind::IMAGE_INPUT).next().is_none());
+        assert!(flat.graph.nodes_of(NodeKind::UNIFORM_COLOR).next().is_some());
         assert!(flat.graph.nodes_of(NodeKind::BLUR).next().is_some());
     }
 
@@ -1623,7 +1664,8 @@ mod tests {
         let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
         let used = g.add_instance(instance, [0.0, 0.0]);
         let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
-        connect(g, noise, "o:output", used, "i:input");
+        g.set_exposed(used, "input", true).unwrap();
+        connect(g, noise, "o:output", used, "p:input");
         g.node_mut(used).unwrap().param_mut("radius").unwrap().value = ParamValue::Float(9.0);
         // The graph loses its input and its radius gets a larger range.
         let s = Arc::make_mut(&mut package.graph_mut(sub).unwrap().graph);
@@ -1638,8 +1680,8 @@ mod tests {
         assert_eq!(node.instance.as_ref().unwrap().graph.name, "Renamed");
         assert_eq!(node.value("radius"), Some(&ParamValue::Float(5.0)), "held to the new range");
         // The link to the input that is gone waits for it.
-        assert!(g.link_into(used, "i:input").is_some());
-        assert!(!g.is_link_live(g.link_into(used, "i:input").unwrap()));
+        assert!(g.link_into(used, "p:input").is_some());
+        assert!(!g.is_link_live(g.link_into(used, "p:input").unwrap()));
         assert!(!sync_instances(&mut package, None, &shelf), "nothing more to do");
     }
 
@@ -1683,7 +1725,7 @@ mod tests {
         };
         let mut expected = kinds(&before);
         // Every grayscale input of the new graph converts what arrives.
-        let conversions = s.nodes_of(NodeKind::IMAGE_INPUT).filter(|n| image_input_kind(n) == ImageKind::Gray).count();
+        let conversions = s.variables.iter().filter(|v| v.image.as_ref().is_some_and(|i| i.kind == ImageKind::Gray)).count();
         expected.extend(std::iter::repeat_n("grayscale", conversions));
         expected.sort();
         assert_eq!(kinds(&after), expected);
@@ -1910,19 +1952,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// An Image Input nothing arrives at shows its picture: the one the node that uses its
-    /// graph gives it, else its own (in its graph seen alone too). What arrives comes first; a
-    /// grayscale input makes the picture grayscale; the pictures are files of the package.
+    fn image_input<'g>(g: &'g mut Graph, name: &str) -> &'g mut crate::graph::ImageInput {
+        g.variable_mut(name).and_then(|v| v.image.as_mut()).expect("an image input")
+    }
+
+    /// An image input is an input value of its graph whose value is a picture: the Image Inputs
+    /// of its name show it while nothing arrives (the graph seen alone too), else its color. A
+    /// node that uses the graph has a parameter for it: a picture of the node's own (none: the
+    /// graph's), or, exposed, a socket, what arrives there coming first. A grayscale input makes
+    /// what it shows grayscale; the pictures are files of the package.
     #[test]
-    fn image_inputs_show_their_pictures() {
+    fn image_inputs_are_input_values_of_pictures() {
+        use crate::Edit;
         let mut tex = Graph::default();
         let input = tex.add_node(NodeKind::IMAGE_INPUT, [0.0, 0.0]);
-        let set = |g: &mut Graph, id: NodeId, key: &str, value: ParamValue| {
-            g.node_mut(id).unwrap().param_mut(key).unwrap().value = value;
-        };
-        set(&mut tex, input, "name", ParamValue::Text("albedo".into()));
-        set(&mut tex, input, "kind", ParamValue::Enum(1));
-        set(&mut tex, input, "image", ParamValue::Text("/own.png".into()));
+        assert_eq!(tex.rename_variable("input", "albedo").unwrap(), "albedo");
+        let apply = |g: &mut Graph, edit: Edit| g_apply(g, edit);
+        assert!(apply(&mut tex, Edit::SetVariableKind { name: "albedo".into(), kind: ImageKind::Color }));
+        assert!(apply(&mut tex, Edit::SetVariablePicture { name: "albedo".into(), picture: "/own.png".into(), default: false }));
+        assert!(apply(&mut tex, Edit::MakeVariableDefault("albedo".into())));
+        assert!(!apply(&mut tex, Edit::MakeVariableDefault("albedo".into())), "it is its default already");
         let out = tex.add_node(NodeKind::OUTPUT, [300.0, 0.0]);
         connect(&mut tex, input, "o:output", out, "i:input");
         let mut package = Package::new("Main", Graph::default());
@@ -1933,63 +1982,99 @@ mod tests {
         };
         let source = |f: &Graph, id: NodeId, socket: &str| f.node(f.link_into(id, socket).unwrap().from).unwrap().clone();
 
-        // Alone: the input is its picture.
+        // Alone: the input is its picture; without one, its color.
         let f = laid_out(&package, t);
         let alone = f.node(input).unwrap();
         assert_eq!((alone.kind, alone.text("path")), (NodeKind::BITMAP, "/own.png"));
         assert_eq!(f.link_into(out, "i:input").unwrap().from, input);
+        image_input(graph_of(&mut package, t), "albedo").picture.clear();
+        let alone = laid_out(&package, t).node(input).unwrap().clone();
+        assert_eq!(alone.kind, NodeKind::UNIFORM_COLOR);
+        assert_eq!(alone.value("color"), Some(&ParamValue::Color(crate::graph::IMAGE_INPUT_COLOR)));
+        assert!(apply(graph_of(&mut package, t), Edit::ResetVariable("albedo".into())), "back to its picture by default");
+        assert_eq!(image_input(graph_of(&mut package, t), "albedo").picture, "/own.png");
 
-        // Used, the graph's picture; given one, that one.
+        // Used: a parameter, not a socket; nothing of its own shows the graph's picture, a picture
+        // of its own, that one.
         let instance = instance_of(&package, t, None);
         let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
         let used = g.add_instance(instance, [0.0, 0.0]);
         let shown = g.add_node(NodeKind::OUTPUT, [300.0, 0.0]);
         connect(g, used, &output_socket_key("output"), shown, "i:input");
+        let node = g.node(used).unwrap();
+        assert_eq!(node.value("albedo"), Some(&ParamValue::Text(String::new())));
+        assert!(!node.is_exposed("albedo"));
+        assert!(g.input_sockets(node).is_empty(), "no socket to plug anything into");
         let bitmap = source(&laid_out(&package, main), shown, "i:input");
         assert_eq!((bitmap.kind, bitmap.text("path")), (NodeKind::BITMAP, "/own.png"));
-        let given = crate::Edit::SetInstanceImage { node: used, input: "albedo".into(), path: Some("/given.png".into()) };
         let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
-        assert!(given.clone().apply(g).unwrap().changed);
-        assert!(!given.apply(g).unwrap().changed, "the same picture again changes nothing");
-        assert!(crate::Edit::SetInstanceImage { node: used, input: "nothing".into(), path: None }.apply(g).is_err());
+        assert!(apply(g, Edit::SetParam { node: used, key: "albedo".into(), value: ParamValue::Text("/given.png".into()) }));
         assert_eq!(source(&laid_out(&package, main), shown, "i:input").text("path"), "/given.png");
         assert!(package.sync_resources());
         assert!(package.resources.iter().any(|r| r.path == "/given.png"), "a file of the package");
 
-        // What arrives comes first.
+        // Exposed: a socket that takes color, and what arrives comes first; not any more, the
+        // node's picture again.
         let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
+        assert!(apply(g, Edit::SetExposed { node: used, key: "albedo".into(), exposed: true }));
+        let socket = g.input_socket(used, &param_socket_key("albedo")).expect("a socket");
+        assert_eq!((socket.ty, socket.slot), (DataType::Image, Slot::Color));
         let noise = g.add_node(NodeKind::NOISE, [-300.0, 0.0]);
-        connect(g, noise, "o:output", used, &input_socket_key("albedo"));
+        connect(g, noise, "o:output", used, &param_socket_key("albedo"));
         assert_eq!(source(&laid_out(&package, main), shown, "i:input").id, noise);
-        g_disconnect(&mut package, main, used, &input_socket_key("albedo"));
+        let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
+        assert!(apply(g, Edit::SetExposed { node: used, key: "albedo".into(), exposed: false }));
+        assert!(g.link_into(used, &param_socket_key("albedo")).is_none());
+        assert_eq!(source(&laid_out(&package, main), shown, "i:input").text("path"), "/given.png");
 
-        // A grayscale input: the picture, made grayscale.
-        let s = Arc::make_mut(&mut package.graph_mut(t).unwrap().graph);
-        set(s, input, "kind", ParamValue::Enum(0));
-        sync_instances(&mut package, None, &Shelf(HashMap::new()));
+        // A grayscale input: the picture, made grayscale; what goes wrong reading it is the node's
+        // that uses the graph, and seen alone, the input's.
+        assert!(apply(graph_of(&mut package, t), Edit::SetVariableKind { name: "albedo".into(), kind: ImageKind::Gray }));
+        assert!(sync_instances(&mut package, None, &Shelf(HashMap::new())));
         let f = laid_out(&package, main);
         let gray = source(&f, shown, "i:input");
         assert_eq!(gray.kind, NodeKind::GRAYSCALE);
         let read = source(&f, gray.id, "i:input");
         assert_eq!((read.kind, read.text("path")), (NodeKind::BITMAP, "/given.png"));
-        // What goes wrong reading it is the node's that uses the graph; seen alone, the input's.
         let lib = Shelf([(None, package.clone())].into_iter().collect());
         assert_eq!(flatten(&lib, None, main).unwrap().owners.get(&read.id), Some(&used));
         let alone = flatten(&lib, None, t).unwrap();
         let own = alone.graph.nodes.iter().find(|n| n.kind == NodeKind::BITMAP).expect("the input's own picture");
         assert_eq!((own.text("path"), alone.owners.get(&own.id)), ("/own.png", Some(&input)));
+        // Without a picture at all, its color: one pixel of gray, as a uniform color is.
+        let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
+        assert!(apply(g, Edit::SetParam { node: used, key: "albedo".into(), value: ParamValue::Text(String::new()) }));
+        image_input(graph_of(&mut package, t), "albedo").picture.clear();
+        let color = source(&laid_out(&package, main), shown, "i:input");
+        assert_eq!((color.kind, color.value("output")), (NodeKind::UNIFORM_COLOR, Some(&ParamValue::Enum(1))));
 
-        // The input renamed: the picture given for it goes, as what arrived there would.
-        let s = Arc::make_mut(&mut package.graph_mut(t).unwrap().graph);
-        set(s, input, "name", ParamValue::Text("base".into()));
+        // The pictures are files of the package, however the paths change.
+        image_input(graph_of(&mut package, t), "albedo").picture = "/b.png".into();
+        let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
+        assert!(apply(g, Edit::SetParam { node: used, key: "albedo".into(), value: ParamValue::Text("/c.png".into()) }));
+        let mut read: Vec<&str> = package.files().map(|(.., path)| path).collect();
+        read.sort();
+        assert_eq!(read, ["/b.png", "/c.png", "/own.png"]);
+        package.map_paths(|p| format!("/moved{p}"));
+        let mut read: Vec<&str> = package.files().map(|(.., path)| path).collect();
+        read.sort();
+        assert_eq!(read, ["/moved/b.png", "/moved/c.png", "/moved/own.png"]);
+
+        // Renamed, the input is another parameter: the picture given for the old one goes, as what
+        // arrived there would.
+        graph_of(&mut package, t).rename_variable("albedo", "base").unwrap();
         assert!(sync_instances(&mut package, None, &Shelf(HashMap::new())));
         let node = package.graph(main).unwrap().graph.node(used).unwrap().clone();
-        assert!(node.instance.unwrap().images.is_empty(), "no picture for an input that is not there");
+        assert!(node.param("albedo").is_none());
+        assert_eq!(node.value("base"), Some(&ParamValue::Text(String::new())));
     }
 
-    fn g_disconnect(package: &mut Package, graph: GraphId, node: NodeId, socket: &str) {
-        let g = Arc::make_mut(&mut package.graph_mut(graph).unwrap().graph);
-        assert!(g.disconnect(node, socket));
+    fn graph_of(package: &mut Package, id: GraphId) -> &mut Graph {
+        Arc::make_mut(&mut package.graph_mut(id).unwrap().graph)
+    }
+
+    fn g_apply(g: &mut Graph, edit: crate::Edit) -> bool {
+        edit.apply(g).unwrap_or_else(|e| panic!("{e}")).changed
     }
 
     #[test]

@@ -9,11 +9,10 @@ mod levels;
 
 use iced::widget::{button, column, container, mouse_area, pick_list, row, scrollable, space, text, text_input, toggler, tooltip};
 use iced::{Alignment, Element, Length};
-use brewed_texture_core::graph::{Node, NodeId, input_socket_key, param_socket_key};
-use brewed_texture_core::instance::port_nodes;
-use brewed_texture_core::nodes::{ImageKind, NodeKind, ParamDef, ParamKind, Role};
+use brewed_texture_core::graph::{Node, NodeId, param_socket_key};
+use brewed_texture_core::nodes::{NodeKind, ParamDef, ParamKind};
 use brewed_texture_core::package::file_name;
-use brewed_texture_core::{Curve, DataType, Edit, Gradient, Instance, Interpolation, ParamValue, Tiling};
+use brewed_texture_core::{Curve, DataType, Edit, Gradient, Interpolation, ParamValue, Tiling, Value};
 
 use crate::app::{App, ColorTarget, FileTarget, Message};
 use crate::icons::{Icon, icon};
@@ -24,6 +23,7 @@ use crate::view::{tip, section};
 use crate::widget::curve::curve_editor;
 use crate::widget::gradient::gradient_editor;
 use crate::widget::number::number;
+use crate::widget::outside::outside;
 use crate::widget::{expose_toggle, socket_icon};
 
 const LABEL_W: f32 = 118.0;
@@ -247,7 +247,7 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
         );
     }
 
-    if let Role::Variable(_) = d.role {
+    if node.variable_type().is_some() {
         col = col.push(variable_section(app, node));
     }
 
@@ -262,11 +262,6 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
     }
     if index == 0 && node.instance.is_some() {
         col = col.push(text("The graph has no input values: its Input nodes are its parameters.").size(style::SMALL).color(style::TEXT_FAINT));
-    }
-    if let Some(instance) = node.instance.as_deref()
-        && !instance.interface.inputs.is_empty()
-    {
-        col = col.push(image_inputs(app, node, instance));
     }
 
     // Node specific sections.
@@ -300,64 +295,6 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
     col.into()
 }
 
-/// The image inputs of a node that uses a graph: what arrives at each, or else the picture the
-/// graph sees there: the one the node gives it, else the graph's own.
-fn image_inputs<'a>(app: &'a App, node: &'a Node, instance: &'a Instance) -> Element<'a, Message> {
-    let used = app.used_graph(&instance.graph);
-    let mut col = column![section("Image Inputs")].spacing(2);
-    for (index, port) in instance.interface.inputs.iter().enumerate() {
-        let kind = port.kind.unwrap_or(ImageKind::Color);
-        let own = used.and_then(|g| port_nodes(g, NodeKind::IMAGE_INPUT).into_iter().find(|n| n.text("name") == port.name));
-        let own_picture = own.map(|n| n.text("image").trim()).filter(|p| !p.is_empty());
-        let none = match own_picture {
-            Some(p) => format!("the graph's own: {}", file_name(p)),
-            None => "none: the graph's default color".to_string(),
-        };
-        let about = format!(
-            "{} image. While nothing arrives at its socket, the graph sees the picture given here; without one, {}.",
-            if kind == ImageKind::Color { "A color" } else { "A grayscale" },
-            match own_picture {
-                Some(p) => format!("its own ({})", file_name(p)),
-                None => "its default color".to_string(),
-            },
-        );
-        let label = tip(
-            row![
-                socket_icon(DataType::Image, true, 11.0, style::image_color(Some(kind))),
-                text(&port.name).size(style::SMALL).color(style::TEXT_DIM).wrapping(text::Wrapping::None),
-            ]
-            .spacing(5)
-            .align_y(Alignment::Center)
-            .width(Length::Fixed(LABEL_W)),
-            about,
-            tooltip::Position::Top,
-        );
-        let arriving = app.graph().link_into(node.id, &input_socket_key(&port.name)).and_then(|l| app.graph().node(l.from));
-        let editor: Element<'a, Message> = match arriving {
-            // What arrives comes first: the picture waits.
-            Some(from) => container(
-                text(format!("Connected: {}", crate::view::graph::node_title(from)))
-                    .size(style::SMALL)
-                    .color(style::TEXT_FAINT)
-                    .wrapping(text::Wrapping::None),
-            )
-            .padding([4, 6])
-            .width(Length::Fill)
-            .clip(true)
-            .style(style::field_box)
-            .into(),
-            None => file_field(app, FileTarget::Instance(node.id, port.name.clone()), none),
-        };
-        col = col.push(
-            container(row![label, editor].spacing(6).align_y(Alignment::Center))
-                .padding([3, 4])
-                .width(Length::Fill)
-                .style(style::stripe(index.is_multiple_of(2))),
-        );
-    }
-    col.into()
-}
-
 fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
     let id = node.id;
     let current = node.variable.clone().unwrap_or_default();
@@ -369,12 +306,16 @@ fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
         section("Input value"),
         row![
             text("Name").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W)),
-            text_input("variable name", editing.as_deref().unwrap_or(&current))
-                .on_input(move |t| Message::BindingText(id, t))
-                .on_submit(Message::CommitBinding)
-                .size(style::TEXT_SIZE)
-                .padding([3, 6])
-                .style(style::text_input),
+            // A click anywhere else in the window takes the name as Enter does.
+            outside(
+                text_input("variable name", editing.as_deref().unwrap_or(&current))
+                    .on_input(move |t| Message::BindingText(id, t))
+                    .on_submit(Message::CommitBinding)
+                    .size(style::TEXT_SIZE)
+                    .padding([3, 6])
+                    .style(style::text_input),
+            )
+            .on_press(editing.is_some().then_some(Message::CommitBinding)),
         ]
         .align_y(Alignment::Center),
         text("Enter a name to use another value. Input nodes with the same name share one value.")
@@ -398,15 +339,22 @@ fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
     if let Some(var) = node.variable.as_deref().and_then(|n| app.graph().variable(n)) {
         let color_open = app.ui.color_picker == Some(ColorTarget::Variable(var.name.clone(), crate::app::VarField::Value));
         let name = var.name.clone();
-        let editor = crate::view::editors::value_editor(
-            var.value,
-            Some(var.default),
-            var.has_range().then_some((var.min, var.max)),
-            move |value| Message::Edit(Edit::SetVariable { name: name.clone(), value }),
-            Message::Seal,
-            color_open,
-            Message::ColorPicker(Some(ColorTarget::Variable(var.name.clone(), crate::app::VarField::Value))),
-        );
+        // The value of an image input is a picture.
+        let editor: Element<'a, Message> = match &var.image {
+            Some(_) => {
+                let color = crate::view::inputs::image_color(var);
+                file_field(app, FileTarget::Variable(name), "no picture: the color".into(), Some(color))
+            }
+            None => crate::view::editors::value_editor(
+                var.value,
+                Some(var.default),
+                var.has_range().then_some((var.min, var.max)),
+                move |value| Message::Edit(Edit::SetVariable { name: name.clone(), value }),
+                Message::Seal,
+                color_open,
+                Message::ColorPicker(Some(ColorTarget::Variable(var.name.clone(), crate::app::VarField::Value))),
+            ),
+        };
         col = col.push(row![text("Value").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W)), editor].align_y(Alignment::Center));
         col = col.push(crate::view::inputs::details(app, var, false));
     }
@@ -427,6 +375,30 @@ fn source_link<'a>(from: NodeId, label: String) -> Element<'a, Message> {
 }
 
 fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value: &'a ParamValue) -> Element<'a, Message> {
+    // An image input: the node images arrive from, or the picture it takes without one.
+    if let ParamKind::Image { kind } = pd.kind {
+        let color = style::image_color(Some(kind));
+        let says: Element<'a, Message> = match app.graph().link_into(node.id, &param_socket_key(pd.key)) {
+            Some(link) => {
+                let from = app.graph().node(link.from).map(crate::view::graph::node_title).unwrap_or_default();
+                row![socket_icon(DataType::Image, true, 12.0, color), source_link(link.from, format!("← {from}"))]
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .into()
+            }
+            None => row![
+                socket_icon(DataType::Image, false, 12.0, style::WARNING),
+                text(format!("not connected · uses {}", graph_picture(node, pd.key, slot_value).0))
+                    .size(style::SMALL)
+                    .color(style::WARNING)
+                    .wrapping(text::Wrapping::None),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into(),
+        };
+        return container(says).padding([4, 6]).width(Length::Fill).clip(true).style(style::field_box).into();
+    }
     let eval = app.eval.node(node.id);
     let ty = slot_value.socket_type().unwrap_or(brewed_texture_core::DataType::Float);
     let color = style::type_color(ty);
@@ -467,8 +439,29 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value
     }
 }
 
+/// What the picture of an image input of the graph a node uses is, in a few words, and the
+/// color seen when it is none: its own (`value`), else the graph's.
+fn graph_picture(node: &Node, key: &str, value: &ParamValue) -> (String, Option<[f32; 4]>) {
+    if let ParamValue::Text(own) = value
+        && !own.trim().is_empty()
+    {
+        return (file_name(own), None);
+    }
+    let param = node.instance.as_ref().and_then(|i| i.interface.param(key));
+    match param.and_then(|p| Some((p.image.as_ref()?, p.value))) {
+        Some((image, _)) if !image.picture.is_empty() => (format!("the graph's: {}", file_name(&image.picture)), None),
+        Some((_, Value::Color(c))) => ("the graph's color".to_string(), Some(c)),
+        _ => ("the graph's".to_string(), None),
+    }
+}
+
 /// A parameter value as a few words, for the hint that offers to put it back.
 fn shown(pd: &ParamDef<'_>, value: &ParamValue) -> String {
+    if let (ParamKind::Image { .. }, ParamValue::Text(t)) = (pd.kind, value)
+        && t.trim().is_empty()
+    {
+        return "the graph's picture".to_string();
+    }
     match value {
         ParamValue::Enum(i) => pd.enum_options().get(*i as usize).map_or_else(|| i.to_string(), |s| s.to_string()),
         ParamValue::Color(c) => brewed_texture_core::Value::Color(*c).display(),
@@ -525,7 +518,7 @@ Changed — middle-click the row to put {} back", pd.tooltip, shown(&pd, &defaul
         editor(app, node, pd, &slot.value)
     };
     let toggle = expose_toggle(
-        pd.can_expose().then(|| slot.value.socket_type()).flatten(),
+        pd.can_expose().then(|| pd.socket(&slot.value).map(|(ty, _)| ty)).flatten(),
         exposed,
         (pd.can_expose() && !not_applicable)
             .then(|| Message::Edit(Edit::SetExposed { node: id, key: pd.key.to_string(), exposed: !exposed })),
@@ -623,14 +616,14 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
         }
         // A file: chosen, or dragged from the Explorer; not a path to type.
         (ParamKind::File { .. }, ParamValue::Text(_)) => {
-            let none = if node.kind == NodeKind::IMAGE_INPUT {
-                "none: the default color"
-            } else if node.kind == NodeKind::TEXT {
-                "none: Inter, built in"
-            } else {
-                "no file"
-            };
-            file_field(app, FileTarget::Param(id, key.to_string()), none.to_string())
+            let none = if node.kind == NodeKind::TEXT { "none: Inter, built in" } else { "no file" };
+            file_field(app, FileTarget::Param(id, key.to_string()), none.to_string(), None)
+        }
+        // The picture a node gives an image input of the graph it uses; none of its own: the
+        // graph's, which the field says.
+        (ParamKind::Image { .. }, ParamValue::Text(_)) => {
+            let (none, color) = graph_picture(node, key, &ParamValue::Text(String::new()));
+            file_field(app, FileTarget::Param(id, key.to_string()), none, color)
         }
         (ParamKind::Text { .. }, ParamValue::Text(s)) => text_input("", s)
             .on_input(move |t| set(id, key, ParamValue::Text(t)))

@@ -113,30 +113,17 @@ pub static COMPOSE_COLOR: NodeDef = NodeDef {
     role: Role::Value,
 };
 
-/// What an Image Input takes, in the order of its "kind" parameter.
-pub const IMAGE_INPUT_KINDS: &[&str] = &["Grayscale", "Color"];
-
 pub static IMAGE_INPUT: NodeDef = NodeDef {
     id: "image_input",
     name: "Image Input",
     category: Category::Values,
-    description: "An image the graph takes. Used as a node in another graph, the graph gets an input of \
-                  this name. While nothing arrives there, the graph sees the picture the node gives the input, \
-                  else its image here, else its default color.",
-    keywords: "input image graph instance socket parameter",
+    description: "An image the graph takes: an input value of the graph (shown in Input Values) whose value \
+                  is a picture; Image Inputs with the same name share one. Used as a node in another graph, the \
+                  graph has a parameter of this name: a picture of that node's, or, exposed, a socket.",
+    keywords: "input image graph instance socket parameter picture",
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,
-    params: &[
-        text("name", "Name", "input").tip("The name of the input the graph has as a node in another graph."),
-        choice("kind", "Kind", 0, IMAGE_INPUT_KINDS)
-            .fixed()
-            .tip("What the graph takes: an image that arrives is made grayscale or color."),
-        file("image", "Image", PICTURE_FILES).tip(
-            "What the graph sees here while nothing arrives (a node that uses the graph can give it another). \
-             It is one of the package's files; drag one onto it from the Explorer.",
-        ),
-        color("default", "Default", [0.5, 0.5, 0.5, 1.0]).tip("What the graph sees here while nothing arrives and it has no image."),
-    ],
+    params: &[],
     role: Role::Image,
 };
 
@@ -146,8 +133,8 @@ pub static GRAPH_INSTANCE: NodeDef = NodeDef {
     id: "graph_instance",
     name: "Graph",
     category: Category::Graphs,
-    description: "A graph used as a node: its image inputs, outputs and input values are the node's. \
-                  Changed where it is, it changes everywhere it is used.",
+    description: "A graph used as a node: its outputs and its input values (its image inputs among them) \
+                  are the node's. Changed where it is, it changes everywhere it is used.",
     keywords: "instance graph package reference",
     inputs: NO_SOCKETS,
     outputs: NO_SOCKETS,

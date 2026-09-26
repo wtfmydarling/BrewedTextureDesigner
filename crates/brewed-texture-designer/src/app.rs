@@ -64,12 +64,13 @@ pub enum DragPayload {
 /// A field that says which file something reads.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FileTarget {
-    /// A file parameter of a node: the file of a Bitmap, the image of an Image Input ...
+    /// A file parameter of a node: the file of a Bitmap, the font of a Text, the picture a node
+    /// that uses a graph gives an image input of it…
     Param(NodeId, String),
-    /// The image of the graph's Image Inputs of this name (in the Input Values).
-    Input(String),
-    /// The picture a node that uses a graph gives its image input of this name.
-    Instance(NodeId, String),
+    /// The picture of an image input of the graph (an input value).
+    Variable(String),
+    /// The picture an image input of the graph has by default.
+    VariableDefault(String),
 }
 
 impl DragPayload {
@@ -2906,14 +2907,6 @@ impl App {
 
     pub fn view(&self, window: window::Id) -> iced::Element<'_, Message> {
         if Some(window) == self.window { view::root(self) } else { view::picker::view(self, window) }
-    }
-}
-
-/// File extensions a node's File parameter accepts.
-pub fn file_extensions(kind: NodeKind, key: &str) -> &'static [&'static str] {
-    match kind.def().param(key).map(|pd| pd.kind) {
-        Some(brewed_texture_core::nodes::ParamKind::File { extensions }) => extensions,
-        _ => &[],
     }
 }
 

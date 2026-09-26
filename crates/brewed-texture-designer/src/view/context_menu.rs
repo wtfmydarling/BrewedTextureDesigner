@@ -145,6 +145,9 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
                     there.then(|| Message::Explorer(ExplorerMessage::Embed(key, vec![path.clone()]))),
                 ));
                 items.push(item(if there { "Relink…" } else { "Locate…" }, "", explorer(ExplorerMessage::Locate(key, path.clone()))));
+                // (A file edited elsewhere is read again by itself; a disk that says nothing of
+                // it, on the network say, may need asking.)
+                items.push(item("Read Again", "", there.then(|| Message::ReloadFile(path.clone()))));
             }
             items.extend([separator(), item("Remove from Package", "", explorer(ExplorerMessage::RemoveResource(key, path.clone())))]);
             items

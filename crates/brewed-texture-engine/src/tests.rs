@@ -711,7 +711,8 @@ fn a_graph_used_as_a_node_computes_what_its_nodes_do() {
     let node = g.add_instance(instance.clone(), [200.0, 0.0]);
     let alone = g.add_instance(instance, [200.0, 300.0]);
     g.node_mut(node).unwrap().param_mut("radius").unwrap().value = ParamValue::Float(12.0);
-    g.connect(noise, "o:output", node, "i:input").unwrap();
+    g.set_exposed(node, "input", true).unwrap();
+    g.connect(noise, "o:output", node, "p:input").unwrap();
     let flat = flatten(&One(package), None, main).unwrap();
     assert!(flat.problems.is_empty(), "{:?}", flat.problems);
     let got = eval_read(&mut e, &flat.graph, node);
@@ -2725,8 +2726,9 @@ fn the_largest_pictures_are_read() {
 }
 
 /// An Image Input nothing arrives at shows its picture, on the GPU as a Bitmap of the picture
-/// would: the one the node that uses its graph gives it, else its own; made grayscale for an
-/// input that takes grayscale, as it is for one that takes color.
+/// would: the one the node that uses its graph gives it, else the graph's; made grayscale for an
+/// input that takes grayscale, as it is for one that takes color. Without a picture, its color:
+/// its luminance, in a grayscale image, for an input that takes grayscale.
 #[test]
 fn image_inputs_show_their_pictures_as_bitmaps_would() {
     use brewed_texture_core::package::{Library, Package, flatten};
@@ -2749,22 +2751,22 @@ fn image_inputs_show_their_pictures_as_bitmaps_would() {
     image::RgbaImage::from_pixel(8, 8, image::Rgba([40, 160, 220, 255])).save(&plain).unwrap();
     let (across, plain) = (across.display().to_string(), plain.display().to_string());
 
-    // A graph that gives out what arrives at its input (grayscale), whose own picture is plain.
+    // A graph that gives out what arrives at its input (grayscale), whose picture is plain.
     let mut shows = graph();
     let input = shows.add_node(NodeKind::IMAGE_INPUT, [0.0, 0.0]);
     let out = shows.add_node(NodeKind::OUTPUT, [300.0, 0.0]);
     shows.connect(input, "o:output", out, "i:input").unwrap();
-    set(&mut shows, input, "image", ParamValue::Text(plain.clone()));
+    let name = shows.node(input).unwrap().variable.clone().unwrap();
+    shows.variable_mut(&name).unwrap().image.as_mut().unwrap().picture = plain.clone();
     let mut package = Package::new("Main", graph());
     let used = package.add_graph("Shows", shows);
     let main = package.first();
     let interface = Interface::of(&package.graph(used).unwrap().graph);
-    let name = interface.inputs[0].name.clone();
-    let mut instance = Instance::new(GraphRef { package: None, graph: used, name: "Shows".into() }, interface);
+    let instance = Instance::new(GraphRef { package: None, graph: used, name: "Shows".into() }, interface);
     let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
     let own = g.add_instance(instance.clone(), [0.0, 0.0]);
-    instance.images.insert(name, across.clone());
     let given = g.add_instance(instance, [0.0, 300.0]);
+    set(g, given, &name, ParamValue::Text(across.clone()));
 
     // Each picture as a Bitmap reads it, made grayscale or not.
     let read = |e: &mut Engine, path: &str, gray: bool| {
@@ -2780,14 +2782,31 @@ fn image_inputs_show_their_pictures_as_bitmaps_would() {
     };
     let flat = flatten(&One(package.clone()), None, main).unwrap();
     assert!(flat.problems.is_empty(), "{:?}", flat.problems);
-    assert_eq!(eval_read(&mut e, &flat.graph, own), read(&mut e, &plain, true), "the input's own picture");
+    assert_eq!(eval_read(&mut e, &flat.graph, own), read(&mut e, &plain, true), "the graph's picture");
     assert_eq!(eval_read(&mut e, &flat.graph, given), read(&mut e, &across, true), "the node's picture");
     // An input that takes color: the pictures as they are.
     let s = Arc::make_mut(&mut package.graph_mut(used).unwrap().graph);
-    set(s, input, "kind", ParamValue::Enum(1));
-    let flat = flatten(&One(package), None, main).unwrap();
+    s.variable_mut(&name).unwrap().image.as_mut().unwrap().kind = brewed_texture_core::nodes::ImageKind::Color;
+    let flat = flatten(&One(package.clone()), None, main).unwrap();
     assert_eq!(eval_read(&mut e, &flat.graph, own), read(&mut e, &plain, false));
     assert_eq!(eval_read(&mut e, &flat.graph, given), read(&mut e, &across, false));
+    // No picture: its color, as it is, or its luminance in a grayscale image of one pixel.
+    let s = Arc::make_mut(&mut package.graph_mut(used).unwrap().graph);
+    let var = s.variable_mut(&name).unwrap();
+    var.value = brewed_texture_core::Value::Color([0.2, 0.4, 0.6, 1.0]);
+    var.image.as_mut().unwrap().picture.clear();
+    let flat = flatten(&One(package.clone()), None, main).unwrap();
+    let shown = pixel(&eval_read(&mut e, &flat.graph, own), 0, 0);
+    assert!(shown.iter().zip([0.2, 0.4, 0.6, 1.0]).all(|(a, b)| close(*a, b, 1e-3)), "its color: {shown:?}");
+    let s = Arc::make_mut(&mut package.graph_mut(used).unwrap().graph);
+    s.variable_mut(&name).unwrap().image.as_mut().unwrap().kind = brewed_texture_core::nodes::ImageKind::Gray;
+    let flat = flatten(&One(package), None, main).unwrap();
+    evaluate_blocking(&mut e, &flat.graph);
+    let kind = e.reports().get(&own).and_then(|r| r.kind);
+    assert_eq!(kind, Some(brewed_texture_core::nodes::ImageKind::Gray), "grayscale");
+    let (_, _, data) = e.read_image(own).unwrap();
+    let l = 0.2126 * 0.2 + 0.7152 * 0.4 + 0.0722 * 0.6;
+    assert!(close(data[0], l, 2e-3), "its luminance: {:?}", &data[..4]);
     assert!(e.gpu.take_errors().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }

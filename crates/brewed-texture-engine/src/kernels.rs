@@ -517,15 +517,8 @@ fn direction(deg: f32) -> [f32; 2] {
 
 // ------------------------------------------------------------------ generators
 
-fn uniform_color(cx: &mut ExecCtx) -> Result<Option<String>, String> {
-    cx.gpu.run(cx.encoder, "uniform_color", bytes(&ColorU { color: cx.params.color("color") }), &[], cx.output)?;
-    Ok(None)
-}
-
-/// What an Image Input is while nothing arrives at it (and what the graph sees on its own):
-/// its default color, made what it takes.
-fn image_input(cx: &mut ExecCtx) -> Result<Option<String>, String> {
-    let c = cx.params.color("default");
+/// A color, or its luminance in a grayscale image.
+fn uniform(cx: &mut ExecCtx, c: [f32; 4]) -> Result<Option<String>, String> {
     let color = if cx.output.is_gray() {
         let l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
         [l, l, l, c[3]]
@@ -534,6 +527,16 @@ fn image_input(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     };
     cx.gpu.run(cx.encoder, "uniform_color", bytes(&ColorU { color }), &[], cx.output)?;
     Ok(None)
+}
+
+fn uniform_color(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    uniform(cx, cx.params.color("color"))
+}
+
+/// An Image Input computed as it is (a graph laid out never has one: each is what it shows,
+/// see `brewed_texture_core::package::flatten`): the color of an image input by default.
+fn image_input(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    uniform(cx, brewed_texture_core::graph::IMAGE_INPUT_COLOR)
 }
 
 fn shape(cx: &mut ExecCtx) -> Result<Option<String>, String> {

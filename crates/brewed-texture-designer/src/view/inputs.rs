@@ -2,20 +2,21 @@
 //! uses its name; Input nodes with the same name share the value (like material
 //! parameters in Unreal). Values are edited here or in an Input node's properties.
 //!
-//! The pictures of the graph's Image Inputs are chosen here too: what the graph sees at each
-//! while nothing arrives there.
+//! An image input is one of them: its value is a picture (Image Input nodes of one name
+//! share it), with a picture by default, what it takes and its color while it has none.
 
-use iced::widget::{button, column, container, row, scrollable, space, text, text_input, tooltip};
+use iced::widget::{button, column, container, pick_list, row, scrollable, space, text, text_input, tooltip};
 use iced::{Alignment, Element, Length};
-use brewed_texture_core::graph::{Node, Variable};
-use brewed_texture_core::instance::{image_input_kind, port_nodes};
+use brewed_texture_core::graph::{ImageInput, Variable};
 use brewed_texture_core::nodes::ImageKind;
-use brewed_texture_core::{DataType, Edit, NodeKind};
+use brewed_texture_core::package::file_name;
+use brewed_texture_core::{DataType, Edit, Value};
 
 use crate::app::{App, ColorTarget, DragPayload, FileTarget, Message, VarField};
 use crate::icons::{Icon, icon};
 use crate::style;
-use crate::view::editors::{file_field, value_editor};
+use crate::view::editors::{file_field, swatch, value_editor};
+use crate::widget::outside::outside;
 use crate::widget::pressable::pressable;
 use crate::widget::socket_icon;
 
@@ -29,6 +30,65 @@ fn field_row<'a>(label: &'a str, editor: impl Into<Element<'a, Message>>) -> Ele
 fn set_value(name: &str) -> impl Fn(brewed_texture_core::Value) -> Message + Clone + 'static {
     let name = name.to_string();
     move |value| Message::Edit(Edit::SetVariable { name: name.clone(), value })
+}
+
+/// The color an image input shows while it has no picture.
+pub fn image_color(var: &Variable) -> [f32; 4] {
+    match var.value {
+        Value::Color(c) => c,
+        _ => brewed_texture_core::graph::IMAGE_INPUT_COLOR,
+    }
+}
+
+/// What a value of an input value is, in a few words: its value, or a picture by its name.
+fn said(var: &Variable, default: bool) -> String {
+    match &var.image {
+        Some(image) => {
+            let picture = if default { &image.default } else { &image.picture };
+            if picture.is_empty() { "no picture".to_string() } else { file_name(picture) }
+        }
+        None => (if default { var.default } else { var.value }).display(),
+    }
+}
+
+/// The socket an input value is on a node that uses the graph, drawn: a diamond in the color
+/// of its type, or a circle for an image input, in the color of what it takes.
+fn socket_of<'a>(var: &Variable) -> Element<'a, Message> {
+    match &var.image {
+        Some(image) => socket_icon(DataType::Image, true, 12.0, style::image_color(Some(image.kind))),
+        None => socket_icon(var.ty, true, 12.0, style::type_color(var.ty)),
+    }
+}
+
+/// The settings of an image input that are not its picture: what it takes, the picture it
+/// has by default, and its color while it has none.
+fn image_settings<'a>(app: &'a App, var: &'a Variable, image: &'a ImageInput, mut col: iced::widget::Column<'a, Message>) -> iced::widget::Column<'a, Message> {
+    let name = var.name.clone();
+    let kinds = [ImageKind::Gray, ImageKind::Color];
+    let kind = {
+        let name = name.clone();
+        pick_list(kinds.map(Kind), Some(Kind(image.kind)), move |k: Kind| Message::Edit(Edit::SetVariableKind { name: name.clone(), kind: k.0 }))
+            .width(Length::Fill)
+            .text_size(style::TEXT_SIZE)
+            .padding([3, 6])
+            .style(style::pick_list)
+    };
+    col = col.push(field_row("Kind", crate::view::tip(kind, "What the graph takes here: an image that arrives is made grayscale or color.", tooltip::Position::Top)));
+    let color = image_color(var);
+    col = col.push(field_row("Default", file_field(app, FileTarget::VariableDefault(name.clone()), "no picture: the color".into(), Some(color))));
+    let open = app.ui.color_picker == Some(ColorTarget::Variable(name.clone(), VarField::Value));
+    let chip = swatch(color, open, Message::ColorPicker(Some(ColorTarget::Variable(name, VarField::Value))));
+    col.push(field_row("Color", crate::view::tip(chip, "What the graph sees here while the input has no picture.", tooltip::Position::Top)))
+}
+
+/// An image kind in a pick list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Kind(ImageKind);
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.name())
+    }
 }
 
 /// Settings of a variable (also shown in the properties of an Input node). `rename`
@@ -45,12 +105,17 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
         .size(style::TEXT_SIZE)
         .padding([3, 6])
         .style(style::text_input);
+    // A click anywhere else in the window renames it as Enter does.
+    let name_input = outside(name_input).on_press(renaming.map(|_| Message::CommitRename));
     let mut col = column![].spacing(5);
     if rename {
         col = col.push(field_row("Name", name_input));
     }
     if rename && renaming.is_some_and(|t| t != var.name) {
-        col = col.push(field_row("", text("Enter renames it everywhere, Esc cancels").size(style::SMALL).color(style::ACCENT_TEXT)));
+        col = col.push(field_row(
+            "",
+            text("Enter or a click elsewhere renames it everywhere, Esc cancels").size(style::SMALL).color(style::ACCENT_TEXT),
+        ));
     }
     col = col.push(field_row(
         "Description",
@@ -64,21 +129,26 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
             .style(style::text_input),
     ));
 
-    let range = var.has_range().then_some((var.min, var.max));
-    let default_open = app.ui.color_picker == Some(ColorTarget::Variable(var.name.clone(), VarField::Default));
-    let default_editor = value_editor(
-        var.default,
-        None,
-        range,
-        {
-            let name = name.clone();
-            move |value| Message::Edit(Edit::SetVariableDefault { name: name.clone(), value })
-        },
-        Message::Seal,
-        default_open,
-        Message::ColorPicker(Some(ColorTarget::Variable(var.name.clone(), VarField::Default))),
-    );
-    col = col.push(field_row("Default", default_editor));
+    match &var.image {
+        Some(image) => col = image_settings(app, var, image, col),
+        None => {
+            let range = var.has_range().then_some((var.min, var.max));
+            let default_open = app.ui.color_picker == Some(ColorTarget::Variable(var.name.clone(), VarField::Default));
+            let default_editor = value_editor(
+                var.default,
+                None,
+                range,
+                {
+                    let name = name.clone();
+                    move |value| Message::Edit(Edit::SetVariableDefault { name: name.clone(), value })
+                },
+                Message::Seal,
+                default_open,
+                Message::ColorPicker(Some(ColorTarget::Variable(var.name.clone(), VarField::Default))),
+            );
+            col = col.push(field_row("Default", default_editor));
+        }
+    }
     if var.has_range() {
         let min_name = name.clone();
         let max = var.max;
@@ -105,7 +175,7 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
         col = col.push(field_row("Min", min_editor));
         col = col.push(field_row("Max", max_editor));
     }
-    let at_default = var.value == var.default;
+    let at_default = var.is_default();
     col = col.push(
         row![
             space().width(Length::Fixed(78.0)),
@@ -116,13 +186,17 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
             button(text("Set as default").size(style::SMALL))
                 .padding([3, 8])
                 .style(style::button)
-                .on_press_maybe((!at_default).then(|| Message::Edit(Edit::SetVariableDefault { name: name.clone(), value: var.value }))),
+                .on_press_maybe((!at_default).then(|| Message::Edit(Edit::MakeVariableDefault(name.clone())))),
         ]
         .spacing(6),
     );
     let users = app.graph().variable_users(&var.name).count();
+    let (what, node) = match &var.image {
+        Some(image) => (format!("{} image", image.kind.name()), "Image Input node"),
+        None => (var.ty.name().to_string(), "Input node"),
+    };
     col = col.push(
-        text(format!("{} · used by {users} Input node{}", var.ty.name(), if users == 1 { "" } else { "s" }))
+        text(format!("{what} · used by {users} {node}{}", if users == 1 { "" } else { "s" }))
             .size(style::SMALL)
             .color(style::TEXT_FAINT),
     );
@@ -134,29 +208,36 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
     let color_open = app.ui.color_picker == Some(ColorTarget::Variable(var.name.clone(), VarField::Value));
     let range = var.has_range().then_some((var.min, var.max));
     // The value of a variable is compared with its own default, so a changed input says so
-    // in the same way a changed parameter does.
-    let editor = value_editor(
-        var.value,
-        Some(var.default),
-        range,
-        set_value(&var.name),
-        Message::Seal,
-        color_open,
-        Message::ColorPicker(Some(ColorTarget::Variable(var.name.clone(), VarField::Value))),
-    );
+    // in the same way a changed parameter does. The value of an image input is its picture.
+    let editor: Element<'a, Message> = match &var.image {
+        Some(_) => file_field(app, FileTarget::Variable(var.name.clone()), "no picture: the color".into(), Some(image_color(var))),
+        None => value_editor(
+            var.value,
+            Some(var.default),
+            range,
+            set_value(&var.name),
+            Message::Seal,
+            color_open,
+            Message::ColorPicker(Some(ColorTarget::Variable(var.name.clone(), VarField::Value))),
+        ),
+    };
     let grip = crate::view::tip(
         pressable(icon(Icon::Grip, 14.0, style::TEXT_FAINT))
             .padding([2, 1])
             .on_press(Message::PanelPress(DragPayload::Variable(var.name.clone()))),
-        "Drag onto the graph to add another Input node with this value",
+        if var.image.is_some() {
+            "Drag onto the graph to add another Image Input with this picture"
+        } else {
+            "Drag onto the graph to add another Input node with this value"
+        },
         tooltip::Position::Right,
     );
     // A value that is no longer the one the input came with says so, and the middle button
     // puts that one back.
-    let changed = var.value != var.default;
+    let changed = !var.is_default();
     let title = if changed { format!("{}*", var.name) } else { var.name.clone() };
     let name = row![
-        socket_icon(var.ty, true, 12.0, style::type_color(var.ty)),
+        socket_of(var),
         text(title)
             .size(style::TEXT_SIZE)
             .font(if changed { style::italic() } else { style::bold() })
@@ -168,10 +249,10 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
     let hint = match (var.description.is_empty(), changed) {
         (true, false) => String::new(),
         (false, false) => var.description.clone(),
-        (true, true) => format!("Changed — middle-click the row to put {} back", var.default.display()),
+        (true, true) => format!("Changed — middle-click the row to put {} back", said(var, true)),
         (false, true) => format!("{}
 
-Changed — middle-click the row to put {} back", var.description, var.default.display()),
+Changed — middle-click the row to put {} back", var.description, said(var, true)),
     };
     let name: Element<'a, Message> = crate::view::tip(name, hint, tooltip::Position::Bottom);
     let header = row![
@@ -196,51 +277,17 @@ Changed — middle-click the row to put {} back", var.description, var.default.d
     iced::widget::mouse_area(row).on_middle_press(Message::Edit(Edit::ResetVariable(var.name.clone()))).into()
 }
 
-/// An Image Input of the graph (the upper one of its name, whose picture all of them take):
-/// the picture the graph sees there while nothing arrives.
-fn image_input_row<'a>(app: &'a App, node: &'a Node, index: usize) -> Element<'a, Message> {
-    let name = node.text("name");
-    let kind = image_input_kind(node);
-    let about = format!(
-        "{} image the graph takes. While nothing arrives there, the graph sees this picture (without one, the \
-         default color). Used in another graph, the node that uses it can give it another.",
-        if kind == ImageKind::Color { "A color" } else { "A grayscale" },
-    );
-    let label = crate::view::tip(
-        row![
-            socket_icon(DataType::Image, true, 12.0, style::image_color(Some(kind))),
-            text(name).size(style::TEXT_SIZE).font(style::bold()).wrapping(text::Wrapping::None),
-        ]
-        .spacing(5)
-        .align_y(Alignment::Center),
-        about,
-        tooltip::Position::Bottom,
-    );
-    let field = file_field(app, FileTarget::Input(name.to_string()), "none: the default color".into());
-    let row = row![
-        // The width of the grip of a value's row: the names line up.
-        space().width(Length::Fixed(16.0)),
-        container(label).width(Length::FillPortion(2)).clip(true),
-        container(field).width(Length::FillPortion(3)),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center);
-    container(row).padding([5, 6]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2))).into()
-}
-
 pub fn view(app: &App) -> Element<'_, Message> {
     let vars = &app.graph().variables;
-    let images = port_nodes(app.graph(), NodeKind::IMAGE_INPUT);
-    let count = vars.len() + images.len();
-    let header = crate::view::pane_header("Input Values", text(count.to_string()).size(style::SMALL).color(style::TEXT_FAINT));
-    let body: Element<'_, Message> = if count == 0 {
+    let header = crate::view::pane_header("Input Values", text(vars.len().to_string()).size(style::SMALL).color(style::TEXT_FAINT));
+    let body: Element<'_, Message> = if vars.is_empty() {
         container(
             column![
                 text("No input values yet.").size(style::TEXT_SIZE),
                 text(
-                    "Add Float, Integer, Boolean, Vec2 or Color Input nodes from the library. The name of each \
-                     Input node is a value here; Input nodes with the same name share it. The pictures of \
-                     Image Input nodes are chosen here too."
+                    "Add Float, Integer, Boolean, Vec2, Color or Image Input nodes from the library. The name of \
+                     each Input node is a value here; Input nodes with the same name share it. The value of an \
+                     image input is a picture."
                 )
                 .size(style::SMALL)
                 .color(style::TEXT_DIM),
@@ -251,19 +298,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .into()
     } else {
         let mut list = column![].spacing(2);
-        // Both kinds: each under its name.
-        let both = !vars.is_empty() && !images.is_empty();
-        if both {
-            list = list.push(crate::view::section("Values"));
-        }
         for (i, v) in vars.iter().enumerate() {
             list = list.push(variable_row(app, v, i));
-        }
-        if !images.is_empty() {
-            list = list.push(crate::view::section("Images"));
-        }
-        for (i, node) in images.into_iter().enumerate() {
-            list = list.push(image_input_row(app, node, i));
         }
         scrollable(container(list).padding([0, 6])).height(Length::Fill).style(style::scrollable).into()
     };

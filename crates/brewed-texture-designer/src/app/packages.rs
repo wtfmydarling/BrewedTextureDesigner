@@ -17,7 +17,7 @@ use iced::{Task, Vector};
 use brewed_texture_core::package::{self, Flat, Library, Missing, MissingKind, Package, PackageEdit, ResourceKind};
 use brewed_texture_core::project::{self, ViewState};
 use brewed_texture_core::{
-    Document, Edit, Graph, GraphId, GraphRef, Instance, Interface, NodeId, NodeKind, ParamValue,
+    Document, Edit, Graph, GraphId, GraphRef, Instance, Interface, NodeId, NodeKind, ParamKind, ParamValue,
 };
 
 use super::{App, Collected, ContextMenu, Dialog, DragPayload, ExplorerMessage, FileTarget, Fold, Message, MissingFiles, PendingAction, blocking};
@@ -479,43 +479,36 @@ impl App {
     /// The files a field takes: their extensions, lower case (none: any).
     pub fn takes(&self, target: &FileTarget) -> &'static [&'static str] {
         match target {
-            FileTarget::Param(node, key) => self.graph().node(*node).map_or(&[][..], |n| super::file_extensions(n.kind, key)),
-            FileTarget::Input(_) | FileTarget::Instance(..) => brewed_texture_core::nodes::PICTURE_FILES,
+            FileTarget::Param(node, key) => match self.graph().node(*node).and_then(|n| n.param_def(key)).map(|pd| pd.kind) {
+                Some(ParamKind::File { extensions }) => extensions,
+                Some(ParamKind::Image { .. }) => brewed_texture_core::nodes::PICTURE_FILES,
+                _ => &[],
+            },
+            FileTarget::Variable(_) | FileTarget::VariableDefault(_) => brewed_texture_core::nodes::PICTURE_FILES,
         }
     }
 
     /// The file a field reads (empty: none).
     pub fn file_of(&self, target: &FileTarget) -> &str {
         let graph = self.graph();
+        let image = |name: &str| graph.variable(name).and_then(|v| v.image.as_ref());
         match target {
             FileTarget::Param(node, key) => graph.node(*node).map_or("", |n| n.text(key)),
-            // (Of Image Inputs of one name, the upper one is the input.)
-            FileTarget::Input(name) => brewed_texture_core::instance::port_nodes(graph, NodeKind::IMAGE_INPUT)
-                .into_iter()
-                .find(|n| n.text("name") == name)
-                .map_or("", |n| n.text("image")),
-            FileTarget::Instance(node, input) => {
-                graph.node(*node).and_then(|n| n.instance.as_ref()?.images.get(input)).map_or("", String::as_str)
-            }
+            FileTarget::Variable(name) => image(name).map_or("", |i| i.picture.as_str()),
+            FileTarget::VariableDefault(name) => image(name).map_or("", |i| i.default.as_str()),
         }
     }
 
     /// Make a field read the file at `path`, or none, as one step to undo. A file the package
     /// did not use before becomes one of its files (see the Explorer's Resources).
     pub(super) fn set_file(&mut self, target: FileTarget, path: Option<String>) -> Task<Message> {
-        let value = || ParamValue::Text(path.clone().unwrap_or_default());
-        let edits = match target {
-            FileTarget::Param(node, key) => vec![Edit::SetParam { node, key, value: value() }],
-            // Image Inputs of one name are one input: they take one picture.
-            FileTarget::Input(name) => self
-                .graph()
-                .nodes_of(NodeKind::IMAGE_INPUT)
-                .filter(|n| n.text("name") == name)
-                .map(|n| Edit::SetParam { node: n.id, key: "image".into(), value: value() })
-                .collect(),
-            FileTarget::Instance(node, input) => vec![Edit::SetInstanceImage { node, input, path }],
+        let picture = path.unwrap_or_default();
+        let edit = match target {
+            FileTarget::Param(node, key) => Edit::SetParam { node, key, value: ParamValue::Text(picture) },
+            FileTarget::Variable(name) => Edit::SetVariablePicture { name, picture, default: false },
+            FileTarget::VariableDefault(name) => Edit::SetVariablePicture { name, picture, default: true },
         };
-        self.apply_all(edits);
+        self.apply(edit);
         self.doc.seal();
         // A new file is looked at now, for its picture.
         if self.new_files() { self.look_at_files() } else { Task::none() }
@@ -527,16 +520,6 @@ impl App {
             DragPayload::Graph { key, graph, .. } => self.graph_refusal(*key, *graph),
             _ => None,
         }
-    }
-
-    /// The graph a node uses, where it is found: in its package, another open package or one
-    /// read for it.
-    pub fn used_graph(&self, r: &GraphRef) -> Option<&Graph> {
-        let package = match &r.package {
-            None => Some(self.doc.package()),
-            Some(path) => self.open_key(path).and_then(|k| self.package_doc(k)).map(Document::package).or_else(|| self.deps.get(path)),
-        };
-        package?.find(r).map(|e| e.graph.as_ref())
     }
 
     /// Open the graph a node uses: in its package, which the Explorer opens if it has to.

@@ -28,10 +28,11 @@ fn kind_of(extensions: &[&str]) -> Option<ResourceKind> {
 }
 
 /// The file a node or a graph reads: a picture of it and its name, and buttons to choose
-/// another, to read it again (edited elsewhere) and to read none; `none` says what reading none
-/// means. A file of the packages dragged from the Explorer is dropped on it: while one is
-/// dragged, the field says at once whether it takes it.
-pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String) -> Element<'a, Message> {
+/// another and to read none; `none` says what reading none means, and `color` is what is seen
+/// then, when it is a color. (A file edited elsewhere is read again by itself.) A file of the
+/// packages dragged from the Explorer is dropped on it: while one is dragged, the field says at
+/// once whether it takes it.
+pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String, color: Option<[f32; 4]>) -> Element<'a, Message> {
     let extensions = app.takes(&target);
     let kind = kind_of(extensions);
     if let Some(DragPayload::Resource { path: dragged, .. }) = &app.ui.drag {
@@ -63,9 +64,13 @@ pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String) -> Element
     // Not looked at yet: taken as there.
     let there = state.is_none_or(|s| s.there);
     let preview = state.and_then(|s| s.preview.as_ref());
-    let picture: Element<'a, Message> = match preview {
-        Some(p) => image(p.image.clone()).width(22).height(22).content_fit(ContentFit::Contain).into(),
-        None => {
+    let picture: Element<'a, Message> = match (preview, color.filter(|_| path.is_empty())) {
+        (Some(p), _) => image(p.image.clone()).width(22).height(22).content_fit(ContentFit::Contain).into(),
+        (None, Some(c)) => container(container(space().width(16).height(14)).style(style::chip(style::color_of(c))))
+            .width(22)
+            .center_x(22)
+            .into(),
+        (None, None) => {
             let glyph = match kind {
                 Some(ResourceKind::Svg) => Icon::Vector,
                 Some(ResourceKind::Font) => Icon::Font,
@@ -90,6 +95,9 @@ pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String) -> Element
     if let Some((_, why)) = state.and_then(|s| s.failed.as_ref()) {
         about.push(why.clone());
     }
+    if !path.is_empty() && !embedded {
+        about.push("Edited elsewhere, it is read again by itself.".into());
+    }
     about.push("Drag a file onto it from the Explorer, or choose one.".into());
     let shown = container(
         row![picture, text(name).size(style::SMALL).color(color).wrapping(text::Wrapping::None)].spacing(6).align_y(Alignment::Center),
@@ -104,13 +112,6 @@ pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String) -> Element
         tooltip::Position::Top,
     )]
     .spacing(4);
-    if !path.is_empty() && !embedded {
-        buttons = buttons.push(tip(
-            button(icon(Icon::Refresh, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(Message::ReloadFile(path.to_string())),
-            "Read the file again (edited elsewhere; a file that changes on disk is read again by itself too)",
-            tooltip::Position::Top,
-        ));
-    }
     if !path.is_empty() {
         buttons = buttons.push(tip(
             button(icon(Icon::Close, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(Message::SetFile(target, None)),

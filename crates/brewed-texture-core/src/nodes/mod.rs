@@ -33,7 +33,7 @@ pub use output::{
     OUTPUT_FORMATS, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL,
     USAGE_ROUGHNESS, output_format_channels,
 };
-pub use values::{DEFAULT_MATH_EXPRESSION, IMAGE_INPUT_KINDS};
+pub use values::DEFAULT_MATH_EXPRESSION;
 
 // ---------------------------------------------------------------------------- categories
 
@@ -195,6 +195,11 @@ pub enum ParamKind {
     File {
         extensions: &'static [&'static str],
     },
+    /// The picture an image input of a graph used as a node takes (a file; empty: the one the
+    /// graph has). Exposed, it is a socket that takes images of this kind instead.
+    Image {
+        kind: ImageKind,
+    },
     /// Source of a Math (`pixel: false`) or Pixel Math (`pixel: true`) expression. Its free
     /// variables become input sockets of the node.
     Expression {
@@ -248,6 +253,7 @@ impl<'a> ParamDef<'a> {
                 | ParamKind::Vec2 { .. }
                 | ParamKind::Color { .. }
                 | ParamKind::Enum { .. }
+                | ParamKind::Image { .. }
         );
         Self {
             key,
@@ -322,7 +328,7 @@ impl<'a> ParamDef<'a> {
             ParamKind::Text { default } | ParamKind::Expression { default, .. } => {
                 ParamValue::Text(default.to_string())
             }
-            ParamKind::File { .. } => ParamValue::Text(String::new()),
+            ParamKind::File { .. } | ParamKind::Image { .. } => ParamValue::Text(String::new()),
             ParamKind::Gradient { default } => ParamValue::Gradient(Gradient::from_pairs(default)),
             ParamKind::Curve { default } => ParamValue::Curve(Curve::from_points(default)),
         }
@@ -351,6 +357,16 @@ impl<'a> ParamDef<'a> {
         self.exposable
     }
 
+    /// The socket the parameter has while it is exposed, its value being `value`: of the type
+    /// of the value, or, for the picture of an image input, one that takes images of its kind.
+    pub fn socket(&self, value: &ParamValue) -> Option<(DataType, Slot)> {
+        match self.kind {
+            ParamKind::Image { kind: ImageKind::Gray } => Some((DataType::Image, Slot::Gray)),
+            ParamKind::Image { kind: ImageKind::Color } => Some((DataType::Image, Slot::Color)),
+            _ => value.socket_type().map(|ty| (ty, Slot::Any)),
+        }
+    }
+
     /// Does a stored value have the right shape for this parameter?
     pub fn accepts(&self, value: &ParamValue) -> bool {
         matches!(
@@ -361,7 +377,10 @@ impl<'a> ParamDef<'a> {
                 | (ParamKind::Vec2 { .. }, ParamValue::Vec2(_))
                 | (ParamKind::Color { .. }, ParamValue::Color(_))
                 | (ParamKind::Enum { .. }, ParamValue::Enum(_))
-                | (ParamKind::Text { .. } | ParamKind::File { .. } | ParamKind::Expression { .. }, ParamValue::Text(_))
+                | (
+                    ParamKind::Text { .. } | ParamKind::File { .. } | ParamKind::Image { .. } | ParamKind::Expression { .. },
+                    ParamValue::Text(_)
+                )
                 | (ParamKind::Gradient { .. }, ParamValue::Gradient(_))
                 | (ParamKind::Curve { .. }, ParamValue::Curve(_))
         )
@@ -488,8 +507,8 @@ pub fn image_kind(kind: NodeKind, params: &crate::eval::Params, inputs: &[Option
         let images = params.u("pattern") == TILE_PATTERN_IMAGE && inputs.iter().take(4).any(|k| *k == Some(ImageKind::Color));
         return if params.u("color") != 0 || images { ImageKind::Color } else { ImageKind::Gray };
     }
-    if kind == NodeKind::IMAGE_INPUT {
-        return if params.u("kind") == 1 { ImageKind::Color } else { ImageKind::Gray };
+    if kind == NodeKind::UNIFORM_COLOR {
+        return if params.u("output") == 1 { ImageKind::Gray } else { ImageKind::Color };
     }
     if kind == NodeKind::FLOOD_FILL {
         return if params.u("output") == 1 { ImageKind::Color } else { ImageKind::Gray };
@@ -556,6 +575,16 @@ impl NodeDef {
     /// [`PRECISION_PARAM`])? An output keeps its image as it writes it.
     pub fn has_precision(&self) -> bool {
         self.role == Role::Image
+    }
+
+    /// The type of the input value of the graph a node of this type reads: Input nodes read
+    /// a value; an Image Input, an image node, reads the picture of an image input.
+    pub fn variable_type(&self) -> Option<DataType> {
+        match self.role {
+            Role::Variable(ty) => Some(ty),
+            _ if std::ptr::eq(self, &values::IMAGE_INPUT) => Some(DataType::Image),
+            _ => None,
+        }
     }
 
     /// Does the node produce an image (thumbnail, 2D view, meaningful tiling)?
@@ -663,7 +692,7 @@ impl NodeKind {
 
     /// Input node type reading a variable of type `ty`.
     pub fn input_for(ty: DataType) -> Option<NodeKind> {
-        NodeKind::ALL.iter().copied().find(|k| k.def().role == Role::Variable(ty))
+        NodeKind::ALL.iter().copied().find(|k| k.def().variable_type() == Some(ty))
     }
 
     // Inputs & values.
@@ -883,10 +912,6 @@ mod tests {
         assert_eq!(kind(NodeKind::TILE_GENERATOR, &[Some(Color)]), Gray);
         assert_eq!(kind(NodeKind::OUTPUT, &[Some(Color)]), Color);
         assert_eq!(kind(NodeKind::BLUR, &[None]), Gray, "nothing arriving is grayscale");
-        // An image input is what it says it takes.
-        assert_eq!(kind(NodeKind::IMAGE_INPUT, &[]), Gray);
-        let color = crate::eval::Params { values: vec![("kind".into(), ParamValue::Enum(1))] };
-        assert_eq!(image_kind(NodeKind::IMAGE_INPUT, &color, &[]), Color);
         // Tiles of a sampler: of shapes, gray; of images, what they are (a color map alone does
         // not make them color); in colors of their own, color.
         let sampler = |values: Vec<(&str, u32)>, inputs: &[Option<ImageKind>]| {

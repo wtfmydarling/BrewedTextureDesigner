@@ -751,12 +751,14 @@ pub fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// What the node is: the variable an Input node reads, the name of an Output node, or
-/// the node type. This is what the graph shows in the header of a node, so that a label
-/// never hides which node it is.
+/// What the node is: the input value an Input node (an Image Input too) reads, the name of an
+/// Output node, or the node type. This is what the graph shows in the header of a node, so
+/// that a label never hides which node it is.
 pub fn node_kind_title(node: &Node) -> String {
+    if node.variable_type().is_some() {
+        return node.variable.clone().unwrap_or_else(|| node.def().name.to_string());
+    }
     match node.def().role {
-        Role::Variable(_) => node.variable.clone().unwrap_or_else(|| node.def().name.to_string()),
         Role::Output => node.text("name").to_string(),
         // The graph it uses.
         Role::Instance => node.instance.as_ref().map_or_else(|| node.def().name.to_string(), |i| i.graph.name.clone()),

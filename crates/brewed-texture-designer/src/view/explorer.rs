@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use brewed_texture_core::package::{Resource, ResourceKind};
+use brewed_texture_core::package::{Reader, Resource, ResourceKind};
 use brewed_texture_core::{Document, GraphId};
 use iced::widget::{button, column, container, image, row, scrollable, space, text, text_input, tooltip};
 use iced::{Alignment, ContentFit, Element, Length};
@@ -19,6 +19,7 @@ use crate::app::{App, ContextTarget, DragPayload, ExplorerMessage, Fold, Message
 use crate::icons::{Icon, icon};
 use crate::style;
 use crate::view::tip;
+use crate::widget::outside::outside;
 use crate::widget::pressable::pressable;
 
 /// Id of the field a graph is renamed in (focused when renaming starts).
@@ -93,11 +94,14 @@ impl Uses {
                     *graphs.entry((used_in, found.id)).or_default().entry(who(used_in)).or_default() += 1;
                 }
             }
-            for (graph, node, _, path) in doc.package().files() {
+            for (graph, reader, path) in doc.package().files() {
                 let name = doc.package().graph(graph).map_or_else(String::new, |g| g.name.clone());
-                let who = match &node.instance {
-                    Some(i) => format!("'{}' in {name}", i.graph.name),
-                    None => format!("{} in {name}", node.def().name),
+                let who = match reader {
+                    Reader::Node(node) => match &node.instance {
+                        Some(i) => format!("'{}' in {name}", i.graph.name),
+                        None => format!("{} in {name}", node.def().name),
+                    },
+                    Reader::Input(input) => format!("the image input '{input}' of {name}"),
                 };
                 *files.entry((*key, path.to_string())).or_default().entry(who).or_default() += 1;
             }
@@ -209,14 +213,18 @@ fn package_rows<'a>(app: &'a App, uses: &Uses, key: u64, doc: &'a Document) -> E
     for g in &doc.package().graphs {
         let renaming = app.ui.renaming_graph.as_ref().filter(|(k, id, _)| *k == key && *id == g.id);
         let row_content: Element<'a, Message> = match renaming {
-            Some((_, _, name)) => text_input("Graph name", name)
-                .id(rename_id())
-                .on_input(|t| explorer(ExplorerMessage::RenameText(t)))
-                .on_submit(explorer(ExplorerMessage::CommitRename))
-                .size(style::TEXT_SIZE)
-                .padding([2, 6])
-                .style(style::text_input)
-                .into(),
+            // A click anywhere else in the window names it as Enter does.
+            Some((_, _, name)) => outside(
+                text_input("Graph name", name)
+                    .id(rename_id())
+                    .on_input(|t| explorer(ExplorerMessage::RenameText(t)))
+                    .on_submit(explorer(ExplorerMessage::CommitRename))
+                    .size(style::TEXT_SIZE)
+                    .padding([2, 6])
+                    .style(style::text_input),
+            )
+            .on_press(Some(explorer(ExplorerMessage::CommitRename)))
+            .into(),
             None => text(&g.name).size(style::TEXT_SIZE).wrapping(text::Wrapping::None).into(),
         };
         let open = editing && doc.current() == g.id;

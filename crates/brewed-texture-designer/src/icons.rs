@@ -12,7 +12,6 @@ pub enum Icon {
     Reset,
     Trash,
     Folder,
-    Refresh,
     Grip,
     Fit,
     Grid,
@@ -42,7 +41,6 @@ fn path(icon: Icon) -> &'static str {
         Icon::Reset => r#"<path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/>"#,
         Icon::Trash => r#"<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13"/>"#,
         Icon::Folder => r#"<path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>"#,
-        Icon::Refresh => r#"<path d="M20 12a8 8 0 0 1-14.3 4.9M4 12a8 8 0 0 1 14.3-4.9M18.5 3v4.5H14M5.5 21v-4.5H10"/>"#,
         Icon::Grip => {
             r#"<circle cx="9" cy="6" r="1.2"/><circle cx="15" cy="6" r="1.2"/><circle cx="9" cy="12" r="1.2"/><circle cx="15" cy="12" r="1.2"/><circle cx="9" cy="18" r="1.2"/><circle cx="15" cy="18" r="1.2"/>"#
         }
