@@ -229,7 +229,7 @@ Output хранит то, что он записывает: свой вход в
 ## Проверка
 
 ```bash
-cargo test --workspace                                            # 211 тестов
+cargo test --workspace                                            # 212 тестов
 WGPU_BACKEND=dx12 cargo test --workspace                          # они же на другом бэкенде (vulkan, dx12, metal)
 cargo test --workspace -- --ignored                               # живые тесты пипетки и захвата указателя (нужен рабочий стол), замеры, стресс-тесты
 cargo run --release --features dev-tools -- --autopilot 30 --seed 3                  # программа 30 минут гоняет себя сама (ниже)

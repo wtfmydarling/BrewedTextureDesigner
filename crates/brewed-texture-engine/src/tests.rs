@@ -2723,3 +2723,71 @@ fn the_largest_pictures_are_read() {
     assert_eq!((picture.width(), picture.height()), (8192, 8192));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An Image Input nothing arrives at shows its picture, on the GPU as a Bitmap of the picture
+/// would: the one the node that uses its graph gives it, else its own; made grayscale for an
+/// input that takes grayscale, as it is for one that takes color.
+#[test]
+fn image_inputs_show_their_pictures_as_bitmaps_would() {
+    use brewed_texture_core::package::{Library, Package, flatten};
+    use brewed_texture_core::{GraphRef, Instance, Interface};
+    use std::sync::Arc;
+
+    struct One(Package);
+    impl Library for One {
+        fn package(&self, path: Option<&str>) -> Option<&Package> {
+            path.is_none().then_some(&self.0)
+        }
+    }
+
+    let Some(mut e) = engine() else { return };
+    let dir = std::env::temp_dir().join(format!("btd-input-pictures-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let across = dir.join("across.png");
+    image::RgbaImage::from_fn(64, 64, |x, y| image::Rgba([(x * 4) as u8, 255 - (y * 4) as u8, 90, 255])).save(&across).unwrap();
+    let plain = dir.join("plain.png");
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([40, 160, 220, 255])).save(&plain).unwrap();
+    let (across, plain) = (across.display().to_string(), plain.display().to_string());
+
+    // A graph that gives out what arrives at its input (grayscale), whose own picture is plain.
+    let mut shows = graph();
+    let input = shows.add_node(NodeKind::IMAGE_INPUT, [0.0, 0.0]);
+    let out = shows.add_node(NodeKind::OUTPUT, [300.0, 0.0]);
+    shows.connect(input, "o:output", out, "i:input").unwrap();
+    set(&mut shows, input, "image", ParamValue::Text(plain.clone()));
+    let mut package = Package::new("Main", graph());
+    let used = package.add_graph("Shows", shows);
+    let main = package.first();
+    let interface = Interface::of(&package.graph(used).unwrap().graph);
+    let name = interface.inputs[0].name.clone();
+    let mut instance = Instance::new(GraphRef { package: None, graph: used, name: "Shows".into() }, interface);
+    let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
+    let own = g.add_instance(instance.clone(), [0.0, 0.0]);
+    instance.images.insert(name, across.clone());
+    let given = g.add_instance(instance, [0.0, 300.0]);
+
+    // Each picture as a Bitmap reads it, made grayscale or not.
+    let read = |e: &mut Engine, path: &str, gray: bool| {
+        let mut g = graph();
+        let b = g.add_node(NodeKind::BITMAP, [0.0, 0.0]);
+        set(&mut g, b, "path", ParamValue::Text(path.to_string()));
+        if !gray {
+            return eval_read(e, &g, b);
+        }
+        let c = g.add_node(NodeKind::GRAYSCALE, [0.0, 0.0]);
+        g.connect(b, "o:output", c, "i:input").unwrap();
+        eval_read(e, &g, c)
+    };
+    let flat = flatten(&One(package.clone()), None, main).unwrap();
+    assert!(flat.problems.is_empty(), "{:?}", flat.problems);
+    assert_eq!(eval_read(&mut e, &flat.graph, own), read(&mut e, &plain, true), "the input's own picture");
+    assert_eq!(eval_read(&mut e, &flat.graph, given), read(&mut e, &across, true), "the node's picture");
+    // An input that takes color: the pictures as they are.
+    let s = Arc::make_mut(&mut package.graph_mut(used).unwrap().graph);
+    set(s, input, "kind", ParamValue::Enum(1));
+    let flat = flatten(&One(package), None, main).unwrap();
+    assert_eq!(eval_read(&mut e, &flat.graph, own), read(&mut e, &plain, false));
+    assert_eq!(eval_read(&mut e, &flat.graph, given), read(&mut e, &across, false));
+    assert!(e.gpu.take_errors().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
