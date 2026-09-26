@@ -175,7 +175,7 @@ fn recover(app: &App) -> Element<'_, Message> {
         let place = unsaved.path.clone().unwrap_or_else(|| "Never saved".into());
         let mut when = format!("Kept {} ago", span(now.saturating_sub(unsaved.time)));
         if let Some(saved) = snapshot.saved.filter(|s| *s > unsaved.time) {
-            when.push_str(&format!("; its file was saved {} after that", span(saved - unsaved.time)));
+            when.push_str(&format!("; its file was saved {} after that: it opens untitled", span(saved - unsaved.time)));
         }
         list = list.push(
             row![

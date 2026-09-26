@@ -34,8 +34,13 @@ struct Harness {
 impl Harness {
     /// `None` when no GPU is available for the headless renderer.
     fn new(view: View, size: Size) -> Option<Harness> {
+        Harness::started(view, size, StartupOptions::default())
+    }
+
+    /// [`Harness::new`], the program started with `opts`.
+    fn started(view: View, size: Size, opts: StartupOptions) -> Option<Harness> {
         let renderer = futures::executor::block_on(<iced::Renderer as Headless>::new(crate::style::ui_font(), Pixels(13.0), None))?;
-        let (mut app, _) = App::boot(StartupOptions::default());
+        let (mut app, _) = App::boot(opts);
         app.ui.window_size = size;
         Some(Harness { app, view, renderer, cache: Cache::default(), size, cursor: mouse::Cursor::Unavailable })
     }
@@ -2552,5 +2557,136 @@ fn unsaved_work_is_recovered_after_a_crash() {
     let (eighth, _) = App::boot(opts);
     assert_eq!(eighth.ui.dialog, None);
     drop(eighth);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What a program that stopped kept is offered in a dialog, over the window, as the program
+/// starts: each package by its name and where it was saved, and the three buttons. Recover,
+/// clicked, opens it.
+#[test]
+fn the_recovery_dialog_offers_what_was_kept() {
+    let dir = scratch("recovery-dialog");
+    let opts = StartupOptions { recovery: Some(dir.join("Recovery")), ..StartupOptions::default() };
+    let walls = dir.join("walls.brewtex");
+    let (mut crashed, _) = App::boot(opts.clone());
+    let _ = crashed.update(Message::SavePicked(Some(walls.clone())));
+    let _ = crashed.update(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
+    let blurs = crashed.graph().nodes_of(NodeKind::BLUR).count();
+    crashed.autosave_now();
+    drop(crashed);
+
+    let Some(mut w) = Harness::started(Box::new(view::root), Size::new(1280.0, 800.0), opts) else {
+        eprintln!("no GPU for the headless renderer: test skipped");
+        return;
+    };
+    assert_eq!(w.app.ui.dialog, Some(Dialog::Recover));
+    assert_eq!(texts(&mut w, "Recover unsaved work?").len(), 1);
+    assert_eq!(texts(&mut w, "walls.brewtex").len(), 1);
+    assert_eq!(texts(&mut w, &walls.display().to_string()).len(), 1, "where it was saved");
+    for label in ["Discard", "Later"] {
+        assert_eq!(texts(&mut w, label).len(), 1, "{label}");
+    }
+    w.snapshot("recovery-dialog");
+    let button = *texts(&mut w, "Recover").first().expect("the Recover button");
+    click(&mut w, button.center());
+    assert_eq!(w.app.ui.dialog, None);
+    assert!(w.app.doc.is_dirty() && w.app.doc.path() == Some(&walls));
+    assert_eq!(w.app.graph().nodes_of(NodeKind::BLUR).count(), blurs, "with the node added after it was saved");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A package whose file was saved after its snapshot was kept (by another program) is
+/// recovered untitled: saving it asks where, and what is newer is not written over unasked.
+#[test]
+fn a_file_saved_since_is_not_written_over() {
+    use crate::app::autosave::Recovery;
+    let dir = scratch("recovery-newer");
+    let opts = StartupOptions { recovery: Some(dir.join("Recovery")), ..StartupOptions::default() };
+    let walls = dir.join("walls.brewtex");
+    let (mut crashed, _) = App::boot(opts.clone());
+    let _ = crashed.update(Message::SavePicked(Some(walls.clone())));
+    let _ = crashed.update(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
+    crashed.autosave_now();
+    drop(crashed);
+    // Saved again since, elsewhere.
+    let file = std::fs::File::options().write(true).open(&walls).unwrap();
+    file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600)).unwrap();
+    drop(file);
+
+    let (mut next, _) = App::boot(opts);
+    let snapshot = next.recoverable().next().expect("offered").clone();
+    assert!(snapshot.saved.is_some_and(|saved| saved > snapshot.unsaved.time));
+    let _ = next.update(Message::Recover(Recovery::Recover));
+    assert!(next.doc.is_dirty() && next.doc.path().is_none(), "untitled");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Quitting asks about each package with unsaved changes in turn; given up with Escape halfway
+/// (after one was not to be saved), the next quit asks about that one again: it may have changed
+/// since, and it is not lost unasked. A dialog takes the keyboard: Ctrl+S under it saves nothing.
+#[test]
+fn a_quit_given_up_asks_again_about_every_package() {
+    let (mut app, _) = App::boot(StartupOptions::default());
+    let main = app.main_window().unwrap();
+    let close = || Message::Runtime(iced::Event::Window(window::Event::CloseRequested), iced::event::Status::Ignored, main);
+    let key = |named: keyboard::key::Named, modifiers: keyboard::Modifiers, text: Option<&str>| {
+        let key = match text {
+            Some(t) => Key::Character(t.into()),
+            None => Key::Named(named),
+        };
+        let event = iced::Event::Keyboard(keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        });
+        Message::Runtime(event, iced::event::Status::Ignored, main)
+    };
+    // Two packages with unsaved changes.
+    let _ = app.update(Message::Edit(Edit::SetResolution([512, 512])));
+    let _ = app.update(Message::New);
+    let _ = app.update(Message::Edit(Edit::SetResolution([256, 256])));
+    let _ = app.update(close());
+    assert_eq!(app.ui.dialog, Some(Dialog::Unsaved(PendingAction::Quit)));
+    let first = app.doc_key;
+    // Not the first: the second asks.
+    let _ = app.update(Message::Proceed(PendingAction::Quit));
+    assert_eq!(app.ui.dialog, Some(Dialog::Unsaved(PendingAction::Quit)));
+    assert_ne!(app.doc_key, first);
+    // Ctrl+S under the dialog saves nothing (the second has no file: it would ask where).
+    let _ = app.update(key(keyboard::key::Named::Escape, keyboard::Modifiers::CTRL, Some("s")));
+    assert_eq!(app.ui.dialog, Some(Dialog::Unsaved(PendingAction::Quit)), "the dialog stays, nothing else happens");
+    // Given up with Escape; the next quit asks about the first again.
+    let _ = app.update(key(keyboard::key::Named::Escape, keyboard::Modifiers::empty(), None));
+    assert_eq!(app.ui.dialog, None);
+    assert!(app.packages().iter().all(|(_, d)| d.is_dirty()), "nothing was lost");
+    let _ = app.update(close());
+    assert_eq!(app.ui.dialog, Some(Dialog::Unsaved(PendingAction::Quit)));
+    assert_eq!(app.doc_key, first, "the first is asked about again");
+}
+
+/// Quitting, a package asked to be saved that cannot be (the place is a folder) leaves nothing
+/// to follow: the quit is given up, and a save that works later is only a save.
+#[test]
+fn a_save_that_fails_leaves_no_quit_behind() {
+    let dir = scratch("failed-save");
+    let (mut app, _) = App::boot(StartupOptions::default());
+    let main = app.main_window().unwrap();
+    let _ = app.update(Message::Edit(Edit::SetResolution([512, 512])));
+    let _ = app.update(Message::Runtime(iced::Event::Window(window::Event::CloseRequested), iced::event::Status::Ignored, main));
+    let _ = app.update(Message::SaveThen(PendingAction::Quit));
+    assert_eq!(app.ui.after_save, Some(PendingAction::Quit), "the untitled package asks where");
+    // Where it cannot be written: a folder (of the name of a package).
+    let folder = dir.join("taken.brewtex");
+    std::fs::create_dir_all(&folder).unwrap();
+    let _ = app.update(Message::SavePicked(Some(folder)));
+    assert!(app.doc.is_dirty() && app.ui.status.as_ref().is_some_and(|s| s.error));
+    assert_eq!(app.ui.after_save, None, "nothing follows");
+    let _ = app.update(Message::SavePicked(Some(dir.join("walls.brewtex"))));
+    assert!(!app.doc.is_dirty());
+    assert_eq!(app.ui.dialog, None);
     let _ = std::fs::remove_dir_all(&dir);
 }

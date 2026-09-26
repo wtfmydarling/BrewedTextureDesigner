@@ -1497,6 +1497,9 @@ impl App {
             }
             Err(e) => {
                 self.set_status(e, true);
+                // What was to follow the save (quitting, closing the package) does not: a save
+                // that works later is only a save.
+                self.ui.after_save = None;
                 false
             }
         }
@@ -1520,6 +1523,18 @@ impl App {
             }),
             |p| Message::SavePicked(p.flatten()),
         )
+    }
+
+    /// Close the dialog that is open, as its Cancel does (Escape too): a quit asked about is
+    /// given up, and the next one asks again about every package with unsaved changes, one not
+    /// to be saved this time too (it may change meanwhile); what programs that stopped kept is
+    /// offered again the next time the program starts.
+    fn cancel_dialog(&mut self) {
+        self.ui.discarded.clear();
+        if self.ui.dialog == Some(Dialog::Recover) {
+            self.recovery(autosave::Recovery::Later);
+        }
+        self.ui.dialog = None;
     }
 
     /// Run an action that would discard unsaved changes, asking first: about the package it
@@ -1876,16 +1891,17 @@ impl App {
                 }
             }
             Message::ExportNodePicked(_, None) => {}
-            Message::Dialog(d) => {
+            Message::Dialog(None) => {
                 self.close_popups();
-                if d.is_none() {
-                    self.ui.discarded.clear();
-                }
+                self.cancel_dialog();
+            }
+            Message::Dialog(Some(d)) => {
+                self.close_popups();
                 // What was found is offered again next time.
-                if self.ui.dialog == Some(Dialog::Recover) && d != Some(Dialog::Recover) {
+                if self.ui.dialog == Some(Dialog::Recover) && d != Dialog::Recover {
                     self.recovery(autosave::Recovery::Later);
                 }
-                self.ui.dialog = d;
+                self.ui.dialog = Some(d);
             }
             Message::Autosave => return self.autosave(),
             Message::Autosaved(done) => self.autosaved(done),
@@ -2318,8 +2334,10 @@ impl App {
         }
         match event {
             E::Window(window::Event::CloseRequested) => {
-                // A pick in progress ends first.
+                // A pick in progress ends first. Each quit asks anew about every package with
+                // unsaved changes (one given up earlier may have changed since).
                 let cancel = self.pick_message(PickMessage::Cancel);
+                self.ui.discarded.clear();
                 return Task::batch([cancel, self.guarded(PendingAction::Quit)]);
             }
             E::Window(window::Event::Opened { size, .. } | window::Event::Resized(size)) => {
@@ -2391,7 +2409,7 @@ impl App {
             if self.ui.add_menu.is_some() || self.ui.menu.is_some() || self.ui.context.is_some() || self.ui.choice_menu.is_some() {
                 self.close_popups();
             } else if self.ui.dialog.is_some() {
-                self.ui.dialog = None;
+                self.cancel_dialog();
             } else if self.ui.renaming_var.is_some() || self.ui.binding.is_some() || self.ui.renaming_graph.is_some() {
                 // Typing a name: forget the text, the name stays as it was.
                 self.ui.renaming_var = None;
@@ -2430,6 +2448,10 @@ impl App {
                 Key::Named(Named::PageUp) => self.add_menu_message(AddMenuMessage::Move(-8)),
                 _ => Task::none(),
             };
+        }
+        // A dialog takes the keyboard: nothing reaches what is under it.
+        if self.ui.dialog.is_some() {
+            return Task::none();
         }
         // Global shortcuts that also work while typing.
         if ctrl && char('s') {

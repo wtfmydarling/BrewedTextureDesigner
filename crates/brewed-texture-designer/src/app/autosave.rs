@@ -233,7 +233,10 @@ impl App {
                         continue;
                     }
                 };
-                let path = snapshot.unsaved.path.as_ref().map(PathBuf::from);
+                // Its file saved after the snapshot holds what is newer: the package opens
+                // untitled, not to be saved over it unasked.
+                let newer = snapshot.saved.is_some_and(|saved| saved > snapshot.unsaved.time);
+                let path = snapshot.unsaved.path.as_ref().filter(|_| !newer).map(PathBuf::from);
                 let same = path
                     .as_ref()
                     .and_then(|p| self.open_key(&p.display().to_string()))
