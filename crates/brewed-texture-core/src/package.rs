@@ -17,7 +17,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::eval::{self, NodeEval, Params, VarSource};
-use crate::graph::{Graph, IMAGE_INPUT_COLOR, Link, Node, NodeId, input_socket_key, output_socket_key, param_socket_key};
+use crate::graph::{Graph, IMAGE_INPUT_COLOR, Link, MAX_ID, Node, NodeId, input_socket_key, output_socket_key, param_socket_key};
 use crate::instance::{GraphId, GraphRef, Instance, Interface, Port, port_nodes};
 use crate::nodes::{ImageKind, NodeKind, ParamKind, Role, Slot};
 use crate::types::{DataType, ParamValue, Value};
@@ -357,7 +357,29 @@ impl Package {
             }
             entry.name = name;
         }
-        self.next_graph = self.next_graph.max(self.graphs.iter().map(|g| g.id.0).max().unwrap_or(0) + 1);
+        // Ids no package makes (a file can say anything) are made anew: the nodes of the
+        // package that use those graphs say so (others find them by their names).
+        let mut max_id = self.graphs.iter().map(|g| g.id.0).filter(|id| *id < MAX_ID).max().unwrap_or(0);
+        let mut renamed = HashMap::new();
+        for entry in self.graphs.iter_mut().filter(|g| g.id.0 >= MAX_ID) {
+            max_id += 1;
+            renamed.insert(entry.id, GraphId(max_id));
+            entry.id = GraphId(max_id);
+        }
+        if !renamed.is_empty() {
+            for entry in &mut self.graphs {
+                for node in &mut Arc::make_mut(&mut entry.graph).nodes {
+                    if let Some(instance) = &mut node.instance
+                        && instance.graph.package.is_none()
+                        && let Some(id) = renamed.get(&instance.graph.graph)
+                    {
+                        instance.graph.graph = *id;
+                    }
+                }
+            }
+        }
+        // (A count past the ids there are is none: it counts on from the last.)
+        self.next_graph = if self.next_graph < MAX_ID { self.next_graph.max(max_id + 1) } else { max_id + 1 };
         // The files the package holds: kept for whatever reads them, under the name their bytes
         // give them (a file edited by hand could say another).
         for r in &mut self.resources {
@@ -1577,6 +1599,67 @@ mod tests {
     fn instance_of(package: &Package, id: GraphId, path: Option<&str>) -> Instance {
         let entry = package.graph(id).unwrap();
         Instance::new(GraphRef { package: path.map(str::to_string), graph: id, name: entry.name.clone() }, Interface::of(&entry.graph))
+    }
+
+    /// Ids a file says that no graph makes (the largest there are, and those of the nodes laid
+    /// out from graphs used as nodes) are made anew as it is read: the links and the nodes that
+    /// use the graphs say so, the package lays out as it did, and nodes and graphs are made
+    /// after them as ever.
+    #[test]
+    fn ids_no_graph_makes_are_made_anew() {
+        let mut package = Package::new("Main", Graph::default());
+        let blurring = package.add_graph("Blur it", blurring());
+        let main = package.first();
+        let instance = instance_of(&package, blurring, None);
+        let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
+        let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+        let used = g.add_instance(instance, [200.0, 0.0]);
+        let out = g.add_node(NodeKind::OUTPUT, [400.0, 0.0]);
+        g.set_exposed(used, "input", true).unwrap();
+        connect(g, noise, "o:output", used, "p:input");
+        connect(g, used, "o:output", out, "i:input");
+        let laid_out = |p: &Package| {
+            let flat = flatten(&Shelf([(None, p.clone())].into_iter().collect()), None, p.first()).unwrap();
+            let mut kinds: Vec<&str> = flat.graph.nodes.iter().map(|n| n.def().id).collect();
+            kinds.sort();
+            (kinds, flat.graph.links.len(), flat.problems.len())
+        };
+        let before = laid_out(&package);
+
+        // What a file could say.
+        let mut file = package.clone();
+        file.graph_mut(blurring).unwrap().id = GraphId(u64::MAX);
+        file.next_graph = u64::MAX;
+        let g = Arc::make_mut(&mut file.graph_mut(main).unwrap().graph);
+        let ids = [(noise, NodeId(u64::MAX)), (used, NodeId((1 << 63) + 5))];
+        for node in &mut g.nodes {
+            if let Some((_, id)) = ids.iter().find(|(old, _)| *old == node.id) {
+                node.id = *id;
+            }
+            if let Some(instance) = &mut node.instance {
+                instance.graph.graph = GraphId(u64::MAX);
+            }
+        }
+        for link in &mut g.links {
+            for (old, id) in ids {
+                link.from = if link.from == old { id } else { link.from };
+                link.to = if link.to == old { id } else { link.to };
+            }
+        }
+        g.next_id = u64::MAX;
+        let json = crate::project::to_json(&file, &HashMap::new(), main, None).unwrap();
+        let mut read = crate::project::from_json(&json, None, "x").unwrap().package;
+
+        for entry in &read.graphs {
+            assert!(entry.id.0 < MAX_ID, "{:?}", entry.id);
+            assert!(entry.graph.nodes.iter().all(|n| n.id.0 < MAX_ID && !n.id.is_inner()));
+            assert!(entry.graph.next_id <= MAX_ID);
+        }
+        assert!(read.next_graph() <= MAX_ID);
+        assert_eq!(laid_out(&read), before, "the same nodes, linked as they were");
+        let g = Arc::make_mut(&mut read.graph_mut(main).unwrap().graph);
+        assert!(g.add_node(NodeKind::BLUR, [0.0, 0.0]).0 < MAX_ID);
+        assert!(read.add_graph("More", Graph::default()).0 < MAX_ID);
     }
 
     #[test]

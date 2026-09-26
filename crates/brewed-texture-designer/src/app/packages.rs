@@ -84,7 +84,9 @@ fn read_files(key: u64, paths: Vec<String>, embed: bool) -> Task<Message> {
 }
 
 /// Copy each file of `plan` (where it is, where its copy goes), making the folders; a file is
-/// copied only where nothing is (a plan leaves out the names taken).
+/// copied only where nothing is (a plan leaves out the names taken). Each copy is whole and on
+/// the disk before the package says it is where it is: saved then, the package never names a
+/// copy a power cut left half written.
 pub fn copy_files(plan: &[(String, String)]) -> Collected {
     let mut out = Collected::default();
     for (from, to) in plan {
@@ -94,7 +96,7 @@ pub fn copy_files(plan: &[(String, String)]) -> Collected {
             if target.exists() {
                 return Err("there is a file of that name there".to_string());
             }
-            std::fs::copy(from, target).map(|_| ()).map_err(|e| e.to_string())
+            brewed_texture_core::files::replace(target, |beside| std::fs::copy(from, beside).map(drop))
         });
         match copied {
             Ok(()) => out.copied.push((from.clone(), to.clone())),
@@ -1075,7 +1077,7 @@ impl App {
                 return Task::perform(
                     blocking({
                         let to = to.clone();
-                        move || std::fs::write(&to, bytes.as_slice()).map_err(|e| format!("Cannot write '{to}': {e}"))
+                        move || brewed_texture_core::files::write_whole(Path::new(&to), &bytes)
                     }),
                     move |written| {
                         let result = written.unwrap_or_else(|| Err("The file could not be written".into())).map(|()| to.clone());

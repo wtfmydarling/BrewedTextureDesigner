@@ -109,13 +109,23 @@ pub fn is_there(path: &str) -> bool {
 /// where the system needs it, the folder's new entry is forced to the disk too). What watches
 /// the folder (a game engine importing textures) sees the new file whole or not at all. A file
 /// held open elsewhere for a moment (an indexer, a virus scanner, a synced folder) is waited
-/// for, a second at most.
+/// for, a second at most. A link stays a link: the file it leads to is the one written.
 pub fn replace<E: std::fmt::Display>(path: &Path, write: impl FnOnce(&Path) -> Result<(), E>) -> Result<(), String> {
+    let said = path;
+    let cannot = |e: String| format!("Cannot write '{}': {e}", said.display());
+    let linked = std::fs::symlink_metadata(said).is_ok_and(|m| m.file_type().is_symlink());
+    let target = if linked { std::fs::canonicalize(said).map_err(|e| cannot(e.to_string()))? } else { said.to_path_buf() };
+    let path = target.as_path();
+    // Beside it, under a name of this write's own: two writes of one file at once (an export
+    // asked for again before the last one is done) each write a whole file, and the last to
+    // be done is the file.
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let name = path.file_name().ok_or_else(|| format!("'{}' names no file", path.display()))?;
-    let beside = path.with_file_name(format!(".{}.{}.tmp", name.to_string_lossy(), std::process::id()));
+    let write_id = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let beside = path.with_file_name(format!(".{}.{}-{write_id}.tmp", name.to_string_lossy(), std::process::id()));
     let failed = |e: String| {
         let _ = std::fs::remove_file(&beside);
-        format!("Cannot write '{}': {e}", path.display())
+        cannot(e)
     };
     write(&beside).map_err(|e| failed(e.to_string()))?;
     std::fs::OpenOptions::new().write(true).open(&beside).and_then(|file| file.sync_all()).map_err(|e| failed(e.to_string()))?;
@@ -205,6 +215,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Writes of one file at once (an export asked for again before the last is done) each
+    /// write a whole file: the file is one of them, whole, and nothing is left beside it.
+    #[test]
+    fn writes_of_one_file_at_once_leave_it_whole() {
+        let dir = std::env::temp_dir().join(format!("brewed-at-once-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("height.png");
+        let contents: Vec<Vec<u8>> = (0..4u8).map(|i| vec![i; 64 << 10]).collect();
+        std::thread::scope(|s| {
+            for content in &contents {
+                let file = &file;
+                s.spawn(move || {
+                    for _ in 0..5 {
+                        write_whole(file, content).unwrap();
+                    }
+                });
+            }
+        });
+        assert!(contents.contains(&std::fs::read(&file).unwrap()), "one of them, whole");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "nothing left beside it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A file held open elsewhere for a moment, not to be replaced meanwhile (as a virus scanner
     /// or an indexer holds files on Windows), is waited for.
     #[cfg(windows)]
@@ -225,6 +259,23 @@ mod tests {
         write_whole(&file, b"after").unwrap();
         letting_go.join().unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), b"after");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file written through a link: the file it leads to, the link a link still.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_stays_a_link() {
+        let dir = std::env::temp_dir().join(format!("brewed-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        let real = dir.join("game").join("basecolor.png");
+        std::fs::write(&real, b"before").unwrap();
+        let link = dir.join("basecolor.png");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_whole(&link, b"after").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(&real).unwrap(), b"after");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

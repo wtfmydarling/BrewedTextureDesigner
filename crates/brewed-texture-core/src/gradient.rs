@@ -62,6 +62,11 @@ impl Gradient {
     /// More stops than this are merged when a gradient is picked from an image.
     pub const MAX_STOPS: usize = 64;
 
+    /// The most stops a gradient keeps: more than the table it is drawn through has entries
+    /// (1024) make no difference. Of more (a file can say anything), as many are kept, evenly
+    /// across them, the first and the last among them.
+    pub const MAX_KEPT: usize = 1024;
+
     pub fn from_pairs(pairs: &[(f32, [f32; 4])]) -> Gradient {
         Gradient {
             stops: pairs.iter().map(|&(pos, color)| GradientStop { pos, color }).collect(),
@@ -81,6 +86,10 @@ impl Gradient {
         stops.sort_by(|a, b| a.pos.total_cmp(&b.pos));
         if stops.is_empty() {
             return Gradient { interpolation: self.interpolation, ..Gradient::default() };
+        }
+        if stops.len() > Self::MAX_KEPT {
+            let n = stops.len();
+            stops = (0..Self::MAX_KEPT).map(|i| stops[i * (n - 1) / (Self::MAX_KEPT - 1)]).collect();
         }
         Gradient { stops, interpolation: self.interpolation }
     }
@@ -225,6 +234,19 @@ mod tests {
         let lut = g.bake(5);
         assert_eq!(lut.len(), 5);
         assert!(close(lut[2], g.sample(0.5)));
+    }
+
+    /// Of more stops than a gradient keeps (a file can say a million), as many are kept, evenly
+    /// across, the first and the last among them; fewer are all kept.
+    #[test]
+    fn a_gradient_keeps_as_many_stops_as_it_can_draw() {
+        let pairs: Vec<(f32, [f32; 4])> = (0..100_000).map(|i| (i as f32 / 99_999.0, [i as f32, 0.0, 0.0, 1.0])).collect();
+        let g = Gradient::from_pairs(&pairs);
+        assert_eq!(g.stops.len(), Gradient::MAX_KEPT);
+        assert_eq!((g.stops[0].color[0], g.stops[Gradient::MAX_KEPT - 1].color[0]), (0.0, 99_999.0));
+        assert!(g.stops.windows(2).all(|w| w[0].pos <= w[1].pos));
+        assert_eq!(g.normalized(), g, "kept as it is read again");
+        assert_eq!(Gradient::from_pairs(&pairs[..500]).stops.len(), 500);
     }
 
     #[test]

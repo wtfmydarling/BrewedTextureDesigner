@@ -23,6 +23,12 @@ pub struct CommentId(pub u64);
 /// float holds, whatever a file says or an edit does.
 pub const MAX_COORD: f32 = 1e7;
 
+/// The ids of nodes, comments and graphs are below this: far beyond what a graph or a package
+/// makes (an id a microsecond for eight years), below the ids of the nodes laid out from graphs
+/// used as nodes (see [`crate::package::flatten`]), and with room to count on. An id a file
+/// says at or above it is made anew as the file is read.
+pub const MAX_ID: u64 = 1 << 48;
+
 /// A coordinate within [`MAX_COORD`] (0 when it is not a number).
 pub fn coordinate(v: f32) -> f32 {
     if v.is_finite() { v.clamp(-MAX_COORD, MAX_COORD) } else { 0.0 }
@@ -1205,10 +1211,26 @@ impl Graph {
         for v in &mut self.variables {
             v.normalize();
         }
-        // Nodes and comments take their ids from the same count.
+        // Nodes and comments take their ids from the same count. Ids no graph makes (a file
+        // can say anything) are made anew, and the links say so.
         let ids = self.nodes.iter().map(|n| n.id.0).chain(self.comments.iter().map(|c| c.id.0));
-        let max_id = ids.max().unwrap_or(0);
-        self.next_id = self.next_id.max(max_id + 1);
+        let mut max_id = ids.filter(|id| *id < MAX_ID).max().unwrap_or(0);
+        let mut renamed = HashMap::new();
+        for node in self.nodes.iter_mut().filter(|n| n.id.0 >= MAX_ID) {
+            max_id += 1;
+            renamed.insert(node.id, NodeId(max_id));
+            node.id = NodeId(max_id);
+        }
+        for comment in self.comments.iter_mut().filter(|c| c.id.0 >= MAX_ID) {
+            max_id += 1;
+            comment.id = CommentId(max_id);
+        }
+        for link in &mut self.links {
+            link.from = renamed.get(&link.from).copied().unwrap_or(link.from);
+            link.to = renamed.get(&link.to).copied().unwrap_or(link.to);
+        }
+        // (A count past the ids there are is none: it counts on from the last.)
+        self.next_id = if self.next_id < MAX_ID { self.next_id.max(max_id + 1) } else { max_id + 1 };
         self.resolution = self.resolution.map(|r| r.clamp(MIN_RESOLUTION, MAX_RESOLUTION));
         self.sync_variables();
         self.prune_links();
