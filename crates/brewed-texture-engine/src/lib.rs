@@ -22,7 +22,7 @@ pub mod vector;
 #[cfg(test)]
 mod tests;
 
-pub use engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Keep, Memory, Thumbnail};
+pub use engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Keep, Memory, Thumbnail, open_picture};
 pub use gpu::Gpu;
 pub use service::{EngineService, Event, ExportJob, Request};
 

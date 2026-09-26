@@ -946,12 +946,13 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                         Some(format!("no Bitmap node for {name}"))
                     }))]);
                 };
+                let file = app.graph().node(bitmap).map(|n| n.text("path").to_string()).unwrap_or_default();
                 return Some(vec![
                     preview(bitmap),
                     Step::Wait,
                     Step::Pause(Duration::from_millis(300)),
                     Step::Wait,
-                    Step::Do(Message::ReloadBitmap(bitmap)),
+                    Step::Do(Message::ReloadFile(file)),
                     Step::Pause(Duration::from_millis(300)),
                     Step::Wait,
                     Step::Note(format!("a Bitmap of {name}")),
@@ -1159,7 +1160,8 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
         name: "a Bitmap changed while it loads",
         next: Box::new(move |app: &App, _: &mut Dice| {
             stormed += 1;
-            let path = |name: &str| ParamValue::Text(files.join(name).display().to_string());
+            let file = |name: &str| files.join(name).display().to_string();
+            let path = |name: &str| ParamValue::Text(file(name));
             match stormed {
                 1 => Some(vec![
                     edit(Edit::AddNodeWith {
@@ -1184,11 +1186,11 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                     ] {
                         steps.push(edit(Edit::SetParam { node: bitmap, key: "path".into(), value: path(name) }));
                         steps.push(seal());
-                        steps.push(Step::Do(Message::ReloadBitmap(bitmap)));
+                        steps.push(Step::Do(Message::ReloadFile(file(name))));
                     }
                     steps.extend([
-                        Step::Do(Message::ReloadBitmap(bitmap)),
-                        Step::Do(Message::ReloadBitmap(bitmap)),
+                        Step::Do(Message::ReloadFile(file("big.png"))),
+                        Step::Do(Message::ReloadFile(file("big.png"))),
                         Step::Wait,
                         Step::Pause(Duration::from_millis(2500)),
                         Step::Wait,

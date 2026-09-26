@@ -85,12 +85,7 @@ pub fn make(path: &str, kind: ResourceKind) -> Result<(Vec<u8>, u32, u32, String
     match kind {
         ResourceKind::Bitmap => {
             let bytes = files::read(path)?;
-            let name = file_name(path);
-            let format = image::ImageFormat::from_path(&name)
-                .or_else(|_| image::guess_format(&bytes))
-                .map_err(|e| format!("Cannot open '{name}': {e}"))?;
-            let picture =
-                image::load_from_memory_with_format(&bytes, format).map_err(|e| format!("Cannot open '{name}': {e}"))?;
+            let picture = brewed_texture_engine::open_picture(&bytes, &file_name(path))?;
             let about = format!("{} × {}, {}", picture.width(), picture.height(), describe(picture.color()));
             let small = picture.thumbnail(SIZE, SIZE).to_rgba8();
             let (w, h) = small.dimensions();

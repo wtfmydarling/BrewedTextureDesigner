@@ -95,7 +95,10 @@ impl Uses {
             }
             for (graph, node, _, path) in doc.package().files() {
                 let name = doc.package().graph(graph).map_or_else(String::new, |g| g.name.clone());
-                let who = format!("{} in {name}", node.def().name);
+                let who = match &node.instance {
+                    Some(i) => format!("'{}' in {name}", i.graph.name),
+                    None => format!("{} in {name}", node.def().name),
+                };
                 *files.entry((*key, path.to_string())).or_default().entry(who).or_default() += 1;
             }
         }
@@ -337,7 +340,7 @@ fn resource_row<'a>(app: &'a App, uses: &Uses, key: u64, r: &'a Resource, indent
         about.push(why.clone());
     }
     about.push(if there {
-        "Drag it onto the graph, or double-click, for a node that reads it.".to_string()
+        "Drag it onto the graph, or double-click, for a node that reads it; or onto a file field.".to_string()
     } else {
         "Not there: right-click to say where it is now.".to_string()
     });

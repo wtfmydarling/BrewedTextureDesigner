@@ -58,7 +58,8 @@ pub enum Request {
         kind: NodeKind,
         key: String,
     },
-    ReloadBitmap(String),
+    /// Read a file again (edited elsewhere): see [`crate::Engine::reload_file`].
+    ReloadFile(String),
     /// Forget every cached image (e.g. after opening another document).
     Reset,
 }
@@ -97,6 +98,8 @@ pub enum Event {
     Memory(Memory),
     Exported(Result<PathBuf, String>),
     GpuErrors(Vec<String>),
+    /// The engine stopped, as it never should: why. Nothing is computed any more.
+    Stopped(String),
 }
 
 pub type Emit = Arc<dyn Fn(Event) + Send + Sync>;
@@ -119,7 +122,17 @@ impl EngineService {
                 // The front end reads the views' images and asks for others: only those stay.
                 let mut engine = Engine::new(Gpu::new(device, queue, name));
                 engine.set_keep(Keep::Read);
-                run(engine, rx, emit)
+                // Should it stop (it never should), the front end is told, rather than left
+                // waiting for images that never come.
+                let tell = emit.clone();
+                if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(engine, rx, emit))) {
+                    let why = panic
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "an error".to_string());
+                    tell(Event::Stopped(why));
+                }
             })
             .expect("spawn engine thread");
         EngineService { tx: Some(tx), thread: Some(thread), adapter }
@@ -216,8 +229,8 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                         pending.choices.push((kind, key));
                     }
                 }
-                Request::ReloadBitmap(path) => {
-                    engine.reload_bitmap(&path);
+                Request::ReloadFile(path) => {
+                    engine.reload_file(&path);
                     pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
                 }
                 Request::Reset => {

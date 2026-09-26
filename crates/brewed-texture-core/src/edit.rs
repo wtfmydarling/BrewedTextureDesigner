@@ -30,6 +30,13 @@ pub enum Edit {
         instance: Instance,
         pos: [f32; 2],
     },
+    /// Give an image input of a node that uses a graph the picture it takes while nothing
+    /// arrives at it (a file), or take it away (`None`).
+    SetInstanceImage {
+        node: NodeId,
+        input: String,
+        path: Option<String>,
+    },
     /// Add a node and connect it to the socket a link was dragged from.
     AddNodeConnected {
         kind: NodeKind,
@@ -241,6 +248,7 @@ impl Edit {
             Edit::SetExposed { exposed: false, .. } => "Unexpose",
             Edit::SetBypass { .. } => "Bypass",
             Edit::SetLocalVar { .. } => "Change Variable",
+            Edit::SetInstanceImage { .. } => "Change Image",
             Edit::SetResolution(_) => "Change Size",
             Edit::SetPrecision(_) => "Change Precision",
             Edit::Paste { .. } => "Paste",
@@ -309,6 +317,19 @@ impl Edit {
             Edit::AddInstance { mut instance, pos } => {
                 instance.interface.normalize();
                 EditResult::created(vec![graph.add_instance(instance, pos)])
+            }
+            Edit::SetInstanceImage { node, input, path } => {
+                let n = graph.node_mut(node).ok_or("The node no longer exists")?;
+                let instance = n.instance.as_deref_mut().ok_or("The node does not use a graph")?;
+                if !instance.interface.inputs.iter().any(|p| p.name == input) {
+                    return Err(format!("The graph has no image input '{input}'"));
+                }
+                let path = path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+                let before = match &path {
+                    Some(p) => instance.images.insert(input, p.clone()),
+                    None => instance.images.remove(&input),
+                };
+                if before == path { EditResult::unchanged() } else { EditResult::changed() }
             }
             Edit::AddNodeConnected { kind, pos, socket } => {
                 let info = graph.socket(&socket).ok_or("The socket the link came from no longer exists")?;

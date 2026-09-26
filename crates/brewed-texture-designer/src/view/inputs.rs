@@ -1,16 +1,21 @@
 //! Input Values: the graph's variables. A variable exists while at least one Input node
 //! uses its name; Input nodes with the same name share the value (like material
 //! parameters in Unreal). Values are edited here or in an Input node's properties.
+//!
+//! The pictures of the graph's Image Inputs are chosen here too: what the graph sees at each
+//! while nothing arrives there.
 
 use iced::widget::{button, column, container, row, scrollable, space, text, text_input, tooltip};
 use iced::{Alignment, Element, Length};
-use brewed_texture_core::Edit;
-use brewed_texture_core::graph::Variable;
+use brewed_texture_core::graph::{Node, Variable};
+use brewed_texture_core::instance::{image_input_kind, port_nodes};
+use brewed_texture_core::nodes::ImageKind;
+use brewed_texture_core::{DataType, Edit, NodeKind};
 
-use crate::app::{App, ColorTarget, DragPayload, Message, VarField};
+use crate::app::{App, ColorTarget, DragPayload, FileTarget, Message, VarField};
 use crate::icons::{Icon, icon};
 use crate::style;
-use crate::view::editors::value_editor;
+use crate::view::editors::{file_field, value_editor};
 use crate::widget::pressable::pressable;
 use crate::widget::socket_icon;
 
@@ -191,16 +196,51 @@ Changed — middle-click the row to put {} back", var.description, var.default.d
     iced::widget::mouse_area(row).on_middle_press(Message::Edit(Edit::ResetVariable(var.name.clone()))).into()
 }
 
+/// An Image Input of the graph (the upper one of its name, whose picture all of them take):
+/// the picture the graph sees there while nothing arrives.
+fn image_input_row<'a>(app: &'a App, node: &'a Node, index: usize) -> Element<'a, Message> {
+    let name = node.text("name");
+    let kind = image_input_kind(node);
+    let about = format!(
+        "{} image the graph takes. While nothing arrives there, the graph sees this picture (without one, the \
+         default color). Used in another graph, the node that uses it can give it another.",
+        if kind == ImageKind::Color { "A color" } else { "A grayscale" },
+    );
+    let label = crate::view::tip(
+        row![
+            socket_icon(DataType::Image, true, 12.0, style::image_color(Some(kind))),
+            text(name).size(style::TEXT_SIZE).font(style::bold()).wrapping(text::Wrapping::None),
+        ]
+        .spacing(5)
+        .align_y(Alignment::Center),
+        about,
+        tooltip::Position::Bottom,
+    );
+    let field = file_field(app, FileTarget::Input(name.to_string()), "none: the default color".into());
+    let row = row![
+        // The width of the grip of a value's row: the names line up.
+        space().width(Length::Fixed(16.0)),
+        container(label).width(Length::FillPortion(2)).clip(true),
+        container(field).width(Length::FillPortion(3)),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    container(row).padding([5, 6]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2))).into()
+}
+
 pub fn view(app: &App) -> Element<'_, Message> {
     let vars = &app.graph().variables;
-    let header = crate::view::pane_header("Input Values", text(vars.len().to_string()).size(style::SMALL).color(style::TEXT_FAINT));
-    let body: Element<'_, Message> = if vars.is_empty() {
+    let images = port_nodes(app.graph(), NodeKind::IMAGE_INPUT);
+    let count = vars.len() + images.len();
+    let header = crate::view::pane_header("Input Values", text(count.to_string()).size(style::SMALL).color(style::TEXT_FAINT));
+    let body: Element<'_, Message> = if count == 0 {
         container(
             column![
                 text("No input values yet.").size(style::TEXT_SIZE),
                 text(
                     "Add Float, Integer, Boolean, Vec2 or Color Input nodes from the library. The name of each \
-                     Input node is a value here; Input nodes with the same name share it."
+                     Input node is a value here; Input nodes with the same name share it. The pictures of \
+                     Image Input nodes are chosen here too."
                 )
                 .size(style::SMALL)
                 .color(style::TEXT_DIM),
@@ -211,8 +251,19 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .into()
     } else {
         let mut list = column![].spacing(2);
+        // Both kinds: each under its name.
+        let both = !vars.is_empty() && !images.is_empty();
+        if both {
+            list = list.push(crate::view::section("Values"));
+        }
         for (i, v) in vars.iter().enumerate() {
             list = list.push(variable_row(app, v, i));
+        }
+        if !images.is_empty() {
+            list = list.push(crate::view::section("Images"));
+        }
+        for (i, node) in images.into_iter().enumerate() {
+            list = list.push(image_input_row(app, node, i));
         }
         scrollable(container(list).padding([0, 6])).height(Length::Fill).style(style::scrollable).into()
     };

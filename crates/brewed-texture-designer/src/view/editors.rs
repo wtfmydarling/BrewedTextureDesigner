@@ -1,16 +1,125 @@
 //! Editors for values, shared by the Input Values panel and the properties panel.
 
-use iced::widget::{button, column, container, row, space, text, toggler, tooltip};
-use iced::{Alignment, Border, Element, Length};
-use brewed_texture_core::{Edit, ParamValue, Value};
+use iced::widget::{button, column, container, image, mouse_area, row, space, text, toggler, tooltip};
+use iced::{Alignment, Border, ContentFit, Element, Length};
+use brewed_texture_core::package::file_name;
+use brewed_texture_core::{Edit, ParamValue, ResourceKind, Value, files};
 
-use crate::app::{App, ColorTarget, Message, PickMessage, VarField};
+use crate::app::{App, ColorTarget, DragPayload, FileTarget, Message, PickMessage, VarField};
 use crate::icons::{Icon, icon};
 use crate::picker::PickTarget;
 use crate::style;
 use crate::view::tip;
 use crate::widget::color::{color_picker, to_hex};
 use crate::widget::number::{NumberField, number};
+
+/// Does a field that takes the files with these extensions (none: any) take the file at `path`?
+pub fn takes_file(extensions: &[&str], path: &str) -> bool {
+    extensions.is_empty()
+        || std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| extensions.iter().any(|x| x.eq_ignore_ascii_case(e)))
+}
+
+/// The kind of the files with these extensions, if they are the files of one.
+fn kind_of(extensions: &[&str]) -> Option<ResourceKind> {
+    ResourceKind::ALL.into_iter().find(|k| k.extensions() == extensions)
+}
+
+/// The file a node or a graph reads: a picture of it and its name, and buttons to choose
+/// another, to read it again (edited elsewhere) and to read none; `none` says what reading none
+/// means. A file of the packages dragged from the Explorer is dropped on it: while one is
+/// dragged, the field says at once whether it takes it.
+pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String) -> Element<'a, Message> {
+    let extensions = app.takes(&target);
+    let kind = kind_of(extensions);
+    if let Some(DragPayload::Resource { path: dragged, .. }) = &app.ui.drag {
+        let name = file_name(dragged);
+        let takes = takes_file(extensions, dragged);
+        let says = if takes {
+            format!("Drop to use {name}")
+        } else {
+            let what = match kind {
+                Some(ResourceKind::Bitmap) => "a picture",
+                Some(ResourceKind::Svg) => "an SVG file",
+                Some(ResourceKind::Font) => "a font",
+                None => "a file this takes",
+            };
+            format!("✕ {name} is not {what}")
+        };
+        let color = if takes { style::ACCENT } else { style::ERROR };
+        let zone = container(text(says).size(style::SMALL).color(color).wrapping(text::Wrapping::None))
+            .padding([5, 8])
+            .width(Length::Fill)
+            .clip(true)
+            .style(style::drop_zone(takes));
+        let zone = mouse_area(zone);
+        return if takes { zone.on_release(Message::SetFile(target, Some(dragged.clone()))).into() } else { zone.into() };
+    }
+
+    let path = app.file_of(&target);
+    let state = (!path.is_empty()).then(|| app.res.files.get(path)).flatten();
+    // Not looked at yet: taken as there.
+    let there = state.is_none_or(|s| s.there);
+    let preview = state.and_then(|s| s.preview.as_ref());
+    let picture: Element<'a, Message> = match preview {
+        Some(p) => image(p.image.clone()).width(22).height(22).content_fit(ContentFit::Contain).into(),
+        None => {
+            let glyph = match kind {
+                Some(ResourceKind::Svg) => Icon::Vector,
+                Some(ResourceKind::Font) => Icon::Font,
+                _ => Icon::Image,
+            };
+            container(icon(glyph, 14.0, style::TEXT_FAINT)).width(22).center_x(22).into()
+        }
+    };
+    let embedded = files::is_embedded(path);
+    let (name, color) = match (path.is_empty(), there) {
+        (true, _) => (none, style::TEXT_FAINT),
+        (false, true) => (file_name(path), style::TEXT),
+        (false, false) => (format!("{} (not there)", file_name(path)), style::ERROR),
+    };
+    let mut about = Vec::new();
+    if !path.is_empty() {
+        about.push(if embedded { "Held in the package's file (see the Explorer's Resources)".to_string() } else { path.to_string() });
+    }
+    if let Some(p) = preview {
+        about.push(p.about.clone());
+    }
+    if let Some((_, why)) = state.and_then(|s| s.failed.as_ref()) {
+        about.push(why.clone());
+    }
+    about.push("Drag a file onto it from the Explorer, or choose one.".into());
+    let shown = container(
+        row![picture, text(name).size(style::SMALL).color(color).wrapping(text::Wrapping::None)].spacing(6).align_y(Alignment::Center),
+    )
+    .padding([1, 6])
+    .width(Length::Fill)
+    .clip(true)
+    .style(style::field_box);
+    let mut buttons = row![tip(
+        button(icon(Icon::Folder, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(Message::BrowseFile(target.clone())),
+        if path.is_empty() { "Choose a file" } else { "Choose another file" },
+        tooltip::Position::Top,
+    )]
+    .spacing(4);
+    if !path.is_empty() && !embedded {
+        buttons = buttons.push(tip(
+            button(icon(Icon::Refresh, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(Message::ReloadFile(path.to_string())),
+            "Read the file again (edited elsewhere; a file that changes on disk is read again by itself too)",
+            tooltip::Position::Top,
+        ));
+    }
+    if !path.is_empty() {
+        buttons = buttons.push(tip(
+            button(icon(Icon::Close, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(Message::SetFile(target, None)),
+            "Read no file",
+            tooltip::Position::Top,
+        ));
+    }
+    row![tip(shown, about.join("\n"), tooltip::Position::Top), buttons].spacing(4).align_y(Alignment::Center).into()
+}
 
 /// A small color swatch that toggles a color picker.
 pub fn swatch<'a>(c: [f32; 4], open: bool, on_press: Message) -> Element<'a, Message> {

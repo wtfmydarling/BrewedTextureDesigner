@@ -250,6 +250,16 @@ pub fn stripe(even: bool) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
+/// A field something dragged is dropped on: one that takes it (`takes`), or one that does not.
+pub fn drop_zone(takes: bool) -> impl Fn(&Theme) -> container::Style {
+    let color = if takes { ACCENT } else { ERROR };
+    move |_| container::Style {
+        background: Some(Color { a: 0.08, ..color }.into()),
+        border: Border { color, width: 1.5, radius: 3.0.into() },
+        ..Default::default()
+    }
+}
+
 pub fn chip(color: Color) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style { background: Some(color.into()), border: border::rounded(1), ..Default::default() }
 }

@@ -43,9 +43,21 @@ pub struct VectorJob {
     pub scale: f32,
     /// Tiling bits (see `brewed_texture_core::Tiling`).
     pub tiling: u32,
+    /// How many times the file it reads was read again (edited elsewhere): a picture of the
+    /// file as it is now is another picture.
+    pub reads: u64,
 }
 
 impl VectorJob {
+    /// The file the picture is drawn from: an SVG, or the font of a text (none: Inter).
+    pub fn file(&self) -> Option<&str> {
+        let path = match &self.what {
+            Vector::Svg { path, .. } => path,
+            Vector::Text { font, .. } => font,
+        };
+        (!path.trim().is_empty()).then_some(path.as_str())
+    }
+
     /// What the picture is, as a number: another job draws another picture.
     pub fn key(&self) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -55,7 +67,7 @@ impl VectorJob {
                 (1u8, text, font, size.to_bits(), align, spacing.to_bits()).hash(&mut h)
             }
         }
-        (self.size, self.offset.map(f32::to_bits), self.rotation.to_bits(), self.scale.to_bits(), self.tiling)
+        (self.size, self.offset.map(f32::to_bits), self.rotation.to_bits(), self.scale.to_bits(), self.tiling, self.reads)
             .hash(&mut h);
         h.finish()
     }
@@ -239,7 +251,7 @@ pub fn preview(path: &str, font: bool, size: u32) -> Result<Vec<u8>, String> {
     } else {
         Vector::Svg { path: path.into(), fit: 0, color: true }
     };
-    let job = VectorJob { what, size: [size, size], offset: [0.0, 0.0], rotation: 0.0, scale: 1.0, tiling: 0 };
+    let job = VectorJob { what, size: [size, size], offset: [0.0, 0.0], rotation: 0.0, scale: 1.0, tiling: 0, reads: 0 };
     let byte = |h: &u16| (half::f16::from_bits(*h).to_f32().clamp(0.0, 1.0) * 255.0).round() as u8;
     Ok(match rasterize(&job)? {
         Raster::Color(pixels) => pixels.iter().map(byte).collect(),
@@ -259,6 +271,7 @@ mod tests {
             rotation: 0.0,
             scale: 1.0,
             tiling: 0,
+            reads: 0,
         }
     }
 
@@ -311,6 +324,7 @@ mod tests {
             rotation: 0.0,
             scale: 1.0,
             tiling: 0,
+            reads: 0,
         };
         let Raster::Color(px) = rasterize(&job).unwrap() else { panic!("color") };
         let at = |x: usize, y: usize| -> [f32; 4] {

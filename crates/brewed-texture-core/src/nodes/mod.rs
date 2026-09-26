@@ -145,6 +145,8 @@ pub(crate) const fn value(key: &'static str, label: &'static str, ty: DataType) 
 }
 
 pub(crate) const NO_SOCKETS: &[SocketDef] = &[];
+/// The files of pictures a Bitmap (and the image of an Image Input) reads.
+pub const PICTURE_FILES: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "exr", "hdr"];
 /// An output of the kind of the inputs.
 pub(crate) const IMAGE_OUT: &[SocketDef] = &[image("output", "Output")];
 pub(crate) const GRAY_OUT: &[SocketDef] = &[gray("output", "Output")];

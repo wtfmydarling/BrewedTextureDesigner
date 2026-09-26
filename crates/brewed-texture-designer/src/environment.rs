@@ -55,11 +55,14 @@ impl std::fmt::Debug for Hdri {
 /// 8-bit one is taken as linear light up to 1).
 pub fn load(path: &Path) -> Result<Hdri, String> {
     let named = |e: String| format!("{}: {e}", path.display());
-    let image = image::ImageReader::open(path)
-        .and_then(|reader| reader.with_guessed_format())
-        .map_err(|e| named(e.to_string()))?
-        .decode()
-        .map_err(|e| named(e.to_string()))?;
+    let mut reader =
+        image::ImageReader::open(path).and_then(|reader| reader.with_guessed_format()).map_err(|e| named(e.to_string()))?;
+    // The largest usual environments, 16384 × 8192, take 1.5 GB decoded (more than the
+    // decoder's own limit lets it take); they are made smaller then.
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(2 << 30);
+    reader.limits(limits);
+    let image = reader.decode().map_err(|e| named(e.to_string()))?;
     let (width, height) = (image.width() as usize, image.height() as usize);
     Ok(Hdri::new(path.display().to_string(), width, height, image.into_rgb32f().into_raw()))
 }

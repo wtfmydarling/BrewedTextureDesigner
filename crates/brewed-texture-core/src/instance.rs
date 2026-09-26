@@ -189,6 +189,18 @@ pub struct Instance {
     pub graph: GraphRef,
     #[serde(default)]
     pub interface: Interface,
+    /// The picture each image input of the node takes while nothing arrives at it (by the
+    /// input's name): a file, as a Bitmap reads one. Without one, the input takes the graph's
+    /// own (see [`crate::nodes::IMAGE_INPUT`]).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub images: std::collections::BTreeMap<String, String>,
+}
+
+impl Instance {
+    /// A node that uses the graph `graph`, which is `interface` as a node.
+    pub fn new(graph: GraphRef, interface: Interface) -> Instance {
+        Instance { graph, interface, images: std::collections::BTreeMap::new() }
+    }
 }
 
 /// The name of an input value as the properties show it: words, with a capital first.

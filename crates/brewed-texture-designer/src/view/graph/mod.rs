@@ -528,8 +528,12 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
             Interaction::Linking { .. } => mouse::Interaction::Crosshair,
             _ => {
                 let Some(p) = cursor.position_in(bounds) else { return mouse::Interaction::default() };
-                if self.app.ui.drag.is_some() {
-                    return mouse::Interaction::Copy;
+                if let Some(payload) = &self.app.ui.drag {
+                    return if self.app.drop_refusal(payload).is_some() {
+                        mouse::Interaction::NotAllowed
+                    } else {
+                        mouse::Interaction::Copy
+                    };
                 }
                 let layouts = self.layouts(None);
                 if self.socket_at(&layouts, p).is_some() || state.hovered_link.is_some() {
@@ -660,13 +664,18 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
             frame.stroke_rectangle(r.position(), r.size(), Stroke::default().with_width(1.0).with_color(style::ACCENT));
         }
 
-        // Something dragged from a panel.
+        // Something dragged from a panel: what dropping it does, or why it cannot be dropped
+        // here, said before it is.
         if let Some(payload) = &app.ui.drag
             && cursor.is_over(bounds)
         {
             let r = Rectangle::with_size(bounds.size()).shrink(2.0);
-            frame.stroke_rectangle(r.position(), r.size(), Stroke::default().with_width(2.0).with_color(style::ACCENT));
-            text_at(&mut frame, format!("Drop to add {}", payload.label()), Point::new(bounds.width / 2.0, 22.0), 15.0, style::ACCENT, TextAlign::Center);
+            let (color, says) = match app.drop_refusal(payload) {
+                None => (style::ACCENT, format!("Drop to add {}", payload.label())),
+                Some(why) => (style::ERROR, format!("Cannot be dropped here: {why}")),
+            };
+            frame.stroke_rectangle(r.position(), r.size(), Stroke::default().with_width(2.0).with_color(color));
+            text_at(&mut frame, says, Point::new(bounds.width / 2.0, 22.0), 15.0, color, TextAlign::Center);
         }
 
         if graph.nodes.is_empty() {

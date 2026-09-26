@@ -20,7 +20,7 @@ use brewed_texture_core::{
     Document, Edit, Graph, GraphId, GraphRef, Instance, Interface, NodeId, NodeKind, ParamValue,
 };
 
-use super::{App, Collected, ContextMenu, Dialog, DragPayload, ExplorerMessage, Fold, Message, MissingFiles, PendingAction, blocking};
+use super::{App, Collected, ContextMenu, Dialog, DragPayload, ExplorerMessage, FileTarget, Fold, Message, MissingFiles, PendingAction, blocking};
 
 /// A package open in the Explorer, other than the one being edited.
 pub struct OpenPackage {
@@ -69,7 +69,7 @@ fn read_files(key: u64, paths: Vec<String>, embed: bool) -> Task<Message> {
             let mut files = Vec::new();
             let mut failed = Vec::new();
             for path in paths {
-                match std::fs::read(&path) {
+                match brewed_texture_core::files::read_disk(&path) {
                     Ok(bytes) => files.push((path, Arc::new(bytes))),
                     Err(e) => failed.push(format!("{} ({e})", package::file_name(&path))),
                 }
@@ -423,41 +423,120 @@ impl App {
 
     /// Add a node that uses the graph `graph` of the package open as `key`, at `pos`.
     pub(super) fn add_graph_node(&mut self, key: u64, graph: GraphId, pos: [f32; 2]) {
+        if let Some(why) = self.graph_refusal(key, graph) {
+            self.set_status(why, true);
+            return;
+        }
         let Some(source) = self.package_doc(key) else { return };
         let Some(entry) = source.package().graph(graph) else { return };
+        let package = if key == self.doc_key { None } else { source.key() };
+        let instance = Instance::new(GraphRef { package, graph, name: entry.name.clone() }, Interface::of(&entry.graph));
+        if self.apply(Edit::AddInstance { instance, pos }) {
+            self.doc.seal();
+        }
+    }
+
+    /// Why the graph `graph` of the package open as `key` cannot be used in the graph being
+    /// edited, if it cannot: it is that graph; it uses that graph (a graph cannot use a graph
+    /// that uses it, however deep); or it is of another package that has no file to be found by.
+    /// Said while it is dragged over the graph, before it is dropped.
+    pub fn graph_refusal(&self, key: u64, graph: GraphId) -> Option<String> {
+        let source = self.package_doc(key)?;
+        let entry = source.package().graph(graph)?;
         let package = if key == self.doc_key {
-            if graph == self.doc.current() {
-                self.set_status("A graph cannot use itself", true);
-                return;
-            }
             None
         } else {
             match source.key() {
                 Some(path) => Some(path),
                 None => {
                     let title = source.title();
-                    self.set_status(format!("Save {title} first: another package finds its graphs by its file"), true);
-                    return;
+                    return Some(format!("Save {title} first: another package finds its graphs by its file"));
                 }
             }
         };
-        // A graph that uses this one, however deep, cannot be used in it.
+        self.use_refusal(&GraphRef { package, graph, name: entry.name.clone() })
+    }
+
+    /// Why the graph `r` says (of the package being edited, or of the package at its path)
+    /// cannot be used in the graph being edited, if it cannot: it is that graph, or it uses it,
+    /// however deep. A graph that cannot be found has nothing to refuse.
+    pub fn use_refusal(&self, r: &GraphRef) -> Option<String> {
         let own = self.doc.key();
+        let here = self.doc.entry().name.clone();
+        // (A package's own file is the package itself.)
+        let package = r.package.clone().filter(|p| Some(p) != own.as_ref());
         let docs = self.shelf.iter().map(|p| &p.doc).chain(own.is_some().then_some(&self.doc));
         let lib = Shelf::new(Some(self.doc.package()), docs, &self.deps);
         let from = package.clone().or_else(|| own.clone());
-        if package::uses_graph(&lib, from.as_deref(), graph, (own.as_deref(), self.doc.current())) {
-            let (name, here) = (entry.name.clone(), self.doc.entry().name.clone());
-            self.set_status(format!("'{name}' uses '{here}': it cannot be used in it"), true);
-            return;
+        let entry = lib.package(from.as_deref())?.find(r)?;
+        if package.is_none() && entry.id == self.doc.current() {
+            return Some(format!("'{here}' cannot use itself"));
         }
-        let instance = Instance {
-            graph: GraphRef { package, graph, name: entry.name.clone() },
-            interface: Interface::of(&entry.graph),
+        package::uses_graph(&lib, from.as_deref(), entry.id, (own.as_deref(), self.doc.current()))
+            .then(|| format!("'{}' uses '{here}': a graph cannot use a graph that uses it", entry.name))
+    }
+
+    /// The files a field takes: their extensions, lower case (none: any).
+    pub fn takes(&self, target: &FileTarget) -> &'static [&'static str] {
+        match target {
+            FileTarget::Param(node, key) => self.graph().node(*node).map_or(&[][..], |n| super::file_extensions(n.kind, key)),
+            FileTarget::Input(_) | FileTarget::Instance(..) => brewed_texture_core::nodes::PICTURE_FILES,
+        }
+    }
+
+    /// The file a field reads (empty: none).
+    pub fn file_of(&self, target: &FileTarget) -> &str {
+        let graph = self.graph();
+        match target {
+            FileTarget::Param(node, key) => graph.node(*node).map_or("", |n| n.text(key)),
+            // (Of Image Inputs of one name, the upper one is the input.)
+            FileTarget::Input(name) => brewed_texture_core::instance::port_nodes(graph, NodeKind::IMAGE_INPUT)
+                .into_iter()
+                .find(|n| n.text("name") == name)
+                .map_or("", |n| n.text("image")),
+            FileTarget::Instance(node, input) => {
+                graph.node(*node).and_then(|n| n.instance.as_ref()?.images.get(input)).map_or("", String::as_str)
+            }
+        }
+    }
+
+    /// Make a field read the file at `path`, or none, as one step to undo. A file the package
+    /// did not use before becomes one of its files (see the Explorer's Resources).
+    pub(super) fn set_file(&mut self, target: FileTarget, path: Option<String>) -> Task<Message> {
+        let value = || ParamValue::Text(path.clone().unwrap_or_default());
+        let edits = match target {
+            FileTarget::Param(node, key) => vec![Edit::SetParam { node, key, value: value() }],
+            // Image Inputs of one name are one input: they take one picture.
+            FileTarget::Input(name) => self
+                .graph()
+                .nodes_of(NodeKind::IMAGE_INPUT)
+                .filter(|n| n.text("name") == name)
+                .map(|n| Edit::SetParam { node: n.id, key: "image".into(), value: value() })
+                .collect(),
+            FileTarget::Instance(node, input) => vec![Edit::SetInstanceImage { node, input, path }],
         };
-        if self.apply(Edit::AddInstance { instance, pos }) {
-            self.doc.seal();
+        self.apply_all(edits);
+        self.doc.seal();
+        // A new file is looked at now, for its picture.
+        if self.new_files() { self.look_at_files() } else { Task::none() }
+    }
+
+    /// Why what is dragged cannot be dropped on the graph being edited, if it cannot.
+    pub fn drop_refusal(&self, payload: &DragPayload) -> Option<String> {
+        match payload {
+            DragPayload::Graph { key, graph, .. } => self.graph_refusal(*key, *graph),
+            _ => None,
         }
+    }
+
+    /// The graph a node uses, where it is found: in its package, another open package or one
+    /// read for it.
+    pub fn used_graph(&self, r: &GraphRef) -> Option<&Graph> {
+        let package = match &r.package {
+            None => Some(self.doc.package()),
+            Some(path) => self.open_key(path).and_then(|k| self.package_doc(k)).map(Document::package).or_else(|| self.deps.get(path)),
+        };
+        package?.find(r).map(|e| e.graph.as_ref())
     }
 
     /// Open the graph a node uses: in its package, which the Explorer opens if it has to.
@@ -728,15 +807,23 @@ impl App {
     }
 
     /// What looking at the files found: a picture is made of each that is there and changed
-    /// since its last one (a file on disk edited elsewhere), on a thread of its own.
+    /// since its last one (a file on disk edited elsewhere), on a thread of its own; and a file
+    /// edited elsewhere, or back where it was, is read again, so that what reads it shows it as
+    /// it is now.
     pub(super) fn files_looked(&mut self, looks: Vec<crate::previews::Look>) -> Task<Message> {
         self.res.looking = false;
         let kinds: HashMap<String, ResourceKind> = self.used_files().into_iter().collect();
         self.res.files.retain(|path, _| kinds.contains_key(path));
         let mut tasks = Vec::new();
+        let mut changed = Vec::new();
         for look in looks {
             let Some(kind) = kinds.get(&look.path).copied() else { continue };
+            // (A file not looked at before was read as it is.)
+            let known = self.res.files.contains_key(&look.path);
             let state = self.res.files.entry(look.path.clone()).or_default();
+            if known && look.there && (state.modified != look.modified || !state.there) {
+                changed.push(look.path.clone());
+            }
             (state.there, state.modified, state.bytes) = (look.there, look.modified, look.bytes);
             if state.wants_preview() {
                 state.making = true;
@@ -747,6 +834,9 @@ impl App {
                     Message::PreviewMade(path.clone(), modified, made)
                 }));
             }
+        }
+        for path in changed {
+            self.send(brewed_texture_engine::Request::ReloadFile(path));
         }
         Task::batch(tasks)
     }

@@ -2153,3 +2153,169 @@ fn the_explorer_and_its_menus() {
     draw_frame(&mut w, std::time::Instant::now());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Image Inputs take pictures. In the Input Values, a picture chosen for one is one of the
+/// package's files and what its graph sees; on a node that uses the graph, a picture dragged
+/// from the Explorer is dropped on the input's field, which says at once what it takes: a file
+/// of another kind is refused while it is dragged. A graph dragged where it cannot be used
+/// says why as soon as it is dragged: onto itself, or onto a graph it uses.
+#[test]
+fn image_inputs_take_pictures_and_drags_say_what_cannot_be() {
+    use brewed_texture_core::ResourceKind;
+    use brewed_texture_core::graph::SocketRef;
+    use crate::app::FileTarget;
+
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let dir = scratch("image-inputs");
+    let picture = dir.join("bricks.png");
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 100, 50, 255])).save(&picture).expect("a picture");
+    let font = dir.join("letters.ttf");
+    std::fs::write(&font, b"named as a font").expect("a file");
+    let (picture_path, font_path) = (picture.display().to_string(), font.display().to_string());
+    let window = w.main_window();
+    let now = std::time::Instant::now;
+    // Pressed in a panel and moved: dragged, as from the Explorer.
+    let start_drag = |w: &mut Harness, payload: DragPayload| {
+        let at = Point::new(150.0, 300.0);
+        w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: at }));
+        w.send(Message::PanelPress(payload));
+        let to = Point::new(at.x + 30.0, at.y + 10.0);
+        w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: to }));
+        assert!(w.app.ui.drag.is_some(), "dragged");
+        draw_frame(w, now());
+    };
+    // Released where the mouse is: the widgets there, then the window.
+    let release = |w: &mut Harness| {
+        w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+        w.window_event(window, iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)));
+        assert!(w.app.ui.drag.is_none(), "the drag is over");
+    };
+
+    // A graph that takes a color image and gives it out.
+    w.send(Message::New);
+    let key = w.app.doc_key;
+    let tex = w.app.doc.current();
+    let tex_name = w.app.doc.entry().name.clone();
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::IMAGE_INPUT, pos: [0.0, 0.0] }));
+    let input = w.app.graph().nodes_of(NodeKind::IMAGE_INPUT).next().expect("an Image Input").id;
+    w.send(Message::Edits(vec![
+        Edit::SetParam { node: input, key: "name".into(), value: ParamValue::Text("albedo".into()) },
+        Edit::SetParam { node: input, key: "kind".into(), value: ParamValue::Enum(1) },
+    ]));
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::OUTPUT, pos: [300.0, 0.0] }));
+    let output = w.app.graph().nodes_of(NodeKind::OUTPUT).next().expect("an Output").id;
+    w.send(Message::Edit(Edit::Connect {
+        a: SocketRef { node: input, key: "o:output".into(), output: true },
+        b: SocketRef { node: output, key: "i:input".into(), output: false },
+    }));
+    w.send(Message::Seal);
+    draw_frame(&mut w, now());
+
+    // The Input Values show it, with no picture yet.
+    assert_eq!(texts(&mut w, "albedo").len(), 1, "one row in the Input Values");
+    assert_eq!(texts(&mut w, "none: the default color").len(), 1);
+    // A picture chosen there: what the graph sees, and one of the package's files.
+    w.send(Message::FilePicked(FileTarget::Input("albedo".into()), Some(picture.clone())));
+    let image_of = |w: &Harness| w.app.graph().node(input).map(|n| n.text("image").to_string());
+    assert_eq!(image_of(&w), Some(picture_path.clone()));
+    assert!(w.app.doc.package().resources.iter().any(|r| r.path == picture_path), "in the Explorer's Resources");
+    assert!(w.app.eval.node(output).is_some_and(|e| e.errors.is_empty()), "{:?}", w.app.eval.node(output));
+    draw_frame(&mut w, now());
+    assert!(!texts(&mut w, "bricks.png").is_empty(), "the field names the picture");
+    w.snapshot("image-inputs-values");
+    // One step to undo.
+    w.send(Message::Undo);
+    assert_eq!(image_of(&w), Some(String::new()));
+    w.send(Message::Redo);
+    assert_eq!(image_of(&w), Some(picture_path.clone()));
+
+    // Another graph uses it: its node shows the input, and what the graph sees there without a
+    // picture given: the graph's own.
+    w.send(Message::Explorer(ExplorerMessage::NewGraph(key)));
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    let main = w.app.doc.current();
+    let main_name = w.app.doc.entry().name.clone();
+    assert_ne!(main, tex);
+    let payload = DragPayload::Graph { key, graph: tex, name: tex_name.clone() };
+    w.send(Message::Graph(GraphMessage::Drop { payload, graph_pos: [0.0, 0.0] }));
+    let node = w.app.graph().instances().next().expect("a node that uses the graph").id;
+    w.send(Message::Graph(GraphMessage::Select { node, mode: SelectMode::Replace }));
+    draw_frame(&mut w, now());
+    assert_eq!(texts(&mut w, "IMAGE INPUTS").len(), 1);
+    assert_eq!(texts(&mut w, "the graph's own: bricks.png").len(), 1);
+    let given = |w: &Harness| w.app.graph().node(node).and_then(|n| n.instance.as_ref()?.images.get("albedo").cloned());
+
+    // A font dragged from the Explorer onto the input's field: refused at once, and so when it
+    // is dropped there.
+    w.send(Message::Explorer(ExplorerMessage::FilesPicked(key, vec![font.clone()])));
+    start_drag(&mut w, DragPayload::Resource { path: font_path.clone(), kind: ResourceKind::Font });
+    let refused = texts(&mut w, "✕ letters.ttf is not a picture");
+    assert_eq!(refused.len(), 1, "the field says it takes pictures");
+    w.snapshot("image-inputs-refused");
+    w.hover(refused[0].center());
+    release(&mut w);
+    assert_eq!(given(&w), None);
+    // The picture: taken, as one step to undo.
+    start_drag(&mut w, DragPayload::Resource { path: picture_path.clone(), kind: ResourceKind::Bitmap });
+    let zone = texts(&mut w, "Drop to use bricks.png");
+    assert_eq!(zone.len(), 1, "the field says it takes the picture");
+    w.snapshot("image-inputs-drop");
+    w.hover(zone[0].center());
+    release(&mut w);
+    assert_eq!(given(&w), Some(picture_path.clone()));
+    assert!(w.app.eval.node(node).is_some_and(|e| e.errors.is_empty()), "{:?}", w.app.eval.node(node));
+    draw_frame(&mut w, now());
+    assert!(texts(&mut w, "the graph's own: bricks.png").is_empty(), "a picture of its own now");
+    w.send(Message::Undo);
+    assert_eq!(given(&w), None);
+    w.send(Message::Redo);
+    assert_eq!(given(&w), Some(picture_path.clone()));
+    // The field's button takes it away.
+    w.send(Message::SetFile(FileTarget::Instance(node, "albedo".into()), None));
+    assert_eq!(given(&w), None);
+
+    // The graph dragged onto itself: refused as soon as it is dragged, saying why.
+    start_drag(&mut w, DragPayload::Graph { key, graph: main, name: main_name.clone() });
+    assert_eq!(texts(&mut w, &format!("✕ '{main_name}' cannot use itself")).len(), 1);
+    w.window_event(window, iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)));
+    // Onto the graph it uses: that graph cannot use it back.
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, tex)));
+    let payload = DragPayload::Graph { key, graph: main, name: main_name.clone() };
+    start_drag(&mut w, payload.clone());
+    let why = format!("'{main_name}' uses '{tex_name}': a graph cannot use a graph that uses it");
+    assert_eq!(texts(&mut w, &format!("✕ {why}")).len(), 1);
+    w.snapshot("image-inputs-cycle");
+    // Dropped anyway: nothing is added, and the status bar says why.
+    w.send(Message::Graph(GraphMessage::Drop { payload, graph_pos: [0.0, 0.0] }));
+    assert_eq!(w.app.graph().instances().count(), 0);
+    let status = |w: &Harness| w.app.ui.status.as_ref().filter(|s| s.error).map(|s| s.text.clone());
+    assert_eq!(status(&w).as_deref(), Some(why.as_str()));
+
+    // Nor pasted: the node that uses this graph, copied, cannot go into it; one that uses a graph
+    // that uses this one cannot either.
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, main)));
+    let user = w.app.graph().instances().next().expect("the node that uses the graph").id;
+    w.send(Message::Graph(GraphMessage::Select { node: user, mode: SelectMode::Replace }));
+    w.send(Message::Copy);
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, tex)));
+    w.send(Message::ClipboardText(None));
+    assert_eq!(w.app.graph().instances().count(), 0, "not pasted");
+    assert_eq!(status(&w), Some(format!("Not pasted: '{tex_name}' cannot use itself")));
+    // Into the graph it was copied from, it is pasted.
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, main)));
+    w.send(Message::ClipboardText(None));
+    assert_eq!(w.app.graph().instances().count(), 2);
+    // A third graph uses the one that uses this one: its node, copied, is not pasted here.
+    w.send(Message::Explorer(ExplorerMessage::NewGraph(key)));
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    let payload = DragPayload::Graph { key, graph: main, name: main_name.clone() };
+    w.send(Message::Graph(GraphMessage::Drop { payload, graph_pos: [0.0, 0.0] }));
+    let user = w.app.graph().instances().next().expect("a node that uses the second graph").id;
+    w.send(Message::Graph(GraphMessage::Select { node: user, mode: SelectMode::Replace }));
+    w.send(Message::Copy);
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, tex)));
+    w.send(Message::ClipboardText(None));
+    assert_eq!(w.app.graph().instances().count(), 0, "not pasted");
+    assert_eq!(status(&w), Some(format!("Not pasted: {why}")));
+    let _ = std::fs::remove_dir_all(&dir);
+}

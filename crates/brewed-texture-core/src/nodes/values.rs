@@ -121,7 +121,8 @@ pub static IMAGE_INPUT: NodeDef = NodeDef {
     name: "Image Input",
     category: Category::Values,
     description: "An image the graph takes. Used as a node in another graph, the graph gets an input of \
-                  this name; on its own, and while nothing arrives there, it sees the default color.",
+                  this name. While nothing arrives there, the graph sees the picture the node gives the input, \
+                  else its image here, else its default color.",
     keywords: "input image graph instance socket parameter",
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,
@@ -130,7 +131,11 @@ pub static IMAGE_INPUT: NodeDef = NodeDef {
         choice("kind", "Kind", 0, IMAGE_INPUT_KINDS)
             .fixed()
             .tip("What the graph takes: an image that arrives is made grayscale or color."),
-        color("default", "Default", [0.5, 0.5, 0.5, 1.0]).tip("What the graph sees here while nothing arrives."),
+        file("image", "Image", PICTURE_FILES).tip(
+            "What the graph sees here while nothing arrives (a node that uses the graph can give it another). \
+             It is one of the package's files; drag one onto it from the Explorer.",
+        ),
+        color("default", "Default", [0.5, 0.5, 0.5, 1.0]).tip("What the graph sees here while nothing arrives and it has no image."),
     ],
     role: Role::Image,
 };

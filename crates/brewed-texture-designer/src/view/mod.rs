@@ -62,9 +62,12 @@ pub fn root(app: &App) -> Element<'_, Message> {
         layers.push(add_menu::view(app, menu));
     }
     if let Some(drag) = &app.ui.drag {
-        let ghost = container(text(format!("+ {}", drag.label())).size(style::TEXT_SIZE))
-            .padding([4, 8])
-            .style(style::popup);
+        // What cannot be dropped on the graph says so as soon as it is dragged, and why.
+        let says = match app.drop_refusal(drag) {
+            Some(why) => text(format!("✕ {why}")).size(style::TEXT_SIZE).color(style::ERROR),
+            None => text(format!("+ {}", drag.label())).size(style::TEXT_SIZE),
+        };
+        let ghost = container(says).padding([4, 8]).max_width(420).style(style::popup);
         let at = app.ui.cursor + iced::Vector::new(14.0, 10.0);
         layers.push(pin(ghost).position(at).into());
     }

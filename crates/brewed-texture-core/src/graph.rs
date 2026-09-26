@@ -189,6 +189,8 @@ impl Node {
             })
             .collect();
         instance.graph.name = name.to_string();
+        // An input the graph no longer has takes no picture, as nothing arrives at it any more.
+        instance.images.retain(|input, _| interface.inputs.iter().any(|p| p.name == *input));
         instance.interface = interface;
         true
     }

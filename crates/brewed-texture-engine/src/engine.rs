@@ -314,6 +314,8 @@ pub struct Engine {
     bitmap_rx: Receiver<DecodedBitmap>,
     /// The drawings of the SVG and Text nodes, by node.
     drawings: HashMap<NodeId, Drawing>,
+    /// How many times each file drawn from was read again (see [`Engine::reload_file`]).
+    rereads: HashMap<String, u64>,
     drawn_tx: Sender<Drawn>,
     drawn_rx: Receiver<Drawn>,
     luts: HashMap<NodeId, Lut>,
@@ -357,6 +359,7 @@ impl Engine {
             bitmap_tx,
             bitmap_rx,
             drawings: HashMap::new(),
+            rereads: HashMap::new(),
             drawn_tx,
             drawn_rx,
             luts: HashMap::new(),
@@ -497,9 +500,11 @@ impl Engine {
         }
     }
 
-    /// Forget a cached file so it is decoded again.
-    pub fn reload_bitmap(&mut self, path: &str) {
+    /// Read a file again (edited elsewhere): a picture is decoded again, and what is drawn from
+    /// it (an SVG, a font) is drawn again, each drawing showing its last one meanwhile.
+    pub fn reload_file(&mut self, path: &str) {
         self.bitmaps.remove(path);
+        *self.rereads.entry(path.to_string()).or_default() += 1;
     }
 
     /// The drawing an SVG or Text node shows for `job` (see [`crate::vector`]): drawn in the
@@ -937,7 +942,9 @@ impl Engine {
 
         // Drawing of an SVG or a Text node, at the texture's size.
         if (node.kind == NodeKind::SVG || node.kind == NodeKind::TEXT) && !node.bypass {
-            match self.drawing_for(node.id, vector_job(node.kind, params, resolution)) {
+            let mut job = vector_job(node.kind, params, resolution);
+            job.reads = job.file().and_then(|f| self.rereads.get(f)).copied().unwrap_or(0);
+            match self.drawing_for(node.id, job) {
                 Ok(Some((img, generation))) => {
                     generation.hash(&mut hasher);
                     bitmap = Some(img);
@@ -1441,16 +1448,8 @@ impl Engine {
 /// any other into RGBA half floats (SIMD conversion on all cores).
 fn decode_bitmap(path: &str) -> Result<(u32, u32, Pixels), String> {
     let bytes = brewed_texture_core::files::read(path)?;
-    let name = brewed_texture_core::package::file_name(path);
-    // By its extension, as a file on disk is opened; else by what it starts with.
-    let format = image::ImageFormat::from_path(&name)
-        .or_else(|_| image::guess_format(&bytes))
-        .map_err(|e| format!("Cannot open '{name}': {e}"))?;
-    let img = image::load_from_memory_with_format(&bytes, format).map_err(|e| format!("Cannot open '{name}': {e}"))?;
+    let img = open_picture(&bytes, &brewed_texture_core::package::file_name(path))?;
     let (w, h) = (img.width(), img.height());
-    if w == 0 || h == 0 || w > 8192 || h > 8192 {
-        return Err(format!("Unsupported image size {w}x{h} (max 8192)"));
-    }
     match img.color() {
         image::ColorType::L8 => {
             let values = img.into_luma8().into_raw().into_iter().map(|v| f32::from(v) / 255.0).collect();
@@ -1475,6 +1474,34 @@ fn decode_bitmap(path: &str) -> Result<(u32, u32, Pixels), String> {
     Ok((w, h, Pixels::Color(half)))
 }
 
+/// The picture in the bytes of a file named `name`: of the kind its extension says, else of the
+/// kind its first bytes say. A picture larger than a texture can be is refused before it is
+/// decoded, as is one of no pixels.
+pub fn open_picture(bytes: &[u8], name: &str) -> Result<image::DynamicImage, String> {
+    const SIDE: u32 = brewed_texture_core::graph::MAX_RESOLUTION;
+    let format = image::ImageFormat::from_path(name)
+        .or_else(|_| image::guess_format(bytes))
+        .map_err(|e| format!("Cannot open '{name}': {e}"))?;
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(SIDE);
+    limits.max_image_height = Some(SIDE);
+    // The largest of them, of 32-bit floats, takes 1 GB decoded (more than the decoder's own
+    // limit lets it take).
+    limits.max_alloc = Some(u64::from(SIDE) * u64::from(SIDE) * 16 + (64 << 20));
+    reader.limits(limits);
+    let picture = reader.decode().map_err(|e| match e {
+        image::ImageError::Limits(l) if matches!(l.kind(), image::error::LimitErrorKind::DimensionError) => {
+            format!("'{name}' is larger than {SIDE} × {SIDE} pixels")
+        }
+        e => format!("Cannot open '{name}': {e}"),
+    })?;
+    if picture.width() == 0 || picture.height() == 0 {
+        return Err(format!("'{name}' has no pixels"));
+    }
+    Ok(picture)
+}
+
 /// What an SVG or a Text node draws, from its parameters, at the texture size `size`.
 fn vector_job(kind: NodeKind, params: &brewed_texture_core::eval::Params, size: [u32; 2]) -> VectorJob {
     let what = if kind == NodeKind::SVG {
@@ -1491,7 +1518,7 @@ fn vector_job(kind: NodeKind, params: &brewed_texture_core::eval::Params, size: 
         }
     };
     let scale = if kind == NodeKind::SVG { params.f("scale").max(1e-3) } else { 1.0 };
-    VectorJob { what, size, offset: params.v2("offset"), rotation: params.f("rotation"), scale, tiling: params.tiling() }
+    VectorJob { what, size, offset: params.v2("offset"), rotation: params.f("rotation"), scale, tiling: params.tiling(), reads: 0 }
 }
 
 /// Convenience for tests and tools: evaluate `graph` from scratch and wait for the GPU.

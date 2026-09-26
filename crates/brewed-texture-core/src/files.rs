@@ -54,12 +54,27 @@ pub fn embedded(path: &str) -> Option<Arc<Vec<u8>>> {
     store().read().ok()?.get(path).cloned()
 }
 
+/// The largest file read: larger than any file a node reads can be (a picture of 8192 × 8192
+/// 32-bit floats, the largest a Bitmap reads, takes 1 GB).
+pub const MAX_FILE: u64 = 2 << 30;
+
+/// The bytes of the file at `path` on disk; else why they cannot be read (a file larger than
+/// [`MAX_FILE`] is not: it would only fill the memory).
+pub fn read_disk(path: &str) -> Result<Vec<u8>, String> {
+    let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if size > MAX_FILE {
+        let gb = size as f64 / (1u64 << 30) as f64;
+        return Err(format!("it is {gb:.1} GB; files of more than {} GB are not read", MAX_FILE >> 30));
+    }
+    std::fs::read(path).map_err(|e| e.to_string())
+}
+
 /// The bytes of the file at `path`: of the package that holds it, or from disk.
 pub fn read(path: &str) -> Result<Arc<Vec<u8>>, String> {
     if is_embedded(path) {
         return embedded(path).ok_or_else(|| format!("{} is not in its package", crate::package::file_name(path)));
     }
-    std::fs::read(path).map(Arc::new).map_err(|e| format!("Cannot open '{path}': {e}"))
+    read_disk(path).map(Arc::new).map_err(|e| format!("Cannot open '{path}': {e}"))
 }
 
 /// Is the file at `path` there: embedded and held, or on disk (which this asks the disk).

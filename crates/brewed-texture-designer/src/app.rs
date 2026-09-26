@@ -61,6 +61,17 @@ pub enum DragPayload {
     Resource { path: String, kind: ResourceKind },
 }
 
+/// A field that says which file something reads.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FileTarget {
+    /// A file parameter of a node: the file of a Bitmap, the image of an Image Input ...
+    Param(NodeId, String),
+    /// The image of the graph's Image Inputs of this name (in the Input Values).
+    Input(String),
+    /// The picture a node that uses a graph gives its image input of this name.
+    Instance(NodeId, String),
+}
+
 impl DragPayload {
     pub fn label(&self) -> String {
         match self {
@@ -380,6 +391,8 @@ pub struct Results {
     pub looking: bool,
     /// The files the open packages used when they were looked at last.
     pub looked: Vec<String>,
+    /// Why the engine stopped, if it did (it never should): nothing is computed any more.
+    pub stopped: Option<String>,
 }
 
 pub struct App {
@@ -688,9 +701,13 @@ pub enum Message {
     ShowFunctions,
     PlotVar(usize),
     PlotRange(f32, f32),
-    BrowseFile(NodeId, String),
-    FilePicked(NodeId, String, Option<PathBuf>),
-    ReloadBitmap(NodeId),
+    /// Choose the file a field reads, in a dialog.
+    BrowseFile(FileTarget),
+    FilePicked(FileTarget, Option<PathBuf>),
+    /// Make a field read a file (one dropped on it from the Explorer), or none.
+    SetFile(FileTarget, Option<String>),
+    /// Read a file again (edited elsewhere).
+    ReloadFile(String),
     AutoLevels(NodeId),
     // input values
     ToggleVariable(String),
@@ -1330,6 +1347,13 @@ impl App {
                 );
                 return;
             }
+        }
+        // Nodes that use this graph, or a graph that uses it, cannot be here: not pasted, and
+        // the status bar says why.
+        let refused = clip.nodes.iter().filter_map(|n| n.instance.as_ref()).find_map(|i| self.use_refusal(&i.graph));
+        if let Some(why) = refused {
+            self.set_status(format!("Not pasted: {why}"), true);
+            return;
         }
         let at = self.graph_pos_for_paste();
         self.apply(Edit::Paste { clipboard: clip, at });
@@ -1983,8 +2007,8 @@ impl App {
                     self.ui.plot_range = (lo.min(hi - 1e-3), hi.max(lo + 1e-3));
                 }
             }
-            Message::BrowseFile(node, key) => {
-                let extensions = self.graph().node(node).map_or(&[][..], |n| file_extensions(n.kind, &key));
+            Message::BrowseFile(target) => {
+                let extensions = self.takes(&target);
                 return Task::perform(
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new().set_title("Choose a file");
@@ -1993,20 +2017,18 @@ impl App {
                         }
                         dialog.pick_file()
                     }),
-                    move |p| Message::FilePicked(node, key.clone(), p.flatten()),
+                    move |p| Message::FilePicked(target.clone(), p.flatten()),
                 );
             }
-            Message::FilePicked(node, key, Some(path)) => {
-                self.apply(Edit::SetParam { node, key, value: ParamValue::Text(path.display().to_string()) });
-                self.doc.seal();
+            Message::FilePicked(target, Some(path)) => return self.set_file(target, Some(path.display().to_string())),
+            Message::FilePicked(_, None) => {}
+            Message::SetFile(target, path) => {
+                // (Dropped from the Explorer: the drag ends here.)
+                self.ui.drag = None;
+                self.ui.press = None;
+                return self.set_file(target, path);
             }
-            Message::FilePicked(_, _, None) => {}
-            Message::ReloadBitmap(node) => {
-                if let Some(n) = self.graph().node(node) {
-                    let path = n.text("path").to_string();
-                    self.send(Request::ReloadBitmap(path));
-                }
-            }
+            Message::ReloadFile(path) => self.send(Request::ReloadFile(path)),
             Message::AutoLevels(node) => self.auto_levels(node),
             Message::ToggleVariable(name) => {
                 if !self.ui.expanded_vars.remove(&name) {
@@ -2115,7 +2137,9 @@ impl App {
                 inner.sort_by_key(|(id, _)| **id);
                 for (id, report) in inner {
                     if let (Some(owner), Some(e)) = (self.owners.get(id), &report.error) {
-                        self.res.inner.entry(*owner).or_insert_with(|| format!("Inside: {e}"));
+                        // (What reads the picture of an Image Input is the input's, not inside it.)
+                        let inside = self.graph().node(*owner).is_some_and(|n| n.instance.is_some());
+                        self.res.inner.entry(*owner).or_insert_with(|| if inside { format!("Inside: {e}") } else { e.clone() });
                     }
                 }
                 self.res.reports = reports;
@@ -2168,6 +2192,15 @@ impl App {
                     Ok(path) => self.set_status(format!("Exported {}", path.display()), false),
                     Err(e) => self.set_status(e, true),
                 }
+            }
+            Event::Stopped(why) => {
+                log::error!("the engine stopped: {why}");
+                #[cfg(any(test, feature = "dev-tools"))]
+                if let Some(pilot) = &mut self.dev.pilot {
+                    pilot.finding(format!("the engine stopped: {why}"));
+                }
+                self.set_status(format!("The engine stopped ({why}): save the packages and start the program again"), true);
+                self.res.stopped = Some(why);
             }
             Event::GpuErrors(errors) => {
                 #[cfg(any(test, feature = "dev-tools"))]

@@ -377,10 +377,10 @@ mod tests {
     fn a_package() -> Package {
         let (mut package, _) = crate::demo::package();
         let wall = package.first();
-        let instance = crate::instance::Instance {
-            graph: crate::instance::GraphRef { package: None, graph: wall, name: package.graphs[0].name.clone() },
-            interface: crate::instance::Interface::of(&package.graphs[0].graph),
-        };
+        let instance = crate::instance::Instance::new(
+            crate::instance::GraphRef { package: None, graph: wall, name: package.graphs[0].name.clone() },
+            crate::instance::Interface::of(&package.graphs[0].graph),
+        );
         let mut g = Graph::default();
         g.add_instance(instance, [0.0, 0.0]);
         let bitmap = g.add_node(crate::NodeKind::BITMAP, [0.0, 300.0]);

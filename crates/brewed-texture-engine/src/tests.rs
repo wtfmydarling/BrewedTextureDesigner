@@ -705,7 +705,7 @@ fn a_graph_used_as_a_node_computes_what_its_nodes_do() {
     let used = package.add_graph("Soft", soft);
     let main = package.first();
     let interface = Interface::of(&package.graph(used).unwrap().graph);
-    let instance = Instance { graph: GraphRef { package: None, graph: used, name: "Soft".into() }, interface };
+    let instance = Instance::new(GraphRef { package: None, graph: used, name: "Soft".into() }, interface);
     let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
     let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
     let node = g.add_instance(instance.clone(), [200.0, 0.0]);
@@ -1039,6 +1039,13 @@ fn distance_fields_and_bevels() {
     let data = eval_read(&mut e, &g, dist);
     assert_eq!(pixel(&data, 3, 3)[0], 0.0);
     assert!(pixel(&data, RES / 2, RES / 2)[0] > 0.99);
+    // A distance larger than anything (typed, or driven by a value) reaches across the image.
+    set(&mut g, dist, "mode", ParamValue::Enum(0));
+    set(&mut g, dist, "distance", ParamValue::Float(1e12));
+    let data = eval_read(&mut e, &g, dist);
+    assert_eq!(pixel(&data, RES / 2, RES / 2)[0], 1.0);
+    assert!(pixel(&data, 3, 3)[0] > 0.99, "as near as the shape, next to that distance");
+    set(&mut g, dist, "distance", ParamValue::Float(64.0));
 
     // A bevel: 0 outside, the top in the middle, the slope in between in its profile.
     let bevel = g.add_node(NodeKind::BEVEL, [0.0, 0.0]);
@@ -2688,4 +2695,31 @@ fn a_large_graph_dragged_through_the_service() {
     say("dragged");
     std::thread::sleep(Duration::from_secs(8));
     say("done");
+}
+
+/// Pictures larger than a texture can be are refused before they are decoded, saying why; a
+/// file that is no picture says so.
+#[test]
+fn pictures_too_large_are_refused_at_once() {
+    let mut png = Vec::new();
+    image::GrayImage::new(8193, 1).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let error = crate::open_picture(&png, "wide.png").unwrap_err();
+    assert_eq!(error, "'wide.png' is larger than 8192 × 8192 pixels");
+    assert!(crate::open_picture(b"not a picture", "notes.png").unwrap_err().starts_with("Cannot open 'notes.png'"));
+    let picture = crate::open_picture(&png[..], "wide").unwrap_err();
+    assert!(picture.contains("larger than"), "by what it starts with: {picture}");
+}
+
+/// The largest picture a Bitmap reads, of 32-bit floats, is read (it takes 1 GB decoded).
+#[test]
+#[ignore = "takes 2 GB of memory"]
+fn the_largest_pictures_are_read() {
+    let dir = std::env::temp_dir().join(format!("btd-large-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("large.exr");
+    exr::prelude::write_rgba_file(&path, 8192, 8192, |x, y| (x as f32 / 8192.0, y as f32 / 8192.0, 0.5f32, 1.0f32)).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let picture = crate::open_picture(&bytes, "large.exr").unwrap();
+    assert_eq!((picture.width(), picture.height()), (8192, 8192));
+    let _ = std::fs::remove_dir_all(&dir);
 }

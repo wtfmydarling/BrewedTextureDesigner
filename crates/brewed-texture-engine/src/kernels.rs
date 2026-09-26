@@ -1154,7 +1154,8 @@ fn make_it_tile(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 /// from pass to pass, and one more of one. An image of [`SEED_FORMAT`], to recycle.
 fn distance_seeds(gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, mask: &GpuImage, size: [u32; 2], u: DistanceU) -> Result<GpuImage, String> {
     let [w, h] = size;
-    let reach = (u.max_distance.ceil().max(1.0) as u32).next_power_of_two();
+    // (No farther than across the image, however far is asked for.)
+    let reach = (u.max_distance.min(w.max(h) as f32).ceil().max(1.0) as u32).next_power_of_two();
     let first = reach.min(w.max(h).next_power_of_two() / 2).max(1);
     let mut a = gpu.take_scratch(w, h, SEED_FORMAT);
     let mut b = gpu.take_scratch(w, h, SEED_FORMAT);

@@ -301,6 +301,15 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
     } else {
         app.adapter.clone()
     };
+    // (It never should.)
+    let gpu: Element<'_, Message> = match &app.res.stopped {
+        Some(why) => tip(
+            text("The engine stopped").size(style::SMALL).color(style::ERROR),
+            format!("{why}\n\nNothing is computed any more: save the packages and start the program again."),
+            tooltip::Position::Top,
+        ),
+        None => text(gpu).size(style::SMALL).color(style::TEXT_FAINT).into(),
+    };
     let mut bar = row![container(status).clip(true).width(Length::Fill), graph]
         .spacing(8)
         .align_y(Alignment::Center)
@@ -308,6 +317,6 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
     if engine {
         bar = bar.push(divider()).push(memory);
     }
-    bar = bar.push(divider()).push(text(gpu).size(style::SMALL).color(style::TEXT_FAINT));
+    bar = bar.push(divider()).push(gpu);
     container(bar).padding([0, 10]).width(Length::Fill).style(style::window_bar).into()
 }

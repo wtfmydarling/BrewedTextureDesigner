@@ -9,15 +9,17 @@ mod levels;
 
 use iced::widget::{button, column, container, mouse_area, pick_list, row, scrollable, space, text, text_input, toggler, tooltip};
 use iced::{Alignment, Element, Length};
-use brewed_texture_core::graph::{Node, NodeId, param_socket_key};
-use brewed_texture_core::nodes::{NodeKind, ParamDef, ParamKind, Role};
-use brewed_texture_core::{Curve, Edit, Gradient, Interpolation, ParamValue, Tiling};
+use brewed_texture_core::graph::{Node, NodeId, input_socket_key, param_socket_key};
+use brewed_texture_core::instance::port_nodes;
+use brewed_texture_core::nodes::{ImageKind, NodeKind, ParamDef, ParamKind, Role};
+use brewed_texture_core::package::file_name;
+use brewed_texture_core::{Curve, DataType, Edit, Gradient, Instance, Interpolation, ParamValue, Tiling};
 
-use crate::app::{App, ColorTarget, Message};
+use crate::app::{App, ColorTarget, FileTarget, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
 use crate::picker::PickTarget;
-use crate::view::editors::{eyedropper, swatch};
+use crate::view::editors::{eyedropper, file_field, swatch};
 use crate::view::{tip, section};
 use crate::widget::curve::curve_editor;
 use crate::widget::gradient::gradient_editor;
@@ -261,6 +263,11 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
     if index == 0 && node.instance.is_some() {
         col = col.push(text("The graph has no input values: its Input nodes are its parameters.").size(style::SMALL).color(style::TEXT_FAINT));
     }
+    if let Some(instance) = node.instance.as_deref()
+        && !instance.interface.inputs.is_empty()
+    {
+        col = col.push(image_inputs(app, node, instance));
+    }
 
     // Node specific sections.
     if d.expression_param().is_some() {
@@ -289,6 +296,64 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
             .map(|k| Edit::SetParam { node: id, key: k.to_string(), value: d.param(k).expect("transform param").default_value() })
             .collect::<Vec<_>>();
         col = col.push(button(text("Reset transform").size(style::SMALL)).padding([4, 10]).style(style::button).on_press(Message::Edits(reset)));
+    }
+    col.into()
+}
+
+/// The image inputs of a node that uses a graph: what arrives at each, or else the picture the
+/// graph sees there: the one the node gives it, else the graph's own.
+fn image_inputs<'a>(app: &'a App, node: &'a Node, instance: &'a Instance) -> Element<'a, Message> {
+    let used = app.used_graph(&instance.graph);
+    let mut col = column![section("Image Inputs")].spacing(2);
+    for (index, port) in instance.interface.inputs.iter().enumerate() {
+        let kind = port.kind.unwrap_or(ImageKind::Color);
+        let own = used.and_then(|g| port_nodes(g, NodeKind::IMAGE_INPUT).into_iter().find(|n| n.text("name") == port.name));
+        let own_picture = own.map(|n| n.text("image").trim()).filter(|p| !p.is_empty());
+        let none = match own_picture {
+            Some(p) => format!("the graph's own: {}", file_name(p)),
+            None => "none: the graph's default color".to_string(),
+        };
+        let about = format!(
+            "{} image. While nothing arrives at its socket, the graph sees the picture given here; without one, {}.",
+            if kind == ImageKind::Color { "A color" } else { "A grayscale" },
+            match own_picture {
+                Some(p) => format!("its own ({})", file_name(p)),
+                None => "its default color".to_string(),
+            },
+        );
+        let label = tip(
+            row![
+                socket_icon(DataType::Image, true, 11.0, style::image_color(Some(kind))),
+                text(&port.name).size(style::SMALL).color(style::TEXT_DIM).wrapping(text::Wrapping::None),
+            ]
+            .spacing(5)
+            .align_y(Alignment::Center)
+            .width(Length::Fixed(LABEL_W)),
+            about,
+            tooltip::Position::Top,
+        );
+        let arriving = app.graph().link_into(node.id, &input_socket_key(&port.name)).and_then(|l| app.graph().node(l.from));
+        let editor: Element<'a, Message> = match arriving {
+            // What arrives comes first: the picture waits.
+            Some(from) => container(
+                text(format!("Connected: {}", crate::view::graph::node_title(from)))
+                    .size(style::SMALL)
+                    .color(style::TEXT_FAINT)
+                    .wrapping(text::Wrapping::None),
+            )
+            .padding([4, 6])
+            .width(Length::Fill)
+            .clip(true)
+            .style(style::field_box)
+            .into(),
+            None => file_field(app, FileTarget::Instance(node.id, port.name.clone()), none),
+        };
+        col = col.push(
+            container(row![label, editor].spacing(6).align_y(Alignment::Center))
+                .padding([3, 4])
+                .width(Length::Fill)
+                .style(style::stripe(index.is_multiple_of(2))),
+        );
     }
     col.into()
 }
@@ -556,53 +621,17 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
                 .style(style::pick_list)
                 .into()
         }
-        // A file the package holds: its name, not a path to type into.
-        (ParamKind::File { .. }, ParamValue::Text(path)) if brewed_texture_core::files::is_embedded(path) => row![
-            tip(
-                container(
-                    row![
-                        icon(Icon::Package, 12.0, style::TEXT_FAINT),
-                        text(brewed_texture_core::package::file_name(path)).size(style::SMALL).wrapping(text::Wrapping::None),
-                    ]
-                    .spacing(6)
-                    .align_y(Alignment::Center),
-                )
-                .padding([4, 6])
-                .width(Length::Fill)
-                .clip(true)
-                .style(style::field_box),
-                "Held in the package's file (see the Explorer's Resources)",
-                tooltip::Position::Top,
-            ),
-            tip(
-                button(icon(Icon::Folder, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(Message::BrowseFile(id, key.to_string())),
-                "Choose another file",
-                tooltip::Position::Top,
-            ),
-        ]
-        .spacing(4)
-        .align_y(Alignment::Center)
-        .into(),
-        (ParamKind::File { .. }, ParamValue::Text(path)) => row![
-            text_input("no file", path)
-                .on_input(move |t| set(id, key, ParamValue::Text(t)))
-                .size(style::SMALL)
-                .padding([3, 6])
-                .style(style::text_input),
-            tip(
-                button(icon(Icon::Folder, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(Message::BrowseFile(id, key.to_string())),
-                "Choose a file",
-                tooltip::Position::Top,
-            ),
-            tip(
-                button(icon(Icon::Refresh, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(Message::ReloadBitmap(id)),
-                "Load the file again (after editing it elsewhere)",
-                tooltip::Position::Top,
-            ),
-        ]
-        .spacing(4)
-        .align_y(Alignment::Center)
-        .into(),
+        // A file: chosen, or dragged from the Explorer; not a path to type.
+        (ParamKind::File { .. }, ParamValue::Text(_)) => {
+            let none = if node.kind == NodeKind::IMAGE_INPUT {
+                "none: the default color"
+            } else if node.kind == NodeKind::TEXT {
+                "none: Inter, built in"
+            } else {
+                "no file"
+            };
+            file_field(app, FileTarget::Param(id, key.to_string()), none.to_string())
+        }
         (ParamKind::Text { .. }, ParamValue::Text(s)) => text_input("", s)
             .on_input(move |t| set(id, key, ParamValue::Text(t)))
             .size(style::TEXT_SIZE)
