@@ -20,6 +20,7 @@ use iced::widget::{image, operation, pane_grid, text_editor};
 use iced::{Point, Rectangle, Size, Subscription, Task, Theme, Vector, keyboard, mouse, window};
 
 use brewed_texture_core::eval::{self, Evaluation};
+use brewed_texture_core::files::Held;
 use brewed_texture_core::graph::{Clipboard, CommentId, Graph, Link, NodeId, SocketRef};
 use brewed_texture_core::package::{Missing, Package, ResourceKind};
 use brewed_texture_core::project::{self, ViewState};
@@ -34,6 +35,7 @@ use crate::eyedropper;
 use crate::picker::{self, PickTarget, Shot};
 use crate::view;
 use crate::view::frames::FrameRate;
+use crate::settings::{self, Settings};
 use crate::workspace::Workspace;
 
 // ---------------------------------------------------------------------------- options
@@ -47,6 +49,8 @@ pub struct StartupOptions {
     /// Where unsaved work is kept to be recovered after a crash (see [`autosave`]), and what
     /// programs that stopped kept is found. `None` keeps nothing.
     pub recovery: Option<PathBuf>,
+    /// The settings, and where they are kept (by default: as they are by default, nowhere).
+    pub settings: settings::Store,
     /// What the tools for developing the program are asked for (see [`dev`]).
     #[cfg(any(test, feature = "dev-tools"))]
     pub dev: dev::DevOptions,
@@ -214,6 +218,7 @@ pub enum Dialog {
     Recover,
     About,
     Shortcuts,
+    Settings,
     /// Files a package names that are not there (see [`MissingFiles`]).
     Missing(MissingFiles),
 }
@@ -427,6 +432,9 @@ pub struct App {
     views: HashMap<(u64, GraphId), ViewState>,
     /// Unsaved work kept for recovery after a crash (see [`autosave`]).
     autosave: autosave::Autosave,
+    /// The settings, and where they are kept.
+    pub settings: Settings,
+    settings_store: settings::Store,
     pub eval: Arc<Evaluation>,
     /// What the engine computes: the graph being edited with the graphs it uses laid out in
     /// it, and its evaluation.
@@ -593,7 +601,7 @@ pub enum ExplorerMessage {
     Embed(u64, Vec<String>),
     /// Files were read for a package, to import (or, `embed`, to hold those it links to), and
     /// what could not be read.
-    FilesRead { key: u64, embed: bool, files: Vec<(String, Arc<Vec<u8>>)>, failed: Vec<String> },
+    FilesRead { key: u64, embed: bool, files: Vec<(String, Held)>, failed: Vec<String> },
     /// Write a file a package holds to disk, and link to it instead (a file dialog).
     SaveResourceAs(u64, String),
     ResourceSavePicked(u64, String, Option<PathBuf>),
@@ -656,6 +664,8 @@ pub enum Message {
     /// Save, then continue with the action (unsaved changes dialog).
     SaveThen(PendingAction),
     Dialog(Option<Dialog>),
+    /// The settings, changed (Edit → Settings…).
+    Settings(Settings),
     /// Keep the unsaved work for recovery (see [`autosave`]).
     Autosave,
     /// Snapshots were written, or could not be (see [`autosave::Written`]).
@@ -736,6 +746,12 @@ pub enum Message {
     /// Choose the file a field reads, in a dialog.
     BrowseFile(FileTarget),
     FilePicked(FileTarget, Option<PathBuf>),
+    /// A file chosen for a field, read to be held by the package (the settings say so), or why
+    /// it could not be.
+    FileHeld(FileTarget, Result<Held, String>),
+    /// A file dropped on the window, read to be held by the package: the node that reads it,
+    /// of its kind, goes where it was dropped.
+    DropHeld(ResourceKind, [f32; 2], Result<Held, String>),
     /// Make a field read a file (one dropped on it from the Explorer), or none.
     SetFile(FileTarget, Option<String>),
     /// Read a file again (edited elsewhere).
@@ -838,6 +854,8 @@ impl App {
             unreadable: HashSet::new(),
             views: HashMap::new(),
             autosave: autosave::Autosave::default(),
+            settings: opts.settings.settings(),
+            settings_store: opts.settings.clone(),
             eval,
             flat: (Arc::new(Graph::default()), Arc::new(Evaluation::default())),
             owners: Arc::new(HashMap::new()),
@@ -979,6 +997,43 @@ impl App {
         crate::style::theme()
     }
 
+    /// How large the interface of a window is drawn, over what the system says: the main
+    /// window's as the settings say; the eyedropper's, over the screen it picks from, as it is.
+    pub fn scale_factor(&self, window: window::Id) -> f32 {
+        if Some(window) == self.window { self.settings.scale } else { 1.0 }
+    }
+
+    /// A new graph, as the settings say new graphs are.
+    pub(crate) fn new_graph(&self) -> Graph {
+        let size = self.settings.graph_size;
+        Graph { resolution: [size, size], precision: self.settings.graph_precision, ..Graph::default() }
+    }
+
+    /// The settings are `new`: kept, and what they change changed.
+    fn set_settings(&mut self, new: Settings) {
+        let old = std::mem::replace(&mut self.settings, new);
+        if old == new {
+            return;
+        }
+        if old.keep_unsaved && !new.keep_unsaved {
+            // Not kept any more: what was kept goes.
+            self.forget_all_snapshots();
+        }
+        if let Err(e) = self.settings_store.save(&new) {
+            self.set_status(e, true);
+        }
+    }
+
+    /// The graphics API the program started with (see [`settings::choose_graphics`]).
+    pub fn graphics_at_start(&self) -> settings::Graphics {
+        self.opts.settings.settings().graphics
+    }
+
+    /// The settings file, and what is wrong with it (the settings dialog says it).
+    pub fn settings_file(&self) -> (Option<&std::path::Path>, &[String]) {
+        (self.settings_store.path(), &self.settings_store.problems)
+    }
+
     pub fn graph(&self) -> &Graph {
         self.doc.graph()
     }
@@ -1015,8 +1070,9 @@ impl App {
             subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
         }
         // Unsaved work, kept for recovery.
-        if self.autosave.session.is_some() {
-            subs.push(iced::time::every(autosave::EVERY).map(|_| Message::Autosave));
+        if self.autosave.session.is_some() && self.settings.keep_unsaved {
+            let every = Duration::from_secs(u64::from(self.settings.keep_every));
+            subs.push(iced::time::every(every).map(|_| Message::Autosave));
         }
         // The files the packages use, on disk: they can come, go or change.
         if !self.res.looked.is_empty() {
@@ -1605,7 +1661,7 @@ impl App {
         match action {
             #[cfg(any(test, feature = "dev-tools"))]
             PendingAction::New => {
-                let package = Package::new("Graph", Graph::default());
+                let package = Package::new("Graph", self.new_graph());
                 let open = package.first();
                 self.replace_package(package, None, HashMap::new(), open);
                 Task::none()
@@ -1949,6 +2005,7 @@ impl App {
             }
             Message::Asked(asked, answer) => return self.answered(asked, *answer),
             Message::Autosave => return self.autosave(),
+            Message::Settings(new) => self.set_settings(new),
             Message::Autosaved(done) => self.autosaved(done),
             Message::Recover(choice) => self.recovery(choice),
             Message::Explorer(msg) => return self.explorer_message(msg),
@@ -2140,8 +2197,26 @@ impl App {
                     move |p| Message::Asked(here, Box::new(Message::FilePicked(target.clone(), p.flatten()))),
                 );
             }
-            Message::FilePicked(target, Some(path)) => return self.set_file(target, Some(path.display().to_string())),
+            Message::FilePicked(target, Some(path)) => {
+                let path = packages::clean(&path);
+                return match self.settings.new_files {
+                    settings::NewFiles::Link => self.set_file(target, Some(path)),
+                    settings::NewFiles::Embed => {
+                        let here = self.here();
+                        packages::read_held(path, move |held| Message::Asked(here, Box::new(Message::FileHeld(target, held))))
+                    }
+                };
+            }
             Message::FilePicked(_, None) => {}
+            Message::FileHeld(target, Ok(held)) => {
+                let path = packages::hold(held);
+                return self.set_file(target, Some(path));
+            }
+            Message::DropHeld(kind, pos, Ok(held)) => {
+                let path = packages::hold(held);
+                self.add_resource_node(path, kind, Some(pos));
+            }
+            Message::FileHeld(_, Err(e)) | Message::DropHeld(_, _, Err(e)) => self.set_status(e, true),
             Message::SetFile(target, path) => {
                 // (Dropped from the Explorer: the drag ends here.)
                 self.ui.drag = None;
@@ -2432,8 +2507,17 @@ impl App {
             let burst = self.ui.drop_burst.filter(|(at, _)| at.elapsed() < Duration::from_millis(800)).map_or(0, |(_, n)| n);
             self.ui.drop_burst = Some((Instant::now(), burst + 1));
             let [x, y] = self.graph_pos_for_paste();
-            self.add_resource_node(path, kind, Some([x, y + burst as f32 * 200.0]));
-            return Task::none();
+            let pos = [x, y + burst as f32 * 200.0];
+            return match self.settings.new_files {
+                settings::NewFiles::Link => {
+                    self.add_resource_node(path, kind, Some(pos));
+                    Task::none()
+                }
+                settings::NewFiles::Embed => {
+                    let here = self.here();
+                    packages::read_held(path, move |held| Message::Asked(here, Box::new(Message::DropHeld(kind, pos, held))))
+                }
+            };
         }
         self.set_status(format!("Cannot use '{path}': drop a package, an image, vector graphics or a font"), true);
         Task::none()
@@ -2508,6 +2592,10 @@ impl App {
         }
         if ctrl && char('e') {
             return self.update_nested(Message::ExportAll);
+        }
+        // (The key of the comma, whatever it types on the layout.)
+        if ctrl && (char(',') || physical == keyboard::key::Physical::Code(keyboard::key::Code::Comma)) {
+            return self.update_nested(Message::Dialog(Some(Dialog::Settings)));
         }
         if status == iced::event::Status::Captured || self.ui.dialog.is_some() {
             return Task::none(); // a text field or widget used the key

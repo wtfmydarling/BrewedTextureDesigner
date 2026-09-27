@@ -4,7 +4,7 @@
 //! Each run of the program is a session: a folder of its own in the recovery folder, with a
 //! file it holds locked while it runs (the system lets the lock go however the program stops,
 //! a crash or a power cut included) and a snapshot of each package with unsaved changes (see
-//! [`crate::project::snapshot_json`]), written anew as the package changes, whole or not at all
+//! [`crate::project::save_snapshot`]), written anew as the package changes, whole or not at all
 //! (see [`crate::files::replace`]). A program that quits as it should leaves nothing of its
 //! session. A program that starts finds the sessions whose lock nobody holds (their programs
 //! stopped without quitting) and offers what they kept. The packages' own files are never
@@ -13,12 +13,10 @@
 //! each apart, written once, and its snapshots name them.
 
 use std::fs::{File, TryLockError};
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Deserialize;
 
 use crate::files;
 use crate::project::{FILE_EXTENSION, Loaded, Unsaved};
@@ -159,7 +157,7 @@ impl Orphan {
         for resource in &mut loaded.package.resources {
             let Some(hash) = files::embedded_hash(&resource.path).filter(|_| resource.data.is_none()) else { continue };
             let Ok(bytes) = std::fs::read(self.dir.join(format!("{hash}.{HELD}"))) else { continue };
-            if files::embedded_path(&resource.path, &bytes) == resource.path {
+            if files::holds(&resource.path, &bytes) {
                 let bytes = Arc::new(bytes);
                 files::keep(&resource.path, &bytes);
                 resource.data = Some(bytes);
@@ -216,7 +214,7 @@ fn is_session(dir: &Path) -> bool {
 /// Is `file` a file a package held, kept apart: `<hash>.held`?
 fn is_held(file: &Path) -> bool {
     file.extension().is_some_and(|e| e == HELD)
-        && file.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.len() == 16 && s.bytes().all(|c| c.is_ascii_hexdigit()))
+        && file.file_stem().and_then(|s| s.to_str()).is_some_and(files::is_hash)
 }
 
 /// Is `file` a snapshot of a session: `<key>.brewtex`?
@@ -228,19 +226,13 @@ fn is_snapshot(file: &Path) -> bool {
 /// The snapshots in `dir` that can be read, with what they say of their packages (read
 /// without holding a package in memory).
 fn snapshots(dir: &Path) -> Vec<Snapshot> {
-    #[derive(Deserialize)]
-    struct Head {
-        #[serde(default)]
-        unsaved: Option<Unsaved>,
-    }
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     entries
         .flatten()
         .map(|e| e.path())
         .filter(|f| is_snapshot(f))
         .filter_map(|file| {
-            let head: Head = serde_json::from_reader(BufReader::new(File::open(&file).ok()?)).ok()?;
-            let unsaved = head.unsaved?;
+            let unsaved = crate::project::read_unsaved(&file)?;
             let saved = unsaved.path.as_ref().and_then(|p| std::fs::metadata(p).ok()?.modified().ok());
             let saved = saved.and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs());
             Some(Snapshot { file, unsaved, saved })
@@ -284,8 +276,7 @@ mod tests {
 
     fn snapshot(session: &Session, key: u64, u: &Unsaved) {
         let package = crate::package::Package::new("Wall", crate::graph::Graph::default());
-        let json = crate::project::snapshot_json(&package, &Default::default(), package.first(), u).unwrap();
-        crate::files::write_whole(&session.file(key), json.as_bytes()).unwrap();
+        crate::project::save_snapshot(&session.file(key), &package, &Default::default(), package.first(), u).unwrap();
     }
 
     /// A session that stops without ending (a crash: its lock goes with it) is found, with
@@ -344,17 +335,16 @@ mod tests {
         let path = files::embedded_path("bricks.png", &bytes);
         let hash = files::embedded_hash(&path).unwrap().to_string();
         let mut package = crate::package::Package::new("Wall", crate::graph::Graph::default());
-        package.resources.push(Resource { path: path.clone(), kind: ResourceKind::Bitmap, data: Some(bytes.clone()) });
-        let json = crate::project::snapshot_json(&package, &Default::default(), package.first(), &unsaved("w.brewtex", 1)).unwrap();
-        assert!(!json.contains("\"data\""), "not in the snapshot");
+        package.resources.push(Resource { path: path.clone(), kind: ResourceKind::Bitmap, data: Some(bytes.clone()), extras: Default::default() });
         files::write_whole(&session.held(&hash), &bytes).unwrap();
-        files::write_whole(&session.file(1), json.as_bytes()).unwrap();
         // Another held file that is not what its name says is not taken.
         let forged = files::embedded_path("forged.png", b"what it was");
-        package.resources.push(Resource { path: forged.clone(), kind: ResourceKind::Bitmap, data: None });
+        package.resources.push(Resource::linked(forged.clone(), ResourceKind::Bitmap));
         files::write_whole(&session.held(files::embedded_hash(&forged).unwrap()), b"something else").unwrap();
-        let json = crate::project::snapshot_json(&package, &Default::default(), package.first(), &unsaved("w.brewtex", 1)).unwrap();
-        files::write_whole(&session.file(1), json.as_bytes()).unwrap();
+        let snapshot = session.file(1);
+        crate::project::save_snapshot(&snapshot, &package, &Default::default(), package.first(), &unsaved("w.brewtex", 1)).unwrap();
+        let held: Vec<String> = crate::archive::Archive::new(File::open(&snapshot).unwrap()).unwrap().entries().iter().map(|e| e.name.clone()).collect();
+        assert!(!held.iter().any(|n| n.starts_with("files/")), "not in the snapshot: {held:?}");
         drop(session);
 
         let me = Session::start(&root).unwrap();

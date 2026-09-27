@@ -37,8 +37,8 @@ pub struct GraphRef {
     pub name: String,
 }
 
-/// An image socket of a graph used as a node: an output of the graph, or a fixed input (a graph
-/// has none; files of version 3 said its image inputs so, see [`crate::project`]).
+/// An image socket of a graph used as a node: an output of the graph, or a fixed input (see
+/// [`Interface::inputs`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Port {
     pub name: String,
@@ -130,11 +130,13 @@ impl InstanceParam {
 /// What a graph is as a node: its outputs and its input values (its image inputs among them).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Interface {
-    #[serde(default)]
+    /// Image inputs of its own: a graph has none (its image inputs are input values), only
+    /// what the engine is given does (see [`crate::package::flatten`]), which no file says.
+    #[serde(skip)]
     pub inputs: Vec<Port>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<Port>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<InstanceParam>,
 }
 
@@ -193,19 +195,16 @@ impl Interface {
 /// A graph used as a node: which graph, and what it was as a node when it was last seen.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Instance {
+    #[serde(flatten)]
     pub graph: GraphRef,
     #[serde(default)]
     pub interface: Interface,
-    /// What files of the day before version 4 said the node gives its image inputs; read
-    /// only, into its parameters (see [`crate::project`]).
-    #[serde(default, skip_serializing)]
-    pub images: std::collections::BTreeMap<String, String>,
 }
 
 impl Instance {
     /// A node that uses the graph `graph`, which is `interface` as a node.
     pub fn new(graph: GraphRef, interface: Interface) -> Instance {
-        Instance { graph, interface, images: std::collections::BTreeMap::new() }
+        Instance { graph, interface }
     }
 }
 

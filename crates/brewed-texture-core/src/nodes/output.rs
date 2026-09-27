@@ -3,6 +3,7 @@
 use super::*;
 
 pub const OUTPUT_FORMATS: &[&str] = &["RGBA", "RGB", "RG", "R", "G", "B", "A"];
+const OUTPUT_FORMAT_IDS: &[&str] = &["rgba", "rgb", "rg", "r", "g", "b", "a"];
 
 /// How an Output writes its file (the "bit_depth" parameter), as Substance Designer's outputs
 /// offer: PNG of 8 or 16 bits, OpenEXR of half floats or floats, and DDS compressed as games
@@ -18,6 +19,8 @@ pub const OUTPUT_DEPTHS: &[&str] = &[
     "DXT4 / BC3",
     "DXT5 / BC3",
 ];
+const OUTPUT_DEPTH_IDS: &[&str] =
+    &["unorm8", "unorm16", "float16", "float32", "dxt1", "dxt2", "dxt3", "dxt4", "dxt5"];
 pub const DEPTH_8: u32 = 0;
 pub const DEPTH_16: u32 = 1;
 pub const DEPTH_16F: u32 = 2;
@@ -51,8 +54,8 @@ pub static OUTPUT: NodeDef = NodeDef {
     outputs: NO_SOCKETS,
     params: &[
         text("name", "Name", "output").tip("File name of the exported image (without extension)."),
-        choice("format", "Channels", 0, OUTPUT_FORMATS).fixed().tip("Channels written by the export."),
-        choice("bit_depth", "Format", 0, OUTPUT_DEPTHS).fixed().tip(
+        choice("format", "Channels", 0, OUTPUT_FORMATS, OUTPUT_FORMAT_IDS).fixed().tip("Channels written by the export."),
+        choice("bit_depth", "Format", 0, OUTPUT_DEPTHS, OUTPUT_DEPTH_IDS).fixed().tip(
             "How the file is written: 8 and 16 bits as PNG, 16 and 32 bits float as OpenEXR, and DXT (BC) as DDS, \
              compressed as game engines read textures, with its mipmaps. The output keeps its image as it writes it, \
              as the 2D and 3D views show it.",
@@ -62,6 +65,7 @@ pub static OUTPUT: NodeDef = NodeDef {
             "Usage",
             0,
             &["Custom", "Base Color", "Normal", "Height", "Roughness", "Metallic", "Ambient Occlusion", "Emissive"],
+            &["custom", "base_color", "normal", "height", "roughness", "metallic", "ambient_occlusion", "emissive"],
         )
         .fixed()
         .tip("What the texture is used for in the 3D view."),

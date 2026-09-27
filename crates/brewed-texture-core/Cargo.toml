@@ -10,5 +10,10 @@ license.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
-# The files a package holds itself, written into its file (see `files`).
-base64 = "0.22"
+# Package files are ZIP archives (see `archive`): their entries deflated, and checked by CRC-32.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+crc32fast = "1.5"
+# The files a package holds are named by the SHA-256 of their bytes (see `files`).
+sha2 = "0.11"
+# What a package's file holds is hashed and compressed on every core.
+rayon.workspace = true

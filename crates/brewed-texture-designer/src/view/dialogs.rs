@@ -1,13 +1,15 @@
 //! Modal dialogs: unsaved changes, work kept by a program that stopped, files a package cannot
-//! find, keyboard shortcuts, about.
+//! find, the settings, keyboard shortcuts, about.
 
-use iced::widget::{button, center, column, container, mouse_area, opaque, row, scrollable, space, text};
+use iced::widget::{button, center, column, container, mouse_area, opaque, pick_list, row, scrollable, space, text, toggler};
 use iced::{Alignment, Element, Length};
+use brewed_texture_core::Precision;
 use brewed_texture_core::package::{MissingKind, file_name};
 
 use crate::app::autosave::Recovery;
 use crate::app::{App, Dialog, ExplorerMessage, Message, MissingFiles, PendingAction};
 use crate::icons::{Icon, icon};
+use crate::settings::{Graphics, NewFiles, Settings};
 use crate::style;
 
 fn dialog_box<'a>(content: impl Into<Element<'a, Message>>, width: f32) -> Element<'a, Message> {
@@ -57,7 +59,8 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
     ("Ctrl+O / Ctrl+N", "Open / new"),
     ("Ctrl+E", "Export all outputs"),
-    ("Drop a file on the window", "Open a .brewtex package, add an image as a Bitmap node, link vector graphics or a font"),
+    ("Ctrl+,", "Settings"),
+    ("Drop a file on the window", "Open a .brewtex package; an image, vector graphics or a font becomes the node that reads it"),
     ("Explorer", "Double-click a graph to edit it; drag a graph onto another to use it as a node"),
     ("Ctrl+G", "Create a graph of the selected nodes, and use it in their place"),
     ("Eyedropper", "Click it, then click anywhere on the screen; for a gradient, drag across the colors"),
@@ -99,6 +102,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
         }
         Dialog::Missing(missing) => missing_files(app, missing),
         Dialog::Recover => recover(app),
+        Dialog::Settings => settings(app),
         Dialog::Shortcuts => {
             let mut table = column![].spacing(4);
             for (keys, what) in SHORTCUTS {
@@ -152,6 +156,146 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             modal(dialog_box(body, 440.0), Some(Message::Dialog(None)))
         }
     }
+}
+
+/// A scale of the interface, as people say it: "125%".
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Percent(f32);
+
+impl std::fmt::Display for Percent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}%", (self.0 * 100.0).round())
+    }
+}
+
+/// How often unsaved work is kept, as people say it: "30 seconds", "2 minutes".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Every(u32);
+
+impl std::fmt::Display for Every {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            60 => f.write_str("a minute"),
+            s if s % 60 == 0 => write!(f, "{} minutes", s / 60),
+            s => write!(f, "{s} seconds"),
+        }
+    }
+}
+
+/// `choices`, and `current` among them in its place if it is not one of them (a value the
+/// settings file says).
+fn with<T: Copy + PartialEq>(choices: &[T], current: T, order: impl Fn(&T) -> f32) -> Vec<T> {
+    let mut all = choices.to_vec();
+    if !all.contains(&current) {
+        all.push(current);
+        all.sort_by(|a, b| order(a).total_cmp(&order(b)));
+    }
+    all
+}
+
+/// The settings (Edit → Settings…): each taken as it is chosen, and kept.
+fn settings(app: &App) -> Element<'_, Message> {
+    let s = app.settings;
+    let label = |t: &'static str| text(t).size(style::TEXT_SIZE).width(Length::Fixed(190.0));
+    let note = |t: String| text(t).size(style::SMALL).color(style::TEXT_FAINT);
+    let heading = |t: &'static str| text(t).size(style::TEXT_SIZE).font(style::bold());
+    let line = |name: &'static str, control: Element<'static, Message>| {
+        row![label(name), control].spacing(10).align_y(Alignment::Center)
+    };
+
+    let scales = with(&[0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0].map(Percent), Percent(s.scale), |p| p.0);
+    let interface = column![
+        heading("Interface"),
+        line("Scale", choices(scales, Percent(s.scale), move |p: Percent| Message::Settings(Settings { scale: p.0, ..s }))),
+    ]
+    .spacing(8);
+
+    let file_choice = |label: &'static str, which: NewFiles| {
+        button(text(label).size(style::TEXT_SIZE))
+            .padding([4, 10])
+            .style(style::toggle_button(s.new_files == which))
+            .on_press(Message::Settings(Settings { new_files: which, ..s }))
+    };
+    let files = column![
+        heading("Files"),
+        line(
+            "A file chosen or dropped",
+            row![file_choice("Embed in the package", NewFiles::Embed), file_choice("Link to it", NewFiles::Link)].spacing(4).into()
+        ),
+        note(match s.new_files {
+            NewFiles::Embed => "The package holds it: the package is one file to copy or send, and needs nothing beside it.".into(),
+            NewFiles::Link => "The package names it where it is: it is read from there, and goes with the package only if copied along.".into(),
+        }),
+    ]
+    .spacing(8);
+
+    let sizes = with(&[128, 256, 512, 1024, 2048, 4096, 8192], s.graph_size, |n| *n as f32);
+    let new_graphs = column![
+        heading("New Graphs"),
+        line("Size", choices(sizes, s.graph_size, move |n: u32| Message::Settings(Settings { graph_size: n, ..s }))),
+        line(
+            "Precision",
+            choices(Precision::ALL.to_vec(), s.graph_precision, move |p: Precision| Message::Settings(Settings { graph_precision: p, ..s }))
+        ),
+    ]
+    .spacing(8);
+
+    let intervals = with(&[10, 30, 60, 120, 300, 600].map(Every), Every(s.keep_every), |e| e.0 as f32);
+    let recovery = column![
+        heading("Recovery"),
+        line(
+            "Keep unsaved work",
+            toggler(s.keep_unsaved).size(18.0).on_toggle(move |on| Message::Settings(Settings { keep_unsaved: on, ..s })).into()
+        ),
+        line("Every", choices(intervals, Every(s.keep_every), move |e: Every| Message::Settings(Settings { keep_every: e.0, ..s }))),
+        note(if s.keep_unsaved {
+            "What packages have not saved is kept beside the settings, and offered back if the program stops without quitting.".into()
+        } else {
+            "Nothing is kept: what was not saved is gone if the program stops without quitting.".into()
+        }),
+    ]
+    .spacing(8);
+
+    let apis = with(Graphics::here(), s.graphics, |g| Graphics::here().iter().position(|h| h == g).unwrap_or(usize::MAX) as f32);
+    let graphics_note = match std::env::var("WGPU_BACKEND").ok().filter(|v| !v.is_empty() && s.graphics.id() != v) {
+        Some(env) if s.graphics == app.graphics_at_start() => format!("The environment says WGPU_BACKEND={env}: that comes first."),
+        _ if s.graphics != app.graphics_at_start() => "Taken when the program starts again.".to_string(),
+        _ => "Taken when the program starts.".to_string(),
+    };
+    let graphics = column![
+        heading("Graphics"),
+        line("API", choices(apis, s.graphics, move |g: Graphics| Message::Settings(Settings { graphics: g, ..s }))),
+        note(graphics_note),
+    ]
+    .spacing(8);
+
+    let (file, problems) = app.settings_file();
+    let mut body = column![
+        row![
+            text("Settings").size(18).font(style::bold()),
+            space().width(Length::Fill),
+            button(text("Close").size(style::TEXT_SIZE)).padding([4, 12]).style(style::button).on_press(Message::Dialog(None)),
+        ]
+        .align_y(Alignment::Center),
+    ]
+    .spacing(18);
+    for problem in problems {
+        body = body.push(container(text(problem.clone()).size(style::SMALL)).padding(6).width(Length::Fill).style(style::message_box(style::WARNING)));
+    }
+    body = body.push(interface).push(files).push(new_graphs).push(recovery).push(graphics);
+    body = body.push(note(match file {
+        Some(file) => format!("Kept in {}", file.display()),
+        None => "Not kept: the program runs with the settings as they are by default.".into(),
+    }));
+    modal(dialog_box(scrollable(body).height(Length::Shrink).style(style::scrollable), 560.0), Some(Message::Dialog(None)))
+}
+
+/// A list to choose one of `options` from, `selected` chosen.
+fn choices<'a, T>(options: Vec<T>, selected: T, on_select: impl Fn(T) -> Message + 'a) -> Element<'a, Message>
+where
+    T: ToString + PartialEq + Clone + 'a,
+{
+    pick_list(options, Some(selected), on_select).text_size(style::TEXT_SIZE).padding([3, 8]).style(style::pick_list).into()
 }
 
 /// How long `seconds` is, in words: "3 minutes".

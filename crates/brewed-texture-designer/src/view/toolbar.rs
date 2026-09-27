@@ -114,6 +114,8 @@ fn edit_menu(app: &App) -> Vec<Element<'_, Message>> {
             sel(Message::GraphFromSelection),
         ),
         item(if has_selection { "Frame Selection in a Comment" } else { "Add Comment" }, "C", Some(Message::AddComment)),
+        separator(),
+        item("Settings…", "Ctrl+,", Some(Message::Dialog(Some(Dialog::Settings)))),
     ]
 }
 

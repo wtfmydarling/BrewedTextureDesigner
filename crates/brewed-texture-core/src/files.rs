@@ -1,10 +1,11 @@
 //! The files packages use (images, vector graphics, fonts): linked where they are on disk, or
 //! held by the package itself (embedded), which writes them into its own file.
 //!
-//! An embedded file is named by what it holds: `embedded:<hash>/<name>`, the hash of its
-//! bytes and the name it came with. The same name always means the same bytes, in any
-//! package: a node that reads one reads it wherever it is pasted, and two packages that hold
-//! the same file hold it once. The bytes of every embedded file of the packages read or made
+//! An embedded file is named by what it holds: `embedded:<sha256>/<name>`, the SHA-256 of its
+//! bytes (in hexadecimal, as `sha256sum` writes it) and the name it came with. The same name
+//! always means the same bytes, in any package, and no other bytes can be made to take a name:
+//! a node that reads one reads it wherever it is pasted, and two packages that hold the same
+//! file hold it once. The bytes of every embedded file of the packages read or made
 //! in this run are kept here, for whatever reads files (the engine, the Explorer's previews):
 //! [`read`] reads a file a package uses, whichever it is.
 
@@ -23,25 +24,85 @@ pub fn is_embedded(path: &str) -> bool {
 /// same bytes, whatever name they came with.
 pub fn embedded_hash(path: &str) -> Option<&str> {
     let (hash, _) = path.strip_prefix(PREFIX)?.split_once('/')?;
-    (hash.len() == 16 && hash.bytes().all(|c| c.is_ascii_hexdigit())).then_some(hash)
+    is_hash(hash).then_some(hash)
 }
+
+/// The hash and the file name of the embedded file `path` (see the module).
+pub fn embedded_parts(path: &str) -> Option<(&str, &str)> {
+    let (hash, name) = path.strip_prefix(PREFIX)?.split_once('/')?;
+    is_hash(hash).then_some((hash, name))
+}
+
+/// Is `text` a hash as embedded files are named by: 64 hexadecimal digits, in small letters?
+pub fn is_hash(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// The SHA-256 of `bytes`, in hexadecimal.
+pub fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    Sha256::digest(bytes).iter().flat_map(|b| [HEX[usize::from(b >> 4)], HEX[usize::from(b & 15)]]).map(char::from).collect()
+}
+
+/// A file for a package to hold: its bytes and the name they are held by (see the module).
+/// Hashing a large file takes a while: it is best made where the file is read, not on the
+/// thread that draws the window.
+#[derive(Clone, Debug)]
+pub struct Held {
+    path: String,
+    bytes: Arc<Vec<u8>>,
+}
+
+impl Held {
+    /// `bytes`, which came as `name` (a path).
+    pub fn new(name: &str, bytes: Arc<Vec<u8>>) -> Held {
+        Held { path: embedded_path(name, &bytes), bytes }
+    }
+
+    /// The name of the embedded file that holds it.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn bytes(&self) -> &Arc<Vec<u8>> {
+        &self.bytes
+    }
+
+    /// Its name and bytes.
+    pub fn into_parts(self) -> (String, Arc<Vec<u8>>) {
+        (self.path, self.bytes)
+    }
+}
+
+/// The same name, the same bytes: the name says what they are.
+impl PartialEq for Held {
+    fn eq(&self, other: &Held) -> bool {
+        self.path == other.path
+    }
+}
+
+impl Eq for Held {}
 
 /// The name of the embedded file that holds `bytes` and came as `name` (a path, of which the
-/// file name is kept).
+/// file name is kept, made a name any system and archive takes).
 pub fn embedded_path(name: &str, bytes: &[u8]) -> String {
-    let name = Path::new(name).file_name().map_or_else(|| "file".to_string(), |n| n.to_string_lossy().to_string());
-    format!("{PREFIX}{:016x}/{}", fnv1a(bytes), name.replace(['/', '\\'], "_"))
+    format!("{PREFIX}{}/{}", sha256(bytes), file_part(name))
 }
 
-/// FNV-1a: a hash that is the same in every build and on every system, as the names of files
-/// written into packages have to be.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
+/// Is `bytes` what the embedded file `path` holds (its hash)?
+pub fn holds(path: &str, bytes: &[u8]) -> bool {
+    embedded_hash(path).is_some_and(|hash| sha256(bytes) == hash)
+}
+
+/// The file name of `name` (a path), as a part of a name of an embedded file: none of what a
+/// system or an archive reads otherwise (separators, a drive's `:`, controls), not `.` or `..`,
+/// at most 120 characters; `file` for nothing.
+fn file_part(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let clean: String = base.chars().map(|c| if c == ':' || c.is_control() { '_' } else { c }).take(120).collect();
+    let clean = clean.trim().to_string();
+    if clean.is_empty() || clean == "." || clean == ".." { "file".to_string() } else { clean }
 }
 
 fn store() -> &'static RwLock<HashMap<String, Arc<Vec<u8>>>> {
@@ -154,27 +215,6 @@ pub fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), String> {
     replace(path, |beside| std::fs::write(beside, bytes))
 }
 
-/// Bytes as a package file writes them: base64.
-pub(crate) mod base64_bytes {
-    use std::sync::Arc;
-
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(bytes: &Option<Arc<Vec<u8>>>, s: S) -> Result<S::Ok, S::Error> {
-        match bytes {
-            Some(bytes) => s.serialize_str(&STANDARD.encode(bytes.as_slice())),
-            None => s.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Arc<Vec<u8>>>, D::Error> {
-        let text: Option<String> = Option::deserialize(d)?;
-        text.map(|t| STANDARD.decode(t.as_bytes()).map(Arc::new).map_err(serde::de::Error::custom)).transpose()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +232,17 @@ mod tests {
         assert_eq!(read(&a).unwrap().as_slice(), b"bricks");
         assert!(is_there(&a));
         assert!(!is_embedded("C:/textures/bricks.png"));
+        // The hash is SHA-256, as `sha256sum` writes it; the name, one a system and an archive
+        // take.
+        assert_eq!(sha256(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        let held = Held::new("C:\\Шрифты\\a:b.ttf", Arc::new(b"abc".to_vec()));
+        assert_eq!(held.path(), "embedded:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad/a_b.ttf");
+        assert!(holds(held.path(), b"abc") && !holds(held.path(), b"abd"));
+        assert_eq!(embedded_parts(held.path()).map(|(_, name)| name), Some("a_b.ttf"));
+        for name in ["", ".", "..", "dir/", "  "] {
+            assert!(embedded_path(name, b"").ends_with("/file"), "{name:?}");
+        }
+        assert_eq!(embedded_hash("embedded:ABC/x.png"), None, "not a hash");
     }
 
     /// A file is replaced whole: what writes it fails, and it is as it was; written, it is what

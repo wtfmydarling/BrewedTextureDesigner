@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::instance::{Instance, InstanceParam, Interface};
 use crate::nodes::{ImageKind, NodeDef, NodeKind, PIXEL_MATH_BUILTINS, ParamDef, ParamKind, Slot, TILING_PARAM};
 use crate::types::{DataType, ParamValue, Tiling, Value, can_connect};
+use crate::{Curve, Gradient};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct NodeId(pub u64);
@@ -41,6 +42,7 @@ pub struct Comment {
     pub id: CommentId,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
+    #[serde(rename = "position")]
     pub pos: [f32; 2],
     pub size: [f32; 2],
     /// The color it is drawn in, like any other color in the graph.
@@ -80,11 +82,10 @@ impl Comment {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ParamSlot {
     pub key: String,
     pub value: ParamValue,
-    #[serde(default)]
     pub exposed: bool,
 }
 
@@ -92,26 +93,210 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// A node of a graph. A file says it as [`NodeFile`] does.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(into = "NodeFile", try_from = "NodeFile")]
 pub struct Node {
     pub id: NodeId,
     pub kind: NodeKind,
     pub pos: [f32; 2],
-    #[serde(default)]
     pub params: Vec<ParamSlot>,
     /// Input nodes: name of the graph variable they read.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variable: Option<String>,
     /// Values of expression variables that are not connected.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub var_values: BTreeMap<String, f32>,
     /// Image nodes: pass the first input through unchanged.
-    #[serde(default, skip_serializing_if = "is_false")]
     pub bypass: bool,
     /// A graph used as a node: which graph, and what it is as a node (see
     /// [`crate::instance`]).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance: Option<Box<Instance>>,
+    /// What other programs keep with the node (see [`crate::project`]): kept as it is.
+    pub extras: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A node as a file says it: what it is (`type`), where, its parameters by key, each a typed
+/// value (see [`FileValue`]), those exposed as sockets listed apart; what an Input node reads
+/// (`input_value`), the values of an expression's variables nothing is connected to
+/// (`locals`), whether it is bypassed, the graph it uses (`uses`, see
+/// [`crate::instance::Instance`]) and what other programs keep with it (`extras`). What is as it
+/// is by default is not said.
+#[derive(Serialize, Deserialize)]
+struct NodeFile {
+    id: NodeId,
+    #[serde(rename = "type")]
+    kind: String,
+    position: [f32; 2],
+    #[serde(default, skip_serializing_if = "ParamsFile::is_empty")]
+    params: ParamsFile,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    exposed: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_value: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    locals: BTreeMap<String, f32>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    bypass: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uses: Option<Box<Instance>>,
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    extras: serde_json::Map<String, serde_json::Value>,
+}
+
+impl From<Node> for NodeFile {
+    fn from(node: Node) -> NodeFile {
+        let exposed = node.params.iter().filter(|p| p.exposed).map(|p| p.key.clone()).collect();
+        let params = node.params.iter().map(|p| (p.key.clone(), FileValue::of(&p.value, node.param_def(&p.key)))).collect();
+        NodeFile {
+            id: node.id,
+            kind: node.kind.id().to_string(),
+            position: node.pos,
+            params: ParamsFile(params),
+            exposed,
+            input_value: node.variable,
+            locals: node.var_values,
+            bypass: node.bypass,
+            uses: node.instance,
+            extras: node.extras,
+        }
+    }
+}
+
+impl TryFrom<NodeFile> for Node {
+    type Error = String;
+
+    fn try_from(file: NodeFile) -> Result<Node, String> {
+        let kind = NodeKind::from_id(&file.kind)
+            .ok_or_else(|| format!("unknown node type '{}' (made by a newer version of the program?)", file.kind))?;
+        let def = |key: &str| match &file.uses {
+            Some(instance) => instance.interface.param(key).map(InstanceParam::def),
+            None => kind.def().param(key).copied(),
+        };
+        let mut params = Vec::with_capacity(file.params.0.len());
+        for (key, value) in file.params.0 {
+            // (A parameter the node does not have goes: see `Node::normalize`.)
+            let value = match value.into_value(def(&key)) {
+                None => continue,
+                Some(Ok(value)) => value,
+                Some(Err(id)) => {
+                    let node = kind.def().name;
+                    return Err(format!(
+                        "the {key} of a {node} is '{id}', which this version does not know (made by a newer version of the program?)"
+                    ));
+                }
+            };
+            params.push(ParamSlot { exposed: file.exposed.contains(&key), key, value });
+        }
+        Ok(Node {
+            id: file.id,
+            kind,
+            pos: file.position,
+            params,
+            variable: file.input_value,
+            var_values: file.locals,
+            bypass: file.bypass,
+            instance: file.uses,
+            extras: file.extras,
+        })
+    }
+}
+
+/// A parameter's value as a file says it: by its type, `{"float": 0.5}`, `{"int": 4}`,
+/// `{"bool": true}`, `{"vec2": [x, y]}`, `{"color": [r, g, b, a]}`, `{"choice": "opengl"}` (the
+/// option's id, see [`crate::nodes::ParamDef::choice_id`]), `{"text": "…"}`, `{"gradient": {…}}`
+/// or `{"curve": {…}}`.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum FileValue {
+    Float(f32),
+    Int(i32),
+    Bool(bool),
+    Vec2([f32; 2]),
+    Color([f32; 4]),
+    Choice(String),
+    Text(String),
+    Gradient(Gradient),
+    Curve(Curve),
+}
+
+impl FileValue {
+    /// `value`, of the parameter `def` describes.
+    fn of(value: &ParamValue, def: Option<ParamDef<'_>>) -> FileValue {
+        match value {
+            ParamValue::Float(v) => FileValue::Float(*v),
+            ParamValue::Int(v) => FileValue::Int(*v),
+            ParamValue::Bool(v) => FileValue::Bool(*v),
+            ParamValue::Vec2(v) => FileValue::Vec2(*v),
+            ParamValue::Color(v) => FileValue::Color(*v),
+            // (A choice holds one of its options, see `ParamDef::sanitize`: else the graph does
+            // not read back, and is not written, see `crate::project`.)
+            ParamValue::Enum(option) => FileValue::Choice(def.and_then(|d| d.choice_id(*option)).unwrap_or_default().to_string()),
+            ParamValue::Text(v) => FileValue::Text(v.clone()),
+            ParamValue::Gradient(v) => FileValue::Gradient(v.clone()),
+            ParamValue::Curve(v) => FileValue::Curve(v.clone()),
+        }
+    }
+
+    /// What it is of the parameter `def` describes: none for a choice of a parameter that is
+    /// no choice, or none at all; the id itself for an option the choice does not have.
+    fn into_value(self, def: Option<ParamDef<'_>>) -> Option<Result<ParamValue, String>> {
+        Some(Ok(match self {
+            FileValue::Float(v) => ParamValue::Float(v),
+            FileValue::Int(v) => ParamValue::Int(v),
+            FileValue::Bool(v) => ParamValue::Bool(v),
+            FileValue::Vec2(v) => ParamValue::Vec2(v),
+            FileValue::Color(v) => ParamValue::Color(v),
+            FileValue::Choice(id) => {
+                let def = def.filter(|d| matches!(d.kind, ParamKind::Enum { .. }))?;
+                return Some(def.choice_of(&id).map(ParamValue::Enum).ok_or(id));
+            }
+            FileValue::Text(v) => ParamValue::Text(v),
+            FileValue::Gradient(v) => ParamValue::Gradient(v),
+            FileValue::Curve(v) => ParamValue::Curve(v),
+        }))
+    }
+}
+
+/// Parameters as a file says them: an object of values by key, in their order.
+#[derive(Default)]
+struct ParamsFile(Vec<(String, FileValue)>);
+
+impl ParamsFile {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Serialize for ParamsFile {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = s.serialize_map(Some(self.0.len()))?;
+        for (key, value) in &self.0 {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ParamsFile {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<ParamsFile, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = ParamsFile;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("parameters by key")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<ParamsFile, A::Error> {
+                let mut params = Vec::with_capacity(map.size_hint().unwrap_or(0).min(256));
+                while let Some((key, value)) = map.next_entry::<String, FileValue>()? {
+                    params.push((key, value));
+                }
+                Ok(ParamsFile(params))
+            }
+        }
+        d.deserialize_map(Visitor)
+    }
 }
 
 impl Node {
@@ -121,7 +306,17 @@ impl Node {
             .all_params()
             .map(|p| ParamSlot { key: p.key.to_string(), value: p.default_value(), exposed: p.exposed_by_default })
             .collect();
-        Node { id, kind, pos: pos.map(coordinate), params, variable: None, var_values: BTreeMap::new(), bypass: false, instance: None }
+        Node {
+            id,
+            kind,
+            pos: pos.map(coordinate),
+            params,
+            variable: None,
+            var_values: BTreeMap::new(),
+            bypass: false,
+            instance: None,
+            extras: serde_json::Map::new(),
+        }
     }
 
     /// A node that uses a graph: its parameters are the graph's input values, at the values
@@ -142,6 +337,7 @@ impl Node {
             var_values: BTreeMap::new(),
             bypass: false,
             instance: Some(Box::new(instance)),
+            extras: serde_json::Map::new(),
         }
     }
 
@@ -331,6 +527,7 @@ pub struct Link {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Variable {
     pub name: String,
+    #[serde(rename = "type")]
     pub ty: DataType,
     /// Its value, and the value it has by default. Of an image input: its color while it has
     /// no picture (a setting of it, the same in both).
@@ -555,10 +752,15 @@ impl Clipboard {
 /// parameter, see [`crate::nodes::PRECISION_PARAM`]), as each node of Substance Designer has
 /// its output format.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Precision {
+    /// `unorm8` in a file: the texture format.
+    #[serde(rename = "unorm8")]
     Bits8,
     #[default]
+    #[serde(rename = "float16")]
     Half,
+    #[serde(rename = "float32")]
     Full,
 }
 
@@ -597,18 +799,24 @@ impl std::fmt::Display for Precision {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Graph {
-    pub nodes: Vec<Node>,
-    pub links: Vec<Link>,
-    #[serde(default)]
-    pub variables: Vec<Variable>,
-    /// Frames grouping nodes, drawn behind them (see [`Comment`]).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub comments: Vec<Comment>,
     pub resolution: [u32; 2],
     /// How precisely its images are kept (see [`Precision`]).
     #[serde(default, skip_serializing_if = "Precision::is_half")]
     pub precision: Precision,
+    #[serde(default)]
+    pub nodes: Vec<Node>,
+    #[serde(default)]
+    pub links: Vec<Link>,
+    #[serde(rename = "input_values", default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<Variable>,
+    /// Frames grouping nodes, drawn behind them (see [`Comment`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<Comment>,
+    /// The id the next node or comment gets.
     pub next_id: u64,
+    /// What other programs keep with the graph (see [`crate::project`]): kept as it is.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extras: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for Graph {
@@ -621,6 +829,7 @@ impl Default for Graph {
             resolution: [2048, 2048],
             precision: Precision::Half,
             next_id: 1,
+            extras: serde_json::Map::new(),
         }
     }
 }
@@ -1118,81 +1327,6 @@ impl Graph {
         (order, cyclic)
     }
 
-    /// What a file of version 3 or before said of image inputs, said as it is said now (see
-    /// [`crate::project`]): an Image Input named its input and held its settings, now it reads
-    /// an input value of that name that holds them (of Image Inputs of one name, the upper
-    /// one's); a node that used the graph had a socket for each, now a parameter, exposed where
-    /// something arrived, with the picture the node gave it. Before [`Graph::normalize`].
-    pub(crate) fn migrate_image_inputs(&mut self) {
-        let mut inputs: Vec<usize> = (0..self.nodes.len()).filter(|&i| self.nodes[i].kind == NodeKind::IMAGE_INPUT).collect();
-        inputs.sort_by(|&a, &b| {
-            let (a, b) = (&self.nodes[a], &self.nodes[b]);
-            a.pos[1].total_cmp(&b.pos[1]).then(a.pos[0].total_cmp(&b.pos[0])).then(a.id.cmp(&b.id))
-        });
-        for i in inputs {
-            let node = &self.nodes[i];
-            if node.variable.is_some() {
-                continue;
-            }
-            let wanted = sanitize_identifier(match node.text("name").trim() {
-                "" => "input",
-                name => name,
-            });
-            let name = match self.variable(&wanted) {
-                Some(v) if v.ty != DataType::Image => self.unique_variable_name(&wanted),
-                _ => wanted,
-            };
-            if self.variable(&name).is_none() {
-                let mut var = Variable::new(name.clone(), DataType::Image);
-                if let Some(ParamValue::Color(c)) = node.value("default") {
-                    (var.value, var.default) = (Value::Color(*c), Value::Color(*c));
-                }
-                if let Some(image) = &mut var.image {
-                    image.kind = if node.enum_value("kind") == 1 { ImageKind::Color } else { ImageKind::Gray };
-                    image.picture = node.text("image").trim().to_string();
-                    image.default = image.picture.clone();
-                }
-                self.variables.push(var);
-            }
-            self.nodes[i].variable = Some(name);
-        }
-        for i in 0..self.nodes.len() {
-            let id = self.nodes[i].id;
-            let Some(instance) = self.nodes[i].instance.as_deref_mut() else { continue };
-            let ports = std::mem::take(&mut instance.interface.inputs);
-            let given = std::mem::take(&mut instance.images);
-            let mut slots = Vec::new();
-            for port in ports {
-                let socket = input_socket_key(&port.name);
-                let arrives = self.links.iter().any(|l| l.to == id && l.to_socket == socket);
-                if instance.interface.param(&port.name).is_none() {
-                    let mut var = Variable::new(port.name.clone(), DataType::Image);
-                    if let Some(image) = &mut var.image {
-                        image.kind = port.kind.unwrap_or(ImageKind::Gray);
-                    }
-                    instance.interface.params.push(InstanceParam {
-                        name: port.name.clone(),
-                        label: crate::instance::label_of(&port.name),
-                        value: var.value,
-                        default: var.default,
-                        min: var.min,
-                        max: var.max,
-                        description: String::new(),
-                        image: var.image,
-                    });
-                }
-                let picture = given.get(&port.name).cloned().unwrap_or_default();
-                slots.push(ParamSlot { key: port.name.clone(), value: ParamValue::Text(picture), exposed: arrives });
-                for l in self.links.iter_mut().filter(|l| l.to == id && l.to_socket == socket) {
-                    l.to_socket = param_socket_key(&port.name);
-                }
-            }
-            let node = &mut self.nodes[i];
-            node.params.retain(|s| !slots.iter().any(|n| n.key == s.key));
-            node.params.extend(slots);
-        }
-    }
-
     /// Repair a graph that was loaded from disk.
     pub fn normalize(&mut self) {
         let mut seen = HashSet::new();
@@ -1618,5 +1752,32 @@ mod tests {
         let mut back: Graph = serde_json::from_str(&json).unwrap();
         back.normalize();
         assert_eq!(g, back);
+    }
+
+    /// A file says an option of a choice by its id, not its place. An option this version does
+    /// not have (of a newer one) keeps the graph from being read, saying which; a choice of a
+    /// parameter the node does not have, or that is no choice, goes as that parameter does.
+    #[test]
+    fn choices_are_said_by_their_ids() {
+        let mut g = Graph::default();
+        let normal = g.add_node(NodeKind::NORMAL, [0.0, 0.0]);
+        set(&mut g, normal, "format", ParamValue::Enum(1));
+        set(&mut g, normal, "intensity", ParamValue::Float(7.25));
+        let json = serde_json::to_string(&g).unwrap();
+        assert!(json.contains(r#""format":{"choice":"directx"}"#) && json.contains(r#""tiling":{"choice":"both"}"#), "{json}");
+        let back: Graph = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.node(normal).unwrap().enum_value("format"), 1);
+        let unknown = json.replace("directx", "sideways");
+        let e = serde_json::from_str::<Graph>(&unknown).unwrap_err().to_string();
+        assert!(e.contains("'sideways'") && e.contains("newer version"), "{e}");
+        let mut odd: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let params = &mut odd["nodes"][0]["params"];
+        params["intensity"] = serde_json::json!({ "choice": "x" });
+        params["nothing"] = serde_json::json!({ "choice": "x" });
+        let mut back: Graph = serde_json::from_value(odd).unwrap();
+        back.normalize();
+        let node = back.node(normal).unwrap();
+        assert_eq!(node.value("intensity"), Some(&node.def().param("intensity").unwrap().default_value()));
+        assert!(node.value("nothing").is_none() && node.enum_value("format") == 1);
     }
 }

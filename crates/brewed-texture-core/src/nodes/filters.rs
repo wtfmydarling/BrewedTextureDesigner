@@ -23,6 +23,28 @@ pub const BLEND_MODES: &[&str] = &[
     "Vivid Light",
     "Pin Light",
 ];
+/// What a file calls each of [`BLEND_MODES`].
+const BLEND_MODE_IDS: &[&str] = &[
+    "normal",
+    "add",
+    "subtract",
+    "multiply",
+    "screen",
+    "overlay",
+    "soft_light",
+    "hard_light",
+    "darken",
+    "lighten",
+    "difference",
+    "exclusion",
+    "divide",
+    "color_dodge",
+    "color_burn",
+    "linear_burn",
+    "linear_light",
+    "vivid_light",
+    "pin_light",
+];
 
 pub static TRANSFORM_2D: NodeDef = NodeDef {
     id: "transform_2d",
@@ -37,7 +59,7 @@ pub static TRANSFORM_2D: NodeDef = NodeDef {
         angle("rotation", "Rotation", 0.0, -180.0, 180.0).tip("Degrees, counter-clockwise."),
         vec2("scale", "Scale", [1.0, 1.0], 0.01, 4.0),
         vec2("pivot", "Pivot", [0.5, 0.5], 0.0, 1.0),
-        choice("filtering", "Filtering", 0, &["Bilinear", "Nearest"]),
+        choice("filtering", "Filtering", 0, &["Bilinear", "Nearest"], &["bilinear", "nearest"]),
         color("matte", "Matte Color", [0.0, 0.0, 0.0, 0.0]).tip("Fill outside the image on axes that do not tile."),
     ],
     role: Role::Image,
@@ -52,9 +74,9 @@ pub static BLEND: NodeDef = NodeDef {
     inputs: &[image("foreground", "Foreground"), image("background", "Background"), gray_opt("mask", "Mask")],
     outputs: IMAGE_OUT,
     params: &[
-        choice("mode", "Blending Mode", 0, BLEND_MODES),
+        choice("mode", "Blending Mode", 0, BLEND_MODES, BLEND_MODE_IDS),
         float("opacity", "Opacity", 1.0, 0.0, 1.0).bounded(),
-        choice("alpha", "Alpha Blending", 0, &["Use Foreground Alpha", "Ignore Alpha"]),
+        choice("alpha", "Alpha Blending", 0, &["Use Foreground Alpha", "Ignore Alpha"], &["foreground", "ignore"]),
         boolean("clamp", "Clamp Result", true),
     ],
     role: Role::Image,
@@ -101,7 +123,7 @@ pub static SLOPE_BLUR: NodeDef = NodeDef {
         pixels("intensity", "Intensity", 16.0, -128.0, 128.0)
             .tip("Distance travelled along the slope, in pixels of a 1024 px image. Negative flows uphill."),
         int("samples", "Samples", 16, 2, 64).bounded(),
-        choice("mode", "Mode", 0, &["Blur", "Min", "Max"]),
+        choice("mode", "Mode", 0, &["Blur", "Min", "Max"], &["blur", "min", "max"]),
     ],
     role: Role::Image,
 };
@@ -157,7 +179,13 @@ pub static MIRROR: NodeDef = NodeDef {
     inputs: IMAGE_IN,
     outputs: IMAGE_OUT,
     params: &[
-        choice("mode", "Mode", 0, &["Left to Right", "Right to Left", "Top to Bottom", "Bottom to Top", "Four-way"]),
+        choice(
+            "mode",
+            "Mode",
+            0,
+            &["Left to Right", "Right to Left", "Top to Bottom", "Bottom to Top", "Four-way"],
+            &["left_to_right", "right_to_left", "top_to_bottom", "bottom_to_top", "four_way"],
+        ),
         float("offset", "Axis", 0.5, 0.0, 1.0),
     ],
     role: Role::Image,
@@ -176,7 +204,13 @@ pub static PIXEL_MATH: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         expression("expression", "Expression", "u * v", true),
-        choice("channel", "Read Channel", 0, &["Luminance", "Red", "Green", "Blue", "Alpha"])
+        choice(
+            "channel",
+            "Read Channel",
+            0,
+            &["Luminance", "Red", "Green", "Blue", "Alpha"],
+            &["luminance", "red", "green", "blue", "alpha"],
+        )
             .fixed()
             .tip("Which channel of connected images the variables read."),
         boolean("auto_bind", "Auto-bind", true)
@@ -191,6 +225,7 @@ pub const PIXEL_MATH_BUILTINS: &[&str] = &["u", "v", "px", "py", "width", "heigh
 
 /// What a Distance node makes of the distances, in the order of its "mode" parameter.
 pub const DISTANCE_MODES: &[&str] = &["From the Shapes", "Into the Shapes", "Signed"];
+const DISTANCE_MODE_IDS: &[&str] = &["outside", "inside", "signed"];
 
 pub static DISTANCE: NodeDef = NodeDef {
     id: "distance",
@@ -203,7 +238,7 @@ pub static DISTANCE: NodeDef = NodeDef {
     inputs: &[gray("mask", "Mask")],
     outputs: GRAY_OUT,
     params: &[
-        choice("mode", "Mode", 0, DISTANCE_MODES).tip(
+        choice("mode", "Mode", 0, DISTANCE_MODES, DISTANCE_MODE_IDS).tip(
             "From the Shapes: 1 on them, 0 at the distance. Into the Shapes: 0 at their edges, 1 at the distance \
              into them. Signed: 0.5 at the edges, 1 at the distance into them, 0 at the distance away.",
         ),
@@ -241,6 +276,7 @@ pub static MAKE_IT_TILE: NodeDef = NodeDef {
 
 /// What a Flood Fill gives each shape, in the order of its "output" parameter.
 pub const FLOOD_FILL_OUTPUTS: &[&str] = &["Random Grayscale", "Random Color"];
+const FLOOD_FILL_OUTPUT_IDS: &[&str] = &["random_gray", "random_color"];
 
 pub static FLOOD_FILL: NodeDef = NodeDef {
     id: "flood_fill",
@@ -253,7 +289,7 @@ pub static FLOOD_FILL: NodeDef = NodeDef {
     inputs: &[gray("mask", "Mask")],
     outputs: IMAGE_OUT,
     params: &[
-        choice("output", "Output", 0, FLOOD_FILL_OUTPUTS).fixed(),
+        choice("output", "Output", 0, FLOOD_FILL_OUTPUTS, FLOOD_FILL_OUTPUT_IDS).fixed(),
         int("seed", "Seed", 0, 0, 1000),
         float("threshold", "Threshold", 0.5, 0.0, 1.0).bounded().tip("Where the mask is a shape: at this value and above."),
     ],

@@ -8,9 +8,12 @@
 //! * [`expr`]: the expression language of the Math and Pixel Math nodes.
 //! * [`eval`]: CPU evaluation of value nodes and of the effective parameters of every node.
 //! * [`edit`] / [`document`]: all modifications as commands, with undo / redo.
-//! * [`project`]: the file format (with migration of older files, and paths relative to the
-//!   file).
+//! * [`project`] / [`archive`]: package files (`.brewtex`, a ZIP archive: see
+//!   `docs/package-format.md`), and paths relative to them.
+//! * [`files`] / [`recovery`]: the files packages use or hold, and unsaved work kept for
+//!   recovery after a crash.
 
+pub mod archive;
 pub mod curve;
 pub mod demo;
 pub mod document;

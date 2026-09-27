@@ -14,6 +14,7 @@ mod icons;
 mod picker;
 mod previews;
 mod scrub;
+mod settings;
 mod style;
 mod view;
 mod widget;
@@ -194,12 +195,8 @@ fn main() -> iced::Result {
         i += 1;
     }
 
-    if let Some(job) = render {
-        std::process::exit(render_package(job));
-    }
-
-    // The layout of the last session, kept for the next one (not for screenshots, which
-    // show the program as it starts the first time, nor for the autopilot).
+    // The settings and the layout of the last session, kept for the next one (not for
+    // screenshots, which show the program as it starts the first time, nor for the autopilot).
     #[cfg(any(test, feature = "dev-tools"))]
     let as_it_was = {
         options.dev.autopilot = flight.map(|minutes| autopilot::Flight { minutes, seed });
@@ -207,6 +204,16 @@ fn main() -> iced::Result {
     };
     #[cfg(not(any(test, feature = "dev-tools")))]
     let as_it_was = true;
+    // (Read before anything else runs: they say the graphics API, which the environment
+    // gives iced and the engine.)
+    options.settings = settings::Store::open(workspace::folder().filter(|_| as_it_was).map(|f| f.join("settings.toml")));
+    let chosen = settings::choose_graphics(&options.settings.settings());
+    let mut store = options.settings.clone();
+
+    if let Some(job) = render {
+        std::process::exit(render_package(job));
+    }
+
     if as_it_was {
         options.workspace = Some(workspace::Workspace::load());
         // Unsaved work, kept to be recovered after a crash, beside the settings (not in the
@@ -220,13 +227,27 @@ fn main() -> iced::Result {
     }
 
     // A daemon: besides the main window, the eyedropper opens a window on every monitor.
-    iced::daemon(move || App::boot(options.clone()), App::update, App::view)
+    let ran = iced::daemon(move || App::boot(options.clone()), App::update, App::view)
         .title(App::title)
         .theme(App::theme)
         .subscription(App::subscription)
+        .scale_factor(App::scale_factor)
         .default_font(style::ui_font())
         .antialiasing(true)
-        .run()
+        .run();
+    if let Err(iced::Error::GraphicsCreationFailed(e)) = &ran
+        && chosen
+    {
+        let said = settings::graphics_failed(&mut store, &e.to_string());
+        log::error!("{said}");
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title(brewed_texture_core::APP_NAME)
+            .set_description(said)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+    }
+    ran
 }
 
 /// Stop at a mistake in the command line.

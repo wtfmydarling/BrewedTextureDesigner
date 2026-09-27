@@ -1,0 +1,1087 @@
+float_input
+float_input o:value float
+float_input p:tiling choice
+float_input p:tiling = none
+float_input p:tiling = horizontal
+float_input p:tiling = vertical
+float_input p:tiling = both
+int_input
+int_input o:value int
+int_input p:tiling choice
+int_input p:tiling = none
+int_input p:tiling = horizontal
+int_input p:tiling = vertical
+int_input p:tiling = both
+bool_input
+bool_input o:value bool
+bool_input p:tiling choice
+bool_input p:tiling = none
+bool_input p:tiling = horizontal
+bool_input p:tiling = vertical
+bool_input p:tiling = both
+vec2_input
+vec2_input o:value vec2
+vec2_input p:tiling choice
+vec2_input p:tiling = none
+vec2_input p:tiling = horizontal
+vec2_input p:tiling = vertical
+vec2_input p:tiling = both
+color_input
+color_input o:value color
+color_input p:tiling choice
+color_input p:tiling = none
+color_input p:tiling = horizontal
+color_input p:tiling = vertical
+color_input p:tiling = both
+math
+math o:result float
+math p:tiling choice
+math p:tiling = none
+math p:tiling = horizontal
+math p:tiling = vertical
+math p:tiling = both
+math p:expression text
+math p:auto_bind bool
+compose_vec2
+compose_vec2 o:value vec2
+compose_vec2 p:tiling choice
+compose_vec2 p:tiling = none
+compose_vec2 p:tiling = horizontal
+compose_vec2 p:tiling = vertical
+compose_vec2 p:tiling = both
+compose_vec2 p:x float
+compose_vec2 p:y float
+compose_color
+compose_color o:value color
+compose_color p:tiling choice
+compose_color p:tiling = none
+compose_color p:tiling = horizontal
+compose_color p:tiling = vertical
+compose_color p:tiling = both
+compose_color p:r float
+compose_color p:g float
+compose_color p:b float
+compose_color p:a float
+image_input
+image_input o:output image
+image_input p:tiling choice
+image_input p:tiling = none
+image_input p:tiling = horizontal
+image_input p:tiling = vertical
+image_input p:tiling = both
+image_input p:precision choice
+image_input p:precision = graph
+image_input p:precision = unorm8
+image_input p:precision = float16
+image_input p:precision = float32
+uniform_color
+uniform_color o:output image
+uniform_color p:tiling choice
+uniform_color p:tiling = none
+uniform_color p:tiling = horizontal
+uniform_color p:tiling = vertical
+uniform_color p:tiling = both
+uniform_color p:precision choice
+uniform_color p:precision = graph
+uniform_color p:precision = unorm8
+uniform_color p:precision = float16
+uniform_color p:precision = float32
+uniform_color p:color color
+uniform_color p:output choice
+uniform_color p:output = color
+uniform_color p:output = gray
+shape
+shape o:output image
+shape p:tiling choice
+shape p:tiling = none
+shape p:tiling = horizontal
+shape p:tiling = vertical
+shape p:tiling = both
+shape p:precision choice
+shape p:precision = graph
+shape p:precision = unorm8
+shape p:precision = float16
+shape p:precision = float32
+shape p:shape choice
+shape p:shape = disc
+shape p:shape = square
+shape p:shape = rounded_square
+shape p:shape = polygon
+shape p:shape = star
+shape p:shape = ring
+shape p:shape = cross
+shape p:shape = capsule
+shape p:shape = paraboloid
+shape p:shape = cone
+shape p:shape = pyramid
+shape p:shape = bell
+shape p:shape = gaussian
+shape p:shape = waves
+shape p:size vec2
+shape p:scale float
+shape p:rotation float
+shape p:offset vec2
+shape p:repeat int
+shape p:softness float
+shape p:sides int
+shape p:inner_radius float
+shape p:thickness float
+shape p:corner_radius float
+shape p:invert bool
+tile_generator
+tile_generator i:pattern image
+tile_generator o:output image
+tile_generator p:tiling choice
+tile_generator p:tiling = none
+tile_generator p:tiling = horizontal
+tile_generator p:tiling = vertical
+tile_generator p:tiling = both
+tile_generator p:precision choice
+tile_generator p:precision = graph
+tile_generator p:precision = unorm8
+tile_generator p:precision = float16
+tile_generator p:precision = float32
+tile_generator p:pattern choice
+tile_generator p:pattern = disc
+tile_generator p:pattern = square
+tile_generator p:pattern = rounded_square
+tile_generator p:pattern = polygon
+tile_generator p:pattern = star
+tile_generator p:pattern = ring
+tile_generator p:pattern = cross
+tile_generator p:pattern = capsule
+tile_generator p:pattern = paraboloid
+tile_generator p:pattern = cone
+tile_generator p:pattern = pyramid
+tile_generator p:pattern = bell
+tile_generator p:pattern = gaussian
+tile_generator p:pattern = waves
+tile_generator p:pattern = image
+tile_generator p:x_amount int
+tile_generator p:y_amount int
+tile_generator p:size vec2
+tile_generator p:scale float
+tile_generator p:offset float
+tile_generator p:vertical_offset bool
+tile_generator p:rotation float
+tile_generator p:random_rotation float
+tile_generator p:random_scale float
+tile_generator p:random_offset float
+tile_generator p:luminance float
+tile_generator p:random_luminance float
+tile_generator p:mask_random float
+tile_generator p:softness float
+tile_generator p:sides int
+tile_generator p:inner_radius float
+tile_generator p:thickness float
+tile_generator p:corner_radius float
+tile_generator p:blend_mode choice
+tile_generator p:blend_mode = max
+tile_generator p:blend_mode = add
+tile_generator p:seed int
+tile_sampler
+tile_sampler i:pattern_1 image
+tile_sampler i:pattern_2 image
+tile_sampler i:pattern_3 image
+tile_sampler i:pattern_4 image
+tile_sampler i:mask_map image
+tile_sampler i:scale_map image
+tile_sampler i:rotation_map image
+tile_sampler i:color_map image
+tile_sampler o:output image
+tile_sampler p:tiling choice
+tile_sampler p:tiling = none
+tile_sampler p:tiling = horizontal
+tile_sampler p:tiling = vertical
+tile_sampler p:tiling = both
+tile_sampler p:precision choice
+tile_sampler p:precision = graph
+tile_sampler p:precision = unorm8
+tile_sampler p:precision = float16
+tile_sampler p:precision = float32
+tile_sampler p:pattern choice
+tile_sampler p:pattern = disc
+tile_sampler p:pattern = square
+tile_sampler p:pattern = rounded_square
+tile_sampler p:pattern = polygon
+tile_sampler p:pattern = star
+tile_sampler p:pattern = ring
+tile_sampler p:pattern = cross
+tile_sampler p:pattern = capsule
+tile_sampler p:pattern = paraboloid
+tile_sampler p:pattern = cone
+tile_sampler p:pattern = pyramid
+tile_sampler p:pattern = bell
+tile_sampler p:pattern = gaussian
+tile_sampler p:pattern = waves
+tile_sampler p:pattern = image
+tile_sampler p:x_amount int
+tile_sampler p:y_amount int
+tile_sampler p:size vec2
+tile_sampler p:scale float
+tile_sampler p:random_scale float
+tile_sampler p:scale_map float
+tile_sampler p:random_position float
+tile_sampler p:offset float
+tile_sampler p:vertical_offset bool
+tile_sampler p:rotation float
+tile_sampler p:random_rotation float
+tile_sampler p:rotation_map float
+tile_sampler p:random_mirror float
+tile_sampler p:color choice
+tile_sampler p:color = luminance
+tile_sampler p:color = random
+tile_sampler p:color = color_map
+tile_sampler p:luminance float
+tile_sampler p:random_luminance float
+tile_sampler p:mask_random float
+tile_sampler p:mask_threshold float
+tile_sampler p:mask_invert bool
+tile_sampler p:softness float
+tile_sampler p:sides int
+tile_sampler p:inner_radius float
+tile_sampler p:thickness float
+tile_sampler p:corner_radius float
+tile_sampler p:blend_mode choice
+tile_sampler p:blend_mode = max
+tile_sampler p:blend_mode = add
+tile_sampler p:blend_mode = stack
+tile_sampler p:seed int
+gradient
+gradient o:output image
+gradient p:tiling choice
+gradient p:tiling = none
+gradient p:tiling = horizontal
+gradient p:tiling = vertical
+gradient p:tiling = both
+gradient p:precision choice
+gradient p:precision = graph
+gradient p:precision = unorm8
+gradient p:precision = float16
+gradient p:precision = float32
+gradient p:type choice
+gradient p:type = linear
+gradient p:type = mirrored_linear
+gradient p:type = radial
+gradient p:type = angular
+gradient p:type = diamond
+gradient p:angle float
+gradient p:center vec2
+gradient p:repeat float
+gradient p:offset float
+gradient p:invert bool
+noise
+noise o:output image
+noise p:tiling choice
+noise p:tiling = none
+noise p:tiling = horizontal
+noise p:tiling = vertical
+noise p:tiling = both
+noise p:precision choice
+noise p:precision = graph
+noise p:precision = unorm8
+noise p:precision = float16
+noise p:precision = float32
+noise p:type choice
+noise p:type = perlin
+noise p:type = simplex
+noise p:type = value
+noise p:type = billow
+noise p:type = ridged
+noise p:type = liquid
+noise p:type = marble
+noise p:type = wood
+noise p:type = veins
+noise p:type = streaks
+noise p:type = flow
+noise p:type = fibers
+noise p:type = scratches
+noise p:type = ripples
+noise p:type = turing
+noise p:type = raindrops
+noise p:type = caustics
+noise p:type = cells
+noise p:type = cracks
+noise p:type = crystal
+noise p:type = mosaic
+noise p:type = stones
+noise p:type = scales
+noise p:type = blocks
+noise p:type = truchet
+noise p:type = maze
+noise p:type = spots
+noise p:type = blotches
+noise p:type = craters
+noise p:type = white_noise
+noise p:scale int
+noise p:octaves int
+noise p:roughness float
+noise p:distortion float
+noise p:stretch int
+noise p:rings int
+noise p:angle float
+noise p:spread float
+noise p:jitter float
+noise p:density float
+noise p:line_density float
+noise p:length float
+noise p:width float
+noise p:line_width float
+noise p:thickness float
+noise p:seed int
+noise p:invert bool
+bitmap
+bitmap o:output image
+bitmap p:tiling choice
+bitmap p:tiling = none
+bitmap p:tiling = horizontal
+bitmap p:tiling = vertical
+bitmap p:tiling = both
+bitmap p:precision choice
+bitmap p:precision = graph
+bitmap p:precision = unorm8
+bitmap p:precision = float16
+bitmap p:precision = float32
+bitmap p:path text
+svg
+svg o:output image
+svg p:tiling choice
+svg p:tiling = none
+svg p:tiling = horizontal
+svg p:tiling = vertical
+svg p:tiling = both
+svg p:precision choice
+svg p:precision = graph
+svg p:precision = unorm8
+svg p:precision = float16
+svg p:precision = float32
+svg p:path text
+svg p:fit choice
+svg p:fit = fit
+svg p:fit = fill
+svg p:fit = stretch
+svg p:output choice
+svg p:output = color
+svg p:output = coverage
+svg p:offset vec2
+svg p:rotation float
+svg p:scale float
+text
+text o:output image
+text p:tiling choice
+text p:tiling = none
+text p:tiling = horizontal
+text p:tiling = vertical
+text p:tiling = both
+text p:precision choice
+text p:precision = graph
+text p:precision = unorm8
+text p:precision = float16
+text p:precision = float32
+text p:text text
+text p:font text
+text p:size float
+text p:align choice
+text p:align = left
+text p:align = center
+text p:align = right
+text p:spacing float
+text p:offset vec2
+text p:rotation float
+transform_2d
+transform_2d i:input image
+transform_2d o:output image
+transform_2d p:tiling choice
+transform_2d p:tiling = none
+transform_2d p:tiling = horizontal
+transform_2d p:tiling = vertical
+transform_2d p:tiling = both
+transform_2d p:precision choice
+transform_2d p:precision = graph
+transform_2d p:precision = unorm8
+transform_2d p:precision = float16
+transform_2d p:precision = float32
+transform_2d p:offset vec2
+transform_2d p:rotation float
+transform_2d p:scale vec2
+transform_2d p:pivot vec2
+transform_2d p:filtering choice
+transform_2d p:filtering = bilinear
+transform_2d p:filtering = nearest
+transform_2d p:matte color
+blend
+blend i:foreground image
+blend i:background image
+blend i:mask image
+blend o:output image
+blend p:tiling choice
+blend p:tiling = none
+blend p:tiling = horizontal
+blend p:tiling = vertical
+blend p:tiling = both
+blend p:precision choice
+blend p:precision = graph
+blend p:precision = unorm8
+blend p:precision = float16
+blend p:precision = float32
+blend p:mode choice
+blend p:mode = normal
+blend p:mode = add
+blend p:mode = subtract
+blend p:mode = multiply
+blend p:mode = screen
+blend p:mode = overlay
+blend p:mode = soft_light
+blend p:mode = hard_light
+blend p:mode = darken
+blend p:mode = lighten
+blend p:mode = difference
+blend p:mode = exclusion
+blend p:mode = divide
+blend p:mode = color_dodge
+blend p:mode = color_burn
+blend p:mode = linear_burn
+blend p:mode = linear_light
+blend p:mode = vivid_light
+blend p:mode = pin_light
+blend p:opacity float
+blend p:alpha choice
+blend p:alpha = foreground
+blend p:alpha = ignore
+blend p:clamp bool
+blur
+blur i:input image
+blur o:output image
+blur p:tiling choice
+blur p:tiling = none
+blur p:tiling = horizontal
+blur p:tiling = vertical
+blur p:tiling = both
+blur p:precision choice
+blur p:precision = graph
+blur p:precision = unorm8
+blur p:precision = float16
+blur p:precision = float32
+blur p:radius float
+directional_blur
+directional_blur i:input image
+directional_blur o:output image
+directional_blur p:tiling choice
+directional_blur p:tiling = none
+directional_blur p:tiling = horizontal
+directional_blur p:tiling = vertical
+directional_blur p:tiling = both
+directional_blur p:precision choice
+directional_blur p:precision = graph
+directional_blur p:precision = unorm8
+directional_blur p:precision = float16
+directional_blur p:precision = float32
+directional_blur p:angle float
+directional_blur p:length float
+directional_blur p:symmetric bool
+non_uniform_blur
+non_uniform_blur i:input image
+non_uniform_blur i:map image
+non_uniform_blur o:output image
+non_uniform_blur p:tiling choice
+non_uniform_blur p:tiling = none
+non_uniform_blur p:tiling = horizontal
+non_uniform_blur p:tiling = vertical
+non_uniform_blur p:tiling = both
+non_uniform_blur p:precision choice
+non_uniform_blur p:precision = graph
+non_uniform_blur p:precision = unorm8
+non_uniform_blur p:precision = float16
+non_uniform_blur p:precision = float32
+non_uniform_blur p:radius float
+slope_blur
+slope_blur i:input image
+slope_blur i:slope image
+slope_blur o:output image
+slope_blur p:tiling choice
+slope_blur p:tiling = none
+slope_blur p:tiling = horizontal
+slope_blur p:tiling = vertical
+slope_blur p:tiling = both
+slope_blur p:precision choice
+slope_blur p:precision = graph
+slope_blur p:precision = unorm8
+slope_blur p:precision = float16
+slope_blur p:precision = float32
+slope_blur p:intensity float
+slope_blur p:samples int
+slope_blur p:mode choice
+slope_blur p:mode = blur
+slope_blur p:mode = min
+slope_blur p:mode = max
+sharpen
+sharpen i:input image
+sharpen o:output image
+sharpen p:tiling choice
+sharpen p:tiling = none
+sharpen p:tiling = horizontal
+sharpen p:tiling = vertical
+sharpen p:tiling = both
+sharpen p:precision choice
+sharpen p:precision = graph
+sharpen p:precision = unorm8
+sharpen p:precision = float16
+sharpen p:precision = float32
+sharpen p:intensity float
+sharpen p:radius float
+warp
+warp i:input image
+warp i:warp image
+warp o:output image
+warp p:tiling choice
+warp p:tiling = none
+warp p:tiling = horizontal
+warp p:tiling = vertical
+warp p:tiling = both
+warp p:precision choice
+warp p:precision = graph
+warp p:precision = unorm8
+warp p:precision = float16
+warp p:precision = float32
+warp p:intensity float
+directional_warp
+directional_warp i:input image
+directional_warp i:intensity image
+directional_warp o:output image
+directional_warp p:tiling choice
+directional_warp p:tiling = none
+directional_warp p:tiling = horizontal
+directional_warp p:tiling = vertical
+directional_warp p:tiling = both
+directional_warp p:precision choice
+directional_warp p:precision = graph
+directional_warp p:precision = unorm8
+directional_warp p:precision = float16
+directional_warp p:precision = float32
+directional_warp p:angle float
+directional_warp p:intensity float
+mirror
+mirror i:input image
+mirror o:output image
+mirror p:tiling choice
+mirror p:tiling = none
+mirror p:tiling = horizontal
+mirror p:tiling = vertical
+mirror p:tiling = both
+mirror p:precision choice
+mirror p:precision = graph
+mirror p:precision = unorm8
+mirror p:precision = float16
+mirror p:precision = float32
+mirror p:mode choice
+mirror p:mode = left_to_right
+mirror p:mode = right_to_left
+mirror p:mode = top_to_bottom
+mirror p:mode = bottom_to_top
+mirror p:mode = four_way
+mirror p:offset float
+pixel_math
+pixel_math o:output image
+pixel_math p:tiling choice
+pixel_math p:tiling = none
+pixel_math p:tiling = horizontal
+pixel_math p:tiling = vertical
+pixel_math p:tiling = both
+pixel_math p:precision choice
+pixel_math p:precision = graph
+pixel_math p:precision = unorm8
+pixel_math p:precision = float16
+pixel_math p:precision = float32
+pixel_math p:expression text
+pixel_math p:channel choice
+pixel_math p:channel = luminance
+pixel_math p:channel = red
+pixel_math p:channel = green
+pixel_math p:channel = blue
+pixel_math p:channel = alpha
+pixel_math p:auto_bind bool
+distance
+distance i:mask image
+distance o:output image
+distance p:tiling choice
+distance p:tiling = none
+distance p:tiling = horizontal
+distance p:tiling = vertical
+distance p:tiling = both
+distance p:precision choice
+distance p:precision = graph
+distance p:precision = unorm8
+distance p:precision = float16
+distance p:precision = float32
+distance p:mode choice
+distance p:mode = outside
+distance p:mode = inside
+distance p:mode = signed
+distance p:distance float
+distance p:threshold float
+flood_fill
+flood_fill i:mask image
+flood_fill o:output image
+flood_fill p:tiling choice
+flood_fill p:tiling = none
+flood_fill p:tiling = horizontal
+flood_fill p:tiling = vertical
+flood_fill p:tiling = both
+flood_fill p:precision choice
+flood_fill p:precision = graph
+flood_fill p:precision = unorm8
+flood_fill p:precision = float16
+flood_fill p:precision = float32
+flood_fill p:output choice
+flood_fill p:output = random_gray
+flood_fill p:output = random_color
+flood_fill p:seed int
+flood_fill p:threshold float
+make_it_tile
+make_it_tile i:input image
+make_it_tile o:output image
+make_it_tile p:tiling choice
+make_it_tile p:tiling = none
+make_it_tile p:tiling = horizontal
+make_it_tile p:tiling = vertical
+make_it_tile p:tiling = both
+make_it_tile p:precision choice
+make_it_tile p:precision = graph
+make_it_tile p:precision = unorm8
+make_it_tile p:precision = float16
+make_it_tile p:precision = float32
+make_it_tile p:blend float
+normal
+normal i:input image
+normal o:output image
+normal p:tiling choice
+normal p:tiling = none
+normal p:tiling = horizontal
+normal p:tiling = vertical
+normal p:tiling = both
+normal p:precision choice
+normal p:precision = graph
+normal p:precision = unorm8
+normal p:precision = float16
+normal p:precision = float32
+normal p:intensity float
+normal p:format choice
+normal p:format = opengl
+normal p:format = directx
+ambient_occlusion
+ambient_occlusion i:input image
+ambient_occlusion o:output image
+ambient_occlusion p:tiling choice
+ambient_occlusion p:tiling = none
+ambient_occlusion p:tiling = horizontal
+ambient_occlusion p:tiling = vertical
+ambient_occlusion p:tiling = both
+ambient_occlusion p:precision choice
+ambient_occlusion p:precision = graph
+ambient_occlusion p:precision = unorm8
+ambient_occlusion p:precision = float16
+ambient_occlusion p:precision = float32
+ambient_occlusion p:radius float
+ambient_occlusion p:height float
+ambient_occlusion p:intensity float
+curvature
+curvature i:input image
+curvature o:output image
+curvature p:tiling choice
+curvature p:tiling = none
+curvature p:tiling = horizontal
+curvature p:tiling = vertical
+curvature p:tiling = both
+curvature p:precision choice
+curvature p:precision = graph
+curvature p:precision = unorm8
+curvature p:precision = float16
+curvature p:precision = float32
+curvature p:radius float
+curvature p:intensity float
+edge_detect
+edge_detect i:input image
+edge_detect o:output image
+edge_detect p:tiling choice
+edge_detect p:tiling = none
+edge_detect p:tiling = horizontal
+edge_detect p:tiling = vertical
+edge_detect p:tiling = both
+edge_detect p:precision choice
+edge_detect p:precision = graph
+edge_detect p:precision = unorm8
+edge_detect p:precision = float16
+edge_detect p:precision = float32
+edge_detect p:width float
+edge_detect p:intensity float
+edge_detect p:invert bool
+emboss
+emboss i:height image
+emboss i:color image
+emboss o:output image
+emboss p:tiling choice
+emboss p:tiling = none
+emboss p:tiling = horizontal
+emboss p:tiling = vertical
+emboss p:tiling = both
+emboss p:precision choice
+emboss p:precision = graph
+emboss p:precision = unorm8
+emboss p:precision = float16
+emboss p:precision = float32
+emboss p:light_angle float
+emboss p:elevation float
+emboss p:intensity float
+emboss p:output choice
+emboss p:output = shading
+emboss p:output = lit_color
+bevel
+bevel i:mask image
+bevel o:output image
+bevel p:tiling choice
+bevel p:tiling = none
+bevel p:tiling = horizontal
+bevel p:tiling = vertical
+bevel p:tiling = both
+bevel p:precision choice
+bevel p:precision = graph
+bevel p:precision = unorm8
+bevel p:precision = float16
+bevel p:precision = float32
+bevel p:width float
+bevel p:profile choice
+bevel p:profile = linear
+bevel p:profile = smooth
+bevel p:profile = round
+bevel p:profile = concave
+bevel p:direction choice
+bevel p:direction = inward
+bevel p:direction = outward
+bevel p:threshold float
+height_blend
+height_blend i:top image
+height_blend i:bottom image
+height_blend i:mask image
+height_blend o:output image
+height_blend p:tiling choice
+height_blend p:tiling = none
+height_blend p:tiling = horizontal
+height_blend p:tiling = vertical
+height_blend p:tiling = both
+height_blend p:precision choice
+height_blend p:precision = graph
+height_blend p:precision = unorm8
+height_blend p:precision = float16
+height_blend p:precision = float32
+height_blend p:offset float
+height_blend p:contrast float
+height_blend p:output choice
+height_blend p:output = height
+height_blend p:output = mask
+normal_combine
+normal_combine i:base image
+normal_combine i:detail image
+normal_combine i:mask image
+normal_combine o:output image
+normal_combine p:tiling choice
+normal_combine p:tiling = none
+normal_combine p:tiling = horizontal
+normal_combine p:tiling = vertical
+normal_combine p:tiling = both
+normal_combine p:precision choice
+normal_combine p:precision = graph
+normal_combine p:precision = unorm8
+normal_combine p:precision = float16
+normal_combine p:precision = float32
+normal_combine p:technique choice
+normal_combine p:technique = reoriented
+normal_combine p:technique = whiteout
+normal_combine p:technique = udn
+normal_combine p:intensity float
+levels
+levels i:input image
+levels o:output image
+levels p:tiling choice
+levels p:tiling = none
+levels p:tiling = horizontal
+levels p:tiling = vertical
+levels p:tiling = both
+levels p:precision choice
+levels p:precision = graph
+levels p:precision = unorm8
+levels p:precision = float16
+levels p:precision = float32
+levels p:in_low float
+levels p:in_high float
+levels p:gamma float
+levels p:out_low float
+levels p:out_high float
+levels p:channels choice
+levels p:channels = rgb
+levels p:channels = rgba
+levels p:channels = r
+levels p:channels = g
+levels p:channels = b
+levels p:channels = a
+levels p:clamp bool
+histogram_scan
+histogram_scan i:input image
+histogram_scan o:output image
+histogram_scan p:tiling choice
+histogram_scan p:tiling = none
+histogram_scan p:tiling = horizontal
+histogram_scan p:tiling = vertical
+histogram_scan p:tiling = both
+histogram_scan p:precision choice
+histogram_scan p:precision = graph
+histogram_scan p:precision = unorm8
+histogram_scan p:precision = float16
+histogram_scan p:precision = float32
+histogram_scan p:position float
+histogram_scan p:contrast float
+histogram_scan p:invert bool
+invert
+invert i:input image
+invert o:output image
+invert p:tiling choice
+invert p:tiling = none
+invert p:tiling = horizontal
+invert p:tiling = vertical
+invert p:tiling = both
+invert p:precision choice
+invert p:precision = graph
+invert p:precision = unorm8
+invert p:precision = float16
+invert p:precision = float32
+invert p:invert_alpha bool
+grayscale
+grayscale i:input image
+grayscale o:output image
+grayscale p:tiling choice
+grayscale p:tiling = none
+grayscale p:tiling = horizontal
+grayscale p:tiling = vertical
+grayscale p:tiling = both
+grayscale p:precision choice
+grayscale p:precision = graph
+grayscale p:precision = unorm8
+grayscale p:precision = float16
+grayscale p:precision = float32
+grayscale p:mode choice
+grayscale p:mode = luminance
+grayscale p:mode = average
+grayscale p:mode = red
+grayscale p:mode = green
+grayscale p:mode = blue
+grayscale p:mode = alpha
+grayscale p:mode = max
+hsl
+hsl i:input image
+hsl o:output image
+hsl p:tiling choice
+hsl p:tiling = none
+hsl p:tiling = horizontal
+hsl p:tiling = vertical
+hsl p:tiling = both
+hsl p:precision choice
+hsl p:precision = graph
+hsl p:precision = unorm8
+hsl p:precision = float16
+hsl p:precision = float32
+hsl p:hue float
+hsl p:saturation float
+hsl p:lightness float
+gradient_map
+gradient_map i:input image
+gradient_map o:output image
+gradient_map p:tiling choice
+gradient_map p:tiling = none
+gradient_map p:tiling = horizontal
+gradient_map p:tiling = vertical
+gradient_map p:tiling = both
+gradient_map p:precision choice
+gradient_map p:precision = graph
+gradient_map p:precision = unorm8
+gradient_map p:precision = float16
+gradient_map p:precision = float32
+gradient_map p:gradient gradient
+gradient_map p:channel choice
+gradient_map p:channel = luminance
+gradient_map p:channel = red
+gradient_map p:channel = green
+gradient_map p:channel = blue
+gradient_map p:channel = alpha
+gradient_map p:channel = average
+gradient_map p:keep_alpha bool
+gradient_dynamic
+gradient_dynamic i:input image
+gradient_dynamic i:gradient image
+gradient_dynamic i:position_map image
+gradient_dynamic o:output image
+gradient_dynamic p:tiling choice
+gradient_dynamic p:tiling = none
+gradient_dynamic p:tiling = horizontal
+gradient_dynamic p:tiling = vertical
+gradient_dynamic p:tiling = both
+gradient_dynamic p:precision choice
+gradient_dynamic p:precision = graph
+gradient_dynamic p:precision = unorm8
+gradient_dynamic p:precision = float16
+gradient_dynamic p:precision = float32
+gradient_dynamic p:orientation choice
+gradient_dynamic p:orientation = horizontal
+gradient_dynamic p:orientation = vertical
+gradient_dynamic p:position float
+curve
+curve i:input image
+curve o:output image
+curve p:tiling choice
+curve p:tiling = none
+curve p:tiling = horizontal
+curve p:tiling = vertical
+curve p:tiling = both
+curve p:precision choice
+curve p:precision = graph
+curve p:precision = unorm8
+curve p:precision = float16
+curve p:precision = float32
+curve p:curve curve
+curve p:channels choice
+curve p:channels = rgb
+curve p:channels = red
+curve p:channels = green
+curve p:channels = blue
+curve p:channels = alpha
+channel_shuffle
+channel_shuffle i:a image
+channel_shuffle i:b image
+channel_shuffle o:output image
+channel_shuffle p:tiling choice
+channel_shuffle p:tiling = none
+channel_shuffle p:tiling = horizontal
+channel_shuffle p:tiling = vertical
+channel_shuffle p:tiling = both
+channel_shuffle p:precision choice
+channel_shuffle p:precision = graph
+channel_shuffle p:precision = unorm8
+channel_shuffle p:precision = float16
+channel_shuffle p:precision = float32
+channel_shuffle p:red choice
+channel_shuffle p:red = a_red
+channel_shuffle p:red = a_green
+channel_shuffle p:red = a_blue
+channel_shuffle p:red = a_alpha
+channel_shuffle p:red = b_red
+channel_shuffle p:red = b_green
+channel_shuffle p:red = b_blue
+channel_shuffle p:red = b_alpha
+channel_shuffle p:red = zero
+channel_shuffle p:red = one
+channel_shuffle p:green choice
+channel_shuffle p:green = a_red
+channel_shuffle p:green = a_green
+channel_shuffle p:green = a_blue
+channel_shuffle p:green = a_alpha
+channel_shuffle p:green = b_red
+channel_shuffle p:green = b_green
+channel_shuffle p:green = b_blue
+channel_shuffle p:green = b_alpha
+channel_shuffle p:green = zero
+channel_shuffle p:green = one
+channel_shuffle p:blue choice
+channel_shuffle p:blue = a_red
+channel_shuffle p:blue = a_green
+channel_shuffle p:blue = a_blue
+channel_shuffle p:blue = a_alpha
+channel_shuffle p:blue = b_red
+channel_shuffle p:blue = b_green
+channel_shuffle p:blue = b_blue
+channel_shuffle p:blue = b_alpha
+channel_shuffle p:blue = zero
+channel_shuffle p:blue = one
+channel_shuffle p:alpha choice
+channel_shuffle p:alpha = a_red
+channel_shuffle p:alpha = a_green
+channel_shuffle p:alpha = a_blue
+channel_shuffle p:alpha = a_alpha
+channel_shuffle p:alpha = b_red
+channel_shuffle p:alpha = b_green
+channel_shuffle p:alpha = b_blue
+channel_shuffle p:alpha = b_alpha
+channel_shuffle p:alpha = zero
+channel_shuffle p:alpha = one
+rgba_merge
+rgba_merge i:red image
+rgba_merge i:green image
+rgba_merge i:blue image
+rgba_merge i:alpha image
+rgba_merge o:output image
+rgba_merge p:tiling choice
+rgba_merge p:tiling = none
+rgba_merge p:tiling = horizontal
+rgba_merge p:tiling = vertical
+rgba_merge p:tiling = both
+rgba_merge p:precision choice
+rgba_merge p:precision = graph
+rgba_merge p:precision = unorm8
+rgba_merge p:precision = float16
+rgba_merge p:precision = float32
+rgba_merge p:red_value float
+rgba_merge p:green_value float
+rgba_merge p:blue_value float
+rgba_merge p:alpha_value float
+posterize
+posterize i:input image
+posterize o:output image
+posterize p:tiling choice
+posterize p:tiling = none
+posterize p:tiling = horizontal
+posterize p:tiling = vertical
+posterize p:tiling = both
+posterize p:precision choice
+posterize p:precision = graph
+posterize p:precision = unorm8
+posterize p:precision = float16
+posterize p:precision = float32
+posterize p:steps int
+output
+output i:input image
+output p:tiling choice
+output p:tiling = none
+output p:tiling = horizontal
+output p:tiling = vertical
+output p:tiling = both
+output p:name text
+output p:format choice
+output p:format = rgba
+output p:format = rgb
+output p:format = rg
+output p:format = r
+output p:format = g
+output p:format = b
+output p:format = a
+output p:bit_depth choice
+output p:bit_depth = unorm8
+output p:bit_depth = unorm16
+output p:bit_depth = float16
+output p:bit_depth = float32
+output p:bit_depth = dxt1
+output p:bit_depth = dxt2
+output p:bit_depth = dxt3
+output p:bit_depth = dxt4
+output p:bit_depth = dxt5
+output p:usage choice
+output p:usage = custom
+output p:usage = base_color
+output p:usage = normal
+output p:usage = height
+output p:usage = roughness
+output p:usage = metallic
+output p:usage = ambient_occlusion
+output p:usage = emissive
+graph_instance
+graph_instance p:tiling choice
+graph_instance p:tiling = none
+graph_instance p:tiling = horizontal
+graph_instance p:tiling = vertical
+graph_instance p:tiling = both

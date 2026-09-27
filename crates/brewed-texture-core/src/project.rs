@@ -1,48 +1,76 @@
-//! Project files (`.brewtex`, JSON): a package (see [`crate::package`]).
+//! Package files (`.brewtex`): a package (see [`crate::package`]), its graphs, the files it holds
+//! and how the editor showed it, in one file any program can read. `docs/package-format.md`
+//! says it for them; in short, a ZIP archive (see [`crate::archive`]) of
 //!
-//! A file holds the package's graphs, each with where its view was, the graph that was being
-//! edited and the files the package uses. Paths are written relative to the file wherever
-//! they can be (see [`crate::package::relative_path`]): a project moved or copied with its
-//! files keeps finding them. Files of version 1 held one graph; they are read as a package of
-//! that graph.
+//! - `mimetype`, the first entry, stored: [`MEDIA_TYPE`], which tells the file by its first
+//!   bytes;
+//! - `package.json`: what the package is (see [`Manifest`]);
+//! - `graphs/<id>.json`: each graph (see [`Graph`]);
+//! - `files/<sha256>/<name>`: each file the package holds, its bytes as they are;
+//! - `editor.json`: how the editor showed it: the graph edited, where each graph's view was;
+//! - whatever else other programs put there, written back as it was.
+//!
+//! Paths to files outside are written relative to the package wherever they can be (see
+//! [`crate::package::relative_path`]): a package moved with its files keeps finding them.
+//!
+//! The format is extended as glTF is: a reader passes over fields it does not know; `extras`
+//! hold what other programs keep with the package, a graph, a node or a file (kept as they
+//! are); and what a reader could not pass over is named in `extensions_required`, which a
+//! reader that does not know it refuses to read rather than lose.
 
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::io::{BufReader, BufWriter, Cursor, Read, Seek, Write};
 use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value as Json;
+use serde_json::{Map, Value as Json};
 
+use crate::archive::{self, Archive, Method, Prepared, Writer};
 use crate::graph::{Graph, NodeId};
 use crate::instance::GraphId;
-use crate::package::{GraphEntry, Package, Resource, relative_path, resolve_path};
+use crate::package::{GraphEntry, Package, Resource, ResourceKind, relative_path, resolve_path};
 
 pub const FILE_EXTENSION: &str = "brewtex";
-const FORMAT: &str = "brewed-texture-designer";
-/// 3: the formats of an Output are those of [`crate::nodes::OUTPUT_DEPTHS`] (in 2, "32 bit
-/// float" was the third, which 16 bits float is now). 4: image inputs are input values of their
-/// graphs, parameters of the nodes that use them (see [`Graph::migrate_image_inputs`]).
-const VERSION: u32 = 4;
+/// What `mimetype` holds: the media type of a package file.
+pub const MEDIA_TYPE: &str = "application/vnd.brewed-texture.package+zip";
+/// What `package.json` says it is.
+pub const FORMAT: &str = "brewed-texture-package";
+/// The version of the format: made greater only when a reader of an earlier one would read a
+/// file wrongly (what it can pass over, it does).
+pub const VERSION: u32 = 1;
+/// The extensions of the format this program reads (see the module): none yet.
+const EXTENSIONS: &[&str] = &[];
 
-/// View settings stored with a graph (not part of undo).
+const MIMETYPE: &str = "mimetype";
+const MANIFEST: &str = "package.json";
+const EDITOR: &str = "editor.json";
+/// A snapshot's (see [`crate::recovery`]): what it says of its package.
+const RECOVERY: &str = "recovery.json";
+const GRAPHS: &str = "graphs/";
+const FILES: &str = "files/";
+
+/// The most the JSON of a package or of a graph may take, and what other programs put in a
+/// package, each and in all: more is not read (it would only fill the memory).
+const MAX_JSON: u64 = 256 << 20;
+const MAX_OTHER: u64 = 64 << 20;
+const MAX_OTHERS: u64 = 256 << 20;
+
+/// Where the editor showed a graph (not part of undo).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ViewState {
+    /// The node the 2D view showed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<NodeId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pan", default, skip_serializing_if = "Option::is_none")]
     pub graph_pan: Option<[f32; 2]>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "zoom", default, skip_serializing_if = "Option::is_none")]
     pub graph_zoom: Option<f32>,
 }
 
-impl ViewState {
-    fn is_empty(&self) -> bool {
-        *self == ViewState::default()
-    }
-}
-
 /// What a snapshot of a package with unsaved changes says of the package (see
-/// [`crate::recovery`] and [`snapshot_json`]).
+/// [`crate::recovery`] and [`save_snapshot`]).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Unsaved {
@@ -54,59 +82,71 @@ pub struct Unsaved {
     pub time: u64,
 }
 
+/// What `package.json` says: what the file is, the package's graphs (their ids, names, and
+/// where each is), the files it uses (those it holds: where they are in the file, and how
+/// large), the package files its graphs use (said for other programs: the graphs say it), the
+/// id the next graph gets, the extensions of the format it uses, and what other programs keep
+/// with it.
 #[derive(Serialize, Deserialize)]
-struct FileGraph {
+struct Manifest {
+    format: String,
+    version: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    generator: String,
+    graphs: Vec<GraphItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    files: Vec<FileItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    packages: Vec<String>,
+    #[serde(default)]
+    next_graph: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    extensions_used: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    extensions_required: Vec<String>,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    extras: Map<String, Json>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct GraphItem {
     id: GraphId,
     name: String,
-    graph: Graph,
-    #[serde(default, skip_serializing_if = "ViewState::is_empty")]
-    view: ViewState,
+    entry: String,
 }
 
-#[derive(Serialize)]
-struct FileGraphOut<'a> {
-    id: GraphId,
-    name: &'a str,
-    graph: &'a Graph,
-    #[serde(skip_serializing_if = "ViewState::is_empty")]
-    view: ViewState,
+/// A file a package uses: its path (as nodes say it: `embedded:<sha256>/<name>` for a file the
+/// package holds, else where it is on disk), what it is, and of one the package holds, its
+/// entry and size.
+#[derive(Serialize, Deserialize)]
+struct FileItem {
+    path: String,
+    kind: ResourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entry: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    extras: Map<String, Json>,
 }
 
-#[derive(Deserialize)]
-struct ProjectFile {
-    #[serde(default)]
-    graphs: Vec<FileGraph>,
-    #[serde(default)]
-    resources: Vec<Resource>,
-    #[serde(default)]
-    open: Option<GraphId>,
-    /// The id the next graph gets (see [`Package::next_graph`]).
-    #[serde(default)]
-    next_graph: u64,
-    /// Version 1: the one graph, and where its view was.
-    #[serde(default)]
-    graph: Option<Graph>,
-    #[serde(default)]
-    view: ViewState,
-    /// A snapshot of unsaved changes: what it says of its package.
-    #[serde(default)]
-    unsaved: Option<Unsaved>,
-}
-
-#[derive(Serialize)]
-struct ProjectOut<'a> {
-    format: &'a str,
-    version: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    unsaved: Option<&'a Unsaved>,
-    graphs: Vec<FileGraphOut<'a>>,
-    #[serde(skip_serializing_if = "<[Resource]>::is_empty")]
-    resources: &'a [Resource],
+/// What `editor.json` says: the graph being edited, and where each graph was shown.
+#[derive(Serialize, Deserialize)]
+struct Editor {
     open: GraphId,
-    next_graph: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    views: Vec<GraphView>,
 }
 
-/// A loaded project and what was adjusted while loading it.
+#[derive(Serialize, Deserialize)]
+struct GraphView {
+    graph: GraphId,
+    #[serde(flatten)]
+    view: ViewState,
+}
+
+/// A package read, and what was adjusted while reading it.
+#[derive(Debug)]
 pub struct Loaded {
     pub package: Package,
     /// Where the view of each graph was.
@@ -114,7 +154,7 @@ pub struct Loaded {
     /// The graph that was being edited.
     pub open: GraphId,
     pub notes: Vec<String>,
-    /// What a snapshot of unsaved changes says of its package (see [`snapshot_json`]).
+    /// What a snapshot of unsaved changes says of its package (see [`save_snapshot`]).
     pub unsaved: Option<Unsaved>,
 }
 
@@ -125,132 +165,327 @@ impl Loaded {
     }
 }
 
-/// The file of `package`, which is (or will be) in `dir`: paths relative to `dir`.
-pub fn to_json(package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId, dir: Option<&Path>) -> Result<String, String> {
-    written(package, views, open, dir, None)
-}
-
-/// A snapshot of `package`, which has unsaved changes (see [`crate::recovery`]): its file, its
-/// paths as they are (the snapshot is elsewhere), and what `unsaved` says of it. Read as any
-/// file of a package is; [`Loaded::unsaved`] is what it says.
-pub fn snapshot_json(package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId, unsaved: &Unsaved) -> Result<String, String> {
-    written(package, views, open, None, Some(unsaved))
-}
-
-fn written(
-    package: &Package,
-    views: &HashMap<GraphId, ViewState>,
-    open: GraphId,
-    dir: Option<&Path>,
-    unsaved: Option<&Unsaved>,
-) -> Result<String, String> {
-    let mut package = package.clone();
-    if let Some(dir) = dir {
-        package.map_paths(|p| relative_path(p, dir));
-    }
-    // A snapshot holds the files its package holds apart (see [`crate::recovery`]): they never
-    // change, and they are written once.
-    if unsaved.is_some() {
-        for resource in &mut package.resources {
-            resource.data = None;
-        }
-    }
-    let graphs = package
-        .graphs
-        .iter()
-        .map(|g| FileGraphOut { id: g.id, name: &g.name, graph: &g.graph, view: views.get(&g.id).cloned().unwrap_or_default() })
-        .collect();
-    let file = ProjectOut {
-        format: FORMAT,
-        version: VERSION,
-        unsaved,
-        graphs,
-        resources: &package.resources,
-        open,
-        next_graph: package.next_graph(),
-    };
-    serde_json::to_string_pretty(&file).map_err(|e| e.to_string())
+/// Whether the files a package holds are written in its file, or kept apart (a snapshot's are,
+/// see [`crate::recovery`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Held {
+    In,
+    Apart,
 }
 
 /// Save `package` as the file at `path`: whatever stops the program, the system or the power
 /// meanwhile, the file is the one before or this one, whole (see [`crate::files::replace`]).
 pub fn save(path: &Path, package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId) -> Result<(), String> {
-    let json = to_json(package, views, open, path.parent())?;
-    crate::files::write_whole(path, json.as_bytes())
+    write_file(path, package, views, open, path.parent(), Held::In, None)
 }
 
-pub fn load(path: &Path) -> Result<Loaded, String> {
-    // (Read as the files packages use are: the packages a package uses are read from where it
-    // says, which could be anything.)
-    let bytes = crate::files::read_disk(&path.to_string_lossy()).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
-    // A picture, or anything else that is not text, is not a project either.
-    let text = String::from_utf8(bytes).map_err(|_| format!("This is not a {} project", crate::APP_NAME))?;
-    if text.trim().is_empty() {
-        return Err(format!("{} is empty", path.display()));
-    }
-    let name = path.file_stem().map_or_else(|| "Graph".to_string(), |s| s.to_string_lossy().to_string());
-    from_json(&text, path.parent(), &name)
+/// Save a snapshot of `package`, which has unsaved changes (see [`crate::recovery`]), as the
+/// file at `path`: its paths as they are (the snapshot is elsewhere), the files it holds kept
+/// apart, and what `unsaved` says of it.
+pub fn save_snapshot(
+    path: &Path,
+    package: &Package,
+    views: &HashMap<GraphId, ViewState>,
+    open: GraphId,
+    unsaved: &Unsaved,
+) -> Result<(), String> {
+    write_file(path, package, views, open, None, Held::Apart, Some(unsaved))
 }
 
-/// Read a project that is in `dir`: its relative paths are taken from there. `name` is what
-/// the one graph of a file of version 1 is called.
-pub fn from_json(text: &str, dir: Option<&Path>, name: &str) -> Result<Loaded, String> {
-    let json: Json = serde_json::from_str(text).map_err(|e| format!("Not a valid project file: {e}"))?;
-    let mut notes = Vec::new();
-    if json.get("format").and_then(Json::as_str) != Some(FORMAT) {
-        return Err(format!("This is not a {} project", crate::APP_NAME));
+/// The file of `package`, which is (or will be) in `dir`: paths relative to `dir`.
+pub fn to_bytes(package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId, dir: Option<&Path>) -> Result<Vec<u8>, String> {
+    write(Vec::new(), package, views, open, dir, Held::In, None)
+}
+
+fn write_file(
+    path: &Path,
+    package: &Package,
+    views: &HashMap<GraphId, ViewState>,
+    open: GraphId,
+    dir: Option<&Path>,
+    held: Held,
+    unsaved: Option<&Unsaved>,
+) -> Result<(), String> {
+    crate::files::replace(path, |beside| -> Result<(), String> {
+        let file = std::fs::File::create(beside).map_err(|e| e.to_string())?;
+        let out = write(BufWriter::new(file), package, views, open, dir, held, unsaved)?;
+        out.into_inner().map(drop).map_err(|e| e.error().to_string())
+    })
+}
+
+/// JSON as a package file writes it, which reads back as it was (else the file is not written:
+/// a file that cannot be read is worse than one not saved).
+fn json<T: Serialize + for<'de> Deserialize<'de>>(value: &T, what: &str) -> Result<Vec<u8>, String> {
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("{what} cannot be written: {e}"))?;
+    serde_json::from_slice::<T>(&bytes).map_err(|e| format!("{what} would not read back: {e}"))?;
+    Ok(bytes)
+}
+
+fn write<W: Write>(
+    out: W,
+    package: &Package,
+    views: &HashMap<GraphId, ViewState>,
+    open: GraphId,
+    dir: Option<&Path>,
+    held: Held,
+    unsaved: Option<&Unsaved>,
+) -> Result<W, String> {
+    let mut package = package.clone();
+    if let Some(dir) = dir {
+        package.map_paths(|p| relative_path(p, dir));
     }
-    let version = json.get("version").and_then(Json::as_u64).unwrap_or(0);
-    if version > VERSION as u64 {
-        notes.push(format!("The file was written by a newer version (format {version}); some data may be lost"));
-    }
-    let file: ProjectFile = serde_json::from_value(json).map_err(|e| format!("Cannot read the project: {e}"))?;
-    let mut views = HashMap::new();
-    let mut entries: Vec<GraphEntry> = if !file.graphs.is_empty() {
-        file.graphs
-            .into_iter()
-            .map(|g| {
-                views.entry(g.id).or_insert(g.view);
-                GraphEntry { id: g.id, name: g.name, graph: Arc::new(g.graph) }
-            })
-            .collect()
-    } else if let Some(graph) = file.graph {
-        views.insert(GraphId(1), file.view);
-        vec![GraphEntry { id: GraphId(1), name: name.to_string(), graph: Arc::new(graph) }]
-    } else {
-        return Err("The project has no graph".into());
+    // Each file the package holds once, at `files/<sha256>/<name>` (of the first name it has).
+    let mut entries: HashMap<String, String> = HashMap::new();
+    let files: Vec<FileItem> = package
+        .resources
+        .iter()
+        .map(|r| {
+            let entry = crate::files::embedded_parts(&r.path).map(|(hash, name)| {
+                let named = format!("{FILES}{hash}/{name}");
+                let entry = if archive::is_entry_name(&named) { named } else { format!("{FILES}{hash}/file") };
+                entries.entry(hash.to_string()).or_insert(entry).clone()
+            });
+            let size = r.data.as_ref().map(|d| d.len() as u64);
+            FileItem { path: r.path.clone(), kind: r.kind, entry, size, extras: r.extras.clone() }
+        })
+        .collect();
+    let manifest = Manifest {
+        format: FORMAT.into(),
+        version: VERSION,
+        generator: format!("{} {}", crate::APP_NAME, env!("CARGO_PKG_VERSION")),
+        graphs: package
+            .graphs
+            .iter()
+            .map(|g| GraphItem { id: g.id, name: g.name.clone(), entry: format!("{GRAPHS}{}.json", g.id.0) })
+            .collect(),
+        files,
+        packages: package.dependencies().into_iter().collect(),
+        next_graph: package.next_graph(),
+        extensions_used: Vec::new(),
+        extensions_required: Vec::new(),
+        extras: package.extras.clone(),
     };
-    for entry in &mut entries {
-        let graph = Arc::make_mut(&mut entry.graph);
-        if version < 3 {
-            for node in graph.nodes.iter_mut().filter(|n| n.kind == crate::NodeKind::OUTPUT) {
-                if let Some(slot) = node.param_mut("bit_depth")
-                    && slot.value == crate::ParamValue::Enum(2)
-                {
-                    slot.value = crate::ParamValue::Enum(crate::nodes::DEPTH_32F);
-                }
+    let editor = Editor {
+        open,
+        views: package
+            .graphs
+            .iter()
+            .filter_map(|g| views.get(&g.id).filter(|v| **v != ViewState::default()).map(|v| GraphView { graph: g.id, view: v.clone() }))
+            .collect(),
+    };
+    // The entries, in order; made ready on every core (the graphs written, what deflates
+    // deflated), then written one after the other.
+    let mut parts: Vec<(&str, Part<'_>)> = vec![
+        (MIMETYPE, Part::Bytes(Cow::Borrowed(MEDIA_TYPE.as_bytes()), Method::Stored)),
+        (MANIFEST, Part::Bytes(Cow::Owned(json(&manifest, "The package")?), Method::Deflated)),
+        (EDITOR, Part::Bytes(Cow::Owned(json(&editor, "The editor's views")?), Method::Deflated)),
+    ];
+    if let Some(unsaved) = unsaved {
+        parts.push((RECOVERY, Part::Bytes(Cow::Owned(json(unsaved, "The snapshot")?), Method::Deflated)));
+    }
+    parts.extend(package.graphs.iter().zip(&manifest.graphs).map(|(g, item)| (item.entry.as_str(), Part::Graph(g))));
+    if held == Held::In {
+        let mut written = HashSet::new();
+        for (r, item) in package.resources.iter().zip(&manifest.files) {
+            let (Some(entry), Some(bytes)) = (&item.entry, &r.data) else { continue };
+            if written.insert(entry.as_str()) {
+                // Pictures are compressed already; vector graphics and fonts deflate well.
+                let method = if r.kind == ResourceKind::Bitmap { Method::Stored } else { Method::Deflated };
+                parts.push((entry, Part::Bytes(Cow::Borrowed(bytes), method)));
             }
         }
-        if version < 4 {
-            graph.migrate_image_inputs();
-        }
-        let links_before = graph.links.len();
+    }
+    parts.extend(package.other_entries.iter().map(|(name, bytes)| (name.as_str(), Part::Bytes(Cow::Borrowed(bytes), Method::Deflated))));
+    let ready: Vec<(&str, Result<Prepared<'_>, String>)> = {
+        use rayon::prelude::*;
+        parts.into_par_iter().map(|(name, part)| (name, part.prepare())).collect()
+    };
+    let io = |e: std::io::Error| e.to_string();
+    let mut zip = Writer::new(out);
+    for (name, prepared) in ready {
+        zip.add_prepared(name, prepared?).map_err(io)?;
+    }
+    zip.finish().map_err(io)
+}
+
+/// An entry of a package file, to be made ready (see [`archive::Prepared`]).
+enum Part<'a> {
+    Bytes(Cow<'a, [u8]>, Method),
+    /// A graph, as JSON.
+    Graph(&'a GraphEntry),
+}
+
+impl<'a> Part<'a> {
+    fn prepare(self) -> Result<Prepared<'a>, String> {
+        let (bytes, method) = match self {
+            Part::Bytes(bytes, method) => (bytes, method),
+            Part::Graph(g) => (Cow::Owned(json(&*g.graph, &format!("The graph '{}'", g.name))?), Method::Deflated),
+        };
+        Prepared::new(bytes, method).map_err(|e| e.to_string())
+    }
+}
+
+/// Read the package file at `path`.
+pub fn load(path: &Path) -> Result<Loaded, String> {
+    let cannot = |e: String| format!("Cannot read {}: {e}", path.display());
+    // (A package names the packages it uses, which could be anything: a device is read forever.)
+    let meta = std::fs::metadata(path).map_err(|e| cannot(e.to_string()))?;
+    if !meta.is_file() {
+        return Err(cannot("it is not a file".into()));
+    }
+    if meta.len() == 0 {
+        return Err(format!("{} is empty", path.display()));
+    }
+    let file = std::fs::File::open(path).map_err(|e| cannot(e.to_string()))?;
+    read_from(BufReader::new(file), path.parent())
+}
+
+/// Read a package file of `bytes`, which is in `dir`: its relative paths are taken from there.
+pub fn from_bytes(bytes: &[u8], dir: Option<&Path>) -> Result<Loaded, String> {
+    read_from(Cursor::new(bytes), dir)
+}
+
+/// What a snapshot at `path` says of its package (see [`save_snapshot`]), read without reading
+/// the package.
+pub fn read_unsaved(path: &Path) -> Option<Unsaved> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = Archive::new(BufReader::new(file)).ok()?;
+    serde_json::from_slice(&archive.read(RECOVERY, MAX_JSON).ok()?).ok()
+}
+
+fn not_a_package() -> String {
+    format!("This is not a {} package", crate::APP_NAME)
+}
+
+/// Read a package file from `source`, which is in `dir`.
+pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded, String> {
+    let mut archive = Archive::new(source).map_err(|e| if e.contains("not an archive") { not_a_package() } else { e })?;
+    if archive.entry(MIMETYPE).is_some() && archive.read(MIMETYPE, 1024)? != MEDIA_TYPE.as_bytes() {
+        return Err(not_a_package());
+    }
+    if archive.entry(MANIFEST).is_none() {
+        return Err(not_a_package());
+    }
+    let manifest: Manifest =
+        serde_json::from_slice(&archive.read(MANIFEST, MAX_JSON)?).map_err(|e| format!("The package cannot be read: {e}"))?;
+    if manifest.format != FORMAT {
+        return Err(not_a_package());
+    }
+    if manifest.version > VERSION {
+        return Err(format!(
+            "The package was made by a newer version of {} (format {}): update the program to open it",
+            crate::APP_NAME,
+            manifest.version
+        ));
+    }
+    let unknown: Vec<&str> =
+        manifest.extensions_required.iter().map(String::as_str).filter(|e| !EXTENSIONS.contains(e)).collect();
+    if !unknown.is_empty() {
+        return Err(format!("The package needs what this version does not read: {}", unknown.join(", ")));
+    }
+    let mut notes = Vec::new();
+    let mut entries = Vec::new();
+    for item in &manifest.graphs {
+        let bytes = archive.read(&item.entry, MAX_JSON).map_err(|e| format!("The graph '{}' cannot be read: {e}", item.name))?;
+        let mut graph: Graph =
+            serde_json::from_slice(&bytes).map_err(|e| format!("The graph '{}' cannot be read: {e}", item.name))?;
+        let links = graph.links.len();
         graph.normalize();
-        if graph.links.len() < links_before {
-            notes.push(format!("{}: {} invalid link(s) were removed", entry.name, links_before - graph.links.len()));
+        if graph.links.len() < links {
+            notes.push(format!("{}: {} link(s) that led nowhere were removed", item.name, links - graph.links.len()));
+        }
+        entries.push(GraphEntry { id: item.id, name: item.name.clone(), graph: Arc::new(graph) });
+    }
+    if entries.is_empty() {
+        return Err("The package has no graph".into());
+    }
+    let unsaved: Option<Unsaved> = match archive.entry(RECOVERY) {
+        Some(_) => serde_json::from_slice(&archive.read(RECOVERY, MAX_JSON)?).ok(),
+        None => None,
+    };
+    let mut resources = Vec::new();
+    let mut missing = 0;
+    // (Files of the same bytes are one entry, read once.)
+    let mut read: HashMap<String, Arc<Vec<u8>>> = HashMap::new();
+    for item in manifest.files {
+        let mut data = None;
+        if let Some(entry) = item.entry.as_deref().filter(|e| e.starts_with(FILES)) {
+            match (read.get(entry), archive.entry(entry)) {
+                (Some(bytes), _) => data = Some(bytes.clone()),
+                (None, Some(_)) => match archive.read(entry, crate::files::MAX_FILE) {
+                    Ok(bytes) => {
+                        let bytes = Arc::new(bytes);
+                        read.insert(entry.to_string(), bytes.clone());
+                        data = Some(bytes);
+                    }
+                    Err(e) => notes.push(e),
+                },
+                // (A snapshot holds them apart.)
+                (None, None) if unsaved.is_none() => missing += 1,
+                (None, None) => {}
+            }
+        }
+        resources.push(Resource { path: item.path, kind: item.kind, data, extras: item.extras });
+    }
+    drop(read);
+    if missing > 0 {
+        notes.push(format!("{missing} file(s) the package holds are not in its file"));
+    }
+    // What other programs put in the package, as it is; not the folders some tools list (their
+    // entries' names make them), nor what no entry may be named (it could not be written back).
+    let ours = |name: &str| [MIMETYPE, MANIFEST, EDITOR, RECOVERY].contains(&name) || name.starts_with(GRAPHS) || name.starts_with(FILES);
+    let others: Vec<String> =
+        archive.entries().iter().map(|e| e.name.clone()).filter(|n| !ours(n) && !(n.ends_with('/') && archive::is_entry_name(n.trim_end_matches('/')))).collect();
+    let mut kept = 0;
+    let mut other_entries = Vec::new();
+    for name in others {
+        if !archive::is_entry_name(&name) {
+            notes.push(format!("Not kept: '{name}', which no entry may be named"));
+            continue;
+        }
+        match archive.read(&name, MAX_OTHER.min(MAX_OTHERS - kept)) {
+            Ok(bytes) => {
+                kept += bytes.len() as u64;
+                other_entries.push((name, Arc::new(bytes)));
+            }
+            Err(e) => notes.push(format!("Not kept: {e}")),
         }
     }
-    let mut package = Package::from_parts(entries, file.resources, file.next_graph);
+    let editor: Option<Editor> = match archive.entry(EDITOR) {
+        Some(_) => archive.read(EDITOR, MAX_JSON).ok().and_then(|b| serde_json::from_slice(&b).ok()),
+        None => None,
+    };
+    let mut package = Package::from_parts(entries, resources, manifest.next_graph);
+    package.extras = manifest.extras;
+    package.other_entries = other_entries;
     if let Some(dir) = dir {
         package.map_paths(|p| resolve_path(p, dir));
     }
-    views.retain(|id, _| package.graph(*id).is_some());
-    for (id, view) in &mut views {
-        let graph = &package.graph(*id).expect("kept above").graph;
-        view.preview = view.preview.filter(|n| graph.contains(*n));
+    let lost = package.resources.iter().filter(|r| crate::files::is_embedded(&r.path) && r.data.is_none()).count();
+    if lost > missing && unsaved.is_none() {
+        notes.push(format!("{} file(s) the package holds are not what their names say, and were left out", lost - missing));
     }
-    let open = file.open.filter(|id| package.graph(*id).is_some()).unwrap_or_else(|| package.first());
-    Ok(Loaded { package, views, open, notes, unsaved: file.unsaved })
+    let mut views = HashMap::new();
+    let mut open = package.first();
+    if let Some(editor) = editor {
+        for v in editor.views {
+            if let Some(entry) = package.graph(v.graph) {
+                let mut view = v.view;
+                view.preview = view.preview.filter(|n| entry.graph.contains(*n));
+                views.insert(v.graph, view);
+            }
+        }
+        if package.graph(editor.open).is_some() {
+            open = editor.open;
+        }
+    }
+    Ok(Loaded { package, views, open, notes, unsaved })
+}
+
+/// The entries of a package file as the format names them, for what checks it (tests).
+#[cfg(test)]
+fn entry_names(bytes: &[u8]) -> Vec<String> {
+    Archive::new(Cursor::new(bytes)).unwrap().entries().iter().map(|e| e.name.clone()).collect()
 }
 
 #[cfg(test)]
@@ -264,115 +499,169 @@ mod tests {
         (package, views, open)
     }
 
+    /// A package is read as it was written: its graphs, the files it holds and those it links
+    /// to, where its views were, the graph edited; written twice, it is the same bytes; its
+    /// entries are those the format names, `mimetype` first.
     #[test]
     fn roundtrip() {
         let (mut package, views, open) = demo();
         let half = Graph { precision: crate::Precision::Half, ..Graph::default() };
         let second = package.add_graph("Second", half);
-        let json = to_json(&package, &views, second, None).unwrap();
-        let loaded = from_json(&json, None, "x").unwrap();
+        let png = Arc::new(b"\x89PNG not really".to_vec());
+        let font = Arc::new(vec![7u8; 3000]);
+        package.resources.push(Resource::embedded("bricks.png", ResourceKind::Bitmap, png.clone()));
+        package.resources.push(Resource::embedded("C:/fonts/Шрифт.ttf", ResourceKind::Font, font.clone()));
+        package.resources.push(Resource::linked(somewhere(&["tex", "linked.png"]), ResourceKind::Bitmap));
+        let bytes = to_bytes(&package, &views, second, None).unwrap();
+        let loaded = from_bytes(&bytes, None).unwrap();
+        assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
         assert_eq!(loaded.package, package);
         assert_eq!(loaded.views[&open], views[&open]);
         assert_eq!(loaded.open, second);
+        let held: Vec<_> = loaded.package.resources.iter().filter_map(|r| r.data.clone()).collect();
+        assert_eq!(held, [png.clone(), font], "the bytes of the files it holds");
+        assert_eq!(to_bytes(&package, &views, second, None).unwrap(), bytes, "the same bytes");
+        let names = entry_names(&bytes);
+        assert_eq!(names[..3], ["mimetype", "package.json", "editor.json"]);
+        assert!(names.contains(&"graphs/1.json".to_string()) && names.contains(&"graphs/2.json".to_string()));
+        let sha = crate::files::sha256(&png);
+        assert!(names.contains(&format!("files/{sha}/bricks.png")), "{names:?}");
+        assert!(names.iter().any(|n| n.ends_with("/Шрифт.ttf")));
+        assert_eq!(names.len(), 7);
+        assert!(from_bytes(b"not a zip", None).err().unwrap().contains("not a Brewed Texture Designer package"));
+    }
+
+    /// What is not a package says so; one made by a newer version, or needing what this version
+    /// does not read, says so and is not read (rather than read wrongly and saved without it).
+    #[test]
+    fn what_is_not_a_package_says_so() {
+        let (package, views, open) = demo();
+        let bytes = to_bytes(&package, &views, open, None).unwrap();
+        let with_manifest = |edit: &dyn Fn(&mut Json)| {
+            let mut archive = Archive::new(Cursor::new(bytes.clone())).unwrap();
+            let names: Vec<String> = archive.entries().iter().map(|e| e.name.clone()).collect();
+            let mut zip = Writer::new(Vec::new());
+            for name in names {
+                let mut content = archive.read(&name, 1 << 30).unwrap();
+                if name == MANIFEST {
+                    let mut manifest: Json = serde_json::from_slice(&content).unwrap();
+                    edit(&mut manifest);
+                    content = serde_json::to_vec(&manifest).unwrap();
+                }
+                zip.add(&name, &content, Method::Deflated).unwrap();
+            }
+            from_bytes(&zip.finish().unwrap(), None)
+        };
+        assert!(with_manifest(&|_| {}).is_ok());
+        let newer = with_manifest(&|m| m["version"] = (VERSION + 1).into()).err().unwrap();
+        assert!(newer.contains("newer version"), "{newer}");
+        let needs = with_manifest(&|m| m["extensions_required"] = serde_json::json!(["x_terrain"])).err().unwrap();
+        assert!(needs.contains("x_terrain"), "{needs}");
+        assert!(with_manifest(&|m| m["extensions_used"] = serde_json::json!(["x_hint"])).is_ok(), "used, not needed: read");
+        assert!(with_manifest(&|m| m["format"] = "something-else".into()).err().unwrap().contains("not a"));
+        // Another archive.
+        let mut zip = Writer::new(Vec::new());
+        zip.add("mimetype", b"application/epub+zip", Method::Stored).unwrap();
+        zip.add("package.json", b"{}", Method::Stored).unwrap();
+        assert!(from_bytes(&zip.finish().unwrap(), None).err().unwrap().contains("not a"));
+    }
+
+    /// What other programs keep with a package, a graph, a node or a file, and the entries they
+    /// put in its file, are written back as they were.
+    #[test]
+    fn what_other_programs_keep_is_kept() {
+        let (mut package, views, open) = demo();
+        package.extras.insert("studio".into(), serde_json::json!({ "asset": "wall_03", "lod": [0, 1] }));
+        let g = Arc::make_mut(&mut package.graphs[0].graph);
+        g.extras.insert("reviewed".into(), true.into());
+        g.nodes[0].extras.insert("note".into(), "keep me".into());
+        package.resources.push(Resource::embedded("a.png", ResourceKind::Bitmap, Arc::new(vec![1, 2, 3])));
+        package.resources.last_mut().unwrap().extras.insert("source".into(), "scan 12".into());
+        package.other_entries.push(("x-studio/review.txt".into(), Arc::new(b"approved".to_vec())));
+        let loaded = from_bytes(&to_bytes(&package, &views, open, None).unwrap(), None).unwrap();
+        assert_eq!(loaded.package, package);
+        assert_eq!(loaded.package.other_entries, package.other_entries);
+        assert_eq!(loaded.package.graphs[0].graph.nodes[0].extras["note"], "keep me");
+    }
+
+    /// What some tools put in an archive that is no entry of a package, the folders they list
+    /// and names no entry may have, is not kept (the second saying so): the package is saved
+    /// all the same.
+    #[test]
+    fn folders_and_odd_names_of_other_tools_are_not_kept() {
+        let (package, views, open) = demo();
+        let bytes = to_bytes(&package, &views, open, None).unwrap();
+        // Written under names as long, then named as those tools name them.
+        let mut archive = Archive::new(Cursor::new(bytes)).unwrap();
+        let mut zip = Writer::new(Vec::new());
+        for e in archive.entries().to_vec() {
+            let content = archive.read(&e.name, 1 << 30).unwrap();
+            zip.add(&e.name, &content, Method::Stored).unwrap();
+        }
+        zip.add("x-studioX", b"", Method::Stored).unwrap();
+        zip.add("x/aa/y", b"odd", Method::Stored).unwrap();
+        zip.add("x-studio/notes.txt", b"kept", Method::Stored).unwrap();
+        let mut bytes = zip.finish().unwrap();
+        for (from, to) in [(&b"x-studioX"[..], &b"x-studio/"[..]), (b"x/aa/y", b"x/../y")] {
+            let places: Vec<usize> = bytes.windows(from.len()).enumerate().filter(|(_, w)| *w == from).map(|(i, _)| i).collect();
+            assert_eq!(places.len(), 2, "the entry and the directory name it");
+            for at in places {
+                bytes[at..at + to.len()].copy_from_slice(to);
+            }
+        }
+        let loaded = from_bytes(&bytes, None).unwrap();
+        let kept: Vec<&str> = loaded.package.other_entries.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(kept, ["x-studio/notes.txt"]);
+        assert!(loaded.notes.iter().any(|n| n.contains("'x/../y'")), "{:?}", loaded.notes);
+        let again = from_bytes(&to_bytes(&loaded.package, &loaded.views, loaded.open, None).unwrap(), None).unwrap();
+        assert_eq!(again.package.other_entries, loaded.package.other_entries);
+    }
+
+    /// Files of the same bytes, whatever their names, are one entry of the file, read once.
+    #[test]
+    fn the_same_bytes_are_held_once() {
+        let (mut package, views, open) = demo();
+        let bytes = Arc::new(b"the same picture, twice".to_vec());
+        package.resources.push(Resource::embedded("a.png", ResourceKind::Bitmap, bytes.clone()));
+        package.resources.push(Resource::embedded("b.png", ResourceKind::Bitmap, bytes.clone()));
+        let file = to_bytes(&package, &views, open, None).unwrap();
+        assert_eq!(entry_names(&file).iter().filter(|n| n.starts_with(FILES)).count(), 1);
+        let loaded = from_bytes(&file, None).unwrap();
         assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
-        assert!(from_json("{}", None, "x").is_err());
-        assert!(from_json("not json", None, "x").is_err());
+        let held: Vec<&Arc<Vec<u8>>> = loaded.package.resources.iter().filter_map(|r| r.data.as_ref()).collect();
+        assert_eq!(held.len(), 2);
+        assert!(Arc::ptr_eq(held[0], held[1]) && *held[0] == bytes);
     }
 
-    /// An Output of 32 bits float in a file of version 2 is one in this version too, where the
-    /// third format is 16 bits float; its other formats are what they were.
+    /// A file a package holds that is not what its name says (made so elsewhere) is left out,
+    /// saying so; one its file lacks is missing, saying so: the package opens either way.
     #[test]
-    fn outputs_of_version_2_keep_their_format() {
-        use crate::{NodeKind, ParamValue};
-        let mut g = Graph::default();
-        let depths = [0, 1, 2];
-        for (i, depth) in depths.iter().enumerate() {
-            let out = g.add_node(NodeKind::OUTPUT, [0.0, 200.0 * i as f32]);
-            g.node_mut(out).unwrap().param_mut("bit_depth").unwrap().value = ParamValue::Enum(*depth);
-        }
-        let package = Package::new("Old", g);
-        let json = to_json(&package, &HashMap::new(), package.first(), None).unwrap();
-        let old = json.replace(&format!("\"version\": {VERSION}"), "\"version\": 2");
-        assert_ne!(old, json);
-        let depths_of = |text: &str| -> Vec<u32> {
-            let loaded = from_json(text, None, "x").unwrap();
-            loaded.package.graphs[0].graph.nodes.iter().map(|n| n.enum_value("bit_depth")).collect()
+    fn files_that_are_not_what_they_say_are_left_out() {
+        let (mut package, views, open) = demo();
+        // (Bytes nothing in this run holds: what holds them would give them back by their name.)
+        let picture = Arc::new(format!("the picture of {:?}", std::time::SystemTime::now()).into_bytes());
+        let path = crate::files::embedded_path("a.png", &picture);
+        package.resources.push(Resource { path, kind: ResourceKind::Bitmap, data: Some(picture), extras: Map::new() });
+        let bytes = to_bytes(&package, &views, open, None).unwrap();
+        /// What an entry, by its name, becomes (none: it goes).
+        type Change<'a> = &'a dyn Fn(&str, Vec<u8>) -> Option<Vec<u8>>;
+        let rewritten = |change: Change| {
+            let mut archive = Archive::new(Cursor::new(bytes.clone())).unwrap();
+            let names: Vec<String> = archive.entries().iter().map(|e| e.name.clone()).collect();
+            let mut zip = Writer::new(Vec::new());
+            for name in names {
+                let content = archive.read(&name, 1 << 30).unwrap();
+                if let Some(content) = change(&name, content) {
+                    zip.add(&name, &content, Method::Stored).unwrap();
+                }
+            }
+            from_bytes(&zip.finish().unwrap(), None).unwrap()
         };
-        assert_eq!(depths_of(&old), [crate::nodes::DEPTH_8, crate::nodes::DEPTH_16, crate::nodes::DEPTH_32F]);
-        assert_eq!(depths_of(&json), [0, 1, 2], "this version's third format stays what it is");
-    }
-
-    /// A file of version 3: an Image Input named its input and held its kind, picture and color;
-    /// a node that used its graph had a socket for it and gave it a picture. Read now, the input
-    /// is an input value of its graph with those settings (of two Image Inputs of one name, the
-    /// upper one's), and the node has a parameter for it with the picture it gave, exposed where
-    /// something arrived, the link arriving there.
-    #[test]
-    fn image_inputs_of_version_3_are_input_values() {
-        use crate::graph::{ParamSlot, input_socket_key, param_socket_key};
-        use crate::instance::{GraphRef, Instance, Interface, Port};
-        use crate::nodes::ImageKind;
-        use crate::{NodeKind, ParamValue, Value};
-        let old_input = |g: &mut Graph, y: f32, kind: u32, picture: &str| {
-            let id = g.add_node(NodeKind::IMAGE_INPUT, [0.0, y]);
-            let node = g.node_mut(id).unwrap();
-            node.params.extend([
-                ParamSlot { key: "name".into(), value: ParamValue::Text("albedo".into()), exposed: false },
-                ParamSlot { key: "kind".into(), value: ParamValue::Enum(kind), exposed: false },
-                ParamSlot { key: "image".into(), value: ParamValue::Text(picture.into()), exposed: false },
-                ParamSlot { key: "default".into(), value: ParamValue::Color([0.1, 0.2, 0.3, 1.0]), exposed: false },
-            ]);
-            id
-        };
-        let mut tex = Graph::default();
-        let upper = old_input(&mut tex, 0.0, 1, "/own.png");
-        let lower = old_input(&mut tex, 300.0, 0, "/other.png");
-        // (Image Inputs read no input value then.)
-        for node in &mut tex.nodes {
-            node.variable = None;
-        }
-        tex.variables.clear();
-        let mut main = Graph::default();
-        let noise = main.add_node(NodeKind::NOISE, [0.0, 0.0]);
-        let ports = Interface { inputs: vec![Port { name: "albedo".into(), kind: Some(ImageKind::Color) }], ..Interface::default() };
-        let fed = main.add_instance(Instance::new(GraphRef { package: None, graph: GraphId(2), name: "Tex".into() }, ports.clone()), [0.0, 0.0]);
-        let given = main.add_instance(Instance::new(GraphRef { package: None, graph: GraphId(2), name: "Tex".into() }, ports), [0.0, 300.0]);
-        main.links.push(crate::graph::Link { from: noise, from_socket: "o:output".into(), to: fed, to_socket: input_socket_key("albedo") });
-        let mut package = Package::new("Main", main);
-        let t = package.add_graph("Tex", tex);
-        assert_eq!(t, GraphId(2));
-        let json = to_json(&package, &HashMap::new(), package.first(), None).unwrap();
-        // As version 3 wrote it: the picture the second node gave its input.
-        let mut file: Json = serde_json::from_str(&json).unwrap();
-        file["version"] = 3.into();
-        let nodes = &mut file["graphs"][0]["graph"]["nodes"];
-        let second = nodes.as_array_mut().unwrap().iter_mut().find(|n| n["id"] == given.0).unwrap();
-        second["instance"]["images"] = serde_json::json!({ "albedo": "/given.png" });
-        let loaded = from_json(&file.to_string(), None, "x").unwrap().package;
-
-        let tex = &loaded.graph(t).unwrap().graph;
-        let var = tex.variable("albedo").expect("an input value");
-        let image = var.image.as_ref().expect("an image input");
-        assert_eq!((image.kind, image.picture.as_str(), image.default.as_str()), (ImageKind::Color, "/own.png", "/own.png"));
-        assert_eq!(var.value, Value::Color([0.1, 0.2, 0.3, 1.0]));
-        assert_eq!(tex.variables.len(), 1, "one input of the name");
-        for id in [upper, lower] {
-            let node = tex.node(id).unwrap();
-            assert_eq!(node.variable.as_deref(), Some("albedo"));
-            assert!(node.param("name").is_none() && node.param("image").is_none());
-        }
-        let main = &loaded.graph(loaded.first()).unwrap().graph;
-        let (fed, given) = (main.node(fed).unwrap(), main.node(given).unwrap());
-        assert!(fed.is_exposed("albedo"), "something arrived: exposed");
-        assert_eq!(main.link_into(fed.id, &param_socket_key("albedo")).map(|l| l.from), Some(noise));
-        assert!(main.input_socket(fed.id, &param_socket_key("albedo")).is_some());
-        assert!(!given.is_exposed("albedo"));
-        assert_eq!(given.value("albedo"), Some(&ParamValue::Text("/given.png".into())));
-        assert!(given.instance.as_ref().unwrap().interface.inputs.is_empty());
-        // Written again, it is this version's file, read as it is.
-        let again = to_json(&loaded, &HashMap::new(), loaded.first(), None).unwrap();
-        assert!(!again.contains("\"images\""));
-        assert_eq!(from_json(&again, None, "x").unwrap().package, loaded);
+        let forged = rewritten(&|name, content| Some(if name.ends_with("a.png") { b"another".to_vec() } else { content }));
+        assert!(forged.package.resources.iter().any(|r| r.path.ends_with("a.png") && r.data.is_none()));
+        assert!(forged.notes.iter().any(|n| n.contains("not what their names say")), "{:?}", forged.notes);
+        let lacking = rewritten(&|name, content| (!name.ends_with("a.png")).then_some(content));
+        assert!(lacking.notes.iter().any(|n| n.contains("not in its file")), "{:?}", lacking.notes);
     }
 
     /// A graph that is gone leaves its id behind: a new graph never takes it, in a file saved
@@ -383,23 +672,11 @@ mod tests {
         let mut package = Package::new("Main", Graph::default());
         let gone = package.add_graph("Gone", Graph::default());
         PackageEdit::RemoveGraph(gone).apply(&mut package).unwrap();
-        let json = to_json(&package, &HashMap::new(), package.first(), None).unwrap();
-        let mut loaded = from_json(&json, None, "x").unwrap().package;
+        let bytes = to_bytes(&package, &HashMap::new(), package.first(), None).unwrap();
+        let mut loaded = from_bytes(&bytes, None).unwrap().package;
         assert_eq!(loaded, package);
         let new = loaded.add_graph("New", Graph::default());
         assert!(new.0 > gone.0, "{new:?} after {gone:?}");
-    }
-
-    /// A file of version 1 is a package of its one graph, named after the file.
-    #[test]
-    fn a_file_of_one_graph() {
-        let (graph, preview) = crate::demo::graph();
-        let v1 = serde_json::json!({ "format": FORMAT, "version": 1, "graph": graph, "view": { "preview": preview } });
-        let loaded = from_json(&v1.to_string(), None, "wall").unwrap();
-        assert_eq!(loaded.package.graphs.len(), 1);
-        assert_eq!(loaded.package.graphs[0].name, "wall");
-        assert_eq!(*loaded.package.graphs[0].graph, graph);
-        assert_eq!(loaded.view().preview, preview);
     }
 
     /// What is wrong with a graph, if anything: what the editor and the engine count on.
@@ -511,31 +788,50 @@ mod tests {
         package
     }
 
-    /// Files and pastes mangled at random load whole, or say why they do not.
+    /// Files and pastes mangled at random load whole, or say why they do not: what a package's
+    /// file and each of its graphs say, and the clipboard.
     #[test]
     fn mangled_files_and_pastes_come_out_whole() {
         use crate::graph::Clipboard;
         let package = a_package();
         let demo = Graph::clone(&package.graphs[0].graph);
-        let file = to_json(&package, &HashMap::new(), package.first(), None).unwrap();
-        let file: Json = serde_json::from_str(&file).unwrap();
+        let bytes = to_bytes(&package, &HashMap::new(), package.first(), None).unwrap();
+        let mut archive = Archive::new(Cursor::new(bytes)).unwrap();
+        let names: Vec<String> = archive.entries().iter().map(|e| e.name.clone()).collect();
+        let contents: Vec<(String, Vec<u8>)> = names.into_iter().map(|n| (n.clone(), archive.read(&n, 1 << 30).unwrap())).collect();
+        let jsons: Vec<(usize, Json)> = contents
+            .iter()
+            .enumerate()
+            .filter(|(_, (n, _))| n.ends_with(".json"))
+            .map(|(i, (_, c))| (i, serde_json::from_slice(c).unwrap()))
+            .collect();
         let ids: Vec<_> = demo.nodes.iter().map(|n| n.id).collect();
         let clip = demo.copy_nodes(&ids).to_text();
         let clip: Json = serde_json::from_str(clip.strip_prefix(Clipboard::MAGIC).unwrap()).unwrap();
         let mut seed = 1u32;
         let (mut loaded, mut pasted) = (0, 0);
         for round in 0..4000 {
-            let (mut f, mut c) = (file.clone(), clip.clone());
+            let mut files = jsons.clone();
+            let mut c = clip.clone();
             // A few parts of each.
             for _ in 0..1 + round % 3 {
                 seed = crate::expr::builtins::pcg_hash(seed);
-                let mut at = seed as usize % parts(&f);
-                mangle(&mut f, &mut at, (seed >> 20) as usize);
+                let which = seed as usize % files.len();
+                let f = &mut files[which].1;
+                let mut at = (seed >> 8) as usize % parts(f);
+                mangle(f, &mut at, (seed >> 20) as usize);
                 seed = crate::expr::builtins::pcg_hash(seed);
                 let mut at = seed as usize % parts(&c);
                 mangle(&mut c, &mut at, (seed >> 20) as usize);
             }
-            if let Ok(l) = from_json(&f.to_string(), None, "x") {
+            let mut zip = Writer::new(Vec::new());
+            for (i, (name, content)) in contents.iter().enumerate() {
+                match files.iter().find(|(k, _)| *k == i) {
+                    Some((_, json)) => zip.add(name, json.to_string().as_bytes(), Method::Stored).unwrap(),
+                    None => zip.add(name, content, Method::Stored).unwrap(),
+                }
+            }
+            if let Ok(l) = from_bytes(&zip.finish().unwrap(), None) {
                 loaded += 1;
                 let p = &l.package;
                 assert!(!p.graphs.is_empty(), "file of round {round}: no graph");
@@ -553,8 +849,9 @@ mod tests {
                 whole(&g).unwrap_or_else(|e| panic!("paste of round {round}: {e}"));
             }
         }
-        // Most survive their mangling, so what is checked is graphs, not refusals.
-        assert!(loaded > 1000 && pasted > 1000, "{loaded} files and {pasted} pastes of 4000");
+        // Many survive their mangling, so what is checked is graphs, not refusals. (A value made
+        // no value at all refuses its node, and a paste of it: rather than set it back unsaid.)
+        assert!(loaded > 1000 && pasted > 500, "{loaded} files and {pasted} pastes of 4000");
     }
 
     #[test]
@@ -572,8 +869,9 @@ mod tests {
             p
         };
         save(&path, &package, &HashMap::new(), package.first()).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("\"textures/a.png\""), "relative: {text}");
+        let mut archive = Archive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let manifest = String::from_utf8(archive.read(MANIFEST, 1 << 20).unwrap()).unwrap();
+        assert!(manifest.contains("\"textures/a.png\""), "relative: {manifest}");
         assert_eq!(load(&path).unwrap().package, package);
         let moved = dir.join("moved");
         std::fs::create_dir_all(moved.join("textures")).unwrap();
@@ -581,14 +879,34 @@ mod tests {
         let there = load(&moved.join("a.brewtex")).unwrap().package;
         let found: Vec<&str> = there.files().map(|(.., p)| p).collect();
         assert_eq!(found, [moved.join("textures").join("a.png").display().to_string()]);
-        // What is not a project says so.
+        // What is not a package says so.
         let not = |bytes: &[u8]| {
             std::fs::write(&path, bytes).unwrap();
             load(&path).map(|_| ()).unwrap_err()
         };
-        assert_eq!(not(b"\x89PNG\r\n\x1a\n\xff\xfe"), "This is not a Brewed Texture Designer project");
+        assert_eq!(not(b"\x89PNG\r\n\x1a\n\xff\xfe"), "This is not a Brewed Texture Designer package");
         assert!(not(b"").ends_with("a.brewtex is empty"));
-        assert!(not(b" \n").ends_with("a.brewtex is empty"));
+        assert!(load(&dir).unwrap_err().contains("not a file"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A snapshot holds its package and what it says of it, not the files the package holds
+    /// (kept apart), and is read as a package all the same.
+    #[test]
+    fn snapshots_hold_what_they_say() {
+        let (mut package, views, open) = demo();
+        package.resources.push(Resource::embedded("a.png", ResourceKind::Bitmap, Arc::new(vec![9; 100])));
+        let dir = std::env::temp_dir().join(format!("brewed_snapshot_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("1.brewtex");
+        let unsaved = Unsaved { path: Some("C:/work/a.brewtex".into()), title: "a.brewtex".into(), time: 42 };
+        save_snapshot(&file, &package, &views, open, &unsaved).unwrap();
+        assert_eq!(read_unsaved(&file), Some(unsaved.clone()));
+        let names = entry_names(&std::fs::read(&file).unwrap());
+        assert!(names.contains(&RECOVERY.to_string()) && !names.iter().any(|n| n.starts_with(FILES)), "{names:?}");
+        let loaded = load(&file).unwrap();
+        assert_eq!(loaded.unsaved, Some(unsaved));
+        assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

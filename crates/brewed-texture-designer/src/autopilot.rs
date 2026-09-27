@@ -354,7 +354,7 @@ impl Autopilot {
 // ---------------------------------------------------------------------------- the files
 
 /// The files the scenes use: pictures for Bitmap nodes (good ones of odd sizes and depths,
-/// and broken ones), broken graphs, and the folder exports go to.
+/// and broken ones), broken packages, and the folder exports go to.
 fn make_files(folder: &Path) -> Result<(), String> {
     let e = |e: image::ImageError| e.to_string();
     image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255])).save(folder.join("one_pixel.png")).map_err(e)?;
@@ -387,13 +387,30 @@ fn make_files(folder: &Path) -> Result<(), String> {
     write("broken.png", b"\x89PNG\r\n\x1a\nnot really")?;
     write("empty.png", b"")?;
     write("text.png", b"just some text in a file called a picture")?;
-    write("broken.brewtex", b"{ \"format\": \"brewed\", \"graph\": [1, 2, ")?;
+    // Packages cut short, damaged (a byte of a graph changed: its CRC-32 says so), of another
+    // program, and not archives at all.
+    let (demo, _) = brewed_texture_core::demo::package();
+    let whole = brewed_texture_core::project::to_bytes(&demo, &Default::default(), demo.first(), None)?;
+    write("broken.brewtex", &whole[..whole.len() / 2])?;
+    let mut damaged = whole.clone();
+    let at = damaged.len() / 2;
+    damaged[at] ^= 0x55;
+    write("damaged.brewtex", &damaged)?;
+    let mut zip = brewed_texture_core::archive::Writer::new(Vec::new());
+    zip.add("hello.txt", b"world", brewed_texture_core::archive::Method::Deflated).map_err(|e| e.to_string())?;
+    write("other.brewtex", &zip.finish().map_err(|e| e.to_string())?)?;
     write("empty.brewtex", b"")?;
-    write("other.brewtex", b"{ \"hello\": \"world\" }")?;
+    write("text.brewtex", b"{ \"format\": \"brewed-texture-package\", \"graphs\": [1, 2, ")?;
     std::fs::create_dir_all(folder.join("export")).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------- the scenes
+
+/// The files in `folder`; else why they cannot be listed (a folder an export was to fill that is
+/// not there is found wanting, not passed over).
+fn files_in(folder: &Path) -> Result<Vec<PathBuf>, String> {
+    Ok(std::fs::read_dir(folder).map_err(|e| format!("{}: {e}", folder.display()))?.flatten().map(|e| e.path()).collect())
+}
 
 fn edit(e: Edit) -> Step {
     Step::Do(Message::Edit(e))
@@ -815,9 +832,13 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                     Some(vec![
                         open("broken.brewtex"),
                         Step::Wait,
+                        open("damaged.brewtex"),
+                        Step::Wait,
                         open("empty.brewtex"),
                         Step::Wait,
                         open("other.brewtex"),
+                        Step::Wait,
+                        open("text.brewtex"),
                         Step::Wait,
                         open("big.png"),
                         Step::Wait,
@@ -875,8 +896,10 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                     ]);
                     let wanted = outputs.len();
                     steps.push(Step::Check(Box::new(move |_: &App| {
-                        let files: Vec<PathBuf> =
-                            std::fs::read_dir(&folder).ok()?.flatten().map(|e| e.path()).collect();
+                        let files = match files_in(&folder) {
+                            Ok(files) => files,
+                            Err(e) => return Some(e),
+                        };
                         if files.len() != wanted {
                             return Some(format!(
                                 "{} files exported to {}, not {wanted}",
@@ -1386,7 +1409,10 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                 Step::Wait,
                 Step::Note(format!("outputs called {names:?}")),
                 Step::Check(Box::new(move |_: &App| {
-                    let files: Vec<PathBuf> = std::fs::read_dir(&folder).ok()?.flatten().map(|e| e.path()).collect();
+                    let files = match files_in(&folder) {
+                        Ok(files) => files,
+                        Err(e) => return Some(e),
+                    };
                     if files.len() != wanted {
                         let names: Vec<_> = files.iter().filter_map(|f| f.file_name()).collect();
                         return Some(format!("{} files of {wanted} exported: {names:?}", files.len()));
@@ -1470,7 +1496,10 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                 Step::Wait,
                 Step::Note("exported at 8192".into()),
                 Step::Check(Box::new(move |_: &App| {
-                    let files: Vec<PathBuf> = std::fs::read_dir(&folder).ok()?.flatten().map(|e| e.path()).collect();
+                    let files = match files_in(&folder) {
+                        Ok(files) => files,
+                        Err(e) => return Some(e),
+                    };
                     if files.len() != wanted {
                         return Some(format!("{} files exported at 8192, not {wanted}", files.len()));
                     }
@@ -1492,6 +1521,8 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
     let packages = folder.join("packages");
     let _ = std::fs::create_dir_all(packages.join("moved"));
     let mut stage = 0;
+    /// A stage past the last: the scene is over.
+    const OVER: u32 = 1000;
     scenes.push(Scene {
         name: "packages and graphs used as nodes",
         next: Box::new(move |app: &App, dice: &mut Dice| {
@@ -1503,11 +1534,20 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                 app.packages().into_iter().map(|(key, _)| Step::Do(Message::Proceed(PendingAction::Close(key)))).collect()
             };
             let instance = |app: &App| app.graph().nodes.iter().find(|n| n.instance.is_some()).map(|n| n.id);
+            // What was to be there is not: said, and the scene is over.
+            let lost = |what: &'static str| Some(vec![Step::Check(Box::new(move |_: &App| Some(what.to_string())))]);
             match stage {
                 1 => {
                     let _ = std::fs::remove_file(&moved);
-                    let kinds = [NodeKind::BLEND, NodeKind::LEVELS, NodeKind::BLUR];
-                    let ids: Vec<NodeId> = app.graph().nodes.iter().filter(|n| kinds.contains(&n.kind)).map(|n| n.id).collect();
+                    // A chain of the demo: the Levels, what arrives at it and where it goes.
+                    let g = app.graph();
+                    let Some(levels) = g.nodes_of(NodeKind::LEVELS).next().map(|n| n.id) else {
+                        stage = OVER;
+                        return lost("the demo has no Levels");
+                    };
+                    let before = g.link_into(levels, "i:input").map(|l| l.from);
+                    let after = g.links.iter().find(|l| l.from == levels).map(|l| l.to);
+                    let ids: Vec<NodeId> = [before, Some(levels), after].into_iter().flatten().collect();
                     Some(vec![
                         Step::Do(Message::SavePicked(Some(wall))),
                         Step::Do(Message::Graph(GraphMessage::SelectBox { ids, additive: false })),
@@ -1515,7 +1555,9 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                         Step::Wait,
                         Step::Note("nodes made a graph of their own".into()),
                         Step::Check(Box::new(|app: &App| {
-                            let used = app.graph().nodes.iter().find(|n| n.instance.is_some())?;
+                            let Some(used) = app.graph().nodes.iter().find(|n| n.instance.is_some()) else {
+                                return Some(format!("no graph made of the selection: {:?}", app.ui.status.as_ref().map(|s| &s.text)));
+                            };
                             let errors = app.eval.node(used.id).map(|e| e.errors.clone()).unwrap_or_default();
                             (app.doc.package().graphs.len() != 2 || !errors.is_empty() || !app.res.inner.is_empty())
                                 .then(|| format!("made a graph of the selection: {} graphs, {errors:?}, {:?}", app.doc.package().graphs.len(), app.res.inner))
@@ -1524,7 +1566,10 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                 }
                 2 => {
                     // Its values dragged, as the properties drag them.
-                    let id = instance(app)?;
+                    let Some(id) = instance(app) else {
+                        stage = OVER;
+                        return lost("the graph made of the selection is not used in its place");
+                    };
                     let node = app.graph().node(id)?;
                     let mut steps = Vec::new();
                     for pd in node.param_defs() {
@@ -1564,7 +1609,10 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                     ])
                 }
                 5 => {
-                    let id = instance(app)?;
+                    let Some(id) = instance(app) else {
+                        stage = OVER;
+                        return lost("the demo dropped on another package is not a node of it");
+                    };
                     Some(vec![
                         preview(id),
                         Step::Wait,
@@ -1582,7 +1630,10 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                     Some(steps)
                 }
                 7 => {
-                    let id = instance(app)?;
+                    let Some(id) = instance(app) else {
+                        stage = OVER;
+                        return lost("opened again, the package has no node that uses the demo");
+                    };
                     Some(vec![
                         Step::Check(Box::new(|app: &App| app.ui.dialog.as_ref().map(|d| format!("opened again, it asked {d:?}")))),
                         Step::Do(Message::OpenReference(id)),
@@ -1614,7 +1665,9 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                         Step::Wait,
                         Step::Note("found where it was moved".into()),
                         Step::Check(Box::new(|app: &App| {
-                            let id = app.graph().nodes.iter().find(|n| n.instance.is_some())?.id;
+                            let Some(id) = app.graph().nodes.iter().find(|n| n.instance.is_some()).map(|n| n.id) else {
+                                return Some("found again, the package has no node that uses the demo".into());
+                            };
                             let errors = app.eval.node(id).map(|e| e.errors.clone()).unwrap_or_default();
                             (app.ui.dialog.is_some() || !errors.is_empty()).then(|| format!("found again: {:?}, {errors:?}", app.ui.dialog))
                         })),

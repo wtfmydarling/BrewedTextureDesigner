@@ -1,0 +1,289 @@
+# The package format (`.brewtex`), version 1
+
+A package is what Brewed Texture Designer saves: any number of graphs, the files they use
+(pictures, vector graphics, fonts) and how the editor last showed them, in one file. The file can
+be copied, mailed or put in version control on its own: files the package *holds* travel inside
+it, and files it *links to* are named relative to it wherever they can be.
+
+The format is meant to be read and written by other programs too: an asset pipeline that lists
+the graphs of a package and the textures they export, a tool that pulls the pictures out, another
+editor. It is a ZIP archive of JSON documents and files, so any language reads it with the
+tools it already has, and its rules for growing are those of glTF: what a reader does not know,
+it passes over; what it must not pass over, it is told about.
+
+The reference implementation is `crates/brewed-texture-core` (`project.rs` for the package,
+`archive.rs` for the ZIP subset, `graph.rs` for graphs).
+
+## At a glance
+
+```
+walls.brewtex                          a ZIP archive
+├── mimetype                           application/vnd.brewed-texture.package+zip (first, stored)
+├── package.json                       the manifest: graphs, files, dependencies
+├── editor.json                        which graph was open, where each view was
+├── graphs/1.json                      a graph each, named in the manifest
+├── graphs/4.json
+├── files/9f86d081…0f00a08/bricks.png  a file the package holds, named by its SHA-256
+└── x-studio/review.txt                what another program keeps with the package
+```
+
+Reading a package with Python, say:
+
+```python
+import hashlib, json, zipfile
+
+with zipfile.ZipFile("walls.brewtex") as z:
+    manifest = json.loads(z.read("package.json"))
+    assert manifest["format"] == "brewed-texture-package" and manifest["version"] <= 1
+    for graph in manifest["graphs"]:
+        g = json.loads(z.read(graph["entry"]))
+        outputs = [n for n in g["nodes"] if n["type"] == "output"]
+        print(graph["name"], len(g["nodes"]), "nodes,", len(outputs), "outputs")
+    for f in manifest.get("files", []):
+        if "entry" in f:                      # held by the package
+            data = z.read(f["entry"])
+            assert hashlib.sha256(data).hexdigest() == f["path"].split(":")[1].split("/")[0]
+```
+
+## The archive
+
+A package file is a ZIP archive as PKWARE's APPNOTE (6.3) describes it, within these limits:
+
+- Entries are **stored** (method 0) or **deflated** (method 8); nothing is encrypted; the archive
+  is one part (not split over disks).
+- **ZIP64** records are allowed, and needed wherever a size, an offset or the number of entries
+  goes past what the classic fields hold. A reader takes them where a classic field is full
+  (`0xFFFF`, `0xFFFFFFFF`), as the specification says.
+- Sizes and CRC-32s may follow an entry in a data descriptor; a reader takes them from the
+  central directory.
+- Entry names are UTF-8 (general purpose bit 11 says so where a name is more than ASCII) and
+  separate their parts by `/`. No part is empty, `.` or `..`; no name holds `\`, `:` or NUL;
+  no two entries have the same name.
+
+The first entry is **`mimetype`**, stored, without an extra field: its bytes,
+`application/vnd.brewed-texture.package+zip` (no line break), are at offset 38 of the file,
+where a program that tells files by their first bytes finds them (as it finds those of EPUB and
+OpenDocument files). A reader should not require it (a package zipped again by another tool may
+have it elsewhere, deflated or not at all), but when it is there, it holds exactly that.
+
+Brewed Texture Designer writes every entry's sizes and CRC-32 before its bytes, gives every entry
+the time 1980-01-01 00:00 and the attributes `rw-r--r--`, and writes the entries in a fixed order
+(`mimetype`, `package.json`, `editor.json`, the graphs, the files, other entries): the same
+package is the same bytes whenever it is saved, and differences in version control are
+differences of the package. Other writers need not do so.
+
+## `package.json`
+
+What the package is. A JSON object:
+
+| Field | Type | |
+|---|---|---|
+| `format` | string | Always `"brewed-texture-package"`. |
+| `version` | integer | The version of the format: `1`. |
+| `generator` | string | What wrote the file, e.g. `"Brewed Texture Designer 0.2.0"`. Optional. |
+| `graphs` | array | The graphs, in the order the package lists them: at least one (below). |
+| `files` | array | The files the package uses (below). Optional. |
+| `packages` | array of strings | The package files whose graphs its graphs use, relative to it where they can be. Said for other programs: the graphs say it too (see `uses`). Optional. |
+| `next_graph` | integer | The id the next graph made gets: above every id a graph of the package has had, so a graph taken out never gives its id to another. Optional. |
+| `extensions_used` | array of strings | The extensions of the format the package uses. Optional. |
+| `extensions_required` | array of strings | Those of them a reader must know to read the package. Optional. |
+| `extras` | object | What other programs keep with the package. Optional. |
+
+A graph:
+
+| Field | Type | |
+|---|---|---|
+| `id` | integer | Its id in the package, from 1: what nodes that use it find it by. It stays the same when the graph is renamed. |
+| `name` | string | Its name, its own in the package. |
+| `entry` | string | The entry that holds it: `graphs/<id>.json`. |
+
+A file:
+
+| Field | Type | |
+|---|---|---|
+| `path` | string | How nodes name it (see *Paths*): `embedded:<sha256>/<name>` for a file the package holds, else where it is on disk. |
+| `kind` | string | `bitmap` (a picture, read by a Bitmap), `svg` (vector graphics, read by an SVG node) or `font` (read by a Text node). |
+| `entry` | string | The entry that holds its bytes, for a file the package holds: `files/<sha256>/<name>`. |
+| `size` | integer | How many bytes it holds, for a file the package holds. |
+| `extras` | object | What other programs keep with the file. Optional. |
+
+```json
+{
+  "format": "brewed-texture-package",
+  "version": 1,
+  "generator": "Brewed Texture Designer 0.2.0",
+  "graphs": [
+    { "id": 1, "name": "Brick Wall", "entry": "graphs/1.json" },
+    { "id": 4, "name": "Mortar", "entry": "graphs/4.json" }
+  ],
+  "files": [
+    {
+      "path": "embedded:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08/bricks.png",
+      "kind": "bitmap",
+      "entry": "files/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08/bricks.png",
+      "size": 48213
+    },
+    { "path": "../fonts/Inter.ttf", "kind": "font" }
+  ],
+  "packages": ["../library/stone.brewtex"],
+  "next_graph": 5
+}
+```
+
+## Files the package holds
+
+Each file the package holds is one entry, `files/<sha256>/<name>`: its bytes as they are, the
+SHA-256 of them in 64 small hexadecimal digits (as `sha256sum` writes it) and the file name it
+came with. Pictures are stored (they are compressed already); vector graphics and fonts are
+deflated.
+
+Nodes name such a file `embedded:<sha256>/<name>`. The name says the bytes: the same name is
+the same file in any package, a node copied into another package brings its file along, and
+files of the same bytes are held once (the entry of the first name). A reader checks the hash:
+bytes that are not what their name says are not taken (the package opens, the file is missing,
+and the reader says so).
+
+## Paths
+
+A file or a package the package links to is named where it is, relative to the package's file
+wherever the two share a root (`textures/bricks.png`, `../library/stone.brewtex`), with `/`
+between the parts on every system; as an absolute path where they do not (another drive on
+Windows). A reader takes a relative path from the folder the package is in. A path is never an
+`embedded:` name, and an `embedded:` name is never a path.
+
+## Graphs
+
+`graphs/<id>.json` holds one graph, a JSON object:
+
+| Field | Type | |
+|---|---|---|
+| `resolution` | `[width, height]` | The size of its images, 16 to 8192 each. |
+| `precision` | string | What its images are kept in: `unorm8`, `float16` or `float32`. Optional: `float16`. |
+| `nodes` | array | Its nodes (below). |
+| `links` | array | Its links (below). |
+| `input_values` | array | Its input values (below). Optional. |
+| `comments` | array | Frames drawn around groups of nodes (below). Optional. |
+| `next_id` | integer | The id the next node or comment gets: above every id of the graph. |
+| `extras` | object | What other programs keep with the graph. Optional. |
+
+Ids of nodes and comments are integers from 1, below 2<sup>48</sup>, each its own in the graph
+(nodes and comments share them). A reader gives ids of 2<sup>48</sup> and above new ones, as it
+holds a resolution to 16…8192.
+
+### Nodes
+
+| Field | Type | |
+|---|---|---|
+| `id` | integer | Its id in the graph. |
+| `type` | string | What it is: `blur`, `tile_generator`, `output`… (see *Node types*). |
+| `position` | `[x, y]` | Where it is in the graph view, in its units (±10<sup>7</sup> at most). |
+| `params` | object | Its parameters by key, in their order, each a value (below). |
+| `exposed` | array of strings | The keys of the parameters exposed as sockets, which links may drive. Optional. |
+| `input_value` | string | The input value of the graph an Input node reads (`float_input`, `image_input`…). Optional. |
+| `locals` | object | The values of the variables of an expression (Math, Pixel Math) that nothing is linked to, by name. Optional. |
+| `bypass` | bool | The node passes its first input through as it is. Optional: `false`. |
+| `uses` | object | The graph a node of type `graph_instance` makes (below). |
+| `extras` | object | What other programs keep with the node. Optional. |
+
+A value says its type: `{"float": 0.5}`, `{"int": 4}`, `{"bool": true}`, `{"vec2": [0.5, 1.0]}`,
+`{"color": [r, g, b, a]}` (straight, not premultiplied: the values an image holds), `{"text": "…"}` (text, an
+expression, or a file: see *Paths*), `{"gradient": {…}}`, `{"curve": {…}}`, or
+`{"choice": "<id>"}`: one of the options of a choice, by its id (`{"choice": "directx"}`), never
+by its place in a list.
+
+A gradient is `{"stops": [{"pos": 0.0, "color": [r, g, b, a]}, …], "interpolation": "linear"}`
+(`linear`, `smooth` or `constant`); a curve, `{"points": [[x, y], …]}`, from 0 to 1 both.
+
+A node that uses a graph (`graph_instance`) says which in `uses`, and what the graph was as a
+node when it was saved, so its sockets and values stay while the graph cannot be found:
+
+| Field | Type | |
+|---|---|---|
+| `package` | string | The package file the graph is in (see *Paths*). Not there: this package. |
+| `graph` | integer | The graph's id in that package. |
+| `name` | string | Its name when the node last saw it: what the graph is found by if its package has no graph of that id any more. |
+| `interface` | object | Its `outputs` (`[{"name": …}]`, one for each name of its Output nodes) and its `params`: its input values (below, with a `label` each), which are the node's parameters. |
+
+### Links
+
+`{"from": 3, "from_socket": "o:value", "to": 7, "to_socket": "p:x_amount"}`: from an output of
+one node to an input of another. At most one link arrives at an input. Sockets are named by what
+they are:
+
+| Socket | |
+|---|---|
+| `o:<key>` | An output of the node: of its type (`o:output`), or, of a graph used as a node, an Output of that graph by its name. |
+| `i:<key>` | An image input of the node type (`i:input`, `i:mask`…). |
+| `p:<key>` | A parameter exposed as a socket; of a graph used as a node, an input value of that graph. |
+| `v:<name>` | A variable of the expression of a Math or Pixel Math node. |
+
+### Input values
+
+What a graph takes from outside: shared by its Input nodes of the name, and the parameters of a
+node that uses the graph.
+
+| Field | Type | |
+|---|---|---|
+| `name` | string | Its name, its own in the graph (what Input nodes read). |
+| `type` | string | `float`, `int`, `bool`, `vec2`, `color` or `image`. |
+| `value`, `default` | value | Its value and its value by default (for an image, its color while it has no picture). |
+| `min`, `max` | value | The range of its slider. |
+| `description` | string | Optional. |
+| `image` | object | For an image: `{"kind": "gray" or "color", "picture": <file>, "default": <file>}`: what it takes, its picture and its picture by default (see *Paths*; empty: none). |
+
+### Comments
+
+`{"id": 27, "text": "The shape of the bricks", "position": [x, y], "size": [w, h], "color": [r, g, b, a]}`
+
+## `editor.json`
+
+How the editor showed the package (optional: a package without it opens at its first graph):
+
+```json
+{ "open": 1, "views": [{ "graph": 1, "preview": 22, "pan": [120.0, -40.0], "zoom": 0.8 }] }
+```
+
+`open` is the graph being edited; each view is where a graph's view was (`pan`, `zoom`) and the
+node its 2D view showed (`preview`), each optional.
+
+## Growing the format
+
+- A reader **passes over** what it does not know: a field, an entry, a parameter of a node that
+  its version of the node does not have.
+- `extras` objects (of the package, a file, a graph, a node) hold what other programs keep: a
+  program that does not know them writes them back as they were. So are the entries of the
+  archive outside `mimetype`, `package.json`, `editor.json`, `recovery.json`, `graphs/` and
+  `files/`: Brewed Texture Designer writes them back as they were (not the folders some tools
+  list, which the names of their entries make).
+- An **extension** is named in `extensions_used`, and in `extensions_required` if a reader that
+  does not know it would read the package wrongly: such a reader refuses the package instead of
+  reading it wrongly and saving it without what it did not know. Names of extensions are
+  prefixed by who made them (`studio_terrain`). This version knows none.
+- **`version`** grows only when a reader of the version before would read a file wrongly. A
+  reader refuses a package of a version above its own.
+- A node of a **type** a reader does not know, or a choice of an **option** it does not know
+  (made by a newer version of the program), makes it refuse the package, saying which: what it
+  cannot read it would lose.
+
+### Node types
+
+The node types, their sockets, their parameters with the types of their values, and the ids of
+the options of their choices are listed in `crates/brewed-texture-core/tests/fixtures/nodes.txt`.
+A test sees that everything listed there stays: a name in a file keeps meaning what it meant
+(things are added, never renamed or taken out).
+
+## Snapshots
+
+A snapshot is what the program keeps of a package with unsaved changes, to offer it back after a
+crash (`<settings>/Recovery/<session>/<n>.brewtex`). It is a package file with one more entry,
+`recovery.json` (`{"path": <file it is saved as, if it is>, "title": …, "time": <seconds since
+1970>}`), whose paths are as they are in memory (absolute), and whose files are kept beside it
+(`<sha256>.held`), once for all the snapshots of a session, instead of in it.
+
+## Limits of the reader
+
+Brewed Texture Designer reads packages of at most 100 000 entries, with a directory of at most
+64 MB; `package.json`, `editor.json` and each graph of at most 256 MB; each file a package holds
+of at most 2 GB; and other programs' entries of at most 64 MB each, 256 MB in all. An entry is
+read as far as it may be, never to more than it says it holds, and is checked by its CRC-32: an
+archive that says it is small and unpacks to gigabytes is refused, not read.

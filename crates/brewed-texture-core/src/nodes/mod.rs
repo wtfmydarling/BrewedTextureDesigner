@@ -78,6 +78,7 @@ impl Category {
 /// What an image is, as in Substance Designer: grayscale (one channel, half the memory of
 /// a color image) or color (red, green, blue and alpha).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ImageKind {
     Gray,
     Color,
@@ -184,9 +185,12 @@ pub enum ParamKind {
     Color {
         default: [f32; 4],
     },
+    /// One of `options` (what the properties call them), by its place. A file says an option
+    /// by its id, at the same place of `ids` (see [`choice`]).
     Enum {
         default: u32,
         options: &'static [&'static str],
+        ids: &'static [&'static str],
     },
     Text {
         default: &'static str,
@@ -341,6 +345,22 @@ impl<'a> ParamDef<'a> {
         }
     }
 
+    /// What a file calls option `option` of a choice (see [`choice`]).
+    pub fn choice_id(&self, option: u32) -> Option<&'static str> {
+        match self.kind {
+            ParamKind::Enum { ids, .. } => ids.get(option as usize).copied(),
+            _ => None,
+        }
+    }
+
+    /// The option of a choice a file calls `id` (see [`choice`]).
+    pub fn choice_of(&self, id: &str) -> Option<u32> {
+        match self.kind {
+            ParamKind::Enum { ids, .. } => ids.iter().position(|i| *i == id).map(|i| i as u32),
+            _ => None,
+        }
+    }
+
     /// Does option `option` match a search? Every word of the query has to be in the
     /// option's name, or begin one of its words.
     pub fn option_matches(&self, option: usize, query: &str) -> bool {
@@ -444,13 +464,59 @@ pub(crate) const fn vec2(key: &'static str, label: &'static str, default: [f32; 
 pub(crate) const fn color(key: &'static str, label: &'static str, default: [f32; 4]) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Color { default })
 }
+/// A choice of `options`, `default` the one chosen at first. A file says the option chosen
+/// by its id, at the same place of `ids`: small letters, digits and `_`, each its own, and
+/// never changed once given (files say it). Options may be added and moved; one that goes
+/// leaves its id unused. What is wrong with them does not compile.
 pub(crate) const fn choice(
     key: &'static str,
     label: &'static str,
     default: u32,
     options: &'static [&'static str],
+    ids: &'static [&'static str],
 ) -> ParamDef<'static> {
-    ParamDef::new(key, label, ParamKind::Enum { default, options })
+    assert!(options.len() == ids.len(), "a choice has an id for each option");
+    assert!((default as usize) < options.len(), "a choice starts with one of its options");
+    let mut i = 0;
+    while i < ids.len() {
+        assert!(is_id(ids[i]), "an id of an option is small letters, digits and _");
+        let mut j = 0;
+        while j < i {
+            assert!(!same(ids[i], ids[j]), "the ids of the options of a choice are each its own");
+            j += 1;
+        }
+        i += 1;
+    }
+    ParamDef::new(key, label, ParamKind::Enum { default, options, ids })
+}
+
+/// Is `id` what an id of an option may be (see [`choice`])?
+const fn is_id(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_') {
+            return false;
+        }
+        i += 1;
+    }
+    !bytes.is_empty()
+}
+
+const fn same(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 pub(crate) const fn text(key: &'static str, label: &'static str, default: &'static str) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Text { default })
@@ -469,7 +535,7 @@ pub(crate) const fn curve(key: &'static str, label: &'static str, default: &'sta
 }
 
 /// The tiling parameter every node carries (always first in the parameter list).
-pub const TILING_PARAM: ParamDef<'static> = choice("tiling", "Tiling", Tiling::Both as u32, &Tiling::LABELS).fixed().tip(
+pub const TILING_PARAM: ParamDef<'static> = choice("tiling", "Tiling", Tiling::Both as u32, &Tiling::LABELS, &Tiling::IDS).fixed().tip(
     "How the node treats the image borders: a tiling axis wraps around the edge, so \
      filters and generators produce seamless results; without tiling, filters clamp to the \
      edge and generators leave the outside empty.",
@@ -477,11 +543,14 @@ pub const TILING_PARAM: ParamDef<'static> = choice("tiling", "Tiling", Tiling::B
 
 /// The choices of [`PRECISION_PARAM`], in the order [`crate::Precision::of_node`] reads them.
 pub const PRECISION_LABELS: [&str; 4] = ["As the Graph", "8 bits", "16 bits float", "32 bits float"];
+/// What a file calls each of [`PRECISION_LABELS`]: those of a graph's precision (see
+/// [`crate::Precision`]), and `graph`.
+const PRECISION_IDS: [&str; 4] = ["graph", "unorm8", "float16", "float32"];
 
 /// The precision parameter every node that makes an image of its own carries (after the
 /// tiling): what its image is kept in, the graph's precision or its own (see
 /// [`crate::Precision`]).
-pub const PRECISION_PARAM: ParamDef<'static> = choice("precision", "Precision", 0, &PRECISION_LABELS).fixed().tip(
+pub const PRECISION_PARAM: ParamDef<'static> = choice("precision", "Precision", 0, &PRECISION_LABELS, &PRECISION_IDS).fixed().tip(
     "What the node's image is kept in. 8 bits: 256 steps from 0 to 1, a quarter of the memory of floats. \
      16 bits float: steps of 1/2048 near 1, finer below; values beyond 0 and 1 kept too. 32 bits float: smooth \
      everywhere (a gentle slope of a height stays smooth in a normal map), twice the memory. As the Graph: what \
@@ -857,9 +926,6 @@ mod tests {
                         p.key
                     );
                 }
-                if let ParamKind::Enum { default, options } = p.kind {
-                    assert!((default as usize) < options.len(), "{}::{}", d.name, p.key);
-                }
                 if p.pictured {
                     assert!(
                         matches!(p.kind, ParamKind::Enum { .. }) && d.has_image(),
@@ -931,5 +997,58 @@ mod tests {
         assert!(NodeKind::BLUR.def().matches("blu"));
         assert!(NodeKind::GRADIENT_MAP.def().matches("colorize"));
         assert!(!NodeKind::BLUR.def().matches("zzz"));
+    }
+
+    /// What a file can say of nodes, a line each: every node type, its sockets (as links name
+    /// them) and parameters with the type of their values, and the options of its choices.
+    fn what_files_say() -> String {
+        let mut lines = Vec::new();
+        for kind in NodeKind::ALL.iter().copied().chain([NodeKind::GRAPH_INSTANCE]) {
+            let d = kind.def();
+            let id = d.id;
+            lines.push(id.to_string());
+            let ty = |t: DataType| serde_json::to_value(t).expect("a type").as_str().expect("its name").to_string();
+            lines.extend(d.inputs.iter().map(|s| format!("{id} i:{} {}", s.key, ty(s.ty))));
+            lines.extend(d.outputs.iter().map(|s| format!("{id} o:{} {}", s.key, ty(s.ty))));
+            for p in d.all_params() {
+                let value = match p.kind {
+                    ParamKind::Float { .. } => "float",
+                    ParamKind::Int { .. } => "int",
+                    ParamKind::Bool { .. } => "bool",
+                    ParamKind::Vec2 { .. } => "vec2",
+                    ParamKind::Color { .. } => "color",
+                    ParamKind::Enum { .. } => "choice",
+                    ParamKind::Text { .. } | ParamKind::File { .. } | ParamKind::Image { .. } | ParamKind::Expression { .. } => "text",
+                    ParamKind::Gradient { .. } => "gradient",
+                    ParamKind::Curve { .. } => "curve",
+                };
+                lines.push(format!("{id} p:{} {value}", p.key));
+                if let ParamKind::Enum { ids, .. } = p.kind {
+                    lines.extend(ids.iter().map(|option| format!("{id} p:{} = {option}", p.key)));
+                }
+            }
+        }
+        lines.join("\n") + "\n"
+    }
+
+    /// What files say of nodes keeps meaning what it meant: what `tests/fixtures/nodes.txt`
+    /// lists (see [`what_files_say`]) is all still there. More may be (a node type, a parameter,
+    /// an option): the list is then written anew, by the test run with `BREWED_WRITE_NODES=1`.
+    #[test]
+    fn what_files_say_of_nodes_stays() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/nodes.txt");
+        let now = what_files_say();
+        if std::env::var_os("BREWED_WRITE_NODES").is_some() {
+            std::fs::write(path, &now).expect("the list written");
+        }
+        let listed = std::fs::read_to_string(path).expect("the list of what files say of nodes").replace("\r\n", "\n");
+        let there: std::collections::HashSet<&str> = now.lines().collect();
+        let gone: Vec<&str> = listed.lines().filter(|l| !there.contains(l)).collect();
+        assert!(
+            gone.is_empty(),
+            "files say what is gone (a node type, a socket, a parameter or an option renamed or taken out, or a \
+             parameter of another type): give it back, else files that say it are not read as they were: {gone:#?}"
+        );
+        assert!(listed == now, "there is more to say: write the list anew (the test run with BREWED_WRITE_NODES=1)");
     }
 }

@@ -22,10 +22,9 @@ struct U {
 
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var tex: texture_2d<f32>;
-@group(0) @binding(2) var smooth_sampler: sampler;
-@group(0) @binding(3) var nearest_sampler: sampler;
-@group(0) @binding(4) var smooth_tiled: sampler;
-@group(0) @binding(5) var nearest_tiled: sampler;
+// Smooth or nearest, repeating or not, as the view is: chosen for each frame (a texture read
+// with more than one sampler cannot be drawn with OpenGL).
+@group(0) @binding(2) var samp: sampler;
 
 struct V {
     @builtin(position) pos: vec4<f32>,
@@ -82,19 +81,9 @@ fn fs(in: V) -> @location(0) vec4<f32> {
         return shown(u.background.rgb);
     }
 
-    let tiled = tiled_x || tiled_y;
-    var c: vec4<f32>;
-    if ((u.flags & 8u) != 0u) {
-        if (tiled) {
-            c = textureSampleLevel(tex, nearest_tiled, q, 0.0);
-        } else {
-            c = textureSampleLevel(tex, nearest_sampler, q, 0.0);
-        }
-    } else if (tiled) {
-        c = textureSampleLevel(tex, smooth_tiled, q, lod);
-    } else {
-        c = textureSampleLevel(tex, smooth_sampler, q, lod);
-    }
+    // Pixels, crisp, when zoomed in (from the image itself, not its mips).
+    let level = select(lod, 0.0, (u.flags & 8u) != 0u);
+    var c = textureSampleLevel(tex, samp, q, level);
     c = widen(c, (u.flags & 16u) != 0u);
     let cell = vec2<i32>(floor(in.wp * u.size / max(u.checker, 1.0)));
     let check = select(vec3<f32>(0.22), vec3<f32>(0.32), ((cell.x + cell.y) & 1) == 1);
@@ -211,24 +200,6 @@ impl shader::Pipeline for Pipeline {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -341,16 +312,19 @@ impl shader::Primitive for Primitive {
             pad: [0; 3],
         };
         queue.write_buffer(&pipeline.uniforms, 0, bytemuck::bytes_of(&u));
+        let sampler = match (self.nearest, self.tile[0] || self.tile[1]) {
+            (false, false) => &pipeline.smooth,
+            (true, false) => &pipeline.nearest,
+            (false, true) => &pipeline.smooth_tiled,
+            (true, true) => &pipeline.nearest_tiled,
+        };
         pipeline.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brewed 2d view"),
             layout: &pipeline.layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: pipeline.uniforms.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&pipeline.smooth) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&pipeline.nearest) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&pipeline.smooth_tiled) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&pipeline.nearest_tiled) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
             ],
         }));
     }

@@ -2260,7 +2260,7 @@ fn edge_values(pd: &brewed_texture_core::nodes::ParamDef) -> Vec<ParamValue> {
                 out.push(ParamValue::Color(v));
             }
         }
-        ParamKind::Enum { default, options } => {
+        ParamKind::Enum { default, options, .. } => {
             out.extend((0..options.len() as u32).map(ParamValue::Enum));
             for v in [default, options.len() as u32, 1000, u32::MAX] {
                 out.push(ParamValue::Enum(v));

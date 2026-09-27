@@ -4,6 +4,8 @@ use super::*;
 
 const SHUFFLE_SOURCES: &[&str] =
     &["A.Red", "A.Green", "A.Blue", "A.Alpha", "B.Red", "B.Green", "B.Blue", "B.Alpha", "Zero", "One"];
+const SHUFFLE_SOURCE_IDS: &[&str] =
+    &["a_red", "a_green", "a_blue", "a_alpha", "b_red", "b_green", "b_blue", "b_alpha", "zero", "one"];
 
 pub static LEVELS: NodeDef = NodeDef {
     id: "levels",
@@ -21,7 +23,7 @@ pub static LEVELS: NodeDef = NodeDef {
         float_log("gamma", "Gamma", 1.0, 0.1, 10.0).clamped(0.01, 100.0),
         float("out_low", "Output Low", 0.0, 0.0, 1.0).bounded(),
         float("out_high", "Output High", 1.0, 0.0, 1.0).bounded(),
-        choice("channels", "Channels", 0, &["RGB", "RGBA", "R", "G", "B", "A"]),
+        choice("channels", "Channels", 0, &["RGB", "RGBA", "R", "G", "B", "A"], &["rgb", "rgba", "r", "g", "b", "a"]),
         boolean("clamp", "Clamp", true),
     ],
     role: Role::Image,
@@ -64,7 +66,13 @@ pub static GRAYSCALE: NodeDef = NodeDef {
     keywords: "desaturate luminance channel",
     inputs: COLOR_IN,
     outputs: GRAY_OUT,
-    params: &[choice("mode", "Mode", 0, &["Luminance", "Average", "Red", "Green", "Blue", "Alpha", "Max"])],
+    params: &[choice(
+        "mode",
+        "Mode",
+        0,
+        &["Luminance", "Average", "Red", "Green", "Blue", "Alpha", "Max"],
+        &["luminance", "average", "red", "green", "blue", "alpha", "max"],
+    )],
     role: Role::Image,
 };
 
@@ -101,7 +109,13 @@ pub static GRADIENT_MAP: NodeDef = NodeDef {
             "Gradient",
             &[(0.0, [0.05, 0.04, 0.03, 1.0]), (0.5, [0.45, 0.25, 0.12, 1.0]), (1.0, [0.95, 0.9, 0.8, 1.0])],
         ),
-        choice("channel", "Read", 0, &["Luminance", "Red", "Green", "Blue", "Alpha", "Average"])
+        choice(
+            "channel",
+            "Read",
+            0,
+            &["Luminance", "Red", "Green", "Blue", "Alpha", "Average"],
+            &["luminance", "red", "green", "blue", "alpha", "average"],
+        )
             .tip("Which value of the input picks the position in the gradient."),
         boolean("keep_alpha", "Keep Input Alpha", true).tip("Multiply the gradient's alpha with the input's alpha."),
     ],
@@ -117,10 +131,10 @@ pub static CHANNEL_SHUFFLE: NodeDef = NodeDef {
     inputs: &[color_image("a", "A"), color_image_opt("b", "B")],
     outputs: COLOR_OUT,
     params: &[
-        choice("red", "Red", 0, SHUFFLE_SOURCES),
-        choice("green", "Green", 1, SHUFFLE_SOURCES),
-        choice("blue", "Blue", 2, SHUFFLE_SOURCES),
-        choice("alpha", "Alpha", 3, SHUFFLE_SOURCES),
+        choice("red", "Red", 0, SHUFFLE_SOURCES, SHUFFLE_SOURCE_IDS),
+        choice("green", "Green", 1, SHUFFLE_SOURCES, SHUFFLE_SOURCE_IDS),
+        choice("blue", "Blue", 2, SHUFFLE_SOURCES, SHUFFLE_SOURCE_IDS),
+        choice("alpha", "Alpha", 3, SHUFFLE_SOURCES, SHUFFLE_SOURCE_IDS),
     ],
     role: Role::Image,
 };
@@ -136,7 +150,7 @@ pub static GRADIENT_DYNAMIC: NodeDef = NodeDef {
     inputs: &[gray("input", "Input"), color_image("gradient", "Gradient"), gray_opt("position_map", "Position Map")],
     outputs: COLOR_OUT,
     params: &[
-        choice("orientation", "Orientation", 0, &["Horizontal", "Vertical"])
+        choice("orientation", "Orientation", 0, &["Horizontal", "Vertical"], &["horizontal", "vertical"])
             .tip("Whether the colors are read along a row of the Gradient image or along a column."),
         float("position", "Position", 0.5, 0.0, 1.0)
             .bounded()
@@ -147,6 +161,7 @@ pub static GRADIENT_DYNAMIC: NodeDef = NodeDef {
 
 /// Which channels of a color image a Curve changes.
 pub const CURVE_CHANNELS: &[&str] = &["RGB", "Red", "Green", "Blue", "Alpha"];
+const CURVE_CHANNEL_IDS: &[&str] = &["rgb", "red", "green", "blue", "alpha"];
 
 pub static CURVE: NodeDef = NodeDef {
     id: "curve",
@@ -159,7 +174,7 @@ pub static CURVE: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         curve("curve", "Curve", &[[0.0, 0.0], [1.0, 1.0]]),
-        choice("channels", "Channels", 0, CURVE_CHANNELS).tip("On a color image, the channels the curve changes."),
+        choice("channels", "Channels", 0, CURVE_CHANNELS, CURVE_CHANNEL_IDS).tip("On a color image, the channels the curve changes."),
     ],
     role: Role::Image,
 };

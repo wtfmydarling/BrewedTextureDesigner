@@ -10,15 +10,15 @@ use crate::graph::{Graph, NodeId};
 use crate::package::Package;
 use crate::project;
 
-/// The demo project, as it is in `assets/demo.brewtex`.
-const DEMO: &str = include_str!("../assets/demo.brewtex");
+/// The demo package, as it is in `assets/demo.brewtex`.
+const DEMO: &[u8] = include_bytes!("../assets/demo.brewtex");
 
 /// What the graph of the demo is called.
 pub const NAME: &str = "Brick Wall";
 
 /// The demo as a package, and the node it shows in the 2D view first.
 pub fn package() -> (Package, Option<NodeId>) {
-    match project::from_json(DEMO, None, NAME) {
+    match project::from_bytes(DEMO, None) {
         Ok(loaded) => {
             let preview = loaded.view().preview;
             (loaded.package, preview)
@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn demo_graph_is_valid() {
-        let loaded = project::from_json(DEMO, None, NAME).expect("assets/demo.brewtex is a project");
+        let loaded = project::from_bytes(DEMO, None).expect("assets/demo.brewtex is a package");
         assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
         let (g, preview) = graph();
         assert!(preview.is_some_and(|id| g.node(id).is_some()), "the demo shows one of its nodes");

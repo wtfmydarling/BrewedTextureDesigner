@@ -9,6 +9,7 @@ use iced::advanced::widget::operation::{self, Operation, Outcome, focusable};
 use iced::keyboard::{self, Key};
 use iced::{Color, Element, Pixels, Point, Size, mouse, window};
 use iced_runtime::user_interface::{Cache, UserInterface};
+use brewed_texture_core::files::Held;
 use brewed_texture_core::{Edit, NodeKind, ParamValue};
 
 use crate::app::{
@@ -1884,12 +1885,26 @@ fn the_files_of_a_package_are_collected() {
     assert_eq!(path_of(&w), bricks.display().to_string());
     w.send(Message::Redo);
     w.send(Message::SavePicked(Some(file.clone())));
-    let text = std::fs::read_to_string(&file).unwrap();
+    let text = package_json(&file);
     assert!(text.contains("wall_files/bricks.png"), "saved relative to itself: {text}");
     // A second copy is never written over a file that is there.
     let again = crate::app::packages::copy_files(&plan);
     assert!(again.copied.is_empty() && again.failed.len() == 1);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What the parts of a saved package say (see `brewed_texture_core::project`), one after the
+/// other.
+fn package_json(file: &std::path::Path) -> String {
+    let mut archive = brewed_texture_core::archive::Archive::new(std::fs::File::open(file).expect("saved")).expect("a package");
+    let parts: Vec<String> = archive.entries().iter().map(|e| e.name.clone()).filter(|n| n.ends_with(".json")).collect();
+    parts.iter().map(|n| String::from_utf8(archive.read(n, u64::MAX).expect("read")).expect("text")).collect::<Vec<_>>().join("\n")
+}
+
+/// The names of the entries of a package's file.
+fn package_entries(file: &std::path::Path) -> Vec<String> {
+    let archive = brewed_texture_core::archive::Archive::new(std::fs::File::open(file).expect("saved")).expect("a package");
+    archive.entries().iter().map(|e| e.name.clone()).collect()
 }
 
 /// A folder of its own for a test's files.
@@ -1936,7 +1951,7 @@ fn packages_and_graphs_used_as_nodes() {
     // Saved beside it, it says where the wall is relative to itself.
     let uses = dir.join("uses.brewtex");
     w.send(Message::SavePicked(Some(uses.clone())));
-    let text = std::fs::read_to_string(&uses).expect("saved");
+    let text = package_json(&uses);
     assert!(text.contains("\"package\": \"wall.brewtex\""), "{text}");
     draw_frame(&mut w, std::time::Instant::now());
 
@@ -2065,7 +2080,7 @@ fn the_files_of_a_package_in_its_resources_folder() {
     assert!(shown(&mut w, "Resources") && shown(&mut w, "a.png") && !shown(&mut w, "Bitmaps"));
     // A font, imported (held by the package): a folder of each kind.
     let font = dir.join("Serif.ttf").display().to_string();
-    let files = vec![(font.clone(), Arc::new(b"not really a font".to_vec()))];
+    let files = vec![(font.clone(), Held::new(&font, Arc::new(b"not really a font".to_vec())))];
     w.send(Message::Explorer(ExplorerMessage::FilesRead { key, embed: false, files, failed: Vec::new() }));
     assert!(shown(&mut w, "Bitmaps") && shown(&mut w, "Fonts") && shown(&mut w, "Serif.ttf"));
     let held = w.app.doc.package().resources.iter().find(|r| r.name() == "Serif.ttf").expect("the font");
@@ -2103,7 +2118,8 @@ fn the_files_of_a_package_in_its_resources_folder() {
 
     // a, held in the package: the Bitmap reads it there.
     let bytes = Arc::new(std::fs::read(&a).expect("a"));
-    w.send(Message::Explorer(ExplorerMessage::FilesRead { key, embed: true, files: vec![(a_path, bytes)], failed: Vec::new() }));
+    let files = vec![(a_path.clone(), Held::new(&a_path, bytes))];
+    w.send(Message::Explorer(ExplorerMessage::FilesRead { key, embed: true, files, failed: Vec::new() }));
     let held = &w.app.doc.package().resources[0];
     assert!(held.is_embedded());
     let read = w.app.graph().nodes_of(NodeKind::BITMAP).next().map(|n| n.text("path").to_string());
@@ -2176,6 +2192,9 @@ fn image_inputs_are_input_values_and_drags_say_what_cannot_be() {
     use crate::app::FileTarget;
 
     let mut w = harness!(view::root, 1680.0, 1000.0);
+    // Pictures chosen are linked, as the settings may say (held by the package, as they say by
+    // default: `files_chosen_or_dropped_are_held`).
+    w.send(Message::Settings(crate::settings::Settings { new_files: crate::settings::NewFiles::Link, ..w.app.settings }));
     let dir = scratch("image-inputs");
     let picture = dir.join("bricks.png");
     image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 100, 50, 255])).save(&picture).expect("a picture");
@@ -2422,7 +2441,7 @@ fn names_being_typed_are_saved() {
     w.send(Message::RenameVariable(var.clone(), "courses".into()));
     w.send(Message::Save);
     assert!(w.app.ui.renaming_graph.is_none() && w.app.ui.renaming_var.is_none());
-    let text = std::fs::read_to_string(&file).expect("saved");
+    let text = package_json(&file);
     assert!(text.contains("\"name\": \"Wall\""), "the graph's name");
     assert!(text.contains("\"courses\"") && !text.contains(&format!("\"{var}\"")), "the input value's name");
     let _ = std::fs::remove_dir_all(&dir);
@@ -2479,7 +2498,7 @@ fn unsaved_work_is_recovered_after_a_crash() {
     assert_eq!(first.ui.dialog, None, "nothing to recover the first time");
     let _ = first.update(Message::SavePicked(Some(walls.clone())));
     let bricks = std::sync::Arc::new(b"the bytes of bricks.png".to_vec());
-    let files = vec![("C:/textures/bricks.png".to_string(), bricks.clone())];
+    let files = vec![("C:/textures/bricks.png".to_string(), Held::new("C:/textures/bricks.png", bricks.clone()))];
     let _ = first.update(Message::Explorer(ExplorerMessage::FilesRead { key: first.doc_key, embed: false, files, failed: vec![] }));
     add(&mut first, NodeKind::BLUR);
     let changed = first.graph().nodes.len();
@@ -2523,7 +2542,8 @@ fn unsaved_work_is_recovered_after_a_crash() {
         .collect();
     assert_eq!(kept.iter().filter(|f| f.extension().is_some_and(|e| e == "held")).count(), 1);
     for snapshot in kept.iter().filter(|f| f.extension().is_some_and(|e| e == "brewtex")) {
-        assert!(!std::fs::read_to_string(snapshot).unwrap().contains("\"data\""), "{}", snapshot.display());
+        let entries = package_entries(snapshot);
+        assert!(!entries.iter().any(|n| n.starts_with("files/")), "{}: {entries:?}", snapshot.display());
     }
     let (_, untitled) = packages.iter().find(|(_, d)| d.path().is_none()).copied().expect("the one never saved");
     assert!(untitled.is_dirty() && untitled.graph().nodes_of(NodeKind::NOISE).count() == 1);
@@ -2721,5 +2741,151 @@ fn answers_of_dialogs_go_where_they_were_asked() {
     assert!(app.package_doc(other.key).is_none());
     let _ = app.update(Message::Asked(other, Box::new(Message::SavePicked(Some(dir.join("gone.brewtex"))))));
     assert!(!dir.join("gone.brewtex").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The settings: Ctrl+, (the key of the comma, on every layout) or Edit → Settings… shows them;
+/// each chosen is taken at once: the main window drawn as large as they say (the eyedropper's,
+/// over the screen, as it is), new graphs as they say.
+#[test]
+fn settings_are_chosen_and_taken() {
+    use crate::settings::{Graphics, Settings};
+    use brewed_texture_core::Precision;
+    use keyboard::key::{Code, Physical};
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    let ctrl = keyboard::Modifiers::CTRL;
+    // A Russian keyboard types "б" on the key of the comma.
+    key(&mut w, "б", Physical::Code(Code::Comma), ctrl);
+    assert_eq!(w.app.ui.dialog, Some(Dialog::Settings));
+    draw_frame(&mut w, std::time::Instant::now());
+    for label in ["Scale", "A file chosen or dropped", "Embed in the package", "Keep unsaved work", "API"] {
+        assert!(!texts(&mut w, label).is_empty(), "{label}");
+    }
+    assert!(!texts(&mut w, "Not kept: the program runs with the settings as they are by default.").is_empty());
+    w.snapshot("settings");
+    press(&mut w, keyboard::key::Named::Escape);
+    assert_eq!(w.app.ui.dialog, None);
+    key(&mut w, ",", Physical::Code(Code::Comma), ctrl);
+    assert_eq!(w.app.ui.dialog, Some(Dialog::Settings));
+
+    let s = w.app.settings;
+    w.send(Message::Settings(Settings { scale: 1.25, graph_size: 512, graph_precision: Precision::Full, graphics: Graphics::Vulkan, ..s }));
+    let main = w.app.main_window().expect("the main window");
+    assert_eq!(w.app.scale_factor(main), 1.25);
+    assert_eq!(w.app.scale_factor(iced::window::Id::unique()), 1.0, "the eyedropper's windows are not");
+    draw_frame(&mut w, std::time::Instant::now());
+    assert!(!texts(&mut w, "Taken when the program starts again.").is_empty(), "the graphics API waits for a start");
+    w.send(Message::Dialog(None));
+    w.send(Message::New);
+    assert_eq!((w.app.graph().resolution, w.app.graph().precision), ([512, 512], Precision::Full));
+    w.send(Message::Explorer(ExplorerMessage::NewGraph(w.app.doc_key)));
+    assert_eq!(w.app.doc.package().graphs.len(), 2);
+    assert_eq!(w.app.graph().resolution, [512, 512], "a graph added to a package too");
+}
+
+/// Settings chosen are kept in their file and taken again the next time, only what changed
+/// written; a file that is no TOML is not written over, and says so. Unsaved work not kept any
+/// more: what was kept of it goes, and nothing more is written.
+#[test]
+fn settings_are_kept_in_their_file() {
+    use crate::settings::{NewFiles, Settings, Store};
+    let dir = scratch("settings");
+    let file = dir.join("settings.toml");
+    let opts = |file: &std::path::Path| StartupOptions {
+        settings: Store::open(Some(file.to_path_buf())),
+        recovery: Some(dir.join("Recovery")),
+        ..StartupOptions::default()
+    };
+    let (mut first, _) = App::boot(opts(&file));
+    assert!(!file.exists(), "nothing written before a setting changes");
+    let _ = first.update(Message::Settings(Settings { keep_every: 120, new_files: NewFiles::Link, ..first.settings }));
+    let text = std::fs::read_to_string(&file).expect("written");
+    assert!(text.contains("every = 120") && text.contains("new = \"link\"") && text.contains("scale = 1.0"), "{text}");
+
+    // Unsaved work, kept; then not kept any more: what was kept goes.
+    let _ = first.update(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
+    let _ = first.update(Message::Seal);
+    first.autosave_now();
+    let snapshots = |dir: &std::path::Path| -> usize {
+        std::fs::read_dir(dir.join("Recovery"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .flat_map(|session| std::fs::read_dir(session.path()).into_iter().flatten().flatten())
+            .filter(|f| f.path().extension().is_some_and(|e| e == "brewtex"))
+            .count()
+    };
+    assert_eq!(snapshots(&dir), 1);
+    let _ = first.update(Message::Settings(Settings { keep_unsaved: false, ..first.settings }));
+    assert_eq!(snapshots(&dir), 0, "not kept any more: gone");
+    let _ = first.update(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [100.0, 0.0] }));
+    first.autosave_now();
+    assert_eq!(snapshots(&dir), 0, "and nothing more written");
+    drop(first);
+
+    let (second, _) = App::boot(opts(&file));
+    assert_eq!((second.settings.keep_every, second.settings.new_files, second.settings.keep_unsaved), (120, NewFiles::Link, false));
+    drop(second);
+
+    std::fs::write(&file, "keep = [").unwrap();
+    let (mut third, _) = App::boot(opts(&file));
+    assert!(third.settings_file().1.iter().any(|p| p.contains("not TOML")), "{:?}", third.settings_file().1);
+    let _ = third.update(Message::Settings(Settings { scale: 1.5, ..third.settings }));
+    assert_eq!(third.settings.scale, 1.5, "taken all the same, while the program runs");
+    assert!(third.ui.status.as_ref().is_some_and(|s| s.error && s.text.contains("not saved")));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep = [", "not written over");
+    drop(third);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file chosen for a node or dropped on the window is held by the package, as the settings
+/// say by default: read and hashed in the background, it is taken where it was asked for, in
+/// one step of undo; one that cannot be read says so. Linked, as they may say, a node reads it
+/// where it is, at once.
+#[test]
+fn files_chosen_or_dropped_are_held() {
+    use crate::app::FileTarget;
+    use crate::settings::{NewFiles, Settings};
+    use brewed_texture_core::ResourceKind;
+    use std::sync::Arc;
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    let dir = scratch("held");
+    let picture = dir.join("bricks.png");
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 100, 50, 255])).save(&picture).expect("a picture");
+    let path = picture.display().to_string();
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BITMAP, pos: [0.0, 0.0] }));
+    w.send(Message::Seal);
+    let bitmap = w.app.graph().nodes_of(NodeKind::BITMAP).next().expect("a Bitmap").id;
+    let target = FileTarget::Param(bitmap, "path".into());
+    let read_by = |w: &Harness, node| w.app.graph().node(node).map(|n| n.text("path").to_string());
+
+    // Chosen: read in the background first (nothing yet), then held.
+    w.send(Message::FilePicked(target.clone(), Some(picture.clone())));
+    assert_eq!(read_by(&w, bitmap).as_deref(), Some(""));
+    let held = Held::new(&path, Arc::new(std::fs::read(&picture).unwrap()));
+    w.send(Message::FileHeld(target.clone(), Ok(held.clone())));
+    assert_eq!(read_by(&w, bitmap).as_deref(), Some(held.path()));
+    let resource = w.app.doc.package().resources.iter().find(|r| r.path == held.path()).expect("in the package");
+    assert!(resource.is_embedded() && resource.name() == "bricks.png");
+    assert!(w.app.eval.node(bitmap).is_some_and(|e| e.errors.is_empty()), "{:?}", w.app.eval.node(bitmap));
+    w.send(Message::Undo);
+    assert_eq!(read_by(&w, bitmap).as_deref(), Some(""));
+    assert!(w.app.doc.package().resources.is_empty(), "one step of undo: {:?}", w.app.doc.package().resources);
+    w.send(Message::Redo);
+
+    // Dropped on the window: the node that reads it, where it was dropped.
+    w.send(Message::DropHeld(ResourceKind::Bitmap, [300.0, 40.0], Ok(held.clone())));
+    let dropped = w.app.graph().nodes_of(NodeKind::BITMAP).find(|n| n.id != bitmap).expect("a node of the drop");
+    assert_eq!((dropped.text("path"), dropped.pos), (held.path(), [300.0, 40.0]));
+    assert_eq!(w.app.doc.package().resources.len(), 1, "held once");
+
+    // What cannot be read says so.
+    w.send(Message::FileHeld(target.clone(), Err("Cannot read gone.png: it is not there".into())));
+    assert!(w.app.ui.status.as_ref().is_some_and(|s| s.error && s.text.contains("gone.png")));
+
+    // Linked: the file where it is, at once.
+    w.send(Message::Settings(Settings { new_files: NewFiles::Link, ..w.app.settings }));
+    w.send(Message::FilePicked(target, Some(picture.clone())));
+    assert_eq!(read_by(&w, bitmap), Some(path));
     let _ = std::fs::remove_dir_all(&dir);
 }

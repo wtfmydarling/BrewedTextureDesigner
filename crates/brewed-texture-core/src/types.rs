@@ -8,6 +8,7 @@ use crate::gradient::Gradient;
 
 /// Type of a socket. Images live on the GPU, everything else is a CPU value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DataType {
     Image,
     Float,
@@ -54,8 +55,10 @@ pub fn can_connect(from: DataType, to: DataType) -> bool {
     }
 }
 
-/// A CPU-side value flowing through a value socket.
+/// A CPU-side value flowing through a value socket. A file says it by its type:
+/// `{"float": 0.5}`, `{"int": 4}`, `{"bool": true}`, `{"vec2": [x, y]}`, `{"color": [r, g, b, a]}`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Value {
     Float(f32),
     Int(i32),
@@ -198,6 +201,8 @@ pub enum Tiling {
 
 impl Tiling {
     pub const LABELS: [&'static str; 4] = ["No tiling", "Horizontal", "Vertical", "H and V"];
+    /// What a file calls each (see [`crate::nodes::TILING_PARAM`]).
+    pub const IDS: [&'static str; 4] = ["none", "horizontal", "vertical", "both"];
 
     pub fn from_index(i: u32) -> Tiling {
         match i {
@@ -217,14 +222,15 @@ impl Tiling {
     }
 }
 
-/// The stored value of a node parameter.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// The stored value of a node parameter (a file says it as `crate::graph::FileValue` does).
+#[derive(Clone, Debug, PartialEq)]
 pub enum ParamValue {
     Float(f32),
     Int(i32),
     Bool(bool),
     Vec2([f32; 2]),
     Color([f32; 4]),
+    /// One of the options of a choice, by its place (see [`crate::nodes::ParamKind::Enum`]).
     Enum(u32),
     Text(String),
     Gradient(Gradient),

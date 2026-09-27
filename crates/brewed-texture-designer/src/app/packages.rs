@@ -14,10 +14,11 @@ use std::sync::Arc;
 
 use iced::{Task, Vector};
 
+use brewed_texture_core::files::Held;
 use brewed_texture_core::package::{self, Flat, Library, Missing, MissingKind, Package, PackageEdit, ResourceKind};
 use brewed_texture_core::project::{self, ViewState};
 use brewed_texture_core::{
-    Document, Edit, Graph, GraphId, GraphRef, Instance, Interface, NodeId, NodeKind, ParamKind, ParamValue,
+    Document, Edit, GraphId, GraphRef, Instance, Interface, NodeId, NodeKind, ParamKind, ParamValue,
 };
 
 use super::{App, Collected, ContextMenu, Dialog, DragPayload, ExplorerMessage, FileTarget, Fold, Message, MissingFiles, PendingAction, blocking};
@@ -70,7 +71,8 @@ fn read_files(key: u64, paths: Vec<String>, embed: bool) -> Task<Message> {
             let mut failed = Vec::new();
             for path in paths {
                 match brewed_texture_core::files::read_disk(&path) {
-                    Ok(bytes) => files.push((path, Arc::new(bytes))),
+                    // Hashed here: not on the thread that draws the window.
+                    Ok(bytes) => files.push((path.clone(), Held::new(&path, Arc::new(bytes)))),
                     Err(e) => failed.push(format!("{} ({e})", package::file_name(&path))),
                 }
             }
@@ -81,6 +83,26 @@ fn read_files(key: u64, paths: Vec<String>, embed: bool) -> Task<Message> {
             Message::Explorer(ExplorerMessage::FilesRead { key, embed, files, failed })
         },
     )
+}
+
+/// Read the file at `path` to be held by a package, in the background (hashed there too: not
+/// on the thread that draws the window), and say what came of it as `then` does.
+pub(super) fn read_held(path: String, then: impl FnOnce(Result<Held, String>) -> Message + Send + 'static) -> Task<Message> {
+    Task::perform(
+        blocking(move || match brewed_texture_core::files::read_disk(&path) {
+            Ok(bytes) => Ok(Held::new(&path, Arc::new(bytes))),
+            Err(e) => Err(format!("Cannot read {}: {e}", package::file_name(&path))),
+        }),
+        move |read| then(read.unwrap_or_else(|| Err("The file could not be read".into()))),
+    )
+}
+
+/// Keep `held` for whatever reads it (see [`brewed_texture_core::files`]): the name it is read
+/// by. A node that reads it makes the package hold it.
+pub(super) fn hold(held: Held) -> String {
+    let (path, bytes) = held.into_parts();
+    brewed_texture_core::files::keep(&path, &bytes);
+    path
 }
 
 /// Copy each file of `plan` (where it is, where its copy goes), making the folders; a file is
@@ -322,7 +344,7 @@ impl App {
 
     /// A new, empty package in the Explorer.
     pub(super) fn new_package(&mut self) {
-        let package = Package::new("Graph", Graph::default());
+        let package = Package::new("Graph", self.new_graph());
         let open = package.first();
         self.add_package(package, None, HashMap::new(), open);
     }
@@ -344,7 +366,7 @@ impl App {
             self.activate(next, None);
             self.shelf.retain(|p| p.key != key);
         } else {
-            let package = Package::new("Graph", Graph::default());
+            let package = Package::new("Graph", self.new_graph());
             let open = package.first();
             self.replace_package(package, None, HashMap::new(), open);
         }
@@ -899,8 +921,9 @@ impl App {
             }
             ExplorerMessage::NewGraph(key) => {
                 self.close_popups();
+                let graph = self.new_graph();
                 let Some(doc) = self.package_doc_mut(key) else { return Task::none() };
-                match doc.apply_package(PackageEdit::AddGraph { name: "Graph".into(), graph: Graph::default() }) {
+                match doc.apply_package(PackageEdit::AddGraph { name: "Graph".into(), graph }) {
                     Ok(result) => {
                         if let Some(graph) = result.graph {
                             self.activate(key, Some(graph));

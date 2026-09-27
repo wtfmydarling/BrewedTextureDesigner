@@ -12,6 +12,7 @@ pub struct GradientStop {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Interpolation {
     #[default]
     Linear,

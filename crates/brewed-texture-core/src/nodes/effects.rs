@@ -12,7 +12,7 @@ pub static NORMAL: NodeDef = NodeDef {
     outputs: COLOR_OUT,
     params: &[
         float("intensity", "Intensity", 4.0, 0.0, 32.0),
-        choice("format", "Format", 0, &["OpenGL (Y+)", "DirectX (Y-)"]),
+        choice("format", "Format", 0, &["OpenGL (Y+)", "DirectX (Y-)"], &["opengl", "directx"]),
     ],
     role: Role::Image,
 };
@@ -77,13 +77,14 @@ pub static EMBOSS: NodeDef = NodeDef {
         angle("light_angle", "Light Angle", 135.0, -180.0, 180.0),
         angle("elevation", "Elevation", 35.0, 1.0, 90.0),
         float("intensity", "Intensity", 4.0, 0.0, 32.0),
-        choice("output", "Output", 0, &["Shading (0.5 = flat)", "Lit color"]),
+        choice("output", "Output", 0, &["Shading (0.5 = flat)", "Lit color"], &["shading", "lit_color"]),
     ],
     role: Role::Image,
 };
 
 /// How the edge of a bevel rises, in the order of its "profile" parameter.
 pub const BEVEL_PROFILES: &[&str] = &["Linear", "Smooth", "Round", "Concave"];
+const BEVEL_PROFILE_IDS: &[&str] = &["linear", "smooth", "round", "concave"];
 
 pub static BEVEL: NodeDef = NodeDef {
     id: "bevel",
@@ -97,11 +98,11 @@ pub static BEVEL: NodeDef = NodeDef {
     outputs: GRAY_OUT,
     params: &[
         pixels("width", "Width", 24.0, 1.0, 256.0).at_least(0.0).tip("How wide the slope is."),
-        choice("profile", "Profile", 2, BEVEL_PROFILES).tip(
+        choice("profile", "Profile", 2, BEVEL_PROFILES, BEVEL_PROFILE_IDS).tip(
             "Linear: a straight slope. Smooth: eased at both ends. Round: a quarter circle, steep at the edge. \
              Concave: hollowed, steep at the top.",
         ),
-        choice("direction", "Direction", 0, &["Inward", "Outward"])
+        choice("direction", "Direction", 0, &["Inward", "Outward"], &["inward", "outward"])
             .tip("Inward: the slope is inside the shapes. Outward: around them, the shapes at full height."),
         float("threshold", "Threshold", 0.5, 0.0, 1.0).bounded().tip("Where the mask is a shape: at this value and above."),
     ],
@@ -121,7 +122,7 @@ pub static HEIGHT_BLEND: NodeDef = NodeDef {
     params: &[
         float("offset", "Height Offset", 0.0, -1.0, 1.0).tip("Raises the top height map (lowers it, below 0)."),
         float("contrast", "Contrast", 0.9, 0.0, 1.0).bounded().tip("How sharply one gives way to the other."),
-        choice("output", "Output", 0, &["Height", "Mask"]).tip("The heights together, or where the top one shows."),
+        choice("output", "Output", 0, &["Height", "Mask"], &["height", "mask"]).tip("The heights together, or where the top one shows."),
     ],
     role: Role::Image,
 };
@@ -136,7 +137,7 @@ pub static NORMAL_COMBINE: NodeDef = NodeDef {
     inputs: &[color_image("base", "Base"), color_image("detail", "Detail"), gray_opt("mask", "Mask")],
     outputs: COLOR_OUT,
     params: &[
-        choice("technique", "Technique", 0, &["Reoriented", "Whiteout", "UDN"]),
+        choice("technique", "Technique", 0, &["Reoriented", "Whiteout", "UDN"], &["reoriented", "whiteout", "udn"]),
         float("intensity", "Detail Intensity", 1.0, 0.0, 2.0).at_least(0.0),
     ],
     role: Role::Image,

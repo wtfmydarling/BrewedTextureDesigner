@@ -1,6 +1,6 @@
-//! Work kept for recovery after a crash (see `brewed_texture_core::recovery`): every
-//! [`EVERY`], the packages whose unsaved changes changed since their last snapshot are written
-//! as snapshots, in the background (the files a package holds apart from it, once each); a
+//! Work kept for recovery after a crash (see `brewed_texture_core::recovery`): as often as the
+//! settings say, the packages whose unsaved changes changed since their last snapshot are
+//! written as snapshots, in the background (the files a package holds apart from it, once each); a
 //! package saved or closed loses its snapshot, and quitting as the program should leaves
 //! nothing. Starting, the program offers what the sessions of
 //! programs that stopped without quitting kept: each package with its unsaved changes, where it
@@ -9,7 +9,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use brewed_texture_core::document::Document;
 use brewed_texture_core::instance::GraphId;
@@ -19,10 +18,6 @@ use brewed_texture_core::recovery::{self, Orphan, Session};
 use iced::Task;
 
 use super::{App, Dialog, Message, blocking};
-
-/// How often the packages with unsaved changes are written for recovery (at most: a package
-/// that did not change since is not written again).
-pub const EVERY: Duration = Duration::from_secs(30);
 
 /// What is kept for recovery, and what was found of programs that stopped.
 #[derive(Default)]
@@ -86,8 +81,7 @@ impl Job {
             }
             held.push(hash.clone());
         }
-        let json = project::snapshot_json(&self.package, &self.views, self.open, &self.unsaved);
-        let written = json.and_then(|json| brewed_texture_core::files::write_whole(&self.file, json.as_bytes()));
+        let written = project::save_snapshot(&self.file, &self.package, &self.views, self.open, &self.unsaved);
         (self.key, self.revision, written.map(|()| held))
     }
 }
@@ -136,7 +130,9 @@ impl App {
     fn autosave_jobs(&mut self) -> Vec<Job> {
         self.forget_saved();
         let Some(session) = &self.autosave.session else { return Vec::new() };
-        if self.autosave.busy {
+        // (Not kept, as the settings may say: a tick on its way when they said so writes
+        // nothing either.)
+        if self.autosave.busy || !self.settings.keep_unsaved {
             return Vec::new();
         }
         self.packages()
@@ -275,6 +271,15 @@ impl App {
     /// What programs that stopped without quitting kept, offered to be recovered.
     pub fn recoverable(&self) -> impl Iterator<Item = &recovery::Snapshot> {
         self.autosave.found.iter().flat_map(|o| &o.snapshots)
+    }
+
+    /// Unsaved work is not kept any more (the settings say so): what was kept of this
+    /// session's packages goes.
+    pub(super) fn forget_all_snapshots(&mut self) {
+        let Some(session) = &self.autosave.session else { return };
+        for key in std::mem::take(&mut self.autosave.written).into_keys() {
+            session.forget(key);
+        }
     }
 
     /// The program quits as it should: nothing is left to recover.

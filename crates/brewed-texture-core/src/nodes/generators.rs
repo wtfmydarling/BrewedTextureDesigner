@@ -18,6 +18,22 @@ pub const SHAPES: &[&str] = &[
     "Gaussian",
     "Waves",
 ];
+const SHAPE_IDS: &[&str] = &[
+    "disc",
+    "square",
+    "rounded_square",
+    "polygon",
+    "star",
+    "ring",
+    "cross",
+    "capsule",
+    "paraboloid",
+    "cone",
+    "pyramid",
+    "bell",
+    "gaussian",
+    "waves",
+];
 pub const SHAPE_ROUNDED: u32 = 2;
 pub const SHAPE_POLYGON: u32 = 3;
 pub const SHAPE_STAR: u32 = 4;
@@ -43,10 +59,28 @@ const TILE_PATTERNS: &[&str] = &[
     "Waves",
     "Input Image",
 ];
+const TILE_PATTERN_IDS: &[&str] = &[
+    "disc",
+    "square",
+    "rounded_square",
+    "polygon",
+    "star",
+    "ring",
+    "cross",
+    "capsule",
+    "paraboloid",
+    "cone",
+    "pyramid",
+    "bell",
+    "gaussian",
+    "waves",
+    "image",
+];
 pub const TILE_PATTERN_IMAGE: u32 = 14;
 
 /// What a Uniform Color makes, in the order of its "output" parameter.
 pub const UNIFORM_OUTPUTS: &[&str] = &["Color", "Grayscale"];
+const UNIFORM_OUTPUT_IDS: &[&str] = &["color", "gray"];
 
 pub static UNIFORM_COLOR: NodeDef = NodeDef {
     id: "uniform_color",
@@ -58,7 +92,7 @@ pub static UNIFORM_COLOR: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         color("color", "Color", [0.5, 0.5, 0.5, 1.0]),
-        choice("output", "Output", 0, UNIFORM_OUTPUTS)
+        choice("output", "Output", 0, UNIFORM_OUTPUTS, UNIFORM_OUTPUT_IDS)
             .fixed()
             .tip("Color: the color. Grayscale: its luminance, in a grayscale image."),
     ],
@@ -74,7 +108,7 @@ pub static SHAPE: NodeDef = NodeDef {
     inputs: NO_SOCKETS,
     outputs: GRAY_OUT,
     params: &[
-        choice("shape", "Shape", 0, SHAPES).pictured(),
+        choice("shape", "Shape", 0, SHAPES, SHAPE_IDS).pictured(),
         vec2("size", "Size", [0.6, 0.6], 0.0, 2.0)
             .tip("Extent of the shape relative to its cell (1 = touches the edges)."),
         float("scale", "Scale", 1.0, 0.0, 2.0),
@@ -100,7 +134,7 @@ pub static TILE_GENERATOR: NodeDef = NodeDef {
     inputs: &[image_opt("pattern", "Pattern")],
     outputs: IMAGE_OUT,
     params: &[
-        choice("pattern", "Pattern", 1, TILE_PATTERNS).pictured(),
+        choice("pattern", "Pattern", 1, TILE_PATTERNS, TILE_PATTERN_IDS).pictured(),
         int("x_amount", "X Amount", 8, 1, 64).bounded(),
         int("y_amount", "Y Amount", 8, 1, 64).bounded(),
         vec2("size", "Size", [0.9, 0.9], 0.0, 2.0).tip("Pattern size relative to the cell."),
@@ -123,7 +157,7 @@ pub static TILE_GENERATOR: NodeDef = NodeDef {
         float("inner_radius", "Inner Radius", 0.5, 0.05, 1.0).when("pattern", &[SHAPE_STAR]),
         float("thickness", "Thickness", 0.2, 0.01, 1.0).when("pattern", &[SHAPE_RING, SHAPE_CROSS]),
         float("corner_radius", "Corner Radius", 0.25, 0.0, 1.0).when("pattern", &[SHAPE_ROUNDED]),
-        choice("blend_mode", "Overlap", 0, &["Max", "Add"]).tip("How overlapping tiles combine."),
+        choice("blend_mode", "Overlap", 0, &["Max", "Add"], &["max", "add"]).tip("How overlapping tiles combine."),
         int("seed", "Seed", 0, 0, 9999).bounded(),
     ],
     role: Role::Image,
@@ -132,8 +166,10 @@ pub static TILE_GENERATOR: NodeDef = NodeDef {
 /// What gives each tile of a Tile Sampler its color: its luminance only (the patterns in their
 /// own colors), a random color of its own, or the Color Map where it stands.
 pub const TILE_SAMPLER_COLORS: &[&str] = &["Luminance", "Random Colors", "Color Map"];
+const TILE_SAMPLER_COLOR_IDS: &[&str] = &["luminance", "random", "color_map"];
 /// How the tiles of a Tile Sampler that overlap combine.
 pub const TILE_SAMPLER_OVERLAPS: &[&str] = &["Max", "Add", "Stack"];
+const TILE_SAMPLER_OVERLAP_IDS: &[&str] = &["max", "add", "stack"];
 
 pub static TILE_SAMPLER: NodeDef = NodeDef {
     id: "tile_sampler",
@@ -155,7 +191,7 @@ pub static TILE_SAMPLER: NodeDef = NodeDef {
     ],
     outputs: IMAGE_OUT,
     params: &[
-        choice("pattern", "Pattern", 1, TILE_PATTERNS).pictured(),
+        choice("pattern", "Pattern", 1, TILE_PATTERNS, TILE_PATTERN_IDS).pictured(),
         int("x_amount", "X Amount", 8, 1, 64).bounded(),
         int("y_amount", "Y Amount", 8, 1, 64).bounded(),
         vec2("size", "Size", [1.0, 1.0], 0.0, 2.0).tip("Pattern size relative to the cell."),
@@ -173,7 +209,7 @@ pub static TILE_SAMPLER: NodeDef = NodeDef {
         float("random_mirror", "Random Mirror", 0.0, 0.0, 1.0)
             .bounded()
             .tip("The chance of a tile being mirrored across, and, apart from that, up and down."),
-        choice("color", "Color", 0, TILE_SAMPLER_COLORS),
+        choice("color", "Color", 0, TILE_SAMPLER_COLORS, TILE_SAMPLER_COLOR_IDS),
         float("luminance", "Luminance", 1.0, 0.0, 1.0).bounded(),
         float("random_luminance", "Random Luminance", 0.0, 0.0, 1.0).bounded(),
         float("mask_random", "Mask Random", 0.0, 0.0, 1.0).bounded().tip("The chance of a tile being left out."),
@@ -186,7 +222,7 @@ pub static TILE_SAMPLER: NodeDef = NodeDef {
         float("inner_radius", "Inner Radius", 0.5, 0.05, 1.0).when("pattern", &[SHAPE_STAR]),
         float("thickness", "Thickness", 0.2, 0.01, 1.0).when("pattern", &[SHAPE_RING, SHAPE_CROSS]),
         float("corner_radius", "Corner Radius", 0.25, 0.0, 1.0).when("pattern", &[SHAPE_ROUNDED]),
-        choice("blend_mode", "Overlap", 0, TILE_SAMPLER_OVERLAPS)
+        choice("blend_mode", "Overlap", 0, TILE_SAMPLER_OVERLAPS, TILE_SAMPLER_OVERLAP_IDS)
             .tip("How overlapping tiles combine: the brighter wins, they add up, or one lies over another in a random order."),
         int("seed", "Seed", 0, 0, 9999).bounded(),
     ],
@@ -202,7 +238,14 @@ pub static GRADIENT: NodeDef = NodeDef {
     inputs: NO_SOCKETS,
     outputs: GRAY_OUT,
     params: &[
-        choice("type", "Type", 0, &["Linear", "Mirrored Linear", "Radial", "Angular", "Diamond"]).pictured(),
+        choice(
+            "type",
+            "Type",
+            0,
+            &["Linear", "Mirrored Linear", "Radial", "Angular", "Diamond"],
+            &["linear", "mirrored_linear", "radial", "angular", "diamond"],
+        )
+        .pictured(),
         angle("angle", "Angle", 0.0, -180.0, 180.0),
         vec2("center", "Center", [0.5, 0.5], 0.0, 1.0),
         float("repeat", "Repeat", 1.0, 0.1, 16.0),
@@ -212,8 +255,8 @@ pub static GRADIENT: NodeDef = NodeDef {
     role: Role::Image,
 };
 
-/// Noise types, in the order the menu shows them (files store the index). Each is a way of
-/// making noise of its own, with a look of its own, not a look of another one.
+/// Noise types, in the order the menu shows them (a file says them as [`NOISE_IDS`] does). Each
+/// is a way of making noise of its own, with a look of its own, not a look of another one.
 pub const NOISE_TYPES: &[&str] = &[
     "Perlin",
     "Simplex",
@@ -245,6 +288,39 @@ pub const NOISE_TYPES: &[&str] = &[
     "Blotches",
     "Craters",
     "White Noise",
+];
+/// What a file calls each of [`NOISE_TYPES`].
+const NOISE_IDS: &[&str] = &[
+    "perlin",
+    "simplex",
+    "value",
+    "billow",
+    "ridged",
+    "liquid",
+    "marble",
+    "wood",
+    "veins",
+    "streaks",
+    "flow",
+    "fibers",
+    "scratches",
+    "ripples",
+    "turing",
+    "raindrops",
+    "caustics",
+    "cells",
+    "cracks",
+    "crystal",
+    "mosaic",
+    "stones",
+    "scales",
+    "blocks",
+    "truchet",
+    "maze",
+    "spots",
+    "blotches",
+    "craters",
+    "white_noise",
 ];
 /// What each type is found by in the menu's search besides its name: what it looks like
 /// and what it is called elsewhere.
@@ -343,7 +419,7 @@ pub static NOISE: NodeDef = NodeDef {
     inputs: NO_SOCKETS,
     outputs: GRAY_OUT,
     params: &[
-        choice("type", "Type", 0, NOISE_TYPES).pictured().searched(NOISE_WORDS),
+        choice("type", "Type", 0, NOISE_TYPES, NOISE_IDS).pictured().searched(NOISE_WORDS),
         int("scale", "Scale", 8, 1, 128)
             .bounded()
             .tip("Number of noise cells across the image (an integer, so it tiles).")
@@ -411,10 +487,13 @@ pub static NOISE: NodeDef = NodeDef {
 
 /// How the picture of an SVG node fills the texture.
 pub const SVG_FITS: &[&str] = &["Fit", "Fill", "Stretch"];
+const SVG_FIT_IDS: &[&str] = &["fit", "fill", "stretch"];
 /// What an SVG node makes of the picture.
 pub const SVG_OUTPUTS: &[&str] = &["Color", "Coverage"];
+const SVG_OUTPUT_IDS: &[&str] = &["color", "coverage"];
 /// Where the text of a Text node is, from its position.
 pub const TEXT_ALIGNS: &[&str] = &["Left", "Center", "Right"];
+const TEXT_ALIGN_IDS: &[&str] = &["left", "center", "right"];
 
 pub static SVG: NodeDef = NodeDef {
     id: "svg",
@@ -428,11 +507,11 @@ pub static SVG: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         file("path", "File", &["svg"]),
-        choice("fit", "Fit", 0, SVG_FITS)
+        choice("fit", "Fit", 0, SVG_FITS, SVG_FIT_IDS)
             .fixed()
             .tip("Fit: all of the picture, as large as the texture holds it. Fill: the texture covered, the rest \
                   cut. Stretch: to the texture's shape."),
-        choice("output", "Output", 0, SVG_OUTPUTS)
+        choice("output", "Output", 0, SVG_OUTPUTS, SVG_OUTPUT_IDS)
             .fixed()
             .tip("Color: the picture's colors. Coverage: grayscale, how much of each pixel the picture covers."),
         vec2("offset", "Offset", [0.0, 0.0], -1.0, 1.0),
@@ -456,7 +535,7 @@ pub static TEXT: NodeDef = NodeDef {
         text("text", "Text", "Text"),
         file("font", "Font", &["ttf", "otf", "ttc"]).tip("A font file (TrueType, OpenType); none: Inter, built in."),
         pixels("size", "Size", 200.0, 4.0, 1024.0).at_least(0.0).tip("How high the letters are (the font's em)."),
-        choice("align", "Alignment", 1, TEXT_ALIGNS).tip("Which end of the line is at the position."),
+        choice("align", "Alignment", 1, TEXT_ALIGNS, TEXT_ALIGN_IDS).tip("Which end of the line is at the position."),
         float("spacing", "Letter Spacing", 0.0, -0.3, 1.0).tip("Between the letters, in ems."),
         vec2("offset", "Offset", [0.0, 0.0], -1.0, 1.0),
         angle("rotation", "Rotation", 0.0, -180.0, 180.0).tip("Degrees, counter-clockwise."),
