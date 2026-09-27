@@ -1,8 +1,8 @@
 //! How the window was laid out when it was closed: where its panels are split, how big it
 //! was, whether it filled the screen, whether the 3D view drew frame after frame and what lit
-//! it. Kept in a file of its own in the user's settings folder, read when the program starts
-//! and written when it quits. (Not where the window was: that screen may not be there next
-//! time.)
+//! it, and the packages opened last. Kept in a file of its own in the user's settings folder,
+//! read when the program starts and written when it quits. (Not where the window was: that
+//! screen may not be there next time.)
 
 use std::path::PathBuf;
 
@@ -28,6 +28,23 @@ pub struct Workspace {
     /// Whether the environment image showed behind the model, and how blurred.
     pub background: Option<bool>,
     pub blur: Option<f32>,
+    /// The package files opened or saved last, the latest first (see [`remember`]).
+    pub recent: Vec<String>,
+}
+
+/// How many packages the File menu offers again.
+pub const RECENT_PACKAGES: usize = 8;
+
+/// `recent` with `path` first: once, and no more than [`RECENT_PACKAGES`] of them.
+pub fn remember(recent: &mut Vec<String>, path: &str) {
+    recent.retain(|p| !same_file(p, path));
+    recent.insert(0, path.to_string());
+    recent.truncate(RECENT_PACKAGES);
+}
+
+/// Do two paths name the same file? (Windows and macOS do not tell capitals apart.)
+fn same_file(a: &str, b: &str) -> bool {
+    if cfg!(any(windows, target_os = "macos")) { a.to_lowercase() == b.to_lowercase() } else { a == b }
 }
 
 impl Workspace {
@@ -117,12 +134,28 @@ mod tests {
             exposure: Some(-1.5),
             background: Some(false),
             blur: Some(0.6),
+            recent: vec!["C:/work/walls.brewtex".into()],
         };
         let json = serde_json::to_string(&w).unwrap();
         assert_eq!(serde_json::from_str::<Workspace>(&json).unwrap(), w);
         // What a file does not say keeps its default.
         assert_eq!(serde_json::from_str::<Workspace>("{}").unwrap(), Workspace::default());
         assert_eq!(serde_json::from_str::<Workspace>(r#"{"maximized": true}"#).unwrap().splits, Vec::<f32>::new());
+    }
+
+    /// The packages opened last: the latest first, each once, no more than [`RECENT_PACKAGES`].
+    #[test]
+    fn packages_opened_last_are_remembered() {
+        let mut recent = Vec::new();
+        for i in 0..12 {
+            remember(&mut recent, &format!("/work/{i}.brewtex"));
+        }
+        assert_eq!(recent.len(), RECENT_PACKAGES);
+        assert_eq!(recent[0], "/work/11.brewtex");
+        remember(&mut recent, "/work/5.brewtex");
+        assert_eq!(recent.iter().filter(|p| p.ends_with("/5.brewtex")).count(), 1);
+        assert_eq!(recent[0], "/work/5.brewtex");
+        assert_eq!(recent.len(), RECENT_PACKAGES);
     }
 
     #[test]

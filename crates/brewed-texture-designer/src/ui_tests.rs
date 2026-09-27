@@ -2889,3 +2889,51 @@ fn files_chosen_or_dropped_are_held() {
     assert_eq!(read_by(&w, bitmap), Some(path));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The packages opened or saved last are in the File menu, the latest first, each by its name
+/// and folder: one opens it again; one that is not there any more goes off the list, saying so;
+/// Clear Recent Packages forgets them all.
+#[test]
+fn packages_opened_last_are_offered_again() {
+    use crate::app::MenuId;
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    let dir = scratch("recent");
+    let (walls, floors) = (dir.join("walls.brewtex"), dir.join("floors.brewtex"));
+    assert!(w.app.ui.recent.is_empty());
+    w.send(Message::SavePicked(Some(walls.clone())));
+    w.send(Message::New);
+    w.send(Message::SavePicked(Some(floors.clone())));
+    let said = |p: &std::path::Path| p.display().to_string();
+    assert_eq!(w.app.ui.recent, [said(&floors), said(&walls)]);
+    // (The Explorer names the packages too: the menu, once more.)
+    let names = ["walls.brewtex", "floors.brewtex", "Clear Recent Packages"];
+    draw_frame(&mut w, std::time::Instant::now());
+    let before = names.map(|name| texts(&mut w, name).len());
+    w.send(Message::Menu(Some(MenuId::File)));
+    draw_frame(&mut w, std::time::Instant::now());
+    for (name, before) in names.into_iter().zip(before) {
+        assert_eq!(texts(&mut w, name).len(), before + 1, "{name}");
+    }
+    w.snapshot("recent-packages");
+    w.send(Message::Menu(None));
+
+    // Opened again from the menu: in the Explorer, the latest now.
+    for key in package_keys(&w.app) {
+        w.send(Message::Explorer(ExplorerMessage::Close(key)));
+    }
+    w.send(Message::OpenRecent(said(&walls)));
+    assert_eq!(w.app.doc.path(), Some(&walls));
+    assert_eq!(w.app.ui.recent, [said(&walls), said(&floors)]);
+
+    // Gone from the disk: off the list, and said.
+    std::fs::remove_file(&floors).unwrap();
+    w.send(Message::OpenRecent(said(&floors)));
+    assert_eq!(w.app.ui.recent, [said(&walls)]);
+    assert!(w.app.ui.status.as_ref().is_some_and(|s| s.error && s.text.contains("not there")));
+    w.send(Message::ClearRecent);
+    assert!(w.app.ui.recent.is_empty());
+    w.send(Message::Menu(Some(MenuId::File)));
+    draw_frame(&mut w, std::time::Instant::now());
+    assert!(texts(&mut w, "Clear Recent Packages").is_empty(), "no list, no clearing it");
+    let _ = std::fs::remove_dir_all(&dir);
+}

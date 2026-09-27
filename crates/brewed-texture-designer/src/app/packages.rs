@@ -308,6 +308,7 @@ impl App {
             Ok(loaded) => {
                 let notes = loaded.notes.clone();
                 self.add_package(loaded.package, Some(PathBuf::from(&key)), loaded.views, loaded.open);
+                crate::workspace::remember(&mut self.ui.recent, &key);
                 let mut msg = format!("Opened {key}");
                 if !notes.is_empty() {
                     msg.push_str(&format!(" ({})", notes.join("; ")));
@@ -331,6 +332,7 @@ impl App {
                     self.shelf.retain(|p| p.key != open);
                 }
                 self.replace_package(loaded.package, Some(PathBuf::from(&key)), loaded.views, loaded.open);
+                crate::workspace::remember(&mut self.ui.recent, &key);
                 let mut msg = format!("Opened {key}");
                 if !notes.is_empty() {
                     msg.push_str(&format!(" ({})", notes.join("; ")));
@@ -404,6 +406,7 @@ impl App {
     /// copy now.
     pub(super) fn saved_as(&mut self, path: &Path) {
         let key = path.display().to_string();
+        crate::workspace::remember(&mut self.ui.recent, &key);
         self.forget_file(&key);
         // Another package open in the Explorer from the same file is this one now.
         let doc_key = self.doc_key;

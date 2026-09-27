@@ -62,10 +62,24 @@ fn menu<'a>(app: &'a App, id: MenuId, title: &'a str, items: Vec<Element<'a, Mes
 
 fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
     let key = app.doc_key;
-    vec![
+    let mut items = vec![
         item("New Package", "Ctrl+N", Some(Message::New)),
         item("New Graph", "", Some(Message::Explorer(ExplorerMessage::NewGraph(key)))),
         item("Open Package…", "Ctrl+O", Some(Message::Open)),
+    ];
+    // The packages opened or saved last: each by its name, and the folder it is in.
+    if !app.ui.recent.is_empty() {
+        items.push(separator());
+        for path in &app.ui.recent {
+            let p = std::path::Path::new(path);
+            let name = p.file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+            let folder = p.parent().and_then(|f| f.file_name()).map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+            items.push(recent_item(name, folder, Message::OpenRecent(path.clone())));
+        }
+        items.push(item("Clear Recent Packages", "", Some(Message::ClearRecent)));
+    }
+    items.extend([
+        separator(),
         item("Link Files…", "", Some(Message::Explorer(ExplorerMessage::LinkFiles(key)))),
         item("Collect Files", "", Some(Message::Explorer(ExplorerMessage::CollectFiles(key)))),
         separator(),
@@ -78,7 +92,28 @@ fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
         item("Open the Demo", "", Some(Message::LoadDemo)),
         separator(),
         item("Quit", "", Some(Message::Quit)),
-    ]
+    ]);
+    items
+}
+
+/// A package of the recent ones: its name, and on the right, the folder it is in (cut short
+/// to fit the menu).
+fn recent_item<'a>(name: String, folder: String, message: Message) -> Element<'a, Message> {
+    let folder: String = if folder.chars().count() > 18 { folder.chars().take(17).chain(['…']).collect() } else { folder };
+    button(
+        row![
+            text(name).size(style::TEXT_SIZE).wrapping(text::Wrapping::None),
+            space().width(Length::Fill),
+            text(folder).size(style::SMALL).color(style::TEXT_DIM).wrapping(text::Wrapping::None),
+        ]
+        .spacing(16)
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .padding([4, 10])
+    .style(style::row_button(false))
+    .on_press(Message::FromMenu(Box::new(message)))
+    .into()
 }
 
 fn edit_menu(app: &App) -> Vec<Element<'_, Message>> {

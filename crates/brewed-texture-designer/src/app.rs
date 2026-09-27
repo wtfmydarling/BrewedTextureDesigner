@@ -12,7 +12,7 @@ pub(crate) mod dev;
 pub(crate) mod packages;
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -359,6 +359,8 @@ pub struct Ui {
     pub renaming_graph: Option<(u64, GraphId, String)>,
     /// Quitting: the packages whose unsaved changes go.
     pub discarded: HashSet<u64>,
+    /// The package files opened or saved last, the latest first (File menu).
+    pub recent: Vec<String>,
 }
 
 /// What the engine told us.
@@ -664,6 +666,10 @@ pub enum Message {
     /// Save, then continue with the action (unsaved changes dialog).
     SaveThen(PendingAction),
     Dialog(Option<Dialog>),
+    /// Open a package opened or saved before (the File menu).
+    OpenRecent(String),
+    /// Forget the packages opened or saved before.
+    ClearRecent,
     /// The settings, changed (Edit → Settings…).
     Settings(Settings),
     /// Keep the unsaved work for recovery (see [`autosave`]).
@@ -920,6 +926,7 @@ impl App {
                 explorer_folded: HashSet::new(),
                 renaming_graph: None,
                 discarded: HashSet::new(),
+                recent: opts.workspace.as_ref().map(|w| w.recent.clone()).unwrap_or_default(),
             },
             opts: opts.clone(),
             window: None,
@@ -1728,6 +1735,7 @@ impl App {
             size: if maximized { last.size } else { Some([size.width, size.height]) },
             maximized,
             realtime: Some(self.ui.realtime),
+            recent: self.ui.recent.clone(),
             ..Workspace::default()
         }
         .with_lighting(&self.ui.preview.lighting);
@@ -1909,6 +1917,20 @@ impl App {
                 if let Some(path) = path {
                     self.open_package(path);
                 }
+            }
+            Message::OpenRecent(path) => {
+                self.close_popups();
+                // (Asked of the disk once, on the click: the menu itself never is.)
+                if !Path::new(&path).is_file() {
+                    self.ui.recent.retain(|p| *p != path);
+                    self.set_status(format!("{path} is not there any more: it is taken off the recent packages"), true);
+                } else {
+                    self.open_package(PathBuf::from(path));
+                }
+            }
+            Message::ClearRecent => {
+                self.close_popups();
+                self.ui.recent.clear();
             }
             Message::Save => {
                 self.close_popups();
