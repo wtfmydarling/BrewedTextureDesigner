@@ -82,6 +82,9 @@ pub struct Resource {
     /// [`crate::files`]).
     pub path: String,
     pub kind: ResourceKind,
+    /// What the package calls it (the Explorer shows it, and it is renamed there), its own in
+    /// the package: its file name at first (see [`default_name`]).
+    pub name: String,
     /// The file itself, when the package holds it: an entry of the package's file of its own.
     pub data: Option<Arc<Vec<u8>>>,
     /// What other programs keep with the file: kept as it is.
@@ -92,7 +95,7 @@ pub struct Resource {
 /// its bytes.
 impl PartialEq for Resource {
     fn eq(&self, other: &Resource) -> bool {
-        self.path == other.path && self.kind == other.kind && self.data.is_some() == other.data.is_some()
+        self.path == other.path && self.kind == other.kind && self.name == other.name && self.data.is_some() == other.data.is_some()
     }
 }
 
@@ -101,7 +104,7 @@ impl Eq for Resource {}
 impl Resource {
     /// A file linked where it is on disk.
     pub fn linked(path: String, kind: ResourceKind) -> Resource {
-        Resource { path, kind, data: None, extras: serde_json::Map::new() }
+        Resource { name: default_name(&path), path, kind, data: None, extras: serde_json::Map::new() }
     }
 
     /// A file the package holds, `bytes`, that came as `name`: its embedded name, which
@@ -110,16 +113,17 @@ impl Resource {
         Resource::held(crate::files::Held::new(name, bytes), kind)
     }
 
-    /// The file `held`, which the package holds (see [`Resource::embedded`]).
+    /// The file `held`, which the package holds (see [`Resource::embedded`]), called as the
+    /// file it came from was.
     pub fn held(held: crate::files::Held, kind: ResourceKind) -> Resource {
-        let (path, bytes) = held.into_parts();
-        crate::files::keep(&path, &bytes);
-        Resource { path, kind, data: Some(bytes), extras: serde_json::Map::new() }
+        let (path, bytes, name) = held.into_parts();
+        crate::files::keep(&path, &bytes, &name);
+        Resource { path, kind, name, data: Some(bytes), extras: serde_json::Map::new() }
     }
 
-    /// Its file name, as the Explorer shows it.
-    pub fn name(&self) -> String {
-        file_name(&self.path)
+    /// What the package calls it.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Does the package hold the file itself?
@@ -131,6 +135,32 @@ impl Resource {
 /// The name of the file at `path`.
 pub fn file_name(path: &str) -> String {
     Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().to_string())
+}
+
+/// What a file of a package is called until it is renamed: its file name; an embedded file's,
+/// what it was called where it was kept first (see [`crate::files::kept_name`]), else the start
+/// of its hash.
+pub fn default_name(path: &str) -> String {
+    let Some(file) = crate::files::embedded_file(path) else { return file_name(path) };
+    crate::files::kept_name(path).unwrap_or_else(|| match file.split_once('.') {
+        Some((hash, extension)) => format!("{}.{extension}", &hash[..8]),
+        None => file[..8].to_string(),
+    })
+}
+
+/// `name`, or, when one of `taken` is called so, the first of "name 2", "name 3"… that none
+/// is (the number before the extension: "bricks 2.png").
+fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(name) {
+        return name.to_string();
+    }
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
+        _ => (name, String::new()),
+    };
+    let stem = stem.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end();
+    let stem = if stem.is_empty() { "file" } else { stem };
+    (2..).map(|i| format!("{stem} {i}{extension}")).find(|n| !taken(n)).expect("a free name")
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -240,10 +270,24 @@ impl Package {
             }
             let Some(kind) = ResourceKind::of_path(&path) else { continue };
             let data = crate::files::is_embedded(&path).then(|| crate::files::embedded(&path)).flatten();
-            self.resources.push(Resource { path, kind, data, extras: serde_json::Map::new() });
+            let name = self.unique_resource_name(&default_name(&path), None);
+            self.resources.push(Resource { path, kind, name, data, extras: serde_json::Map::new() });
             added = true;
         }
         added
+    }
+
+    /// `name`, or after it, a name none of the package's files has but the one at `except`.
+    pub fn unique_resource_name(&self, name: &str, except: Option<&str>) -> String {
+        let name = name.trim();
+        let name = if name.is_empty() { "file" } else { name };
+        unique_name(name, |n| self.resources.iter().any(|r| Some(r.path.as_str()) != except && r.name == n))
+    }
+
+    /// What the package calls the file at `path`: its name, if the package lists it; else what
+    /// it would be called (see [`default_name`]).
+    pub fn file_label(&self, path: &str) -> String {
+        self.resources.iter().find(|r| r.path == path).map_or_else(|| default_name(path), |r| r.name.clone())
     }
 
     /// The files of the package no node reads.
@@ -282,7 +326,12 @@ impl Package {
             }
         };
         for r in &mut self.resources {
-            r.path = f(&r.path);
+            let path = f(&r.path);
+            // Called as its file was, it is called as its new one is.
+            if path != r.path && r.name == default_name(&r.path) && !crate::files::is_embedded(&path) {
+                r.name = default_name(&path);
+            }
+            r.path = path;
         }
         for entry in &mut self.graphs {
             let graph = Arc::make_mut(&mut entry.graph);
@@ -402,7 +451,7 @@ impl Package {
         };
         for (r, whole) in self.resources.iter_mut().zip(whole) {
             match &r.data {
-                Some(bytes) if whole => crate::files::keep(&r.path, bytes),
+                Some(bytes) if whole => crate::files::keep(&r.path, bytes, &r.name),
                 _ => r.data = None,
             }
         }
@@ -411,6 +460,14 @@ impl Package {
         }
         let mut paths = HashSet::new();
         self.resources.retain(|r| !r.path.trim().is_empty() && paths.insert(r.path.clone()));
+        // Each file named, and its name its own (a file can say any, or none).
+        let mut names = HashSet::new();
+        for r in &mut self.resources {
+            let name = r.name.trim();
+            let name = if name.is_empty() { default_name(&r.path) } else { name.chars().filter(|c| !c.is_control()).collect() };
+            r.name = unique_name(&name, |n| names.contains(n));
+            names.insert(r.name.clone());
+        }
         self.sync_resources();
     }
 }
@@ -456,6 +513,11 @@ pub enum PackageEdit {
         name: String,
     },
     DuplicateGraph(GraphId),
+    /// Call the file at `path` `name` (in the package: the file on disk keeps its name).
+    RenameResource {
+        path: String,
+        name: String,
+    },
     /// Link files to the package.
     AddResources(Vec<String>),
     /// Take a file out of the package; the nodes that read it keep reading it.
@@ -502,6 +564,7 @@ impl PackageEdit {
             PackageEdit::AddGraph { .. } => "New Graph",
             PackageEdit::RemoveGraph(_) => "Delete Graph",
             PackageEdit::RenameGraph { .. } => "Rename Graph",
+            PackageEdit::RenameResource { .. } => "Rename File",
             PackageEdit::DuplicateGraph(_) => "Duplicate Graph",
             PackageEdit::AddResources(_) => "Link Files",
             PackageEdit::RemoveResource(_) => "Remove File",
@@ -554,6 +617,21 @@ impl PackageEdit {
                 package.graph_mut(id).expect("checked").name = name;
                 changed
             }
+            PackageEdit::RenameResource { path, name } => {
+                let current = package.resources.iter().find(|r| r.path == path).ok_or("The file is not in the package any more")?.name.clone();
+                let name: String = name.trim().chars().filter(|c| !c.is_control()).collect();
+                if name.is_empty() {
+                    return Err("A file needs a name".into());
+                }
+                if name == current {
+                    return Ok(PackageResult::default());
+                }
+                if package.resources.iter().any(|r| r.path != path && r.name == name) {
+                    return Err(format!("The package has a file named '{name}' already"));
+                }
+                package.resources.iter_mut().find(|r| r.path == path).expect("checked").name = name;
+                changed
+            }
             PackageEdit::DuplicateGraph(id) => {
                 let entry = package.graph(id).ok_or("The graph no longer exists")?;
                 let (name, graph) = (entry.name.clone(), Graph::clone(&entry.graph));
@@ -569,7 +647,9 @@ impl PackageEdit {
                     }
                     match ResourceKind::of_path(&path) {
                         Some(kind) => {
-                            package.resources.push(Resource::linked(path, kind));
+                            let mut linked = Resource::linked(path, kind);
+                            linked.name = package.unique_resource_name(&linked.name, None);
+                            package.resources.push(linked);
                             added += 1;
                         }
                         None => unknown.push(file_name(&path)),
@@ -609,7 +689,8 @@ impl PackageEdit {
                 let mut embedded = 0;
                 for (path, held) in files {
                     let Some(r) = package.resources.iter().find(|r| r.path == path && r.data.is_none()) else { continue };
-                    let held = Resource::held(held, r.kind);
+                    // (Held, it is called as it was.)
+                    let held = Resource { name: r.name.clone(), ..Resource::held(held, r.kind) };
                     let new = held.path.clone();
                     package.map_paths(|p| if p == path { new.clone() } else { p.to_string() });
                     if let Some(r) = package.resources.iter_mut().find(|r| r.path == new) {
@@ -632,8 +713,9 @@ impl PackageEdit {
                         unknown.push(file_name(&name));
                         continue;
                     };
-                    let held = Resource::held(held, kind);
+                    let mut held = Resource::held(held, kind);
                     if !package.resources.iter().any(|r| r.path == held.path) {
+                        held.name = package.unique_resource_name(&held.name, None);
                         package.resources.push(held);
                         added += 1;
                     }

@@ -1408,7 +1408,7 @@ fn bitmap_node_decodes_and_resamples() {
     // The same picture held by a package (see `brewed_texture_core::files`): the same pixels.
     let bytes = std::sync::Arc::new(std::fs::read(&path).unwrap());
     let held = brewed_texture_core::files::embedded_path("tex.png", &bytes);
-    brewed_texture_core::files::keep(&held, &bytes);
+    brewed_texture_core::files::keep(&held, &bytes, "held.png");
     set(&mut g, b, "path", ParamValue::Text(held));
     assert_eq!(eval_read(&mut e, &g, b), data);
 

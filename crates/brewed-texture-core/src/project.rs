@@ -6,7 +6,8 @@
 //!   bytes;
 //! - `package.json`: what the package is (see [`Manifest`]);
 //! - `graphs/<id>.json`: each graph (see [`Graph`]);
-//! - `files/<sha256>/<name>`: each file the package holds, its bytes as they are;
+//! - `files/<sha256>.<ext>`: each file the package holds, its bytes as they are (what the
+//!   package calls it is in `package.json`);
 //! - `editor.json`: how the editor showed it: the graph edited, where each graph's view was;
 //! - whatever else other programs put there, written back as it was.
 //!
@@ -82,29 +83,29 @@ pub struct Unsaved {
     pub time: u64,
 }
 
-/// What `package.json` says: what the file is, the package's graphs (their ids, names, and
-/// where each is), the files it uses (those it holds: where they are in the file, and how
-/// large), the package files its graphs use (said for other programs: the graphs say it), the
-/// id the next graph gets, the extensions of the format it uses, and what other programs keep
-/// with it.
+/// What `package.json` says: what the file is, the package's graphs (their ids and names:
+/// each is `graphs/<id>.json`), the files it uses (each as its nodes say it, and what the
+/// package calls it), the id the next graph gets, the extensions of the format it uses, and what
+/// other programs keep with it. Nothing is said twice: what can be worked out (where a file or a
+/// graph is in the archive, what kind of file a file is, the packages the graphs use) is not
+/// said. What a reader can do without, it takes as it can: a file of the package that cannot
+/// be read is left out, saying so; the rest is as it is by default.
 #[derive(Serialize, Deserialize)]
 struct Manifest {
     format: String,
     version: u32,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "lenient")]
     generator: String,
     graphs: Vec<GraphItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    files: Vec<FileItem>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    packages: Vec<String>,
-    #[serde(default)]
+    files: Vec<Json>,
+    #[serde(default, deserialize_with = "lenient")]
     next_graph: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "lenient")]
     extensions_used: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     extensions_required: Vec<String>,
-    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    #[serde(default, skip_serializing_if = "Map::is_empty", deserialize_with = "lenient")]
     extras: Map<String, Json>,
 }
 
@@ -112,22 +113,28 @@ struct Manifest {
 struct GraphItem {
     id: GraphId,
     name: String,
-    entry: String,
 }
 
-/// A file a package uses: its path (as nodes say it: `embedded:<sha256>/<name>` for a file the
-/// package holds, else where it is on disk), what it is, and of one the package holds, its
-/// entry and size.
+/// A file a package uses: as its nodes say it (`embedded:<sha256>.<ext>` for a file the package
+/// holds, else where it is on disk), and what the package calls it.
 #[derive(Serialize, Deserialize)]
 struct FileItem {
-    path: String,
-    kind: ResourceKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    entry: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    size: Option<u64>,
-    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    file: String,
+    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "lenient")]
+    name: String,
+    #[serde(default, skip_serializing_if = "Map::is_empty", deserialize_with = "lenient")]
     extras: Map<String, Json>,
+}
+
+/// What a field says, or, when it says what cannot be taken, as it is by default: for what a
+/// reader can do without (not worth refusing a package over).
+fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(d: D) -> Result<T, D::Error> {
+    Ok(serde_json::from_value(Json::deserialize(d)?).unwrap_or_default())
+}
+
+/// The entry of a package's file that holds the graph `id`.
+fn graph_entry(id: GraphId) -> String {
+    format!("{GRAPHS}{}.json", id.0)
 }
 
 /// What `editor.json` says: the graph being edited, and where each graph was shown.
@@ -234,32 +241,22 @@ fn write<W: Write>(
     if let Some(dir) = dir {
         package.map_paths(|p| relative_path(p, dir));
     }
-    // Each file the package holds once, at `files/<sha256>/<name>` (of the first name it has).
-    let mut entries: HashMap<String, String> = HashMap::new();
-    let files: Vec<FileItem> = package
+    let files = package
         .resources
         .iter()
-        .map(|r| {
-            let entry = crate::files::embedded_parts(&r.path).map(|(hash, name)| {
-                let named = format!("{FILES}{hash}/{name}");
-                let entry = if archive::is_entry_name(&named) { named } else { format!("{FILES}{hash}/file") };
-                entries.entry(hash.to_string()).or_insert(entry).clone()
-            });
-            let size = r.data.as_ref().map(|d| d.len() as u64);
-            FileItem { path: r.path.clone(), kind: r.kind, entry, size, extras: r.extras.clone() }
-        })
-        .collect();
+        .map(|r| serde_json::to_value(FileItem { file: r.path.clone(), name: r.name.clone(), extras: r.extras.clone() }))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("The package cannot be written: {e}"))?;
+    // The entries of graphs and of the files the package holds (each once), in order.
+    let graph_entries: Vec<String> = package.graphs.iter().map(|g| graph_entry(g.id)).collect();
+    let file_entries: Vec<Option<String>> =
+        package.resources.iter().map(|r| crate::files::embedded_file(&r.path).map(|f| format!("{FILES}{f}"))).collect();
     let manifest = Manifest {
         format: FORMAT.into(),
         version: VERSION,
         generator: format!("{} {}", crate::APP_NAME, env!("CARGO_PKG_VERSION")),
-        graphs: package
-            .graphs
-            .iter()
-            .map(|g| GraphItem { id: g.id, name: g.name.clone(), entry: format!("{GRAPHS}{}.json", g.id.0) })
-            .collect(),
+        graphs: package.graphs.iter().map(|g| GraphItem { id: g.id, name: g.name.clone() }).collect(),
         files,
-        packages: package.dependencies().into_iter().collect(),
         next_graph: package.next_graph(),
         extensions_used: Vec::new(),
         extensions_required: Vec::new(),
@@ -283,11 +280,11 @@ fn write<W: Write>(
     if let Some(unsaved) = unsaved {
         parts.push((RECOVERY, Part::Bytes(Cow::Owned(json(unsaved, "The snapshot")?), Method::Deflated)));
     }
-    parts.extend(package.graphs.iter().zip(&manifest.graphs).map(|(g, item)| (item.entry.as_str(), Part::Graph(g))));
+    parts.extend(package.graphs.iter().zip(&graph_entries).map(|(g, entry)| (entry.as_str(), Part::Graph(g))));
     if held == Held::In {
         let mut written = HashSet::new();
-        for (r, item) in package.resources.iter().zip(&manifest.files) {
-            let (Some(entry), Some(bytes)) = (&item.entry, &r.data) else { continue };
+        for (r, entry) in package.resources.iter().zip(&file_entries) {
+            let (Some(entry), Some(bytes)) = (entry, &r.data) else { continue };
             if written.insert(entry.as_str()) {
                 // Pictures are compressed already; vector graphics and fonts deflate well.
                 let method = if r.kind == ResourceKind::Bitmap { Method::Stored } else { Method::Deflated };
@@ -386,7 +383,7 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
     let mut notes = Vec::new();
     let mut entries = Vec::new();
     for item in &manifest.graphs {
-        let bytes = archive.read(&item.entry, MAX_JSON).map_err(|e| format!("The graph '{}' cannot be read: {e}", item.name))?;
+        let bytes = archive.read(&graph_entry(item.id), MAX_JSON).map_err(|e| format!("The graph '{}' cannot be read: {e}", item.name))?;
         let mut graph: Graph =
             serde_json::from_slice(&bytes).map_err(|e| format!("The graph '{}' cannot be read: {e}", item.name))?;
         let links = graph.links.len();
@@ -407,15 +404,26 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
     let mut missing = 0;
     // (Files of the same bytes are one entry, read once.)
     let mut read: HashMap<String, Arc<Vec<u8>>> = HashMap::new();
-    for item in manifest.files {
+    for value in manifest.files {
+        let item = match serde_json::from_value::<FileItem>(value) {
+            Ok(item) => item,
+            Err(e) => {
+                notes.push(format!("A file of the package cannot be read, and was left out: {e}"));
+                continue;
+            }
+        };
+        let Some(kind) = ResourceKind::of_path(&item.file) else {
+            notes.push(format!("'{}' is no file the package can use, and was left out", item.file));
+            continue;
+        };
         let mut data = None;
-        if let Some(entry) = item.entry.as_deref().filter(|e| e.starts_with(FILES)) {
-            match (read.get(entry), archive.entry(entry)) {
+        if let Some(entry) = crate::files::embedded_file(&item.file).map(|f| format!("{FILES}{f}")) {
+            match (read.get(&entry), archive.entry(&entry)) {
                 (Some(bytes), _) => data = Some(bytes.clone()),
-                (None, Some(_)) => match archive.read(entry, crate::files::MAX_FILE) {
+                (None, Some(_)) => match archive.read(&entry, crate::files::MAX_FILE) {
                     Ok(bytes) => {
                         let bytes = Arc::new(bytes);
-                        read.insert(entry.to_string(), bytes.clone());
+                        read.insert(entry, bytes.clone());
                         data = Some(bytes);
                     }
                     Err(e) => notes.push(e),
@@ -425,7 +433,7 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
                 (None, None) => {}
             }
         }
-        resources.push(Resource { path: item.path, kind: item.kind, data, extras: item.extras });
+        resources.push(Resource { path: item.file, kind, name: item.name, data, extras: item.extras });
     }
     drop(read);
     if missing > 0 {
@@ -509,6 +517,7 @@ mod tests {
         let second = package.add_graph("Second", half);
         let png = Arc::new(b"\x89PNG not really".to_vec());
         let font = Arc::new(vec![7u8; 3000]);
+        let font_bytes = font.clone();
         package.resources.push(Resource::embedded("bricks.png", ResourceKind::Bitmap, png.clone()));
         package.resources.push(Resource::embedded("C:/fonts/Шрифт.ttf", ResourceKind::Font, font.clone()));
         package.resources.push(Resource::linked(somewhere(&["tex", "linked.png"]), ResourceKind::Bitmap));
@@ -524,10 +533,17 @@ mod tests {
         let names = entry_names(&bytes);
         assert_eq!(names[..3], ["mimetype", "package.json", "editor.json"]);
         assert!(names.contains(&"graphs/1.json".to_string()) && names.contains(&"graphs/2.json".to_string()));
+        // Each file it holds, by its bytes and extension; what the package calls it, beside.
         let sha = crate::files::sha256(&png);
-        assert!(names.contains(&format!("files/{sha}/bricks.png")), "{names:?}");
-        assert!(names.iter().any(|n| n.ends_with("/Шрифт.ttf")));
+        assert!(names.contains(&format!("files/{sha}.png")), "{names:?}");
+        assert!(names.contains(&format!("files/{}.ttf", crate::files::sha256(&font_bytes))), "{names:?}");
         assert_eq!(names.len(), 7);
+        let manifest: Json = serde_json::from_slice(&Archive::new(Cursor::new(&bytes)).unwrap().read(MANIFEST, 1 << 20).unwrap()).unwrap();
+        let files: Vec<(&str, &str)> =
+            manifest["files"].as_array().unwrap().iter().map(|f| (f["file"].as_str().unwrap(), f["name"].as_str().unwrap())).collect();
+        assert_eq!(files[0], (format!("embedded:{sha}.png").as_str(), "bricks.png"));
+        assert_eq!(files[1].1, "Шрифт.ttf");
+        assert!(manifest.get("packages").is_none() && manifest["graphs"][0].get("entry").is_none(), "nothing said twice");
         assert!(from_bytes(b"not a zip", None).err().unwrap().contains("not a Brewed Texture Designer package"));
     }
 
@@ -617,20 +633,85 @@ mod tests {
         assert_eq!(again.package.other_entries, loaded.package.other_entries);
     }
 
-    /// Files of the same bytes, whatever their names, are one entry of the file, read once.
+    /// A file of the same bytes, whatever it was called, is one file of the package, held
+    /// once: taken in again, it is the one there, as it is called there.
     #[test]
     fn the_same_bytes_are_held_once() {
+        use crate::package::PackageEdit;
         let (mut package, views, open) = demo();
         let bytes = Arc::new(b"the same picture, twice".to_vec());
-        package.resources.push(Resource::embedded("a.png", ResourceKind::Bitmap, bytes.clone()));
-        package.resources.push(Resource::embedded("b.png", ResourceKind::Bitmap, bytes.clone()));
+        let held = |name: &str| (name.to_string(), crate::files::Held::new(name, bytes.clone()));
+        PackageEdit::Import(vec![held("C:/a/bricks.png"), held("C:/b/wall.png")]).apply(&mut package).unwrap();
+        let names: Vec<&str> = package.resources.iter().map(|r| r.name()).collect();
+        assert_eq!(names, ["bricks.png"]);
         let file = to_bytes(&package, &views, open, None).unwrap();
         assert_eq!(entry_names(&file).iter().filter(|n| n.starts_with(FILES)).count(), 1);
         let loaded = from_bytes(&file, None).unwrap();
         assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
-        let held: Vec<&Arc<Vec<u8>>> = loaded.package.resources.iter().filter_map(|r| r.data.as_ref()).collect();
-        assert_eq!(held.len(), 2);
-        assert!(Arc::ptr_eq(held[0], held[1]) && *held[0] == bytes);
+        assert_eq!(loaded.package.resources.len(), 1);
+        assert_eq!(loaded.package.resources[0].data.as_deref(), Some(&*bytes));
+    }
+
+    /// What a package calls a file is its own to say, and to change: not what the file holds,
+    /// nor how nodes read it. Names are each their own; one a file cannot take is refused, and
+    /// one a file said that another has, made its own on reading.
+    #[test]
+    fn files_are_renamed_in_the_package() {
+        use crate::package::PackageEdit;
+        let (mut package, views, open) = demo();
+        let held = |name: &str, bytes: &[u8]| (name.to_string(), crate::files::Held::new(name, Arc::new(bytes.to_vec())));
+        PackageEdit::Import(vec![held("C:/a/bricks.png", b"one"), held("C:/b/bricks.png", b"two")]).apply(&mut package).unwrap();
+        let names: Vec<&str> = package.resources.iter().map(|r| r.name()).collect();
+        assert_eq!(names, ["bricks.png", "bricks 2.png"], "names each their own");
+        let second = package.resources[1].path.clone();
+        PackageEdit::RenameResource { path: second.clone(), name: " Old wall.png ".into() }.apply(&mut package).unwrap();
+        assert_eq!(package.resources[1].name, "Old wall.png");
+        assert!(PackageEdit::RenameResource { path: second.clone(), name: "bricks.png".into() }.apply(&mut package).is_err());
+        assert!(PackageEdit::RenameResource { path: second.clone(), name: "  ".into() }.apply(&mut package).is_err());
+        assert_eq!(package.resources[1].path, second, "the file is the same");
+        let loaded = from_bytes(&to_bytes(&package, &views, open, None).unwrap(), None).unwrap();
+        assert_eq!(loaded.package.resources[1].name, "Old wall.png");
+        // A linked file is called as its file, until renamed; moved, as its new file.
+        PackageEdit::AddResources(vec!["C:/x/stone.png".into()]).apply(&mut package).unwrap();
+        PackageEdit::Relink { from: "C:/x/stone.png".into(), to: "C:/y/rock.png".into() }.apply(&mut package).unwrap();
+        assert!(package.resources.iter().any(|r| r.path == "C:/y/rock.png" && r.name == "rock.png"));
+        PackageEdit::RenameResource { path: "C:/y/rock.png".into(), name: "Cliff".into() }.apply(&mut package).unwrap();
+        PackageEdit::Relink { from: "C:/y/rock.png".into(), to: "C:/z/rock2.png".into() }.apply(&mut package).unwrap();
+        assert!(package.resources.iter().any(|r| r.path == "C:/z/rock2.png" && r.name == "Cliff"), "a name given stays");
+    }
+
+    /// What a package's file says that a reader can do without, a reader takes as it can: a
+    /// file of the package it cannot read is left out, saying so; a count or a note it cannot
+    /// read is as it is by default. The package opens.
+    #[test]
+    fn what_can_be_done_without_does_not_keep_a_package_shut() {
+        let (package, views, open) = demo();
+        let bytes = to_bytes(&package, &views, open, None).unwrap();
+        let mut archive = Archive::new(Cursor::new(bytes.clone())).unwrap();
+        let names: Vec<String> = archive.entries().iter().map(|e| e.name.clone()).collect();
+        let mut zip = Writer::new(Vec::new());
+        for name in names {
+            let mut content = archive.read(&name, 1 << 30).unwrap();
+            if name == MANIFEST {
+                let mut manifest: Json = serde_json::from_slice(&content).unwrap();
+                manifest["next_graph"] = serde_json::json!(-1);
+                manifest["generator"] = serde_json::json!({ "what": "not text" });
+                manifest["extras"] = serde_json::json!("not an object");
+                manifest["files"] = serde_json::json!([
+                    { "file": 5 },
+                    { "file": "C:/tex/a.png", "name": 7, "size": -1 },
+                    { "file": "C:/tex/readme.txt" }
+                ]);
+                content = serde_json::to_vec(&manifest).unwrap();
+            }
+            zip.add(&name, &content, Method::Deflated).unwrap();
+        }
+        let loaded = from_bytes(&zip.finish().unwrap(), None).unwrap();
+        assert_eq!(loaded.package.graphs.len(), package.graphs.len());
+        let files: Vec<(&str, &str)> = loaded.package.resources.iter().map(|r| (r.path.as_str(), r.name())).collect();
+        assert_eq!(files, [("C:/tex/a.png", "a.png")]);
+        assert_eq!(loaded.notes.len(), 2, "{:?}", loaded.notes);
+        assert!(loaded.package.next_graph() > package.graphs.iter().map(|g| g.id.0).max().unwrap());
     }
 
     /// A file a package holds that is not what its name says (made so elsewhere) is left out,
@@ -641,7 +722,7 @@ mod tests {
         // (Bytes nothing in this run holds: what holds them would give them back by their name.)
         let picture = Arc::new(format!("the picture of {:?}", std::time::SystemTime::now()).into_bytes());
         let path = crate::files::embedded_path("a.png", &picture);
-        package.resources.push(Resource { path, kind: ResourceKind::Bitmap, data: Some(picture), extras: Map::new() });
+        package.resources.push(Resource { path, kind: ResourceKind::Bitmap, name: "a.png".into(), data: Some(picture), extras: Map::new() });
         let bytes = to_bytes(&package, &views, open, None).unwrap();
         /// What an entry, by its name, becomes (none: it goes).
         type Change<'a> = &'a dyn Fn(&str, Vec<u8>) -> Option<Vec<u8>>;
@@ -657,10 +738,10 @@ mod tests {
             }
             from_bytes(&zip.finish().unwrap(), None).unwrap()
         };
-        let forged = rewritten(&|name, content| Some(if name.ends_with("a.png") { b"another".to_vec() } else { content }));
-        assert!(forged.package.resources.iter().any(|r| r.path.ends_with("a.png") && r.data.is_none()));
+        let forged = rewritten(&|name, content| Some(if name.starts_with(FILES) { b"another".to_vec() } else { content }));
+        assert!(forged.package.resources.iter().any(|r| r.name == "a.png" && r.data.is_none()));
         assert!(forged.notes.iter().any(|n| n.contains("not what their names say")), "{:?}", forged.notes);
-        let lacking = rewritten(&|name, content| (!name.ends_with("a.png")).then_some(content));
+        let lacking = rewritten(&|name, content| (!name.starts_with(FILES)).then_some(content));
         assert!(lacking.notes.iter().any(|n| n.contains("not in its file")), "{:?}", lacking.notes);
     }
 

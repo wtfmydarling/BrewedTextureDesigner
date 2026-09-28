@@ -9,7 +9,7 @@ use iced::widget::{button, column, container, pick_list, row, scrollable, space,
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::graph::{ImageInput, Variable};
 use brewed_texture_core::nodes::ImageKind;
-use brewed_texture_core::package::file_name;
+use brewed_texture_core::package::Package;
 use brewed_texture_core::{DataType, Edit, Value};
 
 use crate::app::{App, ColorTarget, DragPayload, FileTarget, Message, VarField};
@@ -41,11 +41,11 @@ pub fn image_color(var: &Variable) -> [f32; 4] {
 }
 
 /// What a value of an input value is, in a few words: its value, or a picture by its name.
-fn said(var: &Variable, default: bool) -> String {
+fn said(var: &Variable, default: bool, package: &Package) -> String {
     match &var.image {
         Some(image) => {
             let picture = if default { &image.default } else { &image.picture };
-            if picture.is_empty() { "no picture".to_string() } else { file_name(picture) }
+            if picture.is_empty() { "no picture".to_string() } else { package.file_label(picture) }
         }
         None => (if default { var.default } else { var.value }).display(),
     }
@@ -249,10 +249,10 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
     let hint = match (var.description.is_empty(), changed) {
         (true, false) => String::new(),
         (false, false) => var.description.clone(),
-        (true, true) => format!("Changed — middle-click the row to put {} back", said(var, true)),
+        (true, true) => format!("Changed — middle-click the row to put {} back", said(var, true, app.doc.package())),
         (false, true) => format!("{}
 
-Changed — middle-click the row to put {} back", var.description, said(var, true)),
+Changed — middle-click the row to put {} back", var.description, said(var, true, app.doc.package())),
     };
     let name: Element<'a, Message> = crate::view::tip(name, hint, tooltip::Position::Bottom);
     let header = row![

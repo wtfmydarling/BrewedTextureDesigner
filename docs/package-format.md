@@ -19,13 +19,17 @@ The reference implementation is `crates/brewed-texture-core` (`project.rs` for t
 ```
 walls.brewtex                          a ZIP archive
 ├── mimetype                           application/vnd.brewed-texture.package+zip (first, stored)
-├── package.json                       the manifest: graphs, files, dependencies
+├── package.json                       the manifest: the graphs, the files and their names
 ├── editor.json                        which graph was open, where each view was
-├── graphs/1.json                      a graph each, named in the manifest
+├── graphs/1.json                      a graph each, by its id
 ├── graphs/4.json
-├── files/9f86d081…0f00a08/bricks.png  a file the package holds, named by its SHA-256
+├── files/9f86d081…0f00a08.png         a file the package holds, by its SHA-256
 └── x-studio/review.txt                what another program keeps with the package
 ```
+
+`mimetype` is a file like the others, of one line: the type of the file, where a program that
+tells files by their first bytes finds it (see *The archive*). It registers nothing anywhere:
+EPUB books and OpenDocument files begin the same way.
 
 Reading a package with Python, say:
 
@@ -36,13 +40,15 @@ with zipfile.ZipFile("walls.brewtex") as z:
     manifest = json.loads(z.read("package.json"))
     assert manifest["format"] == "brewed-texture-package" and manifest["version"] <= 1
     for graph in manifest["graphs"]:
-        g = json.loads(z.read(graph["entry"]))
+        g = json.loads(z.read(f"graphs/{graph['id']}.json"))
         outputs = [n for n in g["nodes"] if n["type"] == "output"]
         print(graph["name"], len(g["nodes"]), "nodes,", len(outputs), "outputs")
     for f in manifest.get("files", []):
-        if "entry" in f:                      # held by the package
-            data = z.read(f["entry"])
-            assert hashlib.sha256(data).hexdigest() == f["path"].split(":")[1].split("/")[0]
+        if f["file"].startswith("embedded:"):  # held by the package
+            held = f["file"].removeprefix("embedded:")
+            data = z.read("files/" + held)
+            assert hashlib.sha256(data).hexdigest() == held.split(".")[0]
+            print(f["name"], len(data), "bytes")
 ```
 
 ## The archive
@@ -83,7 +89,6 @@ What the package is. A JSON object:
 | `generator` | string | What wrote the file, e.g. `"Brewed Texture Designer 0.2.0"`. Optional. |
 | `graphs` | array | The graphs, in the order the package lists them: at least one (below). |
 | `files` | array | The files the package uses (below). Optional. |
-| `packages` | array of strings | The package files whose graphs its graphs use, relative to it where they can be. Said for other programs: the graphs say it too (see `uses`). Optional. |
 | `next_graph` | integer | The id the next graph made gets: above every id a graph of the package has had, so a graph taken out never gives its id to another. Optional. |
 | `extensions_used` | array of strings | The extensions of the format the package uses. Optional. |
 | `extensions_required` | array of strings | Those of them a reader must know to read the package. Optional. |
@@ -95,17 +100,24 @@ A graph:
 |---|---|---|
 | `id` | integer | Its id in the package, from 1: what nodes that use it find it by. It stays the same when the graph is renamed. |
 | `name` | string | Its name, its own in the package. |
-| `entry` | string | The entry that holds it: `graphs/<id>.json`. |
+
+The graph is the entry `graphs/<id>.json`.
 
 A file:
 
 | Field | Type | |
 |---|---|---|
-| `path` | string | How nodes name it (see *Paths*): `embedded:<sha256>/<name>` for a file the package holds, else where it is on disk. |
-| `kind` | string | `bitmap` (a picture, read by a Bitmap), `svg` (vector graphics, read by an SVG node) or `font` (read by a Text node). |
-| `entry` | string | The entry that holds its bytes, for a file the package holds: `files/<sha256>/<name>`. |
-| `size` | integer | How many bytes it holds, for a file the package holds. |
+| `file` | string | The file, as the package's nodes say it: `embedded:<sha256>.<ext>` for a file the package holds (see *Files the package holds*), else where it is on disk (see *Paths*). |
+| `name` | string | What the package calls it, its own in the package: the name the file had at first, renamed as people like. Optional: the file's name. |
 | `extras` | object | What other programs keep with the file. Optional. |
+
+What a file is (a picture, read by a Bitmap; vector graphics, by an SVG node; a font, by a
+Text node) is its extension's to say: `png`, `jpg`, `jpeg`, `tga`, `bmp`, `tif`, `tiff`, `exr`,
+`hdr`; `svg`, `svgz`; `ttf`, `otf`, `ttc`.
+
+Nothing is said twice. Where a graph or a file is in the archive, what kind of file a file is,
+which packages the graphs use: all of it follows from what is said, and is not said again (a
+second saying could only disagree with the first).
 
 ```json
 {
@@ -113,43 +125,52 @@ A file:
   "version": 1,
   "generator": "Brewed Texture Designer 0.2.0",
   "graphs": [
-    { "id": 1, "name": "Brick Wall", "entry": "graphs/1.json" },
-    { "id": 4, "name": "Mortar", "entry": "graphs/4.json" }
+    { "id": 1, "name": "Brick Wall" },
+    { "id": 4, "name": "Mortar" }
   ],
   "files": [
-    {
-      "path": "embedded:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08/bricks.png",
-      "kind": "bitmap",
-      "entry": "files/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08/bricks.png",
-      "size": 48213
-    },
-    { "path": "../fonts/Inter.ttf", "kind": "font" }
+    { "file": "embedded:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08.png", "name": "Bricks, old" },
+    { "file": "fonts/Inter.ttf", "name": "Inter.ttf" }
   ],
-  "packages": ["../library/stone.brewtex"],
   "next_graph": 5
 }
 ```
 
+A reader takes what it can do without as it can: a file of the list it cannot read (no `file`,
+or a file of no kind above) is left out, and the reader says so; `generator`, `next_graph`,
+`name`, `extras` or `extensions_used` that say what cannot be taken (a number where text goes,
+`-1` for a count) are as they are when not said. What it cannot do without (the format, the
+version, the graphs, `extensions_required`) it reads as it is, or refuses the package, saying
+why: rather than read it wrongly and save it without what it did not understand.
+
 ## Files the package holds
 
-Each file the package holds is one entry, `files/<sha256>/<name>`: its bytes as they are, the
-SHA-256 of them in 64 small hexadecimal digits (as `sha256sum` writes it) and the file name it
-came with. Pictures are stored (they are compressed already); vector graphics and fonts are
-deflated.
+Each file the package holds is one entry, `files/<sha256>.<ext>`: its bytes as they are, named
+by the SHA-256 of them in 64 small hexadecimal digits (as `sha256sum` writes it) and the
+extension of the file it came from, in small letters (what reads it may go by it: a TGA picture
+does not say what it is). Pictures are stored (they are compressed already); vector graphics
+and fonts are deflated. What the package calls the file is its `name` in the manifest: renaming
+the file renames nothing in the archive.
 
-Nodes name such a file `embedded:<sha256>/<name>`. The name says the bytes: the same name is
-the same file in any package, a node copied into another package brings its file along, and
-files of the same bytes are held once (the entry of the first name). A reader checks the hash:
-bytes that are not what their name says are not taken (the package opens, the file is missing,
-and the reader says so).
+Nodes name such a file `embedded:<sha256>.<ext>`. The name says the bytes: the same name is the
+same file in any package, a node copied into another package brings its file along, and a file
+taken in twice is held once. A reader checks the hash: bytes that are not what their name says
+are not taken (the package opens, the file is missing, and the reader says so).
 
 ## Paths
 
-A file or a package the package links to is named where it is, relative to the package's file
-wherever the two share a root (`textures/bricks.png`, `../library/stone.brewtex`), with `/`
-between the parts on every system; as an absolute path where they do not (another drive on
-Windows). A reader takes a relative path from the folder the package is in. A path is never an
-`embedded:` name, and an `embedded:` name is never a path.
+A file the package links to (does not hold) is named where it is on disk, relative to the
+folder the package's file is in: `textures/bricks.png` is in the folder `textures` beside
+`walls.brewtex`, `../fonts/Inter.ttf` in the folder `fonts` beside the folder of
+`walls.brewtex`. Relative, a package moved with its files keeps finding them. Parts are
+separated by `/` on every system; a path is absolute where the two share no root (another drive
+on Windows). A reader takes a relative path from the folder the package is in. A path is never
+an `embedded:` name, and an `embedded:` name is never a path.
+
+A package whose graph uses a graph of another package as a node names that package so too (a
+node's `uses.package`, see *Nodes*). Such a package depends on that other file, as one that
+links to a file does: it is whole only with it. A package that holds its files and uses only its
+own graphs needs nothing beside it.
 
 ## Graphs
 

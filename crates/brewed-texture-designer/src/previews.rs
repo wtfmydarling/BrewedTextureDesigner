@@ -150,7 +150,7 @@ mod tests {
         // Held by a package: the same picture.
         let bytes = std::sync::Arc::new(std::fs::read(&png).unwrap());
         let held = files::embedded_path(&png, &bytes);
-        files::keep(&held, &bytes);
+        files::keep(&held, &bytes, "wide.png");
         assert_eq!(make(&held, ResourceKind::Bitmap).unwrap().0, rgba);
         let looks = look(&[png.clone(), held, dir.join("gone.png").display().to_string()]);
         assert_eq!(looks.iter().map(|l| l.there).collect::<Vec<_>>(), [true, true, false]);

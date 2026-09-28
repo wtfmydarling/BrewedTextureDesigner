@@ -100,8 +100,8 @@ pub(super) fn read_held(path: String, then: impl FnOnce(Result<Held, String>) ->
 /// Keep `held` for whatever reads it (see [`brewed_texture_core::files`]): the name it is read
 /// by. A node that reads it makes the package hold it.
 pub(super) fn hold(held: Held) -> String {
-    let (path, bytes) = held.into_parts();
-    brewed_texture_core::files::keep(&path, &bytes);
+    let (path, bytes, name) = held.into_parts();
+    brewed_texture_core::files::keep(&path, &bytes, &name);
     path
 }
 
@@ -986,6 +986,27 @@ impl App {
                     self.set_status(e, true);
                 }
             }
+            ExplorerMessage::StartRenameFile(key, path) => {
+                self.close_popups();
+                let name = self.package_doc(key).and_then(|d| d.package().resources.iter().find(|r| r.path == path).map(|r| r.name.clone()));
+                if let Some(name) = name {
+                    self.ui.renaming_file = Some((key, path, name));
+                    return iced::widget::operation::focus(crate::view::explorer::rename_id());
+                }
+            }
+            ExplorerMessage::RenameFileText(text) => {
+                if let Some((_, _, name)) = &mut self.ui.renaming_file {
+                    *name = text;
+                }
+            }
+            ExplorerMessage::CommitRenameFile => {
+                if let Some((key, path, name)) = self.ui.renaming_file.take()
+                    && let Some(doc) = self.package_doc_mut(key)
+                    && let Err(e) = doc.apply_package(PackageEdit::RenameResource { path, name })
+                {
+                    self.set_status(e, true);
+                }
+            }
             ExplorerMessage::Save(key) => {
                 self.activate(key, None);
                 return self.update_nested(Message::Save);
@@ -1189,7 +1210,7 @@ impl App {
                 self.add_graph_node(key, graph, pos);
                 true
             }
-            DragPayload::Resource { path, kind } => {
+            DragPayload::Resource { path, kind, .. } => {
                 self.add_resource_node(path, kind, Some(pos));
                 true
             }

@@ -2,7 +2,6 @@
 
 use iced::widget::{button, column, container, image, mouse_area, row, space, text, toggler, tooltip};
 use iced::{Alignment, Border, ContentFit, Element, Length};
-use brewed_texture_core::package::file_name;
 use brewed_texture_core::{Edit, ParamValue, ResourceKind, Value, files};
 
 use crate::app::{App, ColorTarget, DragPayload, FileTarget, Message, PickMessage, VarField};
@@ -35,8 +34,7 @@ fn kind_of(extensions: &[&str]) -> Option<ResourceKind> {
 pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String, color: Option<[f32; 4]>) -> Element<'a, Message> {
     let extensions = app.takes(&target);
     let kind = kind_of(extensions);
-    if let Some(DragPayload::Resource { path: dragged, .. }) = &app.ui.drag {
-        let name = file_name(dragged);
+    if let Some(DragPayload::Resource { path: dragged, name, .. }) = &app.ui.drag {
         let takes = takes_file(extensions, dragged);
         let says = if takes {
             format!("Drop to use {name}")
@@ -82,8 +80,8 @@ pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String, color: Opt
     let embedded = files::is_embedded(path);
     let (name, color) = match (path.is_empty(), there) {
         (true, _) => (none, style::TEXT_FAINT),
-        (false, true) => (file_name(path), style::TEXT),
-        (false, false) => (format!("{} (not there)", file_name(path)), style::ERROR),
+        (false, true) => (app.doc.package().file_label(path), style::TEXT),
+        (false, false) => (format!("{} (not there)", app.doc.package().file_label(path)), style::ERROR),
     };
     let mut about = Vec::new();
     if !path.is_empty() {

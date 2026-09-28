@@ -159,7 +159,7 @@ impl Orphan {
             let Ok(bytes) = std::fs::read(self.dir.join(format!("{hash}.{HELD}"))) else { continue };
             if files::holds(&resource.path, &bytes) {
                 let bytes = Arc::new(bytes);
-                files::keep(&resource.path, &bytes);
+                files::keep(&resource.path, &bytes, &resource.name);
                 resource.data = Some(bytes);
             }
         }
@@ -335,7 +335,7 @@ mod tests {
         let path = files::embedded_path("bricks.png", &bytes);
         let hash = files::embedded_hash(&path).unwrap().to_string();
         let mut package = crate::package::Package::new("Wall", crate::graph::Graph::default());
-        package.resources.push(Resource { path: path.clone(), kind: ResourceKind::Bitmap, data: Some(bytes.clone()), extras: Default::default() });
+        package.resources.push(Resource { data: Some(bytes.clone()), ..Resource::linked(path.clone(), ResourceKind::Bitmap) });
         files::write_whole(&session.held(&hash), &bytes).unwrap();
         // Another held file that is not what its name says is not taken.
         let forged = files::embedded_path("forged.png", b"what it was");

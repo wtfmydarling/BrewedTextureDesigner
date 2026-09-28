@@ -131,11 +131,14 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
             let kind = brewed_texture_core::ResourceKind::of_path(path);
             let held = brewed_texture_core::files::is_embedded(path);
             let explorer = |m: ExplorerMessage| Some(Message::Explorer(m));
-            let mut items = vec![item(
-                "Add a Node Reading It",
-                "double-click",
-                kind.filter(|_| there).and_then(|k| explorer(ExplorerMessage::AddResourceNode(path.clone(), k, None))),
-            )];
+            let mut items = vec![
+                item(
+                    "Add a Node Reading It",
+                    "double-click",
+                    kind.filter(|_| there).and_then(|k| explorer(ExplorerMessage::AddResourceNode(path.clone(), k, None))),
+                ),
+                item("Rename", "", explorer(ExplorerMessage::StartRenameFile(key, path.clone()))),
+            ];
             if held {
                 items.push(item("Save as a File and Link It…", "", explorer(ExplorerMessage::SaveResourceAs(key, path.clone()))));
             } else {

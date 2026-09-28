@@ -11,7 +11,7 @@ use iced::widget::{button, column, container, mouse_area, pick_list, row, scroll
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::graph::{Node, NodeId, param_socket_key};
 use brewed_texture_core::nodes::{NodeKind, ParamDef, ParamKind};
-use brewed_texture_core::package::file_name;
+use brewed_texture_core::package::Package;
 use brewed_texture_core::{Curve, DataType, Edit, Gradient, Interpolation, ParamValue, Tiling, Value};
 
 use crate::app::{App, ColorTarget, FileTarget, Message};
@@ -388,7 +388,7 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value
             }
             None => row![
                 socket_icon(DataType::Image, false, 12.0, style::WARNING),
-                text(format!("not connected · uses {}", graph_picture(node, pd.key, slot_value).0))
+                text(format!("not connected · uses {}", graph_picture(node, pd.key, slot_value, app.doc.package()).0))
                     .size(style::SMALL)
                     .color(style::WARNING)
                     .wrapping(text::Wrapping::None),
@@ -441,15 +441,15 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value
 
 /// What the picture of an image input of the graph a node uses is, in a few words, and the
 /// color seen when it is none: its own (`value`), else the graph's.
-fn graph_picture(node: &Node, key: &str, value: &ParamValue) -> (String, Option<[f32; 4]>) {
+fn graph_picture(node: &Node, key: &str, value: &ParamValue, package: &Package) -> (String, Option<[f32; 4]>) {
     if let ParamValue::Text(own) = value
         && !own.trim().is_empty()
     {
-        return (file_name(own), None);
+        return (package.file_label(own), None);
     }
     let param = node.instance.as_ref().and_then(|i| i.interface.param(key));
     match param.and_then(|p| Some((p.image.as_ref()?, p.value))) {
-        Some((image, _)) if !image.picture.is_empty() => (format!("the graph's: {}", file_name(&image.picture)), None),
+        Some((image, _)) if !image.picture.is_empty() => (format!("the graph's: {}", package.file_label(&image.picture)), None),
         Some((_, Value::Color(c))) => ("the graph's color".to_string(), Some(c)),
         _ => ("the graph's".to_string(), None),
     }
@@ -622,7 +622,7 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
         // The picture a node gives an image input of the graph it uses; none of its own: the
         // graph's, which the field says.
         (ParamKind::Image { .. }, ParamValue::Text(_)) => {
-            let (none, color) = graph_picture(node, key, &ParamValue::Text(String::new()));
+            let (none, color) = graph_picture(node, key, &ParamValue::Text(String::new()), app.doc.package());
             file_field(app, FileTarget::Param(id, key.to_string()), none, color)
         }
         (ParamKind::Text { .. }, ParamValue::Text(s)) => text_input("", s)

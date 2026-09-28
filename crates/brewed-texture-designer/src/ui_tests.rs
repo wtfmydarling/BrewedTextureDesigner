@@ -2112,7 +2112,7 @@ fn the_files_of_a_package_in_its_resources_folder() {
     }
     w.app.ui.context = None;
     w.send(Message::Explorer(ExplorerMessage::RemoveUnused(key)));
-    let names: Vec<String> = w.app.doc.package().resources.iter().map(|r| r.name()).collect();
+    let names: Vec<String> = w.app.doc.package().resources.iter().map(|r| r.name().to_string()).collect();
     assert_eq!(names, ["a.png"]);
     assert!(!shown(&mut w, "Bitmaps"), "one kind again: no folder of it");
 
@@ -2308,7 +2308,7 @@ fn image_inputs_are_input_values_and_drags_say_what_cannot_be() {
     // A font dragged from the Explorer onto the parameter's field: refused at once, and so when
     // it is dropped there.
     w.send(Message::Explorer(ExplorerMessage::FilesPicked(key, vec![font.clone()])));
-    start_drag(&mut w, DragPayload::Resource { path: font_path.clone(), kind: ResourceKind::Font });
+    start_drag(&mut w, DragPayload::Resource { path: font_path.clone(), kind: ResourceKind::Font, name: "letters.ttf".into() });
     let refused = texts(&mut w, "✕ letters.ttf is not a picture");
     assert_eq!(refused.len(), 1, "the field says it takes pictures");
     w.snapshot("image-inputs-refused");
@@ -2316,7 +2316,7 @@ fn image_inputs_are_input_values_and_drags_say_what_cannot_be() {
     release(&mut w);
     assert_eq!(given(&w), Some(String::new()));
     // The picture: taken, as one step to undo.
-    start_drag(&mut w, DragPayload::Resource { path: picture_path.clone(), kind: ResourceKind::Bitmap });
+    start_drag(&mut w, DragPayload::Resource { path: picture_path.clone(), kind: ResourceKind::Bitmap, name: "bricks.png".into() });
     let zone = texts(&mut w, "Drop to use bricks.png");
     assert_eq!(zone.len(), 1, "the field says it takes the picture");
     w.snapshot("image-inputs-drop");
@@ -2936,4 +2936,44 @@ fn packages_opened_last_are_offered_again() {
     draw_frame(&mut w, std::time::Instant::now());
     assert!(texts(&mut w, "Clear Recent Packages").is_empty(), "no list, no clearing it");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file of a package is renamed in the Explorer as a graph is: typed, and taken on a click
+/// elsewhere in the window (or Enter); Escape leaves it as it was; undone, it is called as it
+/// was. The file is the same: what reads it reads it still.
+#[test]
+fn files_are_renamed_in_the_explorer() {
+    use std::sync::Arc;
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    let key = w.app.doc_key;
+    let held = Held::new("C:/tex/bricks.png", Arc::new(b"the bytes of bricks.png".to_vec()));
+    let path = held.path().to_string();
+    w.send(Message::Explorer(ExplorerMessage::FilesRead { key, embed: false, files: vec![("C:/tex/bricks.png".into(), held)], failed: vec![] }));
+    let name = |w: &Harness| w.app.doc.package().resources.iter().find(|r| r.path == path).map(|r| r.name.clone());
+    assert_eq!(name(&w).as_deref(), Some("bricks.png"));
+    draw_frame(&mut w, std::time::Instant::now());
+    assert!(!texts(&mut w, "bricks.png").is_empty());
+
+    w.send(Message::Explorer(ExplorerMessage::StartRenameFile(key, path.clone())));
+    assert!(w.app.ui.renaming_file.is_some());
+    w.send(Message::Explorer(ExplorerMessage::RenameFileText("Wall bricks.png".into())));
+    // A click on the graph.
+    draw_frame(&mut w, std::time::Instant::now());
+    w.hover(Point::new(700.0, 250.0));
+    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    assert!(w.app.ui.renaming_file.is_none());
+    assert_eq!(name(&w).as_deref(), Some("Wall bricks.png"));
+    draw_frame(&mut w, std::time::Instant::now());
+    assert!(!texts(&mut w, "Wall bricks.png").is_empty() && texts(&mut w, "bricks.png").is_empty());
+    assert!(w.app.doc.package().resources.iter().any(|r| r.path == path), "the same file");
+
+    // Escape leaves the name as it was.
+    w.send(Message::Explorer(ExplorerMessage::StartRenameFile(key, path.clone())));
+    w.send(Message::Explorer(ExplorerMessage::RenameFileText("Stones.png".into())));
+    press(&mut w, keyboard::key::Named::Escape);
+    assert_eq!(name(&w).as_deref(), Some("Wall bricks.png"));
+
+    w.send(Message::Undo);
+    assert_eq!(name(&w).as_deref(), Some("bricks.png"));
 }

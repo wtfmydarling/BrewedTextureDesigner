@@ -1,13 +1,15 @@
 //! The files packages use (images, vector graphics, fonts): linked where they are on disk, or
 //! held by the package itself (embedded), which writes them into its own file.
 //!
-//! An embedded file is named by what it holds: `embedded:<sha256>/<name>`, the SHA-256 of its
-//! bytes (in hexadecimal, as `sha256sum` writes it) and the name it came with. The same name
-//! always means the same bytes, in any package, and no other bytes can be made to take a name:
-//! a node that reads one reads it wherever it is pasted, and two packages that hold the same
-//! file hold it once. The bytes of every embedded file of the packages read or made
-//! in this run are kept here, for whatever reads files (the engine, the Explorer's previews):
-//! [`read`] reads a file a package uses, whichever it is.
+//! An embedded file is named by what it holds: `embedded:<sha256>.<ext>`, the SHA-256 of its
+//! bytes (in hexadecimal, as `sha256sum` writes it) and the extension of the file it came from
+//! (what reads it may go by it). The same name always means the same bytes, in any package, and
+//! no other bytes can be made to take a name: a node that reads one reads it wherever it is
+//! pasted, and two packages that hold the same file hold it once. What people call the file is
+//! the package's to say (see [`crate::package::Resource::name`]). The bytes of every embedded
+//! file of the packages read or made in this run are kept here, with the name it came with, for
+//! whatever reads files (the engine, the Explorer's previews): [`read`] reads a file a package
+//! uses, whichever it is.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -21,16 +23,32 @@ pub fn is_embedded(path: &str) -> bool {
 }
 
 /// The hash of the bytes the embedded file `path` names (see the module): the same for the
-/// same bytes, whatever name they came with.
+/// same bytes, whatever they came as. None for what is no such name.
 pub fn embedded_hash(path: &str) -> Option<&str> {
-    let (hash, _) = path.strip_prefix(PREFIX)?.split_once('/')?;
-    is_hash(hash).then_some(hash)
+    let rest = path.strip_prefix(PREFIX)?;
+    let (hash, extension) = rest.split_once('.').map_or((rest, None), |(h, e)| (h, Some(e)));
+    (is_hash(hash) && extension.is_none_or(is_extension)).then_some(hash)
 }
 
-/// The hash and the file name of the embedded file `path` (see the module).
-pub fn embedded_parts(path: &str) -> Option<(&str, &str)> {
-    let (hash, name) = path.strip_prefix(PREFIX)?.split_once('/')?;
-    is_hash(hash).then_some((hash, name))
+/// The name of the embedded file `path` without what says it is embedded: `<sha256>.<ext>`,
+/// what a package's file keeps it as (see [`crate::project`]).
+pub fn embedded_file(path: &str) -> Option<&str> {
+    embedded_hash(path)?;
+    path.strip_prefix(PREFIX)
+}
+
+/// An extension an embedded file keeps: 1 to 8 small letters and digits.
+fn is_extension(text: &str) -> bool {
+    (1..=8).contains(&text.len()) && text.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
+/// The extension of the file `name` (a path) as an embedded file keeps it (small letters),
+/// if it has one it can keep.
+fn extension_of(name: &str) -> Option<String> {
+    let base = name.rsplit(['/', '\\']).next()?;
+    let (stem, extension) = base.rsplit_once('.')?;
+    let extension = extension.to_ascii_lowercase();
+    (!stem.is_empty() && is_extension(&extension)).then_some(extension)
 }
 
 /// Is `text` a hash as embedded files are named by: 64 hexadecimal digits, in small letters?
@@ -45,19 +63,20 @@ pub fn sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().flat_map(|b| [HEX[usize::from(b >> 4)], HEX[usize::from(b & 15)]]).map(char::from).collect()
 }
 
-/// A file for a package to hold: its bytes and the name they are held by (see the module).
-/// Hashing a large file takes a while: it is best made where the file is read, not on the
-/// thread that draws the window.
+/// A file for a package to hold: its bytes, the name they are held by (see the module), and
+/// what the file was called. Hashing a large file takes a while: it is best made where the file
+/// is read, not on the thread that draws the window.
 #[derive(Clone, Debug)]
 pub struct Held {
     path: String,
     bytes: Arc<Vec<u8>>,
+    name: String,
 }
 
 impl Held {
     /// `bytes`, which came as `name` (a path).
     pub fn new(name: &str, bytes: Arc<Vec<u8>>) -> Held {
-        Held { path: embedded_path(name, &bytes), bytes }
+        Held { path: embedded_path(name, &bytes), bytes, name: file_name(name) }
     }
 
     /// The name of the embedded file that holds it.
@@ -69,9 +88,14 @@ impl Held {
         &self.bytes
     }
 
-    /// Its name and bytes.
-    pub fn into_parts(self) -> (String, Arc<Vec<u8>>) {
-        (self.path, self.bytes)
+    /// What the file it came from was called.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Its name, bytes, and what the file was called.
+    pub fn into_parts(self) -> (String, Arc<Vec<u8>>, String) {
+        (self.path, self.bytes, self.name)
     }
 }
 
@@ -85,9 +109,12 @@ impl PartialEq for Held {
 impl Eq for Held {}
 
 /// The name of the embedded file that holds `bytes` and came as `name` (a path, of which the
-/// file name is kept, made a name any system and archive takes).
+/// extension is kept).
 pub fn embedded_path(name: &str, bytes: &[u8]) -> String {
-    format!("{PREFIX}{}/{}", sha256(bytes), file_part(name))
+    match extension_of(name) {
+        Some(extension) => format!("{PREFIX}{}.{extension}", sha256(bytes)),
+        None => format!("{PREFIX}{}", sha256(bytes)),
+    }
 }
 
 /// Is `bytes` what the embedded file `path` holds (its hash)?
@@ -95,31 +122,39 @@ pub fn holds(path: &str, bytes: &[u8]) -> bool {
     embedded_hash(path).is_some_and(|hash| sha256(bytes) == hash)
 }
 
-/// The file name of `name` (a path), as a part of a name of an embedded file: none of what a
-/// system or an archive reads otherwise (separators, a drive's `:`, controls), not `.` or `..`,
-/// at most 120 characters; `file` for nothing.
-fn file_part(name: &str) -> String {
+/// The file name of `name` (a path), as people read it: none of the controls a name could
+/// hide, at most 200 characters; `file` for nothing.
+pub fn file_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
-    let clean: String = base.chars().map(|c| if c == ':' || c.is_control() { '_' } else { c }).take(120).collect();
+    let clean: String = base.chars().filter(|c| !c.is_control()).take(200).collect();
     let clean = clean.trim().to_string();
     if clean.is_empty() || clean == "." || clean == ".." { "file".to_string() } else { clean }
 }
 
-fn store() -> &'static RwLock<HashMap<String, Arc<Vec<u8>>>> {
-    static FILES: OnceLock<RwLock<HashMap<String, Arc<Vec<u8>>>>> = OnceLock::new();
+/// The bytes of an embedded file, and what it was first called.
+type Kept = (Arc<Vec<u8>>, String);
+
+fn store() -> &'static RwLock<HashMap<String, Kept>> {
+    static FILES: OnceLock<RwLock<HashMap<String, Kept>>> = OnceLock::new();
     FILES.get_or_init(Default::default)
 }
 
-/// Keep the bytes of the embedded file `path` for whatever reads it.
-pub fn keep(path: &str, bytes: &Arc<Vec<u8>>) {
+/// Keep the bytes of the embedded file `path`, and what it is called (`name`: what a package
+/// that takes it in later calls it), for whatever reads it.
+pub fn keep(path: &str, bytes: &Arc<Vec<u8>>, name: &str) {
     if let Ok(mut files) = store().write() {
-        files.entry(path.to_string()).or_insert_with(|| bytes.clone());
+        files.entry(path.to_string()).or_insert_with(|| (bytes.clone(), name.to_string()));
     }
 }
 
 /// The bytes of the embedded file `path`, when a package holds it.
 pub fn embedded(path: &str) -> Option<Arc<Vec<u8>>> {
-    store().read().ok()?.get(path).cloned()
+    store().read().ok()?.get(path).map(|(bytes, _)| bytes.clone())
+}
+
+/// What the embedded file `path` was called where it was kept first.
+pub fn kept_name(path: &str) -> Option<String> {
+    store().read().ok()?.get(path).map(|(_, name)| name.clone())
 }
 
 /// The largest file read: larger than any file a node reads can be (a picture of 8192 × 8192
@@ -219,30 +254,35 @@ pub fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// An embedded file is named by its bytes and the extension of its file, whatever the file
+    /// was called: that is kept beside it, as the name a package gives it at first.
     #[test]
     fn embedded_files_are_named_by_what_they_hold() {
-        let a = embedded_path("C:/textures/bricks.png", b"bricks");
-        assert!(is_embedded(&a) && a.ends_with("/bricks.png"), "{a}");
-        assert_eq!(a, embedded_path("/elsewhere/bricks.png", b"bricks"), "the same bytes, the same name");
+        let a = embedded_path("C:/textures/bricks.PNG", b"bricks");
+        assert!(is_embedded(&a) && a.ends_with(".png") && !a.contains("bricks"), "{a}");
+        assert_eq!(a, embedded_path("/elsewhere/other.png", b"bricks"), "the same bytes, the same name");
         assert_ne!(a, embedded_path("bricks.png", b"stones"));
-        assert_eq!(crate::package::file_name(&a), "bricks.png");
-        // Held, it is read from here; a file of disk is read from disk.
+        // Held, it is read from here, with what it was called; a file of disk is read from disk.
         assert!(read(&a).is_err() && !is_there(&a));
-        keep(&a, &Arc::new(b"bricks".to_vec()));
+        keep(&a, &Arc::new(b"bricks".to_vec()), "bricks.PNG");
         assert_eq!(read(&a).unwrap().as_slice(), b"bricks");
-        assert!(is_there(&a));
+        assert!(is_there(&a) && kept_name(&a).as_deref() == Some("bricks.PNG"));
         assert!(!is_embedded("C:/textures/bricks.png"));
-        // The hash is SHA-256, as `sha256sum` writes it; the name, one a system and an archive
-        // take.
+        // The hash is SHA-256, as `sha256sum` writes it.
         assert_eq!(sha256(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-        let held = Held::new("C:\\Шрифты\\a:b.ttf", Arc::new(b"abc".to_vec()));
-        assert_eq!(held.path(), "embedded:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad/a_b.ttf");
+        let held = Held::new("C:\\Шрифты\\Мой шрифт.TTF", Arc::new(b"abc".to_vec()));
+        assert_eq!(held.path(), "embedded:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.ttf");
+        assert_eq!(held.name(), "Мой шрифт.TTF");
         assert!(holds(held.path(), b"abc") && !holds(held.path(), b"abd"));
-        assert_eq!(embedded_parts(held.path()).map(|(_, name)| name), Some("a_b.ttf"));
-        for name in ["", ".", "..", "dir/", "  "] {
-            assert!(embedded_path(name, b"").ends_with("/file"), "{name:?}");
+        assert_eq!(embedded_file(held.path()), Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.ttf"));
+        // No extension it can keep, none.
+        for name in ["", "noext", ".hidden", "a.toolongext", "a.p-g", "dir/"] {
+            assert!(!embedded_path(name, b"").contains('.'), "{name:?}");
         }
-        assert_eq!(embedded_hash("embedded:ABC/x.png"), None, "not a hash");
+        assert_eq!(embedded_hash("embedded:ABC.png"), None, "not a hash");
+        assert_eq!(embedded_hash(&format!("embedded:{}.PNG", sha256(b""))), None, "not an extension it keeps");
+        assert_eq!(embedded_hash(&format!("embedded:{}/x.png", sha256(b""))), None);
+        assert!(embedded_hash(&format!("embedded:{}", sha256(b""))).is_some());
     }
 
     /// A file is replaced whole: what writes it fails, and it is as it was; written, it is what

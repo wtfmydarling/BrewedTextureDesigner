@@ -65,8 +65,8 @@ pub enum DragPayload {
     Variable(String),
     /// A graph of a package open in the Explorer: it becomes a node that uses it.
     Graph { key: u64, graph: GraphId, name: String },
-    /// A file of a package: it becomes the node that reads it.
-    Resource { path: String, kind: ResourceKind },
+    /// A file of a package (and what the package calls it): it becomes the node that reads it.
+    Resource { path: String, kind: ResourceKind, name: String },
 }
 
 /// A field that says which file something reads.
@@ -87,7 +87,7 @@ impl DragPayload {
             DragPayload::Node(k) => k.def().name.to_string(),
             DragPayload::Variable(v) => format!("Input '{v}'"),
             DragPayload::Graph { name, .. } => format!("Graph '{name}'"),
-            DragPayload::Resource { path, .. } => brewed_texture_core::package::file_name(path),
+            DragPayload::Resource { name, .. } => name.clone(),
         }
     }
 }
@@ -357,6 +357,9 @@ pub struct Ui {
     pub explorer_folded: HashSet<Fold>,
     /// A graph being renamed in the Explorer: its package, itself, and the name typed.
     pub renaming_graph: Option<(u64, GraphId, String)>,
+    /// The file of a package being renamed in the Explorer (the package's key, the file's path)
+    /// and the name typed so far.
+    pub renaming_file: Option<(u64, String, String)>,
     /// Quitting: the packages whose unsaved changes go.
     pub discarded: HashSet<u64>,
     /// The package files opened or saved last, the latest first (File menu).
@@ -577,6 +580,10 @@ pub enum ExplorerMessage {
     StartRename(u64, GraphId),
     RenameText(String),
     CommitRename,
+    /// Rename a file of a package (its key, the file's path), as a graph is renamed.
+    StartRenameFile(u64, String),
+    RenameFileText(String),
+    CommitRenameFile,
     Save(u64),
     SaveAs(u64),
     Close(u64),
@@ -925,6 +932,7 @@ impl App {
                 drop_burst: None,
                 explorer_folded: HashSet::new(),
                 renaming_graph: None,
+                renaming_file: None,
                 discarded: HashSet::new(),
                 recent: opts.workspace.as_ref().map(|w| w.recent.clone()).unwrap_or_default(),
             },
@@ -1267,6 +1275,9 @@ impl App {
         if self.ui.renaming_graph.is_some() {
             let _ = self.explorer_message(ExplorerMessage::CommitRename);
         }
+        if self.ui.renaming_file.is_some() {
+            let _ = self.explorer_message(ExplorerMessage::CommitRenameFile);
+        }
         if self.ui.renaming_var.is_some() {
             let _ = self.handle(Message::CommitRename);
         }
@@ -1552,6 +1563,7 @@ impl App {
         self.ui.drag = None;
         self.ui.press = None;
         self.ui.renaming_graph = None;
+        self.ui.renaming_file = None;
         self.ui.frame_request = true;
         self.ui.preview.node = preview;
         self.ui.preview.fit = true;
@@ -2566,11 +2578,16 @@ impl App {
                 self.close_popups();
             } else if self.ui.dialog.is_some() {
                 self.cancel_dialog();
-            } else if self.ui.renaming_var.is_some() || self.ui.binding.is_some() || self.ui.renaming_graph.is_some() {
+            } else if self.ui.renaming_var.is_some()
+                || self.ui.binding.is_some()
+                || self.ui.renaming_graph.is_some()
+                || self.ui.renaming_file.is_some()
+            {
                 // Typing a name: forget the text, the name stays as it was.
                 self.ui.renaming_var = None;
                 self.ui.binding = None;
                 self.ui.renaming_graph = None;
+                self.ui.renaming_file = None;
             } else if self.ui.color_picker.is_some() {
                 self.ui.color_picker = None;
             }

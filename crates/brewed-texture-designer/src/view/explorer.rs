@@ -306,18 +306,27 @@ fn resource_row<'a>(app: &'a App, uses: &Uses, key: u64, r: &'a Resource, indent
             .center_x(18)
             .into(),
     };
-    let mut content = row![
-        space().width(indent),
-        picture,
-        container(
-            text(r.name())
+    let renaming = app.ui.renaming_file.as_ref().filter(|(k, path, _)| *k == key && *path == r.path);
+    let name: Element<'a, Message> = match renaming {
+        // A click anywhere else in the window names it as Enter does.
+        Some((_, _, name)) => outside(
+            text_input("File name", name)
+                .id(rename_id())
+                .on_input(|t| explorer(ExplorerMessage::RenameFileText(t)))
+                .on_submit(explorer(ExplorerMessage::CommitRenameFile))
                 .size(style::SMALL)
-                .color(if there { style::TEXT } else { style::TEXT_FAINT })
-                .wrapping(text::Wrapping::None)
+                .padding([1, 6])
+                .style(style::text_input),
         )
-        .width(Length::Fill)
-        .clip(true),
-    ]
+        .on_press(Some(explorer(ExplorerMessage::CommitRenameFile)))
+        .into(),
+        None => text(r.name())
+            .size(style::SMALL)
+            .color(if there { style::TEXT } else { style::TEXT_FAINT })
+            .wrapping(text::Wrapping::None)
+            .into(),
+    };
+    let mut content = row![space().width(indent), picture, container(name).width(Length::Fill).clip(true),]
     .spacing(6)
     .align_y(Alignment::Center);
     let bytes = state.and_then(|s| s.bytes).map(crate::previews::bytes);
@@ -330,14 +339,14 @@ fn resource_row<'a>(app: &'a App, uses: &Uses, key: u64, r: &'a Resource, indent
     let warning = (!there).then(|| format!("Warnings\n—\nThe file is not there: {}", r.path));
     let read_by = uses.files.get(&(key, r.path.clone())).map(|users| notes(users, "Read by"));
     content = content.push(held).push(status(warning, read_by));
-    let payload = DragPayload::Resource { path: r.path.clone(), kind: r.kind };
+    let payload = DragPayload::Resource { path: r.path.clone(), kind: r.kind, name: r.name.clone() };
     let entry = pressable(content)
         .padding([2, 4])
         .on_press(Message::PanelPress(payload))
         .on_double_click(explorer(ExplorerMessage::AddResourceNode(r.path.clone(), r.kind, None)))
         .on_right_press(explorer(ExplorerMessage::Context(ContextTarget::ResourceItem(key, r.path.clone()))));
     // Hovered: the file larger, and what it is.
-    let mut about = vec![r.name(), where_];
+    let mut about = vec![r.name().to_string(), where_];
     match (preview, bytes) {
         (Some(p), Some(b)) => about.push(format!("{}, {b}", p.about)),
         (Some(p), None) => about.push(p.about.clone()),
