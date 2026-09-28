@@ -18,6 +18,7 @@ mod settings;
 mod style;
 mod view;
 mod widget;
+mod window_size;
 mod workspace;
 
 #[cfg(test)]

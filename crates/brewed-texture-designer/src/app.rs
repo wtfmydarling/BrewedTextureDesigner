@@ -959,6 +959,7 @@ impl App {
         // window itself.
         let (main, open) = window::open(main_window_settings(opts.workspace.as_ref()));
         app.window = Some(main);
+        let scale = app.settings.scale;
         #[cfg(windows)]
         let maximized = opts.workspace.as_ref().is_some_and(|w| w.maximized);
         let setup = open.then(move |id| {
@@ -981,7 +982,7 @@ impl App {
                 crate::scrub::remember(window);
                 eyedropper::Host::of(window)
             });
-            Task::batch([appear, host.map(Message::Host)])
+            Task::batch([appear, host.map(Message::Host), crate::window_size::hold(id, scale)])
         });
         (app, Task::batch([setup, scenario, lighting]))
     }
@@ -1815,7 +1816,10 @@ impl App {
                     self.engine = Some(service);
                     self.events = Some(source);
                     self.send_graph();
-                    return Task::perform(blocking(gpu::adapter_name), |name| Message::GpuName(name.unwrap_or_default()));
+                    // (The device says how large a texture, so the window, may be.)
+                    let held = self.window.map_or_else(Task::none, |id| crate::window_size::hold(id, self.settings.scale));
+                    let named = Task::perform(blocking(gpu::adapter_name), |name| Message::GpuName(name.unwrap_or_default()));
+                    return Task::batch([held, named]);
                 }
             }
             Message::GpuName(name) => {

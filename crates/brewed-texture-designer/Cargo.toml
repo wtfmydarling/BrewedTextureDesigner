@@ -43,7 +43,8 @@ resvg = { version = "0.45", default-features = false }
 resvg = { version = "0.45", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-# The eyedropper (live, see src/eyedropper/windows.rs), the taskbar icon and console output.
+# The eyedropper (live, see src/eyedropper/windows.rs), the taskbar icon, console output, and
+# the main window held to what the GPU can draw (src/window_size.rs).
 windows-sys = { version = "0.61", features = [
     "Wdk_System_SystemServices",
     "Win32_Foundation",
@@ -55,6 +56,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

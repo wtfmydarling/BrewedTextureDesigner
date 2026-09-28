@@ -20,9 +20,19 @@ pub struct GpuHandles {
 
 static SLOT: OnceLock<Mutex<Option<GpuHandles>>> = OnceLock::new();
 static PUBLISHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// See [`largest_texture`].
+static LARGEST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(8192);
+
+/// The longest side a texture may have on the device, and so a window: what is drawn into a
+/// window, and what iced draws it with, are textures of its size. What iced asks of a device
+/// (8192), until the device says.
+pub fn largest_texture() -> u32 {
+    LARGEST.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Called by render pipelines when iced creates them.
 pub fn publish(device: &wgpu::Device, queue: &wgpu::Queue) {
+    LARGEST.store(device.limits().max_texture_dimension_2d, std::sync::atomic::Ordering::Relaxed);
     if PUBLISHED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }

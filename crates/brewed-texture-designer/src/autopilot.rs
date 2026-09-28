@@ -1437,7 +1437,9 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
             }
             let resize = |w: f32, h: f32| Step::Window(WindowChange::Resize(iced::Size::new(w, h)));
             let mut steps = Vec::new();
-            for (w, h) in [(1000.0, 640.0), (1920.0, 1080.0), (400.0, 300.0), (3840.0, 2160.0), (1680.0, 1000.0)] {
+            // (20000 x 12000: larger than the GPU can draw, as a window moved onto a display of
+            // a larger scale grows: it is held to what can be drawn, and nothing goes wrong.)
+            for (w, h) in [(1000.0, 640.0), (1920.0, 1080.0), (400.0, 300.0), (3840.0, 2160.0), (20000.0, 12000.0), (1680.0, 1000.0)] {
                 steps.extend([
                     resize(w, h),
                     Step::Pause(Duration::from_millis(400)),

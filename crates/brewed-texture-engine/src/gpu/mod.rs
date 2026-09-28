@@ -403,19 +403,28 @@ pub struct Gpu {
     pub errors: Arc<Mutex<Vec<String>>>,
 }
 
+/// Write down an error of the device, for the log and the status bar (the last 16).
+fn record(errors: &Mutex<Vec<String>>, e: &wgpu::Error) {
+    log::error!("wgpu error: {e}");
+    if let Ok(mut v) = errors.lock() {
+        v.push(e.to_string());
+        if v.len() > 16 {
+            v.remove(0);
+        }
+    }
+}
+
+/// Is `err` about an object labelled `label` (wgpu says so: "In Device::create_render_pipeline,
+/// label = 'noise'")?
+fn is_about(err: &wgpu::Error, label: &str) -> bool {
+    err.to_string().contains(&format!("label = '{label}'"))
+}
+
 impl Gpu {
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, adapter_info: String) -> Gpu {
         let errors: Arc<Mutex<Vec<String>>> = Arc::default();
         let sink = errors.clone();
-        device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
-            log::error!("wgpu error: {e}");
-            if let Ok(mut v) = sink.lock() {
-                v.push(e.to_string());
-                if v.len() > 16 {
-                    v.remove(0);
-                }
-            }
-        }));
+        device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| record(&sink, &e)));
         let sampler = |tiling: u32| {
             let mode = |repeat: bool| if repeat { wgpu::AddressMode::Repeat } else { wgpu::AddressMode::ClampToEdge };
             device.create_sampler(&wgpu::SamplerDescriptor {
@@ -830,8 +839,15 @@ impl Gpu {
             cache: None,
         });
         if let Some(err) = pollster::block_on(self.device.pop_error_scope()) {
-            log::error!("kernel '{label}' failed to compile: {err}");
-            return Err(format!("Shader error in '{label}': {err}"));
+            // The device is the window's too, and wgpu's error scopes are the device's, not the
+            // thread's: what went wrong meanwhile in the window lands here. Only what the
+            // kernel's own objects say is the kernel's.
+            if !is_about(&err, label) {
+                record(&self.errors, &err);
+            } else {
+                log::error!("kernel '{label}' failed to compile: {err}");
+                return Err(format!("Shader error in '{label}': {err}"));
+            }
         }
         Ok(Rc::new(Kernel { pipeline, layout, inputs, filtered }))
     }
@@ -1349,6 +1365,66 @@ fn expand(format: wgpu::TextureFormat, values: Vec<f32>) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A kernel is failed only by what its own objects say: an error of the window (the device
+    /// is the window's too) that lands in its error scope is only written down, and the kernel
+    /// is made all the same.
+    #[test]
+    fn errors_of_others_do_not_fail_a_kernel() {
+        let gpu = match Gpu::headless() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipping GPU test: {e}");
+                return;
+            }
+        };
+        // What goes wrong elsewhere, as the window's texture of a size no texture may have.
+        let other = |label: &str| {
+            gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let _ = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: 1 << 20, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            pollster::block_on(gpu.device.pop_error_scope()).expect("a texture too large is an error")
+        };
+        let err = other("window frame");
+        assert!(is_about(&err, "window frame") && !is_about(&err, "blur") && !is_about(&err, "window"));
+        // Another thread's errors, one after the other, while kernels are made: they land in
+        // the kernels' scopes, and fail none.
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let window = {
+            let (device, stop) = (gpu.device.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("window frame"),
+                        size: wgpu::Extent3d { width: 1 << 20, height: 1, depth_or_array_layers: 1 },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        view_formats: &[],
+                    });
+                }
+            })
+        };
+        let failed: Vec<String> = KERNELS
+            .iter()
+            .flat_map(|src| (0..src.kinds).map(move |kind| (src.name, src.writes.unwrap_or(COLOR_FORMAT), kind)))
+            .filter_map(|(name, output, kind)| gpu.kernel_variant(name, output, 0, kind).err())
+            .collect();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        window.join().unwrap();
+        assert!(failed.is_empty(), "{failed:#?}");
+        assert!(!gpu.errors.lock().unwrap().is_empty(), "the window's errors are written down");
+    }
 
     #[test]
     fn all_builtin_kernels_compile() {
