@@ -250,6 +250,38 @@ pub fn stripe(even: bool) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
+/// A list of settings: rows one under the other, a line between two, in a frame (the lines
+/// are this, between rows a pixel apart).
+pub fn setting_list(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(LINE.into()),
+        border: Border { color: LINE, width: 1.0, radius: 2.0.into() },
+        ..Default::default()
+    }
+}
+
+/// A row of a list of settings: every other one a little lighter, so that what is said on
+/// the left is read with the value on the right.
+pub fn setting_row(even: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style { background: Some(if even { gray(33) } else { gray(36) }.into()), ..Default::default() }
+}
+
+/// The side of a dialog that lists its pages.
+pub fn sidebar(_: &Theme) -> container::Style {
+    container::Style { background: Some(PANEL_DARK.into()), text_color: Some(TEXT), ..Default::default() }
+}
+
+/// A word that marks something (a setting taken only when the program starts): framed in its
+/// color.
+pub fn tag(color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(alpha(color, 0.12).into()),
+        border: Border { color: alpha(color, 0.5), width: 1.0, radius: 3.0.into() },
+        text_color: Some(color),
+        ..Default::default()
+    }
+}
+
 /// A field something dragged is dropped on: one that takes it (`takes`), or one that does not.
 pub fn drop_zone(takes: bool) -> impl Fn(&Theme) -> container::Style {
     let color = if takes { ACCENT } else { ERROR };
@@ -327,6 +359,36 @@ pub fn toggle_button(on: bool) -> impl Fn(&Theme, button_w::Status) -> button_w:
         } else {
             flat_button(theme, status)
         }
+    }
+}
+
+/// The field of a segmented control: its options side by side in it.
+pub fn segments(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(FIELD.into()),
+        border: Border { color: LINE, width: 1.0, radius: 4.0.into() },
+        ..Default::default()
+    }
+}
+
+/// An option of a segmented control: raised and bright when it is the one chosen, lit when
+/// hovered.
+pub fn segment(chosen: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
+    move |_, status| {
+        let (bg, text, border) = match (chosen, status) {
+            (true, button_w::Status::Disabled) => (Some(gray(44)), TEXT_DIM, gray(52)),
+            (true, _) => (Some(gray(78)), ACCENT_TEXT, gray(98)),
+            (false, button_w::Status::Hovered) => (Some(gray(38)), TEXT, Color::TRANSPARENT),
+            (false, button_w::Status::Pressed) => (Some(gray(46)), TEXT, Color::TRANSPARENT),
+            (false, button_w::Status::Disabled) => (None, TEXT_FAINT, Color::TRANSPARENT),
+            (false, button_w::Status::Active) => (None, TEXT_DIM, Color::TRANSPARENT),
+        };
+        let shadow = if chosen {
+            Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.35), offset: Vector::new(0.0, 1.0), blur_radius: 2.0 }
+        } else {
+            Shadow::default()
+        };
+        button_w::Style { background: bg.map(Background::Color), text_color: text, border: Border { color: border, width: 1.0, radius: 3.0.into() }, shadow, snap: true }
     }
 }
 

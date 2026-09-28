@@ -7,8 +7,9 @@ use iced::widget::{button, column, container, image, pick_list, row, rule, space
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::{Edit, Precision};
 
-use crate::app::{App, Dialog, ExplorerMessage, MenuId, Message, PreviewMessage};
+use crate::app::{App, Dialog, ExplorerMessage, MenuId, Message, PreviewMessage, SettingsMessage};
 use crate::icons::{Icon, icon};
+use crate::shortcuts::Command;
 use crate::style;
 use crate::view::tip;
 use crate::widget::dropdown::dropdown;
@@ -17,14 +18,14 @@ const RESOLUTIONS: [u32; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
 const MENU_BAR_H: f32 = 30.0;
 const STATUS_BAR_H: f32 = 24.0;
 
-fn item<'a>(label: impl Into<String>, shortcut: &'a str, message: Option<Message>) -> Element<'a, Message> {
+fn item<'a>(label: impl Into<String>, shortcut: impl Into<String>, message: Option<Message>) -> Element<'a, Message> {
     let enabled = message.is_some();
     let color = if enabled { style::TEXT } else { style::TEXT_FAINT };
     button(
         row![
             text(label.into()).size(style::TEXT_SIZE).color(color),
             space().width(Length::Fill),
-            text(shortcut).size(style::SMALL).color(if enabled { style::TEXT_DIM } else { style::TEXT_FAINT }),
+            text(shortcut.into()).size(style::SMALL).color(if enabled { style::TEXT_DIM } else { style::TEXT_FAINT }),
         ]
         .spacing(16)
         .align_y(Alignment::Center),
@@ -63,14 +64,16 @@ fn menu<'a>(app: &'a App, id: MenuId, title: &'a str, items: Vec<Element<'a, Mes
 fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
     let key = app.doc_key;
     let mut items = vec![
-        item("New Package", "Ctrl+N", Some(Message::New)),
+        item("New Package", app.key_of(Command::New), Some(Message::New)),
         item("New Graph", "", Some(Message::Explorer(ExplorerMessage::NewGraph(key)))),
-        item("Open Package…", "Ctrl+O", Some(Message::Open)),
+        item("Open Package…", app.key_of(Command::Open), Some(Message::Open)),
     ];
-    // The packages opened or saved last: each by its name, and the folder it is in.
-    if !app.ui.recent.is_empty() {
+    // The packages opened or saved last (as many as the settings say): each by its name, and
+    // the folder it is in.
+    let offered = app.settings.recent_packages as usize;
+    if !app.ui.recent.is_empty() && offered > 0 {
         items.push(separator());
-        for path in &app.ui.recent {
+        for path in app.ui.recent.iter().take(offered) {
             let p = std::path::Path::new(path);
             let name = p.file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
             let folder = p.parent().and_then(|f| f.file_name()).map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
@@ -83,11 +86,11 @@ fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
         item("Link Files…", "", Some(Message::Explorer(ExplorerMessage::LinkFiles(key)))),
         item("Collect Files", "", Some(Message::Explorer(ExplorerMessage::CollectFiles(key)))),
         separator(),
-        item("Save", "Ctrl+S", Some(Message::Save)),
-        item("Save As…", "Ctrl+Shift+S", Some(Message::SaveAs)),
+        item("Save", app.key_of(Command::Save), Some(Message::Save)),
+        item("Save As…", app.key_of(Command::SaveAs), Some(Message::SaveAs)),
         item("Close Package", "", Some(Message::Explorer(ExplorerMessage::Close(key)))),
         separator(),
-        item("Export Outputs…", "Ctrl+E", Some(Message::ExportAll)),
+        item("Export Outputs…", app.key_of(Command::Export), Some(Message::ExportAll)),
         separator(),
         item("Open the Demo", "", Some(Message::LoadDemo)),
         separator(),
@@ -125,32 +128,36 @@ fn edit_menu(app: &App) -> Vec<Element<'_, Message>> {
         app.graph().node(*id).is_some_and(|n| n.def().has_image() && !n.def().inputs.is_empty() && n.kind != brewed_texture_core::NodeKind::OUTPUT)
     });
     vec![
-        item(undo, "Ctrl+Z", app.doc.can_undo().then_some(Message::Undo)),
-        item(redo, "Ctrl+Y", app.doc.can_redo().then_some(Message::Redo)),
+        item(undo, app.key_of(Command::Undo), app.doc.can_undo().then_some(Message::Undo)),
+        item(redo, app.key_of(Command::Redo), app.doc.can_redo().then_some(Message::Redo)),
         separator(),
-        item("Copy", "Ctrl+C", sel(Message::Copy)),
-        item("Cut", "Ctrl+X", sel(Message::Cut)),
-        item("Paste", "Ctrl+V", Some(Message::Paste)),
-        item("Duplicate", "Ctrl+D", sel(Message::Duplicate)),
+        item("Copy", app.key_of(Command::Copy), sel(Message::Copy)),
+        item("Cut", app.key_of(Command::Cut), sel(Message::Cut)),
+        item("Paste", app.key_of(Command::Paste), Some(Message::Paste)),
+        item("Duplicate", app.key_of(Command::Duplicate), sel(Message::Duplicate)),
         item(
             "Delete",
-            "Del",
+            app.key_of(Command::Delete),
             (has_selection || app.ui.selected_link.is_some() || app.ui.selected_comment.is_some()).then_some(Message::Delete),
         ),
         separator(),
-        item("Select All", "Ctrl+A", Some(Message::SelectAll)),
-        item("Bypass Node", "Ctrl+B", bypass.map(Message::ToggleBypass)),
+        item("Select All", app.key_of(Command::SelectAll), Some(Message::SelectAll)),
+        item("Bypass Node", app.key_of(Command::Bypass), bypass.map(Message::ToggleBypass)),
         item(
             match app.ui.selection.len() {
                 0 => "Create Graph from Selection".to_string(),
                 n => format!("Create Graph from Selection ({n})"),
             },
-            "Ctrl+G",
+            app.key_of(Command::GraphFromSelection),
             sel(Message::GraphFromSelection),
         ),
-        item(if has_selection { "Frame Selection in a Comment" } else { "Add Comment" }, "C", Some(Message::AddComment)),
+        item(
+            if has_selection { "Frame Selection in a Comment" } else { "Add Comment" },
+            app.key_of(Command::AddComment),
+            Some(Message::AddComment),
+        ),
         separator(),
-        item("Settings…", "Ctrl+,", Some(Message::Dialog(Some(Dialog::Settings)))),
+        item("Settings…", app.key_of(Command::Settings), Some(Message::Settings(SettingsMessage::Open))),
     ]
 }
 
@@ -158,17 +165,17 @@ fn view_menu(app: &App) -> Vec<Element<'_, Message>> {
     let p = &app.ui.preview;
     let check = |on: bool, label: &str| format!("{}  {label}", if on { "●" } else { "○" });
     vec![
-        item(check(p.show_tiling, "Show Tiling in 2D View"), "", Some(Message::Preview(PreviewMessage::ToggleTiling))),
+        item(check(p.show_tiling, "Show Tiling in 2D View"), app.key_of(Command::ShowTiling), Some(Message::Preview(PreviewMessage::ToggleTiling))),
         item(check(app.ui.realtime, "Real-time Rendering"), "", Some(Message::ToggleRealtime)),
         separator(),
-        item("Frame Selection / All", "F", Some(Message::Frame)),
+        item("Frame Selection / All", app.key_of(Command::Frame), Some(Message::Frame)),
         item("Reset Panel Layout", "", Some(Message::ResetLayout)),
     ]
 }
 
-fn help_menu(_app: &App) -> Vec<Element<'_, Message>> {
+fn help_menu(app: &App) -> Vec<Element<'_, Message>> {
     vec![
-        item("Keyboard Shortcuts", "F1", Some(Message::Dialog(Some(Dialog::Shortcuts)))),
+        item("Keyboard Shortcuts", app.key_of(Command::Help), Some(Message::Dialog(Some(Dialog::Shortcuts)))),
         item(format!("About {}", brewed_texture_core::APP_NAME), "", Some(Message::Dialog(Some(Dialog::About)))),
     ]
 }

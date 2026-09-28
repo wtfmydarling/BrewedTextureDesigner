@@ -15,6 +15,7 @@ pub mod models;
 pub mod picker;
 pub mod preview;
 pub mod properties;
+pub mod settings;
 pub mod toolbar;
 pub mod view3d;
 
@@ -76,6 +77,10 @@ pub fn root(app: &App) -> Element<'_, Message> {
     }
     if let Some(dialog) = &app.ui.dialog {
         layers.push(dialogs::view(app, dialog));
+    }
+    // Over everything, the dialogs too (the settings dialog shows it itself).
+    if app.ui.restart_offer && !matches!(app.ui.dialog, Some(crate::app::Dialog::Settings(_))) {
+        layers.push(settings::restart_offer(app));
     }
     stack(layers).into()
 }
@@ -153,4 +158,14 @@ pub fn pane_header<'a>(title: &str, tools: impl Into<Element<'a, Message>>) -> E
 /// The size of the window (for keeping popups inside it).
 pub fn window_size(app: &App) -> iced::Size {
     app.ui.window_size
+}
+
+/// How far the mouse wheel turned, in pixels (a line is 60), as the views zoom by it: the
+/// wheel pushed away zooms in, unless the settings say the other way.
+pub fn wheel(app: &App, delta: &iced::mouse::ScrollDelta) -> f32 {
+    let dy = match delta {
+        iced::mouse::ScrollDelta::Lines { y, .. } => y * 60.0,
+        iced::mouse::ScrollDelta::Pixels { y, .. } => *y,
+    };
+    if app.settings.invert_zoom { -dy } else { dy }
 }

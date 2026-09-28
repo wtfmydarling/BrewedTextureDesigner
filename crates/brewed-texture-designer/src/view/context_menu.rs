@@ -5,15 +5,16 @@ use iced::{Alignment, Element, Length, Size};
 use brewed_texture_core::{Edit, NodeKind};
 
 use crate::app::{App, ColorTarget, ContextMenu, ContextTarget, ExplorerMessage, GraphMessage, Message};
+use crate::shortcuts::Command;
 use crate::style;
 
-fn item<'a>(label: impl Into<String>, shortcut: &'a str, message: Option<Message>) -> Element<'a, Message> {
+fn item<'a>(label: impl Into<String>, shortcut: impl Into<String>, message: Option<Message>) -> Element<'a, Message> {
     let enabled = message.is_some();
     button(
         row![
             text(label.into()).size(style::TEXT_SIZE).color(if enabled { style::TEXT } else { style::TEXT_FAINT }),
             space().width(Length::Fill),
-            text(shortcut).size(style::SMALL).color(style::TEXT_FAINT),
+            text(shortcut.into()).size(style::SMALL).color(style::TEXT_FAINT),
         ]
         .align_y(Alignment::Center),
     )
@@ -67,34 +68,34 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
             let uses_graph = node.is_some_and(|n| n.instance.is_some());
             vec![
                 item("Show in 2D View", "double-click", Some(Message::Graph(GraphMessage::Preview(*id)))),
-                item(if bypassed { "Enable Node" } else { "Bypass Node" }, "Ctrl+B", can_bypass.then_some(Message::ToggleBypass(*id))),
+                item(if bypassed { "Enable Node" } else { "Bypass Node" }, app.key_of(Command::Bypass), can_bypass.then_some(Message::ToggleBypass(*id))),
                 item("Open Reference", "", uses_graph.then_some(Message::OpenReference(*id))),
                 separator(),
                 item(
                     format!("Create Graph from Selection ({})", app.ui.selection.len().max(1)),
-                    "Ctrl+G",
+                    app.key_of(Command::GraphFromSelection),
                     Some(Message::GraphFromSelection),
                 ),
-                item("Duplicate", "Ctrl+D", Some(Message::Duplicate)),
-                item("Copy", "Ctrl+C", Some(Message::Copy)),
-                item("Cut", "Ctrl+X", Some(Message::Cut)),
+                item("Duplicate", app.key_of(Command::Duplicate), Some(Message::Duplicate)),
+                item("Copy", app.key_of(Command::Copy), Some(Message::Copy)),
+                item("Cut", app.key_of(Command::Cut), Some(Message::Cut)),
                 item("Disconnect Inputs", "", Some(Message::Edit(Edit::DisconnectInputs(*id)))),
-                item("Frame in a Comment", "C", Some(Message::AddComment)),
+                item("Frame in a Comment", app.key_of(Command::AddComment), Some(Message::AddComment)),
                 item(
                     "Export Output…",
                     "",
                     node.filter(|n| n.kind == NodeKind::OUTPUT).map(|n| Message::ExportNode(n.id)),
                 ),
                 separator(),
-                item("Delete", "Del", Some(Message::Delete)),
+                item("Delete", app.key_of(Command::Delete), Some(Message::Delete)),
             ]
         }
-        ContextTarget::Link(link) => vec![item("Delete Link", "Del", Some(Message::Edit(Edit::RemoveLink(link.clone()))))],
+        ContextTarget::Link(link) => vec![item("Delete Link", app.key_of(Command::Delete), Some(Message::Edit(Edit::RemoveLink(link.clone()))))],
         ContextTarget::Comment(id) => vec![
             item("Edit Text", "double-click", Some(Message::Graph(GraphMessage::EditComment(*id)))),
             item("Color…", "", Some(Message::ColorPicker(Some(ColorTarget::Comment(*id))))),
             separator(),
-            item("Delete Comment", "Del", Some(Message::Edit(Edit::RemoveComments(vec![*id])))),
+            item("Delete Comment", app.key_of(Command::Delete), Some(Message::Edit(Edit::RemoveComments(vec![*id])))),
         ],
         ContextTarget::Package(key) => {
             let key = *key;
@@ -158,14 +159,14 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
         ContextTarget::Canvas { graph_pos } => vec![
             item(
                 "Add Node…",
-                "Space",
+                app.key_of(Command::AddNode),
                 Some(Message::Graph(GraphMessage::OpenAddMenu { at: menu.at, graph_pos: *graph_pos })),
             ),
-            item("Paste", "Ctrl+V", Some(Message::Paste)),
+            item("Paste", app.key_of(Command::Paste), Some(Message::Paste)),
             separator(),
-            item("Select All", "Ctrl+A", Some(Message::SelectAll)),
+            item("Select All", app.key_of(Command::SelectAll), Some(Message::SelectAll)),
             item("Frame All", "", Some(Message::FrameAll)),
-            item("Add Comment", "C", Some(Message::AddComment)),
+            item("Add Comment", app.key_of(Command::AddComment), Some(Message::AddComment)),
         ],
     };
     let height = items.len() as f32 * 27.0 + 12.0;

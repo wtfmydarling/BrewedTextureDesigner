@@ -22,7 +22,8 @@ use std::time::{Duration, Instant};
 use brewed_texture_core::graph::{input_socket_key, output_socket_key};
 use brewed_texture_core::{DataType, Edit, NodeId, NodeKind, ParamDef, ParamKind, ParamValue, SocketRef, Value};
 
-use crate::app::{App, Dialog, DragPayload, ExplorerMessage, GraphMessage, Message, PendingAction, PreviewMessage, SelectMode};
+use crate::app::{App, Dialog, DragPayload, ExplorerMessage, GraphMessage, Message, PendingAction, PreviewMessage, SelectMode, SettingsMessage};
+use crate::settings::{Page, Setting, Settings};
 use crate::view::view3d::{Camera, Move, Shape};
 
 /// How long the autopilot flies, and on which seed.
@@ -430,7 +431,7 @@ fn home(app: &App) -> Option<NodeId> {
 }
 
 /// Back to the demo as it opens, settled: it takes what it took when it opened, whatever was
-/// done before.
+/// done before (and the images the cache keeps, no more than it may).
 fn back_home(what: &'static str) -> Vec<Step> {
     vec![
         Step::Do(Message::Proceed(PendingAction::LoadDemo)),
@@ -440,18 +441,63 @@ fn back_home(what: &'static str) -> Vec<Step> {
         Step::Check(Box::new(move |app: &App| {
             let m = app.res.memory;
             // The five maps it writes with their mips: 64 MB at 2048.
-            (m.kept + m.scratch > 0 || m.total() > 65 * 1024 * 1024).then(|| {
+            (m.scratch > 0 || m.kept > app.settings.image_cache_bytes() || m.total() - m.kept > 65 * 1024 * 1024).then(|| {
                 format!(
-                    "after {what}: {:.1} MB (views {:.1}, kept {:.1}, scratch {:.1}, files {:.1}), not 64",
+                    "after {what}: {:.1} MB (views {:.1}, kept {:.1} of a cache of {} MB, scratch {:.1}, files {:.1}), not 64",
                     mb(m.total()),
                     mb(m.shown),
                     mb(m.kept),
+                    app.settings.image_cache,
                     mb(m.scratch),
                     mb(m.files)
                 )
             })
         })),
     ]
+}
+
+/// The settings dialog, as people go through it: every page, values changed and cancelled,
+/// changed and applied (the image cache let go of at once when there is none), every page set
+/// back as it is by default.
+fn settings_scene() -> Vec<Step> {
+    let say = |m: SettingsMessage| Step::Do(Message::Settings(m));
+    let set = |s: Setting| say(SettingsMessage::Set(s));
+    let mut steps = vec![say(SettingsMessage::Open)];
+    steps.extend(Page::ALL.into_iter().map(|page| say(SettingsMessage::Page(page))));
+    steps.extend([
+        set(Setting::UndoSteps(20)),
+        set(Setting::InvertZoom(true)),
+        say(SettingsMessage::Cancel),
+        Step::Check(Box::new(|app: &App| (app.settings != Settings::default()).then(|| "cancelled, and taken all the same".into()))),
+        say(SettingsMessage::Open),
+        set(Setting::UndoSteps(20)),
+        set(Setting::RecentPackages(3)),
+        set(Setting::InvertZoom(true)),
+        set(Setting::ImageCache(0)),
+        say(SettingsMessage::Apply),
+        say(SettingsMessage::Cancel),
+        Step::Wait,
+        Step::Pause(Duration::from_millis(1200)),
+        Step::Note("no image cache".into()),
+        Step::Check(Box::new(|app: &App| {
+            let kept = app.res.memory.kept;
+            (app.settings.image_cache != 0 || kept > 0).then(|| format!("no image cache, and {:.1} MB kept", mb(kept)))
+        })),
+        say(SettingsMessage::Open),
+        set(Setting::ImageCache(256)),
+        say(SettingsMessage::Apply),
+    ]);
+    steps.extend(Page::ALL.into_iter().flat_map(|page| [say(SettingsMessage::Page(page)), say(SettingsMessage::ResetPage)]));
+    steps.extend([
+        say(SettingsMessage::Apply),
+        say(SettingsMessage::Cancel),
+        Step::Check(Box::new(|app: &App| {
+            (app.settings != Settings::default() || app.ui.dialog.is_some() || app.ui.restart_offer)
+                .then(|| "every page set back, and the settings are not as by default".into())
+        })),
+    ]);
+    steps.extend(back_home("the settings"));
+    steps
 }
 
 /// A value for a parameter: in its slider's range, or, `far`, what can be typed past it (up
@@ -1116,6 +1162,7 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
     });
 
     scenes.extend(more_scenes(folder));
+    scenes.push_back(Scene { name: "the settings", next: once(settings_scene()) });
     scenes.push_back(Scene { name: "random", next: Box::new(random_steps) });
     scenes.push_back(Scene { name: "the end", next: once(back_home("the random part")) });
     scenes

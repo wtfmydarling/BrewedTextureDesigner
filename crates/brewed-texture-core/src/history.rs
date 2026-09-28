@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use crate::edit::MergeKey;
 
-const MAX_STEPS: usize = 256;
+/// How many steps a history keeps, unless it is told another number (see
+/// [`History::set_limit`]).
+pub const DEFAULT_STEPS: usize = 200;
 const MERGE_WINDOW: Duration = Duration::from_millis(1500);
 
 struct Step<T> {
@@ -25,11 +27,22 @@ pub struct History<T> {
     last_key: Option<MergeKey>,
     last_time: Option<Instant>,
     sealed: bool,
+    /// How many steps undo can go back.
+    limit: usize,
 }
 
 impl<T> Default for History<T> {
     fn default() -> Self {
-        History { undo: Vec::new(), redo: Vec::new(), last_key: None, last_time: None, sealed: false }
+        History { undo: Vec::new(), redo: Vec::new(), last_key: None, last_time: None, sealed: false, limit: DEFAULT_STEPS }
+    }
+}
+
+impl<T> History<T> {
+    /// Keep `steps` steps to undo (at least one): fewer than there are, the oldest go.
+    pub fn set_limit(&mut self, steps: usize) {
+        self.limit = steps.max(1);
+        let over = self.undo.len().saturating_sub(self.limit);
+        self.undo.drain(..over);
     }
 }
 
@@ -46,7 +59,7 @@ impl<T: Clone> History<T> {
     /// Record a new step whose undo restores `before`.
     pub fn push(&mut self, before: T, label: &'static str, key: Option<MergeKey>, now: Instant) {
         self.undo.push(Step { state: before, label });
-        if self.undo.len() > MAX_STEPS {
+        if self.undo.len() > self.limit {
             self.undo.remove(0);
         }
         self.redo.clear();
@@ -98,7 +111,8 @@ impl<T: Clone> History<T> {
         Some(step.state)
     }
 
+    /// Forget every step (how many it keeps stays).
     pub fn clear(&mut self) {
-        *self = History::default();
+        *self = History { limit: self.limit, ..History::default() };
     }
 }

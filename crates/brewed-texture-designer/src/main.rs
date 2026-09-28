@@ -15,6 +15,7 @@ mod picker;
 mod previews;
 mod scrub;
 mod settings;
+mod shortcuts;
 mod style;
 mod view;
 mod widget;
@@ -31,7 +32,7 @@ use brewed_texture_engine::render::Job;
 
 const USAGE: &str = "Brewed Texture Designer — GPU accelerated node based texture editor
 
-usage: brewed-texture-designer [FILE.brewtex]
+usage: brewed-texture-designer [FILE.brewtex]...
        brewed-texture-designer --render PACKAGE.brewtex [--graph NAME]... [--set NAME=VALUE]...
                                [--size N|WxH] [--precision 8|16|32] [--out DIR]
 
@@ -191,7 +192,7 @@ fn main() -> iced::Result {
                 eprintln!("unknown option {other}\n\n{}", usage());
                 std::process::exit(2);
             }
-            other => options.open = Some(PathBuf::from(other)),
+            other => options.open.push(PathBuf::from(other)),
         }
         i += 1;
     }
@@ -209,6 +210,8 @@ fn main() -> iced::Result {
     // gives iced and the engine.)
     options.settings = settings::Store::open(workspace::folder().filter(|_| as_it_was).map(|f| f.join("settings.toml")));
     let chosen = settings::choose_graphics(&options.settings.settings());
+    options.graphics_from_settings = chosen;
+    let antialiasing = options.settings.settings().antialiasing;
     let mut store = options.settings.clone();
 
     if let Some(job) = render {
@@ -232,9 +235,8 @@ fn main() -> iced::Result {
         .title(App::title)
         .theme(App::theme)
         .subscription(App::subscription)
-        .scale_factor(App::scale_factor)
         .default_font(style::ui_font())
-        .antialiasing(true)
+        .antialiasing(antialiasing)
         .run();
     if let Err(iced::Error::GraphicsCreationFailed(e)) = &ran
         && chosen

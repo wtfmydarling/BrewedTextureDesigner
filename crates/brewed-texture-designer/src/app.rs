@@ -10,6 +10,7 @@ pub(crate) mod autosave;
 #[cfg(any(test, feature = "dev-tools"))]
 pub(crate) mod dev;
 pub(crate) mod packages;
+pub(crate) mod settings_dialog;
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -27,6 +28,7 @@ use brewed_texture_core::project::{self, ViewState};
 use brewed_texture_core::{Category, Document, Edit, GraphId, NodeKind, ParamValue, Value};
 
 pub use packages::OpenPackage;
+pub use settings_dialog::{SettingsDialog, SettingsMessage};
 use brewed_texture_engine::{DisplayImage, EngineService, Event, ExportJob, ImageReport, Request};
 use brewed_texture_engine::simd::ImageStats;
 
@@ -36,13 +38,15 @@ use crate::picker::{self, PickTarget, Shot};
 use crate::view;
 use crate::view::frames::FrameRate;
 use crate::settings::{self, Settings};
+use crate::shortcuts::{Chord, Command};
 use crate::workspace::Workspace;
 
 // ---------------------------------------------------------------------------- options
 
 #[derive(Clone, Debug, Default)]
 pub struct StartupOptions {
-    pub open: Option<PathBuf>,
+    /// The packages to open (the last is edited).
+    pub open: Vec<PathBuf>,
     /// How the window was laid out last time: kept, and saved again on quitting. `None`
     /// starts from the defaults and saves nothing.
     pub workspace: Option<Workspace>,
@@ -51,6 +55,9 @@ pub struct StartupOptions {
     pub recovery: Option<PathBuf>,
     /// The settings, and where they are kept (by default: as they are by default, nowhere).
     pub settings: settings::Store,
+    /// The graphics API is the settings' choice, given in the environment (see
+    /// [`settings::choose_graphics`]).
+    pub graphics_from_settings: bool,
     /// What the tools for developing the program are asked for (see [`dev`]).
     #[cfg(any(test, feature = "dev-tools"))]
     pub dev: dev::DevOptions,
@@ -218,7 +225,7 @@ pub enum Dialog {
     Recover,
     About,
     Shortcuts,
-    Settings,
+    Settings(Box<SettingsDialog>),
     /// Files a package names that are not there (see [`MissingFiles`]).
     Missing(MissingFiles),
 }
@@ -364,6 +371,17 @@ pub struct Ui {
     pub discarded: HashSet<u64>,
     /// The package files opened or saved last, the latest first (File menu).
     pub recent: Vec<String>,
+    /// The page of the settings dialog shown last.
+    pub settings_page: settings::Page,
+    /// Settings the program takes only when it starts were applied: it offers to start again.
+    pub restart_offer: bool,
+    /// Quitting to start again (see [`SettingsMessage::Restart`]).
+    pub restarting: bool,
+    /// What the program was started again with (it is not, in the tests).
+    #[cfg(test)]
+    pub started_again: Option<Vec<PathBuf>>,
+    /// The folder a file dialog was answered from last.
+    pub last_folder: Option<PathBuf>,
 }
 
 /// What the engine told us.
@@ -677,8 +695,8 @@ pub enum Message {
     OpenRecent(String),
     /// Forget the packages opened or saved before.
     ClearRecent,
-    /// The settings, changed (Edit → Settings…).
-    Settings(Settings),
+    /// The settings dialog (Edit → Settings…).
+    Settings(SettingsMessage),
     /// Keep the unsaved work for recovery (see [`autosave`]).
     Autosave,
     /// Snapshots were written, or could not be (see [`autosave::Written`]).
@@ -787,6 +805,23 @@ pub enum Message {
     Autopilot,
 }
 
+/// The folder a file dialog was answered from, when `message` is its answer: where the file
+/// chosen is, or the folder chosen.
+fn answered_from(message: &Message) -> Option<PathBuf> {
+    let file = |p: &Option<PathBuf>| p.as_deref().and_then(Path::parent).map(Path::to_path_buf);
+    match message {
+        Message::Asked(_, answer) => answered_from(answer),
+        Message::OpenPicked(p) | Message::SavePicked(p) | Message::ExportNodePicked(_, p) | Message::FilePicked(_, p) => file(p),
+        Message::ExportFolderPicked(folder) => folder.clone(),
+        Message::Preview(PreviewMessage::EnvironmentPicked(p)) => file(p),
+        Message::Explorer(ExplorerMessage::Located(_, _, p) | ExplorerMessage::ResourceSavePicked(_, _, p)) => file(p),
+        Message::Explorer(ExplorerMessage::FilesPicked(_, files) | ExplorerMessage::ImportPicked(_, files)) => {
+            files.first().and_then(|f| f.parent()).map(Path::to_path_buf)
+        }
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------- boot
 
 const MIN_WINDOW: Size = Size::new(1000.0, 640.0);
@@ -857,8 +892,10 @@ impl App {
     pub fn boot(opts: StartupOptions) -> (App, Task<Message>) {
         let (package, preview_node) = brewed_texture_core::demo::package();
         let eval = Arc::new(eval::evaluate(&package.graphs[0].graph));
+        let mut doc = Document::new(package, None);
+        doc.set_undo_steps(opts.settings.settings().undo_steps as usize);
         let mut app = App {
-            doc: Document::new(package, None),
+            doc,
             doc_key: 1,
             shelf: Vec::new(),
             next_key: 1,
@@ -935,6 +972,12 @@ impl App {
                 renaming_file: None,
                 discarded: HashSet::new(),
                 recent: opts.workspace.as_ref().map(|w| w.recent.clone()).unwrap_or_default(),
+                settings_page: settings::Page::General,
+                restart_offer: false,
+                restarting: false,
+                #[cfg(test)]
+                started_again: None,
+                last_folder: opts.workspace.as_ref().and_then(|w| w.last_folder.clone()).map(PathBuf::from),
             },
             opts: opts.clone(),
             window: None,
@@ -943,7 +986,7 @@ impl App {
             #[cfg(any(test, feature = "dev-tools"))]
             dev: dev::Dev::new(&opts.dev),
         };
-        if let Some(path) = opts.open.clone() {
+        for path in opts.open.clone() {
             app.open_path(path);
         }
         if let Some(root) = &opts.recovery {
@@ -967,7 +1010,6 @@ impl App {
         // window itself.
         let (main, open) = window::open(main_window_settings(opts.workspace.as_ref()));
         app.window = Some(main);
-        let scale = app.settings.scale;
         #[cfg(windows)]
         let maximized = opts.workspace.as_ref().is_some_and(|w| w.maximized);
         let setup = open.then(move |id| {
@@ -990,7 +1032,7 @@ impl App {
                 crate::scrub::remember(window);
                 eyedropper::Host::of(window)
             });
-            Task::batch([appear, host.map(Message::Host), crate::window_size::hold(id, scale)])
+            Task::batch([appear, host.map(Message::Host), crate::window_size::hold(id)])
         });
         (app, Task::batch([setup, scenario, lighting]))
     }
@@ -1013,41 +1055,34 @@ impl App {
         crate::style::theme()
     }
 
-    /// How large the interface of a window is drawn, over what the system says: the main
-    /// window's as the settings say; the eyedropper's, over the screen it picks from, as it is.
-    pub fn scale_factor(&self, window: window::Id) -> f32 {
-        if Some(window) == self.window { self.settings.scale } else { 1.0 }
-    }
-
     /// A new graph, as the settings say new graphs are.
     pub(crate) fn new_graph(&self) -> Graph {
         let size = self.settings.graph_size;
         Graph { resolution: [size, size], precision: self.settings.graph_precision, ..Graph::default() }
     }
 
-    /// The settings are `new`: kept, and what they change changed.
-    fn set_settings(&mut self, new: Settings) {
-        let old = std::mem::replace(&mut self.settings, new);
-        if old == new {
-            return;
-        }
-        if old.keep_unsaved && !new.keep_unsaved {
-            // Not kept any more: what was kept goes.
-            self.forget_all_snapshots();
-        }
-        if let Err(e) = self.settings_store.save(&new) {
-            self.set_status(e, true);
+    /// A document of `package`, as the settings say documents are.
+    pub(crate) fn document(&self, package: Package, path: Option<PathBuf>) -> Document {
+        let mut doc = Document::new(package, path);
+        doc.set_undo_steps(self.settings.undo_steps as usize);
+        doc
+    }
+
+    /// Where a file dialog opens, as the settings say (see [`settings::FileDialogs`]): in the
+    /// folder of the package's file (`package`, else the one being edited), or in the folder
+    /// a dialog was answered from last; in the other where that one is not there.
+    pub(crate) fn dialog_folder(&self, package: Option<&Path>) -> Option<PathBuf> {
+        let package = package.or(self.doc.path().map(PathBuf::as_path)).and_then(Path::parent).filter(|d| d.is_dir()).map(Path::to_path_buf);
+        let last = self.ui.last_folder.clone().filter(|d| d.is_dir());
+        match self.settings.file_dialogs {
+            settings::FileDialogs::Package => package.or(last),
+            settings::FileDialogs::Last => last.or(package),
         }
     }
 
-    /// The graphics API the program started with (see [`settings::choose_graphics`]).
-    pub fn graphics_at_start(&self) -> settings::Graphics {
-        self.opts.settings.settings().graphics
-    }
-
-    /// The settings file, and what is wrong with it (the settings dialog says it).
-    pub fn settings_file(&self) -> (Option<&std::path::Path>, &[String]) {
-        (self.settings_store.path(), &self.settings_store.problems)
+    /// The key of a command, as a menu shows it: its first ("" for none).
+    pub fn key_of(&self, command: Command) -> String {
+        self.settings.shortcuts.of(command).first().map(Chord::shown).unwrap_or_default()
     }
 
     pub fn graph(&self) -> &Graph {
@@ -1087,7 +1122,7 @@ impl App {
         }
         // Unsaved work, kept for recovery.
         if self.autosave.session.is_some() && self.settings.keep_unsaved {
-            let every = Duration::from_secs(u64::from(self.settings.keep_every));
+            let every = Duration::from_secs(60 * u64::from(self.settings.keep_every));
             subs.push(iced::time::every(every).map(|_| Message::Autosave));
         }
         // The files the packages use, on disk: they can come, go or change.
@@ -1598,7 +1633,7 @@ impl App {
         let hint = self.doc.path();
         let name = hint.and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
         let name = name.unwrap_or_else(|| format!("untitled.{}", project::FILE_EXTENSION));
-        let folder = hint.and_then(|p| p.parent()).filter(|d| d.is_dir()).map(PathBuf::from);
+        let folder = self.dialog_folder(None);
         Task::perform(
             blocking(move || {
                 let mut dialog = rfd::FileDialog::new()
@@ -1651,6 +1686,10 @@ impl App {
         self.ui.discarded.clear();
         if self.ui.dialog == Some(Dialog::Recover) {
             self.recovery(autosave::Recovery::Later);
+        }
+        if std::mem::take(&mut self.ui.restarting) {
+            // Not started again: still to be.
+            self.ui.restart_offer = true;
         }
         self.ui.dialog = None;
     }
@@ -1709,12 +1748,16 @@ impl App {
 
     /// The file dialog to open a package.
     fn pick_package(&self) -> Task<Message> {
+        let folder = self.dialog_folder(None);
         Task::perform(
-            blocking(|| {
-                rfd::FileDialog::new()
+            blocking(move || {
+                let mut dialog = rfd::FileDialog::new()
                     .set_title("Open package")
-                    .add_filter(format!("{} package", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION, "json"])
-                    .pick_file()
+                    .add_filter(format!("{} package", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION, "json"]);
+                if let Some(folder) = folder {
+                    dialog = dialog.set_directory(folder);
+                }
+                dialog.pick_file()
             }),
             |p| Message::OpenPicked(p.flatten()),
         )
@@ -1732,6 +1775,9 @@ impl App {
     /// is left to recover: what was not saved, the user chose not to save.
     fn hide_and_exit(&mut self) -> Task<Message> {
         self.end_autosave();
+        if self.ui.restarting {
+            self.start_again();
+        }
         match self.window {
             Some(id) => window::set_mode(id, window::Mode::Hidden).chain(iced::exit()),
             None => iced::exit(),
@@ -1749,6 +1795,7 @@ impl App {
             maximized,
             realtime: Some(self.ui.realtime),
             recent: self.ui.recent.clone(),
+            last_folder: self.ui.last_folder.as_ref().map(|f| f.display().to_string()),
             ..Workspace::default()
         }
         .with_lighting(&self.ui.preview.lighting);
@@ -1778,6 +1825,9 @@ impl App {
     // ------------------------------------------------------------------ update
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        if let Some(folder) = answered_from(&message) {
+            self.ui.last_folder = Some(folder);
+        }
         let task = self.handle(message);
         self.refresh();
         self.sync_expression();
@@ -1827,9 +1877,10 @@ impl App {
                     let (service, source) = gpu::start_engine(handles, "GPU".into());
                     self.engine = Some(service);
                     self.events = Some(source);
+                    self.send(Request::Cache(self.settings.image_cache_bytes()));
                     self.send_graph();
                     // (The device says how large a texture, so the window, may be.)
-                    let held = self.window.map_or_else(Task::none, |id| crate::window_size::hold(id, self.settings.scale));
+                    let held = self.window.map_or_else(Task::none, crate::window_size::hold);
                     let named = Task::perform(blocking(gpu::adapter_name), |name| Message::GpuName(name.unwrap_or_default()));
                     return Task::batch([held, named]);
                 }
@@ -1982,8 +2033,15 @@ impl App {
                     self.set_status("The graph has no Output nodes to export", true);
                 } else {
                     let here = self.here();
+                    let folder = self.dialog_folder(None);
                     return Task::perform(
-                        blocking(|| rfd::FileDialog::new().set_title("Export outputs to folder").pick_folder()),
+                        blocking(move || {
+                            let mut dialog = rfd::FileDialog::new().set_title("Export outputs to folder");
+                            if let Some(folder) = folder {
+                                dialog = dialog.set_directory(folder);
+                            }
+                            dialog.pick_folder()
+                        }),
                         move |p| Message::Asked(here, Box::new(Message::ExportFolderPicked(p.flatten()))),
                     );
                 }
@@ -2005,13 +2063,14 @@ impl App {
                 );
                 let ext = brewed_texture_engine::export::extension(depth);
                 let here = self.here();
+                let folder = self.dialog_folder(None);
                 return Task::perform(
                     blocking(move || {
-                        rfd::FileDialog::new()
-                            .set_title("Export output")
-                            .add_filter(ext.to_uppercase(), &[ext])
-                            .set_file_name(name)
-                            .save_file()
+                        let mut dialog = rfd::FileDialog::new().set_title("Export output").add_filter(ext.to_uppercase(), &[ext]).set_file_name(name);
+                        if let Some(folder) = folder {
+                            dialog = dialog.set_directory(folder);
+                        }
+                        dialog.save_file()
                     }),
                     move |p| Message::Asked(here, Box::new(Message::ExportNodePicked(id, p.flatten()))),
                 );
@@ -2043,7 +2102,7 @@ impl App {
             }
             Message::Asked(asked, answer) => return self.answered(asked, *answer),
             Message::Autosave => return self.autosave(),
-            Message::Settings(new) => self.set_settings(new),
+            Message::Settings(message) => return self.settings_message(message),
             Message::Autosaved(done) => self.autosaved(done),
             Message::Recover(choice) => self.recovery(choice),
             Message::Explorer(msg) => return self.explorer_message(msg),
@@ -2224,11 +2283,15 @@ impl App {
             Message::BrowseFile(target) => {
                 let extensions = self.takes(&target);
                 let here = self.here();
+                let folder = self.dialog_folder(None);
                 return Task::perform(
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new().set_title("Choose a file");
                         if !extensions.is_empty() {
                             dialog = dialog.add_filter("Supported files", extensions);
+                        }
+                        if let Some(folder) = folder {
+                            dialog = dialog.set_directory(folder);
                         }
                         dialog.pick_file()
                     }),
@@ -2561,14 +2624,11 @@ impl App {
         Task::none()
     }
 
-    /// `physical` makes the shortcuts the same on every keyboard layout: a key that types
-    /// no Latin letter (Cyrillic, Greek…) counts as the Latin one in its place.
+    /// A key pressed: Escape closes what is open; a command's key does what it does (see
+    /// [`crate::shortcuts`]: the keys are the settings', the same on every keyboard layout).
     fn shortcut(&mut self, key: keyboard::Key, physical: keyboard::key::Physical, m: keyboard::Modifiers, status: iced::event::Status) -> Task<Message> {
         use keyboard::Key;
         use keyboard::key::Named;
-        let ctrl = m.command();
-        let latin = key.to_latin(physical).map(|c| c.to_ascii_lowercase());
-        let char = |c: char| latin == Some(c);
         // Escape closes whatever is open, even when a text field has focus.
         if key == Key::Named(Named::Escape) {
             if self.ui.screen_pick.is_some() {
@@ -2576,6 +2636,8 @@ impl App {
             }
             if self.ui.add_menu.is_some() || self.ui.menu.is_some() || self.ui.context.is_some() || self.ui.choice_menu.is_some() {
                 self.close_popups();
+            } else if self.capturing_key() {
+                return self.settings_message(SettingsMessage::StopCapture);
             } else if self.ui.dialog.is_some() {
                 self.cancel_dialog();
             } else if self.ui.renaming_var.is_some()
@@ -2596,6 +2658,13 @@ impl App {
         // Nothing else while picking from the screen (the keyboard may still reach the
         // window).
         if self.ui.screen_pick.is_some() {
+            return Task::none();
+        }
+        // The settings dialog waiting for a key takes the next one (not a modifier alone).
+        if self.capturing_key() {
+            if let Some(chord) = Chord::of(&key, physical, m) {
+                self.capture_key(chord);
+            }
             return Task::none();
         }
         if let Some(menu) = &self.ui.choice_menu {
@@ -2626,52 +2695,49 @@ impl App {
         if self.ui.dialog.is_some() {
             return Task::none();
         }
-        // Global shortcuts that also work while typing.
-        if ctrl && char('s') {
-            return self.update_nested(if m.shift() { Message::SaveAs } else { Message::Save });
-        }
-        if ctrl && char('o') {
-            return self.update_nested(Message::Open);
-        }
-        if ctrl && char('e') {
-            return self.update_nested(Message::ExportAll);
-        }
-        // (The key of the comma, whatever it types on the layout.)
-        if ctrl && (char(',') || physical == keyboard::key::Physical::Code(keyboard::key::Code::Comma)) {
-            return self.update_nested(Message::Dialog(Some(Dialog::Settings)));
-        }
-        if status == iced::event::Status::Captured || self.ui.dialog.is_some() {
-            return Task::none(); // a text field or widget used the key
-        }
+        let Some(chord) = Chord::of(&key, physical, m) else { return Task::none() };
+        // (Captured: a text field or a widget used the key.)
+        let typing = status == iced::event::Status::Captured;
         let over_graph = self.ui.graph_view.contains(self.ui.cursor);
-        let message = match key.as_ref() {
-            _ if ctrl && (char('y') || (m.shift() && char('z'))) => Message::Redo,
-            _ if ctrl && char('z') => Message::Undo,
-            _ if ctrl && char('n') => Message::New,
-            _ if ctrl && char('c') => Message::Copy,
-            _ if ctrl && char('x') => Message::Cut,
-            _ if ctrl && char('v') => Message::Paste,
-            _ if ctrl && char('d') => Message::Duplicate,
-            _ if ctrl && char('a') => Message::SelectAll,
-            _ if ctrl && char('g') => Message::GraphFromSelection,
-            _ if ctrl && char('b') => match self.ui.selection.iter().next() {
+        let over_2d = self.ui.preview.bounds.contains(self.ui.cursor);
+        match self.settings.shortcuts.command(chord, typing, over_graph, over_2d) {
+            Some(command) => self.command(command),
+            None => Task::none(),
+        }
+    }
+
+    /// Do what a command of the keyboard does.
+    fn command(&mut self, command: Command) -> Task<Message> {
+        let message = match command {
+            Command::New => Message::New,
+            Command::Open => Message::Open,
+            Command::Save => Message::Save,
+            Command::SaveAs => Message::SaveAs,
+            Command::Export => Message::ExportAll,
+            Command::Settings => Message::Settings(SettingsMessage::Open),
+            Command::Undo => Message::Undo,
+            Command::Redo => Message::Redo,
+            Command::Copy => Message::Copy,
+            Command::Cut => Message::Cut,
+            Command::Paste => Message::Paste,
+            Command::Duplicate => Message::Duplicate,
+            Command::Delete => Message::Delete,
+            Command::SelectAll => Message::SelectAll,
+            Command::Bypass => match self.ui.selection.iter().next() {
                 Some(id) => Message::ToggleBypass(*id),
                 None => return Task::none(),
             },
-            Key::Named(Named::Delete | Named::Backspace) => Message::Delete,
-            Key::Named(Named::F1) => Message::Dialog(Some(Dialog::Shortcuts)),
-            _ if !ctrl && char('f') => Message::Frame,
-            _ if !ctrl && char('c') && over_graph => Message::AddComment,
-            Key::Named(Named::Space) if over_graph => {
+            Command::GraphFromSelection => Message::GraphFromSelection,
+            Command::Frame => Message::Frame,
+            Command::AddComment => Message::AddComment,
+            Command::AddNode => {
                 let at = self.ui.cursor;
                 let pos = self.ui.graph_view.to_graph(at);
                 return self.open_add_menu(at, pos, None);
             }
-            // Over the 2D view, Space is the tiling: it is what one keeps looking at.
-            Key::Named(Named::Space) if self.ui.preview.bounds.contains(self.ui.cursor) => {
-                Message::Preview(PreviewMessage::ToggleTiling)
-            }
-            _ => return Task::none(),
+            // Over the 2D view, the tiling: it is what one keeps looking at.
+            Command::ShowTiling => Message::Preview(PreviewMessage::ToggleTiling),
+            Command::Help => Message::Dialog(Some(Dialog::Shortcuts)),
         };
         self.update_nested(message)
     }
@@ -2900,7 +2966,8 @@ impl App {
             }
             PreviewMessage::BrowseEnvironment => {
                 // Where the image in use is, to choose another beside it.
-                let folder = p.lighting.file.as_deref().and_then(|f| std::path::Path::new(f).parent()).filter(|d| d.is_dir()).map(PathBuf::from);
+                let beside = p.lighting.file.as_deref().and_then(|f| std::path::Path::new(f).parent()).filter(|d| d.is_dir()).map(PathBuf::from);
+                let folder = beside.or_else(|| self.dialog_folder(None));
                 self.close_popups();
                 return Task::perform(
                     blocking(move || {

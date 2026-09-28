@@ -30,10 +30,13 @@ pub struct Workspace {
     pub blur: Option<f32>,
     /// The package files opened or saved last, the latest first (see [`remember`]).
     pub recent: Vec<String>,
+    /// The folder a file dialog was answered from last.
+    pub last_folder: Option<String>,
 }
 
-/// How many packages the File menu offers again.
-pub const RECENT_PACKAGES: usize = 8;
+/// How many packages are remembered, of which the File menu offers as many as the settings
+/// say.
+pub const RECENT_PACKAGES: usize = 20;
 
 /// `recent` with `path` first: once, and no more than [`RECENT_PACKAGES`] of them.
 pub fn remember(recent: &mut Vec<String>, path: &str) {
@@ -135,6 +138,7 @@ mod tests {
             background: Some(false),
             blur: Some(0.6),
             recent: vec!["C:/work/walls.brewtex".into()],
+            last_folder: Some("C:/work".into()),
         };
         let json = serde_json::to_string(&w).unwrap();
         assert_eq!(serde_json::from_str::<Workspace>(&json).unwrap(), w);
@@ -147,11 +151,11 @@ mod tests {
     #[test]
     fn packages_opened_last_are_remembered() {
         let mut recent = Vec::new();
-        for i in 0..12 {
+        for i in 0..RECENT_PACKAGES + 4 {
             remember(&mut recent, &format!("/work/{i}.brewtex"));
         }
         assert_eq!(recent.len(), RECENT_PACKAGES);
-        assert_eq!(recent[0], "/work/11.brewtex");
+        assert_eq!(recent[0], format!("/work/{}.brewtex", RECENT_PACKAGES + 3));
         remember(&mut recent, "/work/5.brewtex");
         assert_eq!(recent.iter().filter(|p| p.ends_with("/5.brewtex")).count(), 1);
         assert_eq!(recent[0], "/work/5.brewtex");

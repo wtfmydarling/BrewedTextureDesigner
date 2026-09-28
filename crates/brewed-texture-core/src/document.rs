@@ -214,6 +214,11 @@ impl Document {
         self.revision += 1;
     }
 
+    /// How many steps undo can go back (at least one): fewer than there are, the oldest go.
+    pub fn set_undo_steps(&mut self, steps: usize) {
+        self.history.set_limit(steps);
+    }
+
     /// Replace the whole document (new / open). History starts over.
     pub fn replace(&mut self, package: Package, path: Option<PathBuf>) {
         self.current = package.first();
@@ -315,5 +320,33 @@ mod tests {
         // A graph that is not changed is not copied for undo.
         let other = &doc.package().graph(first).unwrap().graph;
         assert!(Arc::strong_count(other) > 1, "shared with the undo steps");
+    }
+
+    /// Undo goes back as many steps as it is told to keep: the oldest go, as they come and
+    /// when it is told fewer; a document started over keeps the number.
+    #[test]
+    fn undo_keeps_as_many_steps_as_it_is_told() {
+        let mut doc = Document::of_graph(Graph::default(), None);
+        doc.set_undo_steps(3);
+        let add = |doc: &mut Document| {
+            doc.apply(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }).unwrap();
+            doc.seal();
+        };
+        let undone = |doc: &mut Document| std::iter::from_fn(|| doc.undo().then_some(())).count();
+        for _ in 0..5 {
+            add(&mut doc);
+        }
+        assert_eq!(undone(&mut doc), 3);
+        assert_eq!(doc.graph().nodes.len(), 2, "the two oldest steps went");
+        for _ in 0..3 {
+            assert!(doc.redo());
+        }
+        doc.set_undo_steps(1);
+        assert_eq!(undone(&mut doc), 1, "fewer: the oldest go");
+        doc.replace(Package::new("Graph", Graph::default()), None);
+        for _ in 0..3 {
+            add(&mut doc);
+        }
+        assert_eq!(undone(&mut doc), 1, "started over, it keeps the number");
     }
 }

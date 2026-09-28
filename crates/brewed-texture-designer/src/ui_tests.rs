@@ -2194,7 +2194,7 @@ fn image_inputs_are_input_values_and_drags_say_what_cannot_be() {
     let mut w = harness!(view::root, 1680.0, 1000.0);
     // Pictures chosen are linked, as the settings may say (held by the package, as they say by
     // default: `files_chosen_or_dropped_are_held`).
-    w.send(Message::Settings(crate::settings::Settings { new_files: crate::settings::NewFiles::Link, ..w.app.settings }));
+    apply_settings(&mut w, |s| s.new_files = crate::settings::NewFiles::Link);
     let dir = scratch("image-inputs");
     let picture = dir.join("bricks.png");
     image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 100, 50, 255])).save(&picture).expect("a picture");
@@ -2744,43 +2744,156 @@ fn answers_of_dialogs_go_where_they_were_asked() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The settings: Ctrl+, (the key of the comma, on every layout) or Edit → Settings… shows them;
-/// each chosen is taken at once: the main window drawn as large as they say (the eyedropper's,
-/// over the screen, as it is), new graphs as they say.
+/// The settings changed by `change`, as Apply leaves them in the app (the dialog opened, the
+/// change made, applied).
+fn apply_settings(w: &mut Harness, change: impl FnOnce(&mut crate::settings::Settings)) {
+    use crate::app::SettingsMessage as S;
+    let mut settings = w.app.settings.clone();
+    change(&mut settings);
+    w.send(Message::Settings(S::Open));
+    if let Some(Dialog::Settings(dialog)) = &mut w.app.ui.dialog {
+        dialog.draft = settings;
+    }
+    w.send(Message::Settings(S::Apply));
+    w.send(Message::Settings(S::Cancel));
+}
+
+/// Where the view shows `wanted`, to click it: the last place, what floats over the window
+/// (a dialog, the offer to start again) before the window.
+fn place_of(w: &mut Harness, wanted: &str) -> Point {
+    texts(w, wanted).last().unwrap_or_else(|| panic!("{wanted} is not shown")).center()
+}
+
+/// The settings: Ctrl+, (the key of the comma, on every layout) or Edit → Settings… shows them,
+/// a page at a time, the one shown last. A change is marked on its page and taken only when it
+/// is applied: Apply does nothing before a change, Cancel (Escape) forgets it, and a page is set
+/// back as it is by default. New graphs are as the settings say.
 #[test]
-fn settings_are_chosen_and_taken() {
-    use crate::settings::{Graphics, Settings};
+fn settings_are_changed_and_applied() {
+    use crate::app::SettingsMessage as S;
+    use crate::settings::{Page, Setting, Settings};
     use brewed_texture_core::Precision;
     use keyboard::key::{Code, Physical};
     let mut w = harness!(view::root, 1280.0, 800.0);
     let ctrl = keyboard::Modifiers::CTRL;
+    let page = |w: &Harness| match &w.app.ui.dialog {
+        Some(Dialog::Settings(dialog)) => Some(dialog.page),
+        _ => None,
+    };
     // A Russian keyboard types "б" on the key of the comma.
     key(&mut w, "б", Physical::Code(Code::Comma), ctrl);
-    assert_eq!(w.app.ui.dialog, Some(Dialog::Settings));
+    assert_eq!(page(&w), Some(Page::General));
     draw_frame(&mut w, std::time::Instant::now());
-    for label in ["Scale", "A file chosen or dropped", "Embed in the package", "Keep unsaved work", "API"] {
+    for label in ["General", "Packages", "Recovery", "Performance", "Shortcuts", "Undo steps", "Recent packages", "File dialogs open in", "Invert zoom"] {
         assert!(!texts(&mut w, label).is_empty(), "{label}");
     }
+    assert!(texts(&mut w, "Keep unsaved work").is_empty(), "on a page of its own");
     assert!(!texts(&mut w, "Not kept: the program runs with the settings as they are by default.").is_empty());
     w.snapshot("settings");
+    // Nothing changed: nothing to apply, and the dialog is closed rather than cancelled.
+    assert!(texts(&mut w, "Cancel").is_empty() && !texts(&mut w, "Close").is_empty());
+    let at = place_of(&mut w, "Apply");
+    click(&mut w, at);
+    assert_eq!(page(&w), Some(Page::General), "Apply does nothing yet");
+
+    // Another page, and a change: marked, not taken.
+    let at = place_of(&mut w, "Packages");
+    click(&mut w, at);
+    assert_eq!(page(&w), Some(Page::Packages));
+    w.send(Message::Settings(S::Set(Setting::GraphSize(512))));
+    w.send(Message::Settings(S::Set(Setting::GraphPrecision(Precision::Full))));
+    draw_frame(&mut w, std::time::Instant::now());
+    assert_eq!(w.app.settings.graph_size, 2048, "not taken before Apply");
+    assert!(!texts(&mut w, "●").is_empty() && !texts(&mut w, "Cancel").is_empty(), "marked, and to be cancelled");
+    w.snapshot("settings-changed");
     press(&mut w, keyboard::key::Named::Escape);
     assert_eq!(w.app.ui.dialog, None);
-    key(&mut w, ",", Physical::Code(Code::Comma), ctrl);
-    assert_eq!(w.app.ui.dialog, Some(Dialog::Settings));
+    assert_eq!(w.app.settings, Settings::default(), "cancelled: nothing taken");
 
-    let s = w.app.settings;
-    w.send(Message::Settings(Settings { scale: 1.25, graph_size: 512, graph_precision: Precision::Full, graphics: Graphics::Vulkan, ..s }));
-    let main = w.app.main_window().expect("the main window");
-    assert_eq!(w.app.scale_factor(main), 1.25);
-    assert_eq!(w.app.scale_factor(iced::window::Id::unique()), 1.0, "the eyedropper's windows are not");
+    // Opened again on the page shown last; applied, taken, and the dialog stays.
+    key(&mut w, ",", Physical::Code(Code::Comma), ctrl);
+    assert_eq!(page(&w), Some(Page::Packages));
+    w.send(Message::Settings(S::Set(Setting::GraphSize(512))));
+    w.send(Message::Settings(S::Set(Setting::GraphPrecision(Precision::Full))));
     draw_frame(&mut w, std::time::Instant::now());
-    assert!(!texts(&mut w, "Taken when the program starts again.").is_empty(), "the graphics API waits for a start");
-    w.send(Message::Dialog(None));
+    let at = place_of(&mut w, "Apply");
+    click(&mut w, at);
+    assert_eq!((w.app.settings.graph_size, w.app.settings.graph_precision), (512, Precision::Full));
+    assert_eq!(page(&w), Some(Page::Packages));
+    draw_frame(&mut w, std::time::Instant::now());
+    assert!(texts(&mut w, "●").is_empty() && !texts(&mut w, "Close").is_empty(), "nothing waits to be applied");
+    w.send(Message::Settings(S::Cancel));
     w.send(Message::New);
     assert_eq!((w.app.graph().resolution, w.app.graph().precision), ([512, 512], Precision::Full));
     w.send(Message::Explorer(ExplorerMessage::NewGraph(w.app.doc_key)));
     assert_eq!(w.app.doc.package().graphs.len(), 2);
     assert_eq!(w.app.graph().resolution, [512, 512], "a graph added to a package too");
+
+    // The page set back as it is by default.
+    w.send(Message::Settings(S::Open));
+    draw_frame(&mut w, std::time::Instant::now());
+    let at = place_of(&mut w, "Reset Page to Defaults");
+    click(&mut w, at);
+    w.send(Message::Settings(S::Apply));
+    assert_eq!(w.app.settings, Settings::default());
+}
+
+/// A setting the program takes only when it starts says so, and offers to start it again once
+/// it is applied, in the corner: Later puts the offer away, a setting as it started takes it
+/// away. Restart asks about unsaved changes as quitting does ("before restarting"): given up,
+/// the offer is back; else the program quits and starts again with the packages open.
+#[test]
+fn settings_taken_at_a_start_offer_to_start_again() {
+    use crate::app::SettingsMessage as S;
+    use crate::settings::{Graphics, Page, Setting};
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    w.send(Message::Settings(S::OpenPage(Page::Performance)));
+    draw_frame(&mut w, std::time::Instant::now());
+    for label in ["Image cache", "Graphics API", "Antialiasing", "Restart"] {
+        assert!(!texts(&mut w, label).is_empty(), "{label}");
+    }
+    w.send(Message::Settings(S::Set(Setting::Graphics(Graphics::Vulkan))));
+    assert!(!w.app.ui.restart_offer, "not before it is applied");
+    w.send(Message::Settings(S::Apply));
+    assert!(w.app.ui.restart_offer);
+    draw_frame(&mut w, std::time::Instant::now());
+    assert!(!texts(&mut w, "Taken when the program starts again.").is_empty());
+    assert_eq!(texts(&mut w, "Restart the program?").len(), 1, "in the dialog, while it is open");
+    w.snapshot("restart-offer");
+    let at = place_of(&mut w, "Later");
+    click(&mut w, at);
+    assert!(!w.app.ui.restart_offer);
+    w.send(Message::Settings(S::Set(Setting::Graphics(Graphics::Auto))));
+    w.send(Message::Settings(S::Apply));
+    assert!(!w.app.ui.restart_offer, "as it started: nothing to start again for");
+    w.send(Message::Settings(S::Set(Setting::Antialiasing(false))));
+    w.send(Message::Settings(S::Apply));
+    assert!(w.app.ui.restart_offer);
+    w.send(Message::Settings(S::Cancel));
+    draw_frame(&mut w, std::time::Instant::now());
+    assert_eq!(texts(&mut w, "Restart the program?").len(), 1, "in the corner, once it is closed");
+    w.snapshot("restart-offer-corner");
+
+    // Unsaved changes ask first; given up, the offer is back.
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
+    draw_frame(&mut w, std::time::Instant::now());
+    let at = place_of(&mut w, "Restart Now");
+    click(&mut w, at);
+    assert!(matches!(w.app.ui.dialog, Some(Dialog::Unsaved(_))));
+    draw_frame(&mut w, std::time::Instant::now());
+    let question = format!("\"{}\" has unsaved changes. Do you want to save them before restarting?", w.app.doc.title());
+    let asked = texts(&mut w, &question);
+    assert!(!asked.is_empty(), "before restarting");
+    press(&mut w, keyboard::key::Named::Escape);
+    assert!(w.app.ui.restart_offer && w.app.ui.started_again.is_none());
+
+    // Saved: the program starts again with the package.
+    let dir = scratch("restart");
+    let walls = dir.join("walls.brewtex");
+    w.send(Message::SavePicked(Some(walls.clone())));
+    w.send(Message::Settings(S::Restart));
+    assert_eq!(w.app.ui.started_again.as_deref(), Some(&[walls][..]));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Settings chosen are kept in their file and taken again the next time, only what changed
@@ -2798,9 +2911,9 @@ fn settings_are_kept_in_their_file() {
     };
     let (mut first, _) = App::boot(opts(&file));
     assert!(!file.exists(), "nothing written before a setting changes");
-    let _ = first.update(Message::Settings(Settings { keep_every: 120, new_files: NewFiles::Link, ..first.settings }));
+    first.set_settings(Settings { keep_every: 5, new_files: NewFiles::Link, ..first.settings.clone() });
     let text = std::fs::read_to_string(&file).expect("written");
-    assert!(text.contains("every = 120") && text.contains("new = \"link\"") && text.contains("scale = 1.0"), "{text}");
+    assert!(text.contains("every = 5") && text.contains("new_files = \"link\"") && text.contains("undo_steps = 200"), "{text}");
 
     // Unsaved work, kept; then not kept any more: what was kept goes.
     let _ = first.update(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
@@ -2816,7 +2929,7 @@ fn settings_are_kept_in_their_file() {
             .count()
     };
     assert_eq!(snapshots(&dir), 1);
-    let _ = first.update(Message::Settings(Settings { keep_unsaved: false, ..first.settings }));
+    first.set_settings(Settings { keep_unsaved: false, ..first.settings.clone() });
     assert_eq!(snapshots(&dir), 0, "not kept any more: gone");
     let _ = first.update(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [100.0, 0.0] }));
     first.autosave_now();
@@ -2824,17 +2937,171 @@ fn settings_are_kept_in_their_file() {
     drop(first);
 
     let (second, _) = App::boot(opts(&file));
-    assert_eq!((second.settings.keep_every, second.settings.new_files, second.settings.keep_unsaved), (120, NewFiles::Link, false));
+    assert_eq!((second.settings.keep_every, second.settings.new_files, second.settings.keep_unsaved), (5, NewFiles::Link, false));
     drop(second);
 
     std::fs::write(&file, "keep = [").unwrap();
     let (mut third, _) = App::boot(opts(&file));
     assert!(third.settings_file().1.iter().any(|p| p.contains("not TOML")), "{:?}", third.settings_file().1);
-    let _ = third.update(Message::Settings(Settings { scale: 1.5, ..third.settings }));
-    assert_eq!(third.settings.scale, 1.5, "taken all the same, while the program runs");
+    third.set_settings(Settings { undo_steps: 50, ..third.settings.clone() });
+    assert_eq!(third.settings.undo_steps, 50, "taken all the same, while the program runs");
     assert!(third.ui.status.as_ref().is_some_and(|s| s.error && s.text.contains("not saved")));
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep = [", "not written over");
     drop(third);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The keys of the commands are given on the Shortcuts page: a key is clicked, and the next
+/// key pressed takes its place (Escape stops waiting). A key another command had goes from it,
+/// and the page says so. Applied, the key does what it was given to, the menus and the list of
+/// keys say it, and the settings file keeps it.
+#[test]
+fn shortcuts_are_given_other_keys() {
+    use crate::app::SettingsMessage as S;
+    use crate::settings::{Page, Store};
+    use crate::shortcuts::{Chord, Command};
+    use keyboard::key::{Code, Physical};
+    let dir = scratch("shortcuts");
+    let file = dir.join("settings.toml");
+    let opts = StartupOptions { settings: Store::open(Some(file.clone())), ..StartupOptions::default() };
+    let Some(mut w) = Harness::started(Box::new(view::root), Size::new(1280.0, 800.0), opts) else { return };
+    let ctrl = keyboard::Modifiers::CTRL;
+    let capturing = |w: &Harness| match &w.app.ui.dialog {
+        Some(Dialog::Settings(dialog)) => dialog.capturing,
+        _ => None,
+    };
+    w.send(Message::Settings(S::OpenPage(Page::Shortcuts)));
+    draw_frame(&mut w, std::time::Instant::now());
+    for label in ["Undo", "Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Frame Selection / All", "Search and Add a Node"] {
+        assert!(!texts(&mut w, label).is_empty(), "{label}");
+    }
+    w.snapshot("settings-shortcuts");
+    // Undo's key clicked: it waits; Escape stops it waiting, the dialog stays.
+    let at = place_of(&mut w, "Ctrl+Z");
+    click(&mut w, at);
+    assert_eq!(capturing(&w), Some((Command::Undo, 0)));
+    press(&mut w, keyboard::key::Named::Escape);
+    assert_eq!(capturing(&w), None);
+    assert!(w.app.ui.dialog.is_some());
+    // Given Ctrl+D (on a Russian keyboard), which Duplicate had.
+    let at = place_of(&mut w, "Ctrl+Z");
+    click(&mut w, at);
+    draw_frame(&mut w, std::time::Instant::now());
+    assert!(!texts(&mut w, "Press a key…").is_empty());
+    key(&mut w, "в", Physical::Code(Code::KeyD), ctrl);
+    let ctrl_d = Chord::parse("Ctrl+D").unwrap();
+    let draft = match &w.app.ui.dialog {
+        Some(Dialog::Settings(dialog)) => dialog.clone(),
+        _ => panic!("the dialog stays"),
+    };
+    assert_eq!((draft.draft.shortcuts.of(Command::Undo), draft.draft.shortcuts.of(Command::Duplicate)), (vec![ctrl_d], vec![]));
+    assert_eq!(draft.note.as_deref(), Some("Ctrl+D was the key of \"Duplicate\", which has no key now."));
+    draw_frame(&mut w, std::time::Instant::now());
+    assert!(!texts(&mut w, "Ctrl+D was the key of \"Duplicate\", which has no key now.").is_empty(), "the page says so");
+    assert_eq!(w.app.key_of(Command::Undo), "Ctrl+Z", "not before Apply");
+    w.send(Message::Settings(S::Apply));
+    w.send(Message::Settings(S::Cancel));
+
+    // Ctrl+D undoes now, and duplicates nothing; Ctrl+Z does nothing.
+    let nodes = w.app.graph().nodes.len();
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
+    w.send(Message::Seal);
+    key(&mut w, "z", Physical::Code(Code::KeyZ), ctrl);
+    assert_eq!(w.app.graph().nodes.len(), nodes + 1, "Ctrl+Z is no key now");
+    key(&mut w, "d", Physical::Code(Code::KeyD), ctrl);
+    assert_eq!(w.app.graph().nodes.len(), nodes, "undone, nothing duplicated");
+    assert_eq!((w.app.key_of(Command::Undo), w.app.key_of(Command::Duplicate)), ("Ctrl+D".to_string(), String::new()));
+    w.send(Message::Dialog(Some(Dialog::Shortcuts)));
+    draw_frame(&mut w, std::time::Instant::now());
+    assert!(!texts(&mut w, "Ctrl+D").is_empty(), "the list of keys says it");
+    w.send(Message::Dialog(None));
+    let text = std::fs::read_to_string(&file).expect("kept");
+    assert!(text.contains("undo = [\"Ctrl+D\"]") && text.contains("duplicate = []"), "{text}");
+
+    // A key taken away, and the keys by default again.
+    w.send(Message::Settings(S::Open));
+    w.send(Message::Settings(S::ClearKey(Command::Redo, 0)));
+    w.send(Message::Settings(S::ResetKeys(Command::Undo)));
+    w.send(Message::Settings(S::ResetKeys(Command::Duplicate)));
+    w.send(Message::Settings(S::Apply));
+    assert_eq!(w.app.settings.shortcuts.of(Command::Redo), [Chord::parse("Ctrl+Shift+Z").unwrap()]);
+    assert_eq!((w.app.key_of(Command::Undo), w.app.key_of(Command::Duplicate)), ("Ctrl+Z".to_string(), "Ctrl+D".to_string()));
+    let text = std::fs::read_to_string(&file).unwrap();
+    let said = |key: &str| text.lines().any(|l| l.starts_with(key));
+    assert!(text.contains("redo = [\"Ctrl+Shift+Z\"]") && !said("undo =") && !said("duplicate ="), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The mouse wheel zooms the graph and the 2D and 3D views one way, and the other way when the
+/// settings say so. Undo goes back as many steps as they say; File → Open Recent offers as many
+/// packages as they say.
+#[test]
+fn the_wheel_undo_and_recent_packages_are_as_the_settings_say() {
+    use crate::app::MenuId;
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    draw_frame(&mut w, std::time::Instant::now());
+    let middle = w.app.ui.graph_view.bounds.center();
+    let wheel = |w: &mut Harness| {
+        w.hover(middle);
+        w.mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 } });
+    };
+    let zoom = w.app.ui.graph_view.zoom;
+    wheel(&mut w);
+    assert!(w.app.ui.graph_view.zoom > zoom, "pushed away, it zooms in");
+    apply_settings(&mut w, |s| s.invert_zoom = true);
+    let zoom = w.app.ui.graph_view.zoom;
+    wheel(&mut w);
+    assert!(w.app.ui.graph_view.zoom < zoom, "the other way");
+
+    apply_settings(&mut w, |s| s.undo_steps = 10);
+    for i in 0..15 {
+        w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [i as f32 * 10.0, 0.0] }));
+        w.send(Message::Seal);
+    }
+    let mut undone = 0;
+    while w.app.doc.can_undo() {
+        w.send(Message::Undo);
+        undone += 1;
+    }
+    assert_eq!(undone, 10);
+
+    let dir = scratch("recent-count");
+    for name in ["a", "b", "c"] {
+        w.send(Message::New);
+        w.send(Message::SavePicked(Some(dir.join(format!("{name}.brewtex")))));
+    }
+    assert_eq!(w.app.ui.recent.len(), 3);
+    apply_settings(&mut w, |s| s.recent_packages = 2);
+    w.send(Message::Menu(Some(MenuId::File)));
+    draw_frame(&mut w, std::time::Instant::now());
+    let offered = ["a.brewtex", "b.brewtex", "c.brewtex"].map(|name| texts(&mut w, name).len());
+    // (The Explorer names them too: the menu, once more for each it offers.)
+    assert_eq!(offered, [1, 2, 2], "the two opened last");
+    assert_eq!(w.app.ui.recent.len(), 3, "the others are remembered still");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The file dialogs open in the folder of the package being edited, or where a dialog was
+/// answered last, as the settings say: each where the other is not there.
+#[test]
+fn file_dialogs_open_where_the_settings_say() {
+    use crate::settings::FileDialogs;
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    let dir = scratch("dialog-folders");
+    let (package, other) = (dir.join("package"), dir.join("other"));
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    assert_eq!(w.app.dialog_folder(None), None, "nothing to go by: where the system likes");
+    w.send(Message::SavePicked(Some(package.join("walls.brewtex"))));
+    assert_eq!(w.app.ui.last_folder.as_deref(), Some(package.as_path()));
+    let key = w.app.doc_key;
+    w.send(Message::Explorer(ExplorerMessage::FilesPicked(key, vec![other.join("bricks.png")])));
+    assert_eq!(w.app.ui.last_folder.as_deref(), Some(other.as_path()), "answered from there last");
+    assert_eq!(w.app.dialog_folder(None).as_deref(), Some(package.as_path()));
+    apply_settings(&mut w, |s| s.file_dialogs = FileDialogs::Last);
+    assert_eq!(w.app.dialog_folder(None).as_deref(), Some(other.as_path()));
+    std::fs::remove_dir_all(&other).unwrap();
+    assert_eq!(w.app.dialog_folder(None).as_deref(), Some(package.as_path()), "not there: the package's");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2845,7 +3112,7 @@ fn settings_are_kept_in_their_file() {
 #[test]
 fn files_chosen_or_dropped_are_held() {
     use crate::app::FileTarget;
-    use crate::settings::{NewFiles, Settings};
+    use crate::settings::NewFiles;
     use brewed_texture_core::ResourceKind;
     use std::sync::Arc;
     let mut w = harness!(view::root, 1280.0, 800.0);
@@ -2884,7 +3151,7 @@ fn files_chosen_or_dropped_are_held() {
     assert!(w.app.ui.status.as_ref().is_some_and(|s| s.error && s.text.contains("gone.png")));
 
     // Linked: the file where it is, at once.
-    w.send(Message::Settings(Settings { new_files: NewFiles::Link, ..w.app.settings }));
+    apply_settings(&mut w, |s| s.new_files = NewFiles::Link);
     w.send(Message::FilePicked(target, Some(picture.clone())));
     assert_eq!(read_by(&w, bitmap), Some(path));
     let _ = std::fs::remove_dir_all(&dir);

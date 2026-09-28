@@ -233,10 +233,7 @@ impl canvas::Program<Message> for Overlay<'_> {
         match event {
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 let q = local?;
-                let dy = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => y * 60.0,
-                    mouse::ScrollDelta::Pixels { y, .. } => *y,
-                };
+                let dy = crate::view::wheel(self.app, delta);
                 // Relative to what the view is when the app gets it: several turns of the
                 // wheel can arrive in one frame.
                 Some(canvas::Action::publish(Message::Preview(PreviewMessage::ZoomAt { at: q, factor: (dy * 0.002).exp() })).and_capture())

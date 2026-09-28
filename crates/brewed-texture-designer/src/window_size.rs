@@ -10,15 +10,14 @@ use iced::{Size, Task, window};
 use crate::app::Message;
 use crate::gpu;
 
-/// Hold the window `id` to that size (`scale`, the settings', is the interface's over the
-/// system's now): as iced holds a window's size, what it is dragged to on every system (iced
-/// keeps it in pixels, whatever the scale later), and on Windows, every size it is given,
-/// whoever gives it: the system too, as the window moves between displays, which iced's hold
-/// does not reach.
-pub fn hold(id: window::Id, scale: f32) -> Task<Message> {
+/// Hold the window `id` to that size: as iced holds a window's size, what it is dragged to on
+/// every system (iced keeps it in pixels, whatever the scale later), and on Windows, every size
+/// it is given, whoever gives it: the system too, as the window moves between displays, which
+/// iced's hold does not reach.
+pub fn hold(id: window::Id) -> Task<Message> {
     let largest = gpu::largest_texture() as f32;
     let dragged = window::scale_factor(id).then(move |system| {
-        let side = largest / (system * scale).max(0.01);
+        let side = largest / system.max(0.01);
         window::set_max_size(id, Some(Size::new(side, side)))
     });
     #[cfg(windows)]

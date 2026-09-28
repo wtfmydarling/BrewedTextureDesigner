@@ -83,8 +83,9 @@ pub struct Memory {
     pub shown: u64,
     /// How many images that is.
     pub shown_images: usize,
-    /// Images kept for the next change and those asked about (kept as [`Keep::Read`], they
-    /// go once nothing changes for a moment); every other image, kept as [`Keep::All`].
+    /// Images kept for the next change, those asked about and those the cache keeps (kept as
+    /// [`Keep::Read`]: the first two go once nothing changes for a moment); every other image,
+    /// kept as [`Keep::All`].
     pub kept: u64,
     /// Scratch images the last change worked in, kept for the next one while changes keep
     /// coming.
@@ -227,10 +228,11 @@ pub enum Keep {
     /// Every node's: for a caller that reads whichever image it likes (tests, tools).
     #[default]
     All,
-    /// Only those something reads: the node the 2D view shows, the outputs the 3D view uses,
-    /// the nodes asked about, and what the last change read from outside itself (the next
-    /// change of the same kind reads it again), until the engine settles. The others live
-    /// while the evaluation that makes them needs them.
+    /// Those something reads: the node the 2D view shows, the outputs the 3D view uses, the
+    /// nodes asked about, and what the last change read from outside itself (the next change
+    /// of the same kind reads it again), until the engine settles. The others live while the
+    /// evaluation that makes them needs them, and after it while they fit in the cache (see
+    /// [`Engine::set_cache`]).
     Read,
 }
 
@@ -337,6 +339,11 @@ pub struct Engine {
     shown_copies: HashMap<NodeId, (u64, GpuImage)>,
     /// What the last change read from outside itself (see [`Keep::Read`]).
     boundary: HashSet<NodeId>,
+    /// The memory the images that do not stay may keep (see [`Engine::set_cache`]), and when
+    /// each image was last computed or read: the uses so far, counted, at the time.
+    cache: u64,
+    used: HashMap<NodeId, u64>,
+    uses: u64,
     /// Thumbnails the evaluations recorded, to read back (see [`Engine::render_thumbnails`]).
     thumbnails: Vec<(NodeId, u64, GpuImage, Readback)>,
     /// Pictures of the options of choices, by node kind and parameter (see
@@ -374,6 +381,9 @@ impl Engine {
             given: Vec::new(),
             shown_copies: HashMap::new(),
             boundary: HashSet::new(),
+            cache: 0,
+            used: HashMap::new(),
+            uses: 0,
             thumbnails: Vec::new(),
             choices: HashMap::new(),
             last_resolution: [0, 0],
@@ -423,6 +433,7 @@ impl Engine {
         self.given.clear();
         self.shown_copies.clear();
         self.boundary.clear();
+        self.used.clear();
         self.thumbnails.clear();
         self.choices.clear();
         self.gpu.clear_pool();
@@ -641,6 +652,7 @@ impl Engine {
         }
         self.luts.retain(|id, _| alive.contains(id));
         self.boundary.retain(|id| alive.contains(id));
+        self.used.retain(|id, _| alive.contains(id));
         // Files no Bitmap node reads any more go, whatever was open before (a file read again
         // is decoded again).
         let files: HashSet<&str> = graph
@@ -719,7 +731,8 @@ impl Engine {
         };
 
         // 3. Compute, in order. Each image goes back to the pool (for the next image of its
-        //    size) once the last node that reads it here has read it, unless it stays.
+        //    size) once the last node that reads it here has read it, unless it stays or the
+        //    cache keeps it.
         let mut readers: HashMap<NodeId, usize> = HashMap::new();
         for id in &runs {
             for read in plans[id].reads() {
@@ -755,16 +768,24 @@ impl Engine {
             if plan.changed && !id.is_inner() {
                 self.encode_thumbnail(id, &mut encoder);
             }
+            // What it read was used, then it was: an image read goes from the cache after
+            // the one made of it.
+            for read in plan.reads() {
+                self.uses += 1;
+                self.used.insert(read, self.uses);
+            }
+            self.uses += 1;
+            self.used.insert(id, self.uses);
             for read in plan.reads() {
                 let left = readers.entry(read).or_default();
                 *left = left.saturating_sub(1);
                 if *left == 0 && !kept.contains(&read) {
-                    self.release(read);
+                    self.retire(read, &kept, &readers);
                 }
             }
             // A node nothing reads after it, and that does not stay, only needed its thumbnail.
             if readers.get(&id).is_none_or(|n| *n == 0) && !kept.contains(&id) {
-                self.release(id);
+                self.retire(id, &kept, &readers);
             }
         }
 
@@ -803,6 +824,48 @@ impl Engine {
         self.keep = keep;
     }
 
+    /// The memory the images that do not stay (kept as [`Keep::Read`]) may keep, in bytes: a
+    /// change then computes only what follows it, from what is there. The images used least
+    /// lately go first when others need the room; 0 keeps none.
+    pub fn set_cache(&mut self, bytes: u64) {
+        self.cache = bytes;
+        self.sweep();
+    }
+
+    /// The image of `node`, which does not stay, is not read by this evaluation any more:
+    /// kept if it fits in the cache, which lets go of the images used least lately to make
+    /// room (not those that stay, nor those the evaluation reads still); else let go of.
+    fn retire(&mut self, node: NodeId, kept: &HashSet<NodeId>, readers: &HashMap<NodeId, usize>) {
+        if self.cache == 0 {
+            self.release(node);
+            return;
+        }
+        self.trim(|id| kept.contains(&id) || readers.get(&id).is_some_and(|n| *n > 0));
+    }
+
+    /// Let go of the images that do not stay (`stays`) beyond the cache: those used least
+    /// lately first, until the others fit in it.
+    fn trim(&mut self, stays: impl Fn(NodeId) -> bool) {
+        let mut cached: Vec<(u64, NodeId, u64)> = self
+            .states
+            .iter()
+            .filter(|(id, _)| !stays(**id))
+            .filter_map(|(id, s)| s.image.as_ref().map(|image| (self.used.get(id).copied().unwrap_or(0), *id, image.bytes())))
+            .collect();
+        let mut total: u64 = cached.iter().map(|(_, _, bytes)| bytes).sum();
+        if total <= self.cache {
+            return;
+        }
+        cached.sort_unstable_by_key(|(used, id, _)| (*used, id.0));
+        for (_, id, bytes) in cached {
+            if total <= self.cache {
+                break;
+            }
+            self.release(id);
+            total -= bytes;
+        }
+    }
+
     /// The node the 2D view shows: its image is read, and stays.
     pub fn set_preview(&mut self, node: Option<NodeId>) {
         self.preview = node;
@@ -827,9 +890,10 @@ impl Engine {
         read.map(|id| self.producer(*id)).chain(self.boundary.iter().copied()).collect()
     }
 
-    /// Let go of the images that no longer stay (kept as [`Keep::Read`]): what a view stopped
-    /// showing, what is not asked about any more. An evaluation does it itself; this is for
-    /// a view that moved on to an image that is there, which needs no evaluation.
+    /// Let go of the images that no longer stay (kept as [`Keep::Read`]), beyond what the
+    /// cache keeps: what a view stopped showing, what is not asked about any more. An
+    /// evaluation does it itself; this is for a view that moved on to an image that is there,
+    /// which needs no evaluation.
     pub fn sweep(&mut self) {
         let shown = self.shown();
         self.shown_copies.retain(|id, _| shown.contains(id));
@@ -837,11 +901,7 @@ impl Engine {
             return;
         }
         let kept = self.kept();
-        let stale: Vec<NodeId> =
-            self.states.iter().filter(|(id, s)| s.image.is_some() && !kept.contains(id)).map(|(id, _)| *id).collect();
-        for id in stale {
-            self.release(id);
-        }
+        self.trim(|id| kept.contains(&id));
     }
 
     /// Keep the scratch images the next change is likely to need when one is `coming` (a
@@ -861,8 +921,9 @@ impl Engine {
     }
 
     /// Nothing has changed for a while: let go of everything the next change would have read
-    /// and that the views do not show (kept as [`Keep::Read`]), and of the scratch images. What
-    /// stays is what the views show, whatever was changed before.
+    /// and that the views do not show (kept as [`Keep::Read`]) beyond what the cache keeps,
+    /// and of the scratch images. What stays is what the views show, whatever was changed
+    /// before, and what fits in the cache.
     pub fn settle(&mut self) {
         self.boundary.clear();
         self.asked.clear();

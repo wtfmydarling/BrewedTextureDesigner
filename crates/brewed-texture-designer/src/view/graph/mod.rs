@@ -354,10 +354,7 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 let p = local?;
-                let dy = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => y * 60.0,
-                    mouse::ScrollDelta::Pixels { y, .. } => *y,
-                };
+                let dy = crate::view::wheel(self.app, delta);
                 publish(GraphMessage::ZoomAt { at: p, factor: (dy * 0.0018).exp() })
             }
             Event::Mouse(mouse::Event::ButtonPressed(button)) => {

@@ -352,6 +352,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let missing = maps.iter().all(Option::is_none);
     let l = &app.ui.preview.lighting;
     let scene = Scene {
+        wheel: if app.settings.invert_zoom { -1.0 } else { 1.0 },
         camera: app.ui.preview.view3d,
         maps,
         gray,
@@ -389,6 +390,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
 // ---------------------------------------------------------------------------- program
 
 pub struct Scene {
+    /// Which way the mouse wheel zooms: 1, the wheel pushed away zooms in; -1, the other way.
+    wheel: f32,
     camera: Camera,
     /// Base color, normal, height, roughness, metallic, ambient occlusion, emissive.
     maps: [Option<wgpu::TextureView>; 7],
@@ -472,10 +475,11 @@ impl shader::Program<Message> for Scene {
             }
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 cursor.position_over(bounds)?;
-                let dy = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => y * 60.0,
-                    mouse::ScrollDelta::Pixels { y, .. } => *y,
-                };
+                let dy = self.wheel
+                    * match delta {
+                        mouse::ScrollDelta::Lines { y, .. } => y * 60.0,
+                        mouse::ScrollDelta::Pixels { y, .. } => *y,
+                    };
                 publish(Move::Zoom((-dy * 0.0015).exp()))
             }
             _ => None,
