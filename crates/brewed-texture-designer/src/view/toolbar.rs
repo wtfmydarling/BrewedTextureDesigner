@@ -14,7 +14,8 @@ use crate::style;
 use crate::view::tip;
 use crate::widget::dropdown::dropdown;
 
-const RESOLUTIONS: [u32; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
+/// The texture sizes offered (a graph's, and a new graph's in the settings).
+pub(crate) const RESOLUTIONS: [u32; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
 const MENU_BAR_H: f32 = 30.0;
 const STATUS_BAR_H: f32 = 24.0;
 

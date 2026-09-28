@@ -1794,51 +1794,6 @@ fn images_live_while_something_reads_them() {
     assert!(e.image(alone).is_none() && e.state(alone).is_none());
 }
 
-/// With a cache, the images nothing reads any more stay while they fit in it: a view that
-/// goes back to a node, or a change of another branch, computes nothing that is there. The
-/// images used least lately go first when others need the room, and a smaller cache lets go
-/// of what does not fit in it at once; without one, nothing stays that is not read.
-#[test]
-fn a_cache_keeps_what_fits_in_it() {
-    let Some(mut e) = engine() else { return };
-    e.set_keep(crate::engine::Keep::Read);
-    let mut g = graph();
-    let a = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
-    let blur_a = g.add_node(NodeKind::BLUR, [0.0, 0.0]);
-    let b = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
-    let blur_b = g.add_node(NodeKind::BLUR, [0.0, 0.0]);
-    set(&mut g, b, "seed", ParamValue::Int(9));
-    g.connect(a, "o:output", blur_a, "i:input").unwrap();
-    g.connect(b, "o:output", blur_b, "i:input").unwrap();
-    e.set_cache(u64::MAX);
-    e.set_preview(Some(blur_a));
-    evaluate_blocking(&mut e, &g);
-    assert_eq!(e.report.recomputed, 4, "all new: each draws its thumbnail");
-    e.settle();
-    for id in [a, blur_a, b, blur_b] {
-        assert!(e.image(id).is_some(), "kept, the engine settled");
-    }
-    // The other branch shown: it is there.
-    e.set_preview(Some(blur_b));
-    evaluate_blocking(&mut e, &g);
-    assert_eq!(e.report.recomputed, 0, "nothing computed again");
-    // A change of the first blur reads its noise as it was.
-    set(&mut g, blur_a, "radius", ParamValue::Float(5.0));
-    evaluate_blocking(&mut e, &g);
-    assert_eq!(e.report.recomputed, 1);
-    // A cache of one image: of those no view shows, the one used last.
-    let one = e.image(b).unwrap().bytes();
-    e.set_cache(one);
-    e.settle();
-    let cached: Vec<NodeId> = [a, blur_a, b].into_iter().filter(|id| e.image(*id).is_some()).collect();
-    assert_eq!(cached, [blur_a], "the blur computed last");
-    assert!(e.image(blur_b).is_some(), "shown");
-    // None: nothing stays that is not read.
-    e.set_cache(0);
-    assert!(e.image(blur_a).is_none() && e.image(blur_b).is_some());
-    assert_eq!(e.memory_report().kept, 0);
-}
-
 /// A view samples the node image it was given until it is given another, which the engine
 /// cannot know it has been yet: let go of, that texture never goes back to the pool, where
 /// another image could take it and be drawn in the view in its place.

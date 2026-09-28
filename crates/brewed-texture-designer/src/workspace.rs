@@ -35,14 +35,15 @@ pub struct Workspace {
 }
 
 /// How many packages are remembered, of which the File menu offers as many as the settings
-/// say.
-pub const RECENT_PACKAGES: usize = 20;
+/// say: [`RECENT_OFFERED`] by default.
+pub const RECENT_KEPT: usize = 20;
+pub const RECENT_OFFERED: u32 = 8;
 
-/// `recent` with `path` first: once, and no more than [`RECENT_PACKAGES`] of them.
+/// `recent` with `path` first: once, and no more than [`RECENT_KEPT`] of them.
 pub fn remember(recent: &mut Vec<String>, path: &str) {
     recent.retain(|p| !same_file(p, path));
     recent.insert(0, path.to_string());
-    recent.truncate(RECENT_PACKAGES);
+    recent.truncate(RECENT_KEPT);
 }
 
 /// Do two paths name the same file? (Windows and macOS do not tell capitals apart.)
@@ -147,19 +148,19 @@ mod tests {
         assert_eq!(serde_json::from_str::<Workspace>(r#"{"maximized": true}"#).unwrap().splits, Vec::<f32>::new());
     }
 
-    /// The packages opened last: the latest first, each once, no more than [`RECENT_PACKAGES`].
+    /// The packages opened last: the latest first, each once, no more than [`RECENT_KEPT`].
     #[test]
     fn packages_opened_last_are_remembered() {
         let mut recent = Vec::new();
-        for i in 0..RECENT_PACKAGES + 4 {
+        for i in 0..RECENT_KEPT + 4 {
             remember(&mut recent, &format!("/work/{i}.brewtex"));
         }
-        assert_eq!(recent.len(), RECENT_PACKAGES);
-        assert_eq!(recent[0], format!("/work/{}.brewtex", RECENT_PACKAGES + 3));
+        assert_eq!(recent.len(), RECENT_KEPT);
+        assert_eq!(recent[0], format!("/work/{}.brewtex", RECENT_KEPT + 3));
         remember(&mut recent, "/work/5.brewtex");
         assert_eq!(recent.iter().filter(|p| p.ends_with("/5.brewtex")).count(), 1);
         assert_eq!(recent[0], "/work/5.brewtex");
-        assert_eq!(recent.len(), RECENT_PACKAGES);
+        assert_eq!(recent.len(), RECENT_KEPT);
     }
 
     #[test]

@@ -2784,7 +2784,7 @@ fn settings_are_changed_and_applied() {
     key(&mut w, "б", Physical::Code(Code::Comma), ctrl);
     assert_eq!(page(&w), Some(Page::General));
     draw_frame(&mut w, std::time::Instant::now());
-    for label in ["General", "Packages", "Recovery", "Performance", "Shortcuts", "Undo steps", "Recent packages", "File dialogs open in", "Invert zoom"] {
+    for label in ["General", "Packages", "Recovery", "Graphics", "Shortcuts", "Undo steps", "Recent packages", "File dialogs open in", "Invert zoom"] {
         assert!(!texts(&mut w, label).is_empty(), "{label}");
     }
     assert!(texts(&mut w, "Keep unsaved work").is_empty(), "on a page of its own");
@@ -2847,9 +2847,9 @@ fn settings_taken_at_a_start_offer_to_start_again() {
     use crate::app::SettingsMessage as S;
     use crate::settings::{Graphics, Page, Setting};
     let mut w = harness!(view::root, 1280.0, 800.0);
-    w.send(Message::Settings(S::OpenPage(Page::Performance)));
+    w.send(Message::Settings(S::OpenPage(Page::Graphics)));
     draw_frame(&mut w, std::time::Instant::now());
-    for label in ["Image cache", "Graphics API", "Antialiasing", "Restart"] {
+    for label in ["Graphics API", "Antialiasing", "Restart"] {
         assert!(!texts(&mut w, label).is_empty(), "{label}");
     }
     w.send(Message::Settings(S::Set(Setting::Graphics(Graphics::Vulkan))));
@@ -2913,7 +2913,9 @@ fn settings_are_kept_in_their_file() {
     assert!(!file.exists(), "nothing written before a setting changes");
     first.set_settings(Settings { keep_every: 5, new_files: NewFiles::Link, ..first.settings.clone() });
     let text = std::fs::read_to_string(&file).expect("written");
-    assert!(text.contains("every = 5") && text.contains("new_files = \"link\"") && text.contains("undo_steps = 200"), "{text}");
+    let said = |key: &str| text.lines().any(|l| l.starts_with(key));
+    assert!(said("every_minutes = 5") && said("new = \"link\""), "{text}");
+    assert!(!said("undo_steps") && !said("keep"), "what is as it is by default is not said: {text}");
 
     // Unsaved work, kept; then not kept any more: what was kept goes.
     let _ = first.update(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
@@ -3081,8 +3083,10 @@ fn the_wheel_undo_and_recent_packages_are_as_the_settings_say() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The file dialogs open in the folder of the package being edited, or where a dialog was
-/// answered last, as the settings say: each where the other is not there.
+/// The file dialogs open as the settings say. By default each where it did before there was
+/// a setting: saving the package or its files, in the package's folder; any other where the
+/// system opens it. Else all in the package's folder, or all where a dialog was answered
+/// last: each in the other where that one is not there.
 #[test]
 fn file_dialogs_open_where_the_settings_say() {
     use crate::settings::FileDialogs;
@@ -3091,18 +3095,39 @@ fn file_dialogs_open_where_the_settings_say() {
     let (package, other) = (dir.join("package"), dir.join("other"));
     std::fs::create_dir_all(&package).unwrap();
     std::fs::create_dir_all(&other).unwrap();
-    assert_eq!(w.app.dialog_folder(None), None, "nothing to go by: where the system likes");
+    assert_eq!((w.app.dialog_folder(None, true), w.app.dialog_folder(None, false)), (None, None), "nothing to go by");
     w.send(Message::SavePicked(Some(package.join("walls.brewtex"))));
     assert_eq!(w.app.ui.last_folder.as_deref(), Some(package.as_path()));
     let key = w.app.doc_key;
     w.send(Message::Explorer(ExplorerMessage::FilesPicked(key, vec![other.join("bricks.png")])));
     assert_eq!(w.app.ui.last_folder.as_deref(), Some(other.as_path()), "answered from there last");
-    assert_eq!(w.app.dialog_folder(None).as_deref(), Some(package.as_path()));
+    // As before.
+    assert_eq!(w.app.dialog_folder(None, true).as_deref(), Some(package.as_path()), "saving: in the package's folder");
+    assert_eq!(w.app.dialog_folder(None, false), None, "any other: where the system opens it");
+    apply_settings(&mut w, |s| s.file_dialogs = FileDialogs::Package);
+    assert_eq!(w.app.dialog_folder(None, false).as_deref(), Some(package.as_path()));
     apply_settings(&mut w, |s| s.file_dialogs = FileDialogs::Last);
-    assert_eq!(w.app.dialog_folder(None).as_deref(), Some(other.as_path()));
+    assert_eq!(w.app.dialog_folder(None, true).as_deref(), Some(other.as_path()));
     std::fs::remove_dir_all(&other).unwrap();
-    assert_eq!(w.app.dialog_folder(None).as_deref(), Some(package.as_path()), "not there: the package's");
+    assert_eq!(w.app.dialog_folder(None, false).as_deref(), Some(package.as_path()), "not there: the package's");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Escape in a field of the settings dialog (a number being typed) stops the typing, and the
+/// dialog stays with what was changed in it; Escape anywhere else cancels it.
+#[test]
+fn escape_in_a_field_of_the_settings_keeps_them() {
+    use crate::app::SettingsMessage as S;
+    use crate::settings::Setting;
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    w.send(Message::Settings(S::Open));
+    w.send(Message::Settings(S::Set(Setting::UndoSteps(50))));
+    let main = w.main_window();
+    w.send(Message::Runtime(escape(), iced::event::Status::Captured, main));
+    assert!(matches!(&w.app.ui.dialog, Some(Dialog::Settings(d)) if d.draft.undo_steps == 50), "a field took it");
+    w.send(Message::Runtime(escape(), iced::event::Status::Ignored, main));
+    assert_eq!(w.app.ui.dialog, None);
+    assert_eq!(w.app.settings.undo_steps, 256, "cancelled");
 }
 
 /// A file chosen for a node or dropped on the window is held by the package, as the settings

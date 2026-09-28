@@ -12,7 +12,7 @@ use crate::edit::MergeKey;
 
 /// How many steps a history keeps, unless it is told another number (see
 /// [`History::set_limit`]).
-pub const DEFAULT_STEPS: usize = 200;
+pub const DEFAULT_STEPS: usize = 256;
 const MERGE_WINDOW: Duration = Duration::from_millis(1500);
 
 struct Step<T> {

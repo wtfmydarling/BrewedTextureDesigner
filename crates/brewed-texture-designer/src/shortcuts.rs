@@ -389,19 +389,25 @@ impl Shortcuts {
     }
 
     /// The command `chord` gives where the pointer is (`over_graph`, `over_2d`) and whether a
-    /// text is being typed: of those given from there, the first that has it. While typing,
-    /// only a chord with Ctrl or a function key is a command (the others type).
+    /// text is being typed: of those given from there, the first that has it; if none does, the
+    /// first that has it without Shift, or Alt, or both held (as the keys always were: Shift+Del
+    /// deletes, Ctrl+Shift+C copies). While typing, only a chord with Ctrl or a function key is a
+    /// command (the others type).
     pub fn command(&self, chord: Chord, typing: bool, over_graph: bool, over_2d: bool) -> Option<Command> {
         let types = !chord.ctrl && !matches!(chord.key, KeyName::F(_));
-        Command::ALL.iter().copied().find(|c| {
-            let here = match c.place() {
-                Place::Anywhere => !typing || !types,
-                Place::Window => !typing,
-                Place::Graph => !typing && over_graph,
-                Place::View2d => !typing && over_2d,
-            };
-            here && self.of(*c).contains(&chord)
-        })
+        let given = |chord: Chord| {
+            Command::ALL.iter().copied().find(|c| {
+                let here = match c.place() {
+                    Place::Anywhere => !typing || !types,
+                    Place::Window => !typing,
+                    Place::Graph => !typing && over_graph,
+                    Place::View2d => !typing && over_2d,
+                };
+                here && self.of(*c).contains(&chord)
+            })
+        };
+        let without = [chord, Chord { shift: false, ..chord }, Chord { alt: false, ..chord }, Chord { shift: false, alt: false, ..chord }];
+        without.into_iter().find_map(given)
     }
 
     /// The shortcuts as `settings.toml` says them, and what it says that cannot be taken. A
@@ -413,10 +419,8 @@ impl Shortcuts {
         let mut problems = Vec::new();
         let mut named = Vec::new();
         for (id, item) in table.into_iter().flat_map(|t| t.iter()) {
-            let Some(command) = Command::ALL.iter().copied().find(|c| c.id() == id) else {
-                problems.push(format!("shortcuts.{id} is no command of this version"));
-                continue;
-            };
+            // (A command this version does not have is left alone.)
+            let Some(command) = Command::ALL.iter().copied().find(|c| c.id() == id) else { continue };
             let values: Vec<&toml_edit::Value> = match item.as_value() {
                 Some(toml_edit::Value::Array(a)) => a.iter().collect(),
                 Some(one) => vec![one],
@@ -532,6 +536,29 @@ mod tests {
         assert_eq!(shortcuts.command(chord("Space"), false, true, false), Some(Command::AddNode));
         assert_eq!(shortcuts.command(chord("Space"), false, false, true), Some(Command::ShowTiling));
         assert_eq!(shortcuts.command(chord("Space"), false, false, false), None);
+        // As the keys always were: Shift or Alt held too, where no command has the chord.
+        for (pressed, command) in [
+            ("Shift+Delete", Command::Delete),
+            ("Alt+Backspace", Command::Delete),
+            ("Shift+F", Command::Frame),
+            ("Shift+F1", Command::Help),
+            ("Ctrl+Shift+C", Command::Copy),
+            ("Ctrl+Alt+Z", Command::Undo),
+            ("Ctrl+Shift+Y", Command::Redo),
+            ("Ctrl+Alt+Shift+V", Command::Paste),
+            ("Ctrl+Shift+S", Command::SaveAs),
+            ("Ctrl+Shift+Z", Command::Redo),
+        ] {
+            assert_eq!(shortcuts.command(chord(pressed), false, false, false), Some(command), "{pressed}");
+        }
+        assert_eq!(shortcuts.command(chord("Shift+Space"), false, true, false), Some(Command::AddNode));
+        assert_eq!(shortcuts.command(chord("Ctrl+F"), false, false, false), None, "Ctrl is never dropped");
+        assert_eq!(shortcuts.command(chord("Shift+F"), true, false, false), None, "typed");
+        // A chord given with Shift is taken before the one without.
+        let mut given = shortcuts.clone();
+        given.set(Command::AddComment, vec![chord("Shift+F")]);
+        assert_eq!(given.command(chord("Shift+F"), false, true, false), Some(Command::AddComment));
+        assert_eq!(given.command(chord("F"), false, true, false), Some(Command::Frame));
     }
 
     /// A chord given to a command goes from the one that had it; a command's own chords are
@@ -582,6 +609,6 @@ mod tests {
         assert_eq!(shortcuts.of(Command::Redo), Shortcuts::defaults(Command::Redo), "nothing it can read: its own");
         assert_eq!(shortcuts.of(Command::Undo), Shortcuts::defaults(Command::Undo));
         assert_eq!(shortcuts.of(Command::Save), [chord("F2"), chord("F3")]);
-        assert_eq!(problems.len(), 4, "{problems:?}");
+        assert_eq!(problems.len(), 3, "a command this version does not have is left alone: {problems:?}");
     }
 }

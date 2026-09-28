@@ -725,7 +725,7 @@ impl App {
         };
         // Where it was, else where dialogs open.
         let was = Path::new(&path).parent().filter(|d| d.is_dir()).map(PathBuf::from);
-        let folder = was.or_else(|| self.dialog_folder(self.package_doc(key).and_then(|d| d.path()).map(PathBuf::as_path)));
+        let folder = was.or_else(|| self.dialog_folder(self.package_doc(key).and_then(|d| d.path()).map(PathBuf::as_path), false));
         let title = format!("Where is {}?", package::file_name(&path));
         Task::perform(
             blocking(move || {
@@ -1024,7 +1024,7 @@ impl App {
                 self.close_popups();
                 let extensions: Vec<&'static str> =
                     ResourceKind::ALL.iter().flat_map(|k| k.extensions().iter().copied()).collect();
-                let folder = self.dialog_folder(self.package_doc(key).and_then(|d| d.path()).map(PathBuf::as_path));
+                let folder = self.dialog_folder(self.package_doc(key).and_then(|d| d.path()).map(PathBuf::as_path), false);
                 return Task::perform(
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new()
@@ -1063,7 +1063,7 @@ impl App {
                 self.close_popups();
                 let extensions: Vec<&'static str> =
                     ResourceKind::ALL.iter().flat_map(|k| k.extensions().iter().copied()).collect();
-                let folder = self.dialog_folder(self.package_doc(key).and_then(|d| d.path()).map(PathBuf::as_path));
+                let folder = self.dialog_folder(self.package_doc(key).and_then(|d| d.path()).map(PathBuf::as_path), false);
                 return Task::perform(
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new()
@@ -1115,7 +1115,7 @@ impl App {
             ExplorerMessage::SaveResourceAs(key, path) => {
                 self.close_popups();
                 let name = package::file_name(&path);
-                let folder = self.dialog_folder(self.package_doc(key).and_then(|d| d.path()).map(PathBuf::as_path));
+                let folder = self.dialog_folder(self.package_doc(key).and_then(|d| d.path()).map(PathBuf::as_path), true);
                 return Task::perform(
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new().set_title("Save the file, and link to it").set_file_name(name);

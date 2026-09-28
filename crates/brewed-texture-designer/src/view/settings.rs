@@ -72,7 +72,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a SettingsDialog) -> Element<'a, Message
         Page::General => general(applied, draft),
         Page::Packages => packages(applied, draft),
         Page::Recovery => recovery(applied, draft),
-        Page::Performance => performance(app, applied, draft),
+        Page::Graphics => graphics(app, applied, draft),
         Page::Shortcuts => shortcuts(applied, dialog),
     };
     for part in body {
@@ -281,13 +281,14 @@ fn general<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>
         .limits(10.0, 1000.0)
         .default_value(f64::from(d.undo_steps))
         .on_change(|v| set(Setting::UndoSteps(v.round() as u32)));
-    let recent = number(f64::from(draft.recent_packages), 0.0, 20.0)
+    let most = crate::workspace::RECENT_KEPT as f64;
+    let recent = number(f64::from(draft.recent_packages), 0.0, most)
         .integer(true)
-        .limits(0.0, 20.0)
+        .limits(0.0, most)
         .default_value(f64::from(d.recent_packages))
         .on_change(|v| set(Setting::RecentPackages(v.round() as u32)));
     let folders = segmented(
-        &[(FileDialogs::Package, "Package's folder"), (FileDialogs::Last, "Last folder")],
+        &[(FileDialogs::Auto, "Automatic"), (FileDialogs::Package, "Package"), (FileDialogs::Last, "Last used")],
         draft.file_dialogs,
         true,
         Setting::FileDialogs,
@@ -312,8 +313,9 @@ fn general<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>
                 Row::new(
                     "File dialogs open in",
                     match draft.file_dialogs {
-                        FileDialogs::Package => "The folder of the package being edited; for one never saved, the folder a dialog was answered from last.",
-                        FileDialogs::Last => "The folder a dialog was answered from last, whatever package is being edited.",
+                        FileDialogs::Auto => "Each where it fits: saving a package or one of its files, in the package's folder; looking for a missing file, where it was; any other, where the system opens it.",
+                        FileDialogs::Package => "All in the folder of the package being edited; for one never saved, where a dialog was answered last.",
+                        FileDialogs::Last => "All in the folder a dialog was answered from last, whatever package is being edited.",
                     },
                     folders,
                 )
@@ -347,7 +349,7 @@ impl std::fmt::Display for Side {
 fn packages<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>> {
     let d = Settings::default();
     let files = segmented(&[(NewFiles::Embed, "Embed in the package"), (NewFiles::Link, "Link to the file")], draft.new_files, true, Setting::NewFiles);
-    let sizes = with(&[256, 512, 1024, 2048, 4096, 8192].map(Side), Side(draft.graph_size), |s| s.0);
+    let sizes = with(&crate::view::toolbar::RESOLUTIONS.map(Side), Side(draft.graph_size), |s| s.0);
     let precision = segmented(
         &[(Precision::Bits8, "8 bits"), (Precision::Half, "16 bits float"), (Precision::Full, "32 bits float")],
         draft.graph_precision,
@@ -424,65 +426,32 @@ fn recovery<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message
     )]
 }
 
-/// An amount of memory, as people say it.
-#[derive(Clone, Copy, PartialEq)]
-struct Megabytes(u32);
-
-impl std::fmt::Display for Megabytes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            0 => f.write_str("None"),
-            mb if mb >= 1024 && mb % 1024 == 0 => write!(f, "{} GB", mb / 1024),
-            mb if mb >= 1024 => write!(f, "{:.1} GB", f64::from(mb) / 1024.0),
-            mb => write!(f, "{mb} MB"),
-        }
-    }
-}
-
-fn performance<'a>(app: &App, applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>> {
+fn graphics<'a>(app: &App, applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>> {
     let d = Settings::default();
     let started = app.started_with();
-    let cache = with(&[0, 256, 512, 1024, 2048, 4096, 8192].map(Megabytes), Megabytes(draft.image_cache), |m| m.0);
-    let kept = app.res.memory.kept;
-    let cache_note = (applied.image_cache > 0 && kept > 0)
-        .then(|| (format!("Kept now: {}.", Megabytes((kept >> 20) as u32)), style::TEXT_FAINT));
     let apis: Vec<(Graphics, &str)> = Graphics::here().iter().map(|g| (*g, g.name())).collect();
     let later = |differs: bool| differs.then(|| ("Taken when the program starts again.".to_string(), style::WARNING));
     let api_note = match app.graphics_from_environment() {
         Some(env) => Some((format!("The environment says WGPU_BACKEND={env}: that comes first."), style::WARNING)),
         None => later(draft.graphics != started.graphics),
     };
-    vec![
-        group(
-            "Video Memory",
-            vec![
-                Row::new(
-                    "Image cache",
-                    "The images of the nodes no view shows are kept while they fit: a change then computes only what follows it. Those used least lately go first.",
-                    choices(cache, Megabytes(draft.image_cache), true, |m: Megabytes| Setting::ImageCache(m.0)),
-                )
-                .state(applied.image_cache, draft.image_cache, d.image_cache, set(Setting::ImageCache(d.image_cache)))
-                .note(cache_note),
-            ],
-        ),
-        group(
-            "Drawing",
-            vec![
-                Row::new("Graphics API", "What the program draws and computes with. Automatic takes the one the system does best.", segmented(&apis, draft.graphics, true, Setting::Graphics))
-                    .state(applied.graphics, draft.graphics, d.graphics, set(Setting::Graphics(d.graphics)))
-                    .restart()
-                    .note(api_note),
-                Row::new(
-                    "Antialiasing",
-                    "Smooth edges of the links, nodes and curves the program draws. Off, it takes less video memory, on large screens most.",
-                    switch(draft.antialiasing, true, Setting::Antialiasing),
-                )
-                .state(applied.antialiasing, draft.antialiasing, d.antialiasing, set(Setting::Antialiasing(d.antialiasing)))
+    vec![group(
+        "Drawing",
+        vec![
+            Row::new("Graphics API", "What the program draws and computes with. Automatic takes the one the system does best.", segmented(&apis, draft.graphics, true, Setting::Graphics))
+                .state(applied.graphics, draft.graphics, d.graphics, set(Setting::Graphics(d.graphics)))
                 .restart()
-                .note(later(draft.antialiasing != started.antialiasing)),
-            ],
-        ),
-    ]
+                .note(api_note),
+            Row::new(
+                "Antialiasing",
+                "Smooth edges of the links, nodes and curves the program draws. Off, it takes less video memory, on large screens most.",
+                switch(draft.antialiasing, true, Setting::Antialiasing),
+            )
+            .state(applied.antialiasing, draft.antialiasing, d.antialiasing, set(Setting::Antialiasing(d.antialiasing)))
+            .restart()
+            .note(later(draft.antialiasing != started.antialiasing)),
+        ],
+    )]
 }
 
 fn shortcuts<'a>(applied: &Settings, dialog: &'a SettingsDialog) -> Vec<Element<'a, Message>> {

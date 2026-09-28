@@ -1068,13 +1068,15 @@ impl App {
         doc
     }
 
-    /// Where a file dialog opens, as the settings say (see [`settings::FileDialogs`]): in the
-    /// folder of the package's file (`package`, else the one being edited), or in the folder
-    /// a dialog was answered from last; in the other where that one is not there.
-    pub(crate) fn dialog_folder(&self, package: Option<&Path>) -> Option<PathBuf> {
+    /// Where a file dialog opens, as the settings say (see [`settings::FileDialogs`]):
+    /// `package` is the file of the package it is about (else the one being edited), and
+    /// `saving_the_package`, it saves the package or one of its files. None: where the system
+    /// opens it.
+    pub(crate) fn dialog_folder(&self, package: Option<&Path>, saving_the_package: bool) -> Option<PathBuf> {
         let package = package.or(self.doc.path().map(PathBuf::as_path)).and_then(Path::parent).filter(|d| d.is_dir()).map(Path::to_path_buf);
         let last = self.ui.last_folder.clone().filter(|d| d.is_dir());
         match self.settings.file_dialogs {
+            settings::FileDialogs::Auto => package.filter(|_| saving_the_package),
             settings::FileDialogs::Package => package.or(last),
             settings::FileDialogs::Last => last.or(package),
         }
@@ -1633,7 +1635,7 @@ impl App {
         let hint = self.doc.path();
         let name = hint.and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
         let name = name.unwrap_or_else(|| format!("untitled.{}", project::FILE_EXTENSION));
-        let folder = self.dialog_folder(None);
+        let folder = self.dialog_folder(None, true);
         Task::perform(
             blocking(move || {
                 let mut dialog = rfd::FileDialog::new()
@@ -1748,7 +1750,7 @@ impl App {
 
     /// The file dialog to open a package.
     fn pick_package(&self) -> Task<Message> {
-        let folder = self.dialog_folder(None);
+        let folder = self.dialog_folder(None, false);
         Task::perform(
             blocking(move || {
                 let mut dialog = rfd::FileDialog::new()
@@ -1877,7 +1879,6 @@ impl App {
                     let (service, source) = gpu::start_engine(handles, "GPU".into());
                     self.engine = Some(service);
                     self.events = Some(source);
-                    self.send(Request::Cache(self.settings.image_cache_bytes()));
                     self.send_graph();
                     // (The device says how large a texture, so the window, may be.)
                     let held = self.window.map_or_else(Task::none, crate::window_size::hold);
@@ -2033,7 +2034,7 @@ impl App {
                     self.set_status("The graph has no Output nodes to export", true);
                 } else {
                     let here = self.here();
-                    let folder = self.dialog_folder(None);
+                    let folder = self.dialog_folder(None, false);
                     return Task::perform(
                         blocking(move || {
                             let mut dialog = rfd::FileDialog::new().set_title("Export outputs to folder");
@@ -2063,7 +2064,7 @@ impl App {
                 );
                 let ext = brewed_texture_engine::export::extension(depth);
                 let here = self.here();
-                let folder = self.dialog_folder(None);
+                let folder = self.dialog_folder(None, false);
                 return Task::perform(
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new().set_title("Export output").add_filter(ext.to_uppercase(), &[ext]).set_file_name(name);
@@ -2283,7 +2284,7 @@ impl App {
             Message::BrowseFile(target) => {
                 let extensions = self.takes(&target);
                 let here = self.here();
-                let folder = self.dialog_folder(None);
+                let folder = self.dialog_folder(None, false);
                 return Task::perform(
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new().set_title("Choose a file");
@@ -2639,7 +2640,11 @@ impl App {
             } else if self.capturing_key() {
                 return self.settings_message(SettingsMessage::StopCapture);
             } else if self.ui.dialog.is_some() {
-                self.cancel_dialog();
+                // (A field of the dialog that took it, a number being typed, stops being typed
+                // in: the dialog stays, with what was changed in it.)
+                if status != iced::event::Status::Captured {
+                    self.cancel_dialog();
+                }
             } else if self.ui.renaming_var.is_some()
                 || self.ui.binding.is_some()
                 || self.ui.renaming_graph.is_some()
@@ -2967,7 +2972,7 @@ impl App {
             PreviewMessage::BrowseEnvironment => {
                 // Where the image in use is, to choose another beside it.
                 let beside = p.lighting.file.as_deref().and_then(|f| std::path::Path::new(f).parent()).filter(|d| d.is_dir()).map(PathBuf::from);
-                let folder = beside.or_else(|| self.dialog_folder(None));
+                let folder = beside.or_else(|| self.dialog_folder(None, false));
                 self.close_popups();
                 return Task::perform(
                     blocking(move || {

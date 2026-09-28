@@ -161,9 +161,6 @@ impl App {
                 open.doc.set_undo_steps(steps);
             }
         }
-        if old.image_cache != new.image_cache {
-            self.send(brewed_texture_engine::Request::Cache(new.image_cache_bytes()));
-        }
         if old.needs_restart(&new) {
             // Offered while they are not those the program started with.
             self.ui.restart_offer = new.needs_restart(&self.started_with());

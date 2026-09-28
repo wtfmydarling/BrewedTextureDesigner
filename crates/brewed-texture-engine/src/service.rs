@@ -60,9 +60,6 @@ pub enum Request {
     },
     /// Read a file again (edited elsewhere): see [`crate::Engine::reload_file`].
     ReloadFile(String),
-    /// The memory the images of nodes no view shows may keep, in bytes: see
-    /// [`crate::Engine::set_cache`].
-    Cache(u64),
     /// Forget every cached image (e.g. after opening another document).
     Reset,
 }
@@ -236,7 +233,6 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                     engine.reload_file(&path);
                     pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
                 }
-                Request::Cache(bytes) => engine.set_cache(bytes),
                 Request::Reset => {
                     engine.reset();
                     // The front end forgets everything it was told with it.
