@@ -86,6 +86,10 @@ fn usage() -> String {
 }
 
 fn main() -> iced::Result {
+    #[cfg(target_arch = "x86_64")]
+    if !runs_x86_64_v3() {
+        cannot_run();
+    }
     attach_console();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,brewed_texture_designer=info")).init();
 
@@ -251,6 +255,43 @@ fn main() -> iced::Result {
             .show();
     }
     ran
+}
+
+/// Whether this processor, and the system, run what the program is built for on x86-64 (see
+/// `.cargo/config.toml`): AVX2, FMA, BMI, F16C, LZCNT and MOVBE, with the system keeping the
+/// 256-bit registers. Asked of the processor itself: `is_x86_feature_detected!` takes what the
+/// build enables for granted.
+#[cfg(target_arch = "x86_64")]
+fn runs_x86_64_v3() -> bool {
+    use std::arch::x86_64::{__cpuid, __cpuid_count, _xgetbv};
+    let bit = |reg: u32, n: u32| reg & (1 << n) != 0;
+    if __cpuid(0).eax < 7 || __cpuid(0x8000_0000).eax < 0x8000_0001 {
+        return false;
+    }
+    let (basic, leaf7, extended) = (__cpuid(1), __cpuid_count(7, 0), __cpuid(0x8000_0001));
+    // (XGETBV is there where the system says it saves the registers, OSXSAVE.)
+    // SAFETY: only called where OSXSAVE says the instruction is there.
+    let ymm = bit(basic.ecx, 27) && unsafe { _xgetbv(0) } & 0b110 == 0b110;
+    let avx = bit(basic.ecx, 28) && bit(basic.ecx, 12) && bit(basic.ecx, 29) && bit(basic.ecx, 22);
+    let avx2 = bit(leaf7.ebx, 5) && bit(leaf7.ebx, 3) && bit(leaf7.ebx, 8) && bit(extended.ecx, 5);
+    ymm && avx && avx2
+}
+
+/// On a processor the program is not built for: say so, and stop (rather than stop with no
+/// word at the first instruction it cannot run). Nothing is made at run time here, the message
+/// least of all: what runs before this may already be what such a processor cannot run.
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+fn cannot_run() -> ! {
+    #[cfg(windows)]
+    // SAFETY: two static strings that end in a zero, and no window to own the message.
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+        let text = windows_sys::w!("Brewed Texture Designer needs a processor with AVX2: Intel Core since 2013 (Haswell), AMD since 2015. This one has not.");
+        MessageBoxW(std::ptr::null_mut(), text, windows_sys::w!("Brewed Texture Designer"), MB_OK | MB_ICONERROR);
+    }
+    eprintln!("Brewed Texture Designer needs a processor with AVX2: Intel Core since 2013 (Haswell), AMD since 2015. This one has not.");
+    std::process::exit(1);
 }
 
 /// Stop at a mistake in the command line.

@@ -13,7 +13,7 @@ cargo run --release
 
 Работает на Windows, Linux (X11 и Wayland) и macOS; кроме Rust для сборки ничего не нужно — системные библиотеки (X11, Wayland, PipeWire) подгружаются во время работы и только если понадобятся.
 
-Нужен GPU с Vulkan, DX12 или Metal. В `.cargo/config.toml` включён `target-cpu=native`, чтобы SIMD-ядра собирались под AVX2 вашего процессора. Если бинарник нужно переносить на другие машины, эту строку стоит убрать.
+Нужен GPU с Vulkan, DX12 или Metal и процессор с AVX2 (Intel Core с 2013 года, Haswell; AMD с 2015-го) или Apple Silicon (M1 и новее). Под них программа и собирается (`.cargo/config.toml`: `x86-64-v3` и `apple-m1`), на какой бы машине её ни собирали, — а не под «всё, что есть у машины сборки» (`native`: собранное на Ryzen использовало бы SHA-инструкции, которых нет у Intel Core 6–10 поколений, и падало бы там). SIMD-ядра от этого не медленнее (`--bench`). На процессоре без AVX2 программа сразу говорит об этом, а не падает молча.
 
 При старте открывается демо-граф «кирпичная стена»: пять Input Values (`bricks_x`, `bricks_y`, `mortar`, `wear`, `tint`), Tile Generator, Noise, Blend, Levels, Blur, Gradient Map, Histogram Scan, Normal, Ambient Occlusion, Pixel Math и пять Output с назначением (Base Color, Normal, Height, Roughness, AO). Их сразу видно на 3D-модели. Две рамки-комментария показывают, где в графе форма кирпичей, а где карты для 3D. Все изображения демо тайлятся без шва — это проверяет тест.
 

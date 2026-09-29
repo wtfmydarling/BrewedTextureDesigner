@@ -1,4 +1,10 @@
-# Let the compiler use every SIMD extension of the build machine (AVX2/FMA on modern x86-64).
-# The `wide` SIMD types pick the widest native implementation at compile time.
-[build]
-rustflags = ["-C", "target-cpu=native"]
+# The processors the program is built for, whatever machine builds it: every x86-64 processor
+# with AVX2 (Intel since Haswell, 2013; AMD since Excavator and Zen), whose 256-bit vectors the
+# `wide` SIMD types use (they pick their implementation at compile time), and every Apple
+# Silicon Mac. Not `native`: a build would then use whatever the machine it was made on has
+# (SHA, VAES, AVX-512…), and stop on a processor that has not, as soon as it came to it.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=x86-64-v3"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "target-cpu=apple-m1"]
