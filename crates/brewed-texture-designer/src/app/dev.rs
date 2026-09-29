@@ -69,6 +69,11 @@ impl App {
         }
     }
 
+    /// Are the packages being saved written, those being opened read?
+    pub fn files_idle(&self) -> bool {
+        self.ui.saving.is_empty() && self.ui.opening.is_empty()
+    }
+
     /// Has the engine done all it was asked, every export too?
     pub fn engine_idle(&self) -> bool {
         self.engine.is_some()

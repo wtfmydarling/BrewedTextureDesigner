@@ -227,7 +227,7 @@ impl Autopilot {
             }
         }
         if let Some(since) = self.waiting_since {
-            if !app.engine_idle() {
+            if !app.engine_idle() || !app.files_idle() {
                 if now - since > Duration::from_secs(90) {
                     self.finding("the engine did not finish what it was asked in 90 s".into());
                     self.waiting_since = None;

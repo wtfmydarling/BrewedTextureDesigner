@@ -95,6 +95,16 @@ impl Document {
         self.saved_revision = self.revision;
     }
 
+    /// The package was written to `path` (while it could still be edited): saved if it is
+    /// as it was written (`same`), else with changes to save still, in that file.
+    pub fn saved_at(&mut self, path: PathBuf, same: bool) {
+        if same {
+            self.mark_saved(path);
+        } else {
+            self.path = Some(path);
+        }
+    }
+
     /// The package is not what its file holds (it was recovered from a snapshot of unsaved
     /// changes, see [`crate::recovery`]): it has changes to save.
     pub fn mark_unsaved(&mut self) {

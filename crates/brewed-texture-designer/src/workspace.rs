@@ -47,7 +47,7 @@ pub fn remember(recent: &mut Vec<String>, path: &str) {
 }
 
 /// Do two paths name the same file? (Windows and macOS do not tell capitals apart.)
-fn same_file(a: &str, b: &str) -> bool {
+pub(crate) fn same_file(a: &str, b: &str) -> bool {
     if cfg!(any(windows, target_os = "macos")) { a.to_lowercase() == b.to_lowercase() } else { a == b }
 }
 

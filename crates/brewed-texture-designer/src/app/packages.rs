@@ -138,6 +138,46 @@ pub fn clean(path: &Path) -> String {
     package::clean_path(&path).display().to_string()
 }
 
+/// A package being saved (see [`App::save_package`]): where, the package as it is written,
+/// what was to follow the save, where to save it again once this is done (a save asked for
+/// meanwhile), and whether the file is to be opened then (and in place of the package being
+/// edited, or not): it was asked for while it was being written.
+#[derive(Debug)]
+pub struct Saving {
+    path: String,
+    package: Package,
+    then: Option<PendingAction>,
+    again: Option<PathBuf>,
+    open: Option<bool>,
+}
+
+/// A package file read, with the package files its graphs use (see [`App::open_file`]).
+#[derive(Debug)]
+pub struct Opened {
+    loaded: project::Loaded,
+    deps: Vec<(String, Result<Package, String>)>,
+}
+
+/// The package file at `file`, and the package files its graphs use, as deep as they use
+/// others, but those in `known` (open, or read already).
+fn read_with_dependencies(file: &str, mut known: HashSet<String>) -> Result<Opened, String> {
+    let loaded = project::load(Path::new(file))?;
+    known.insert(file.to_string());
+    let mut wanted: Vec<String> = loaded.package.dependencies().into_iter().collect();
+    let mut deps = Vec::new();
+    while let Some(dep) = wanted.pop() {
+        if !known.insert(dep.clone()) {
+            continue;
+        }
+        let read = project::load(Path::new(&dep)).map(|l| l.package);
+        if let Ok(package) = &read {
+            wanted.extend(package.dependencies());
+        }
+        deps.push((dep, read));
+    }
+    Ok(Opened { loaded, deps })
+}
+
 impl App {
     // ------------------------------------------------------------------ the open packages
 
@@ -297,51 +337,160 @@ impl App {
         self.unreadable.remove(path);
     }
 
-    /// Open the package file at `path` in the Explorer (or edit it, when it is open already),
-    /// and say what it names that is not there.
-    pub(super) fn open_package(&mut self, path: PathBuf) {
-        let key = clean(&path);
-        if let Some(open) = self.open_key(&key) {
+    /// Open the package file at `path`: in the Explorer (or edit it, when it is open already),
+    /// or in place of the package being edited (`replace`: the unsaved changes dialog has been
+    /// answered). It is read off the UI thread, with the package files its graphs use that are
+    /// not read yet: a large one takes a while (see [`App::opened`]).
+    pub(crate) fn open_file(&mut self, path: PathBuf, replace: bool) -> Task<Message> {
+        let file = clean(&path);
+        if !replace && let Some(open) = self.open_key(&file) {
             self.activate(open, None);
-            return;
+            return Task::none();
         }
-        match project::load(Path::new(&key)) {
-            Ok(loaded) => {
-                let notes = loaded.notes.clone();
-                self.add_package(loaded.package, Some(PathBuf::from(&key)), loaded.views, loaded.open);
-                crate::workspace::remember(&mut self.ui.recent, &key);
-                let mut msg = format!("Opened {key}");
-                if !notes.is_empty() {
-                    msg.push_str(&format!(" ({})", notes.join("; ")));
-                }
-                self.set_status(msg, false);
-                self.ask_for_missing();
-            }
-            Err(e) => self.set_status(e, true),
+        // Being written: opened once it is.
+        if let Some(saving) = self.ui.saving.values_mut().find(|s| crate::workspace::same_file(&s.path, &file)) {
+            saving.open = Some(replace);
+            return Task::none();
         }
+        if !self.ui.opening.insert(file.clone()) {
+            return Task::none();
+        }
+        self.set_status(format!("Opening {file}…"), false);
+        let known: HashSet<String> =
+            self.all_docs().filter_map(Document::key).chain(self.deps.keys().cloned()).chain(self.unreadable.iter().cloned()).collect();
+        let read = file.clone();
+        self.in_background(
+            move || read_with_dependencies(&read, known).map(Arc::new),
+            move |done| Message::Opened(file.clone(), replace, done.unwrap_or_else(|| Err(format!("{file} was not opened: what read it stopped")))),
+        )
     }
 
-    /// Open the file at `path` in place of the package being edited (the unsaved changes
-    /// dialog has been answered).
-    pub(super) fn open_path(&mut self, path: PathBuf) {
-        let key = clean(&path);
-        match project::load(Path::new(&key)) {
-            Ok(loaded) => {
-                let notes = loaded.notes.clone();
-                // Open elsewhere in the Explorer already: that one goes, this one takes its place.
-                if let Some(open) = self.open_key(&key).filter(|k| *k != self.doc_key) {
-                    self.shelf.retain(|p| p.key != open);
-                }
-                self.replace_package(loaded.package, Some(PathBuf::from(&key)), loaded.views, loaded.open);
-                crate::workspace::remember(&mut self.ui.recent, &key);
-                let mut msg = format!("Opened {key}");
-                if !notes.is_empty() {
-                    msg.push_str(&format!(" ({})", notes.join("; ")));
-                }
-                self.set_status(msg, false);
-                self.ask_for_missing();
+    /// A package file was read (see [`App::open_file`]): the packages it uses are kept, and it
+    /// is opened; what it names that is not there is asked for.
+    pub(super) fn opened(&mut self, file: String, replace: bool, result: Result<Arc<Opened>, String>) {
+        self.ui.opening.remove(&file);
+        let Opened { loaded, deps } = match result.map(Arc::try_unwrap) {
+            Ok(Ok(opened)) => opened,
+            Ok(Err(_)) => return,
+            Err(e) => {
+                self.set_status(e, true);
+                return;
             }
-            Err(e) => self.set_status(e, true),
+        };
+        let open: HashSet<String> = self.all_docs().filter_map(Document::key).collect();
+        for (dep, read) in deps {
+            if open.contains(&dep) || self.deps.contains_key(&dep) || self.unreadable.contains(&dep) {
+                continue;
+            }
+            match read {
+                Ok(package) => {
+                    self.deps.insert(dep, package);
+                }
+                Err(e) => {
+                    log::warn!("a package that is used cannot be read: {e}");
+                    self.unreadable.insert(dep);
+                }
+            }
+        }
+        let notes = loaded.notes.clone();
+        let path = Some(PathBuf::from(&file));
+        if replace {
+            // Open elsewhere in the Explorer already: that one goes, this one takes its place.
+            if let Some(open) = self.open_key(&file).filter(|k| *k != self.doc_key) {
+                self.shelf.retain(|p| p.key != open);
+            }
+            self.replace_package(loaded.package, path, loaded.views, loaded.open);
+        } else if let Some(open) = self.open_key(&file) {
+            // Opened meanwhile.
+            self.activate(open, None);
+            return;
+        } else {
+            self.add_package(loaded.package, path, loaded.views, loaded.open);
+        }
+        crate::workspace::remember(&mut self.ui.recent, &file);
+        let mut msg = format!("Opened {file}");
+        if !notes.is_empty() {
+            msg.push_str(&format!(" ({})", notes.join("; ")));
+        }
+        self.set_status(msg, false);
+        self.ask_for_missing();
+    }
+
+    /// Save the package open as `key` at `path`, off the UI thread (a package that holds large
+    /// files takes a while), as it is now: an edit made meanwhile is unsaved still once it is
+    /// written. What was to follow the save (`ui.after_save`) follows it, if it goes well. A
+    /// package being saved is saved again once that is done.
+    pub(crate) fn save_package(&mut self, key: u64, path: PathBuf) -> Task<Message> {
+        let path = PathBuf::from(clean(&path));
+        let then = self.ui.after_save.take();
+        if let Some(saving) = self.ui.saving.get_mut(&key) {
+            saving.again = Some(path);
+            if then.is_some() {
+                saving.then = then;
+            }
+            return Task::none();
+        }
+        let Some(doc) = self.package_doc(key) else { return Task::none() };
+        let (package, current) = (doc.package().clone(), doc.current());
+        let views = self.views_of(key);
+        self.set_status(format!("Saving {}…", path.display()), false);
+        let (written, to) = (package.clone(), path.clone());
+        self.ui.saving.insert(key, Saving { path: path.display().to_string(), package, then, again: None, open: None });
+        self.in_background(
+            move || project::save(&to, &written, &views, current),
+            move |done| Message::Saved(key, path.clone(), done.unwrap_or_else(|| Err("The package was not saved: what wrote it stopped".into()))),
+        )
+    }
+
+    /// A package was written, or could not be (see [`App::save_package`]): saved if it is as it
+    /// was written; what was to follow the save follows. What waited for the packages being
+    /// saved goes on once none is.
+    pub(super) fn saved(&mut self, key: u64, path: PathBuf, result: Result<(), String>) -> Task<Message> {
+        let Some(saving) = self.ui.saving.remove(&key) else { return Task::none() };
+        let task = match result {
+            Ok(()) => {
+                self.set_status(format!("Saved {}", path.display()), false);
+                if let Some(doc) = self.package_doc_mut(key) {
+                    let same = *doc.package() == saving.package;
+                    doc.saved_at(path.clone(), same);
+                }
+                self.saved_as(key, &path);
+                self.forget_saved();
+                match saving.again {
+                    Some(again) => {
+                        self.ui.after_save = saving.then;
+                        let task = self.save_package(key, again);
+                        // (Opened once it is written again.)
+                        if let Some(next) = self.ui.saving.get_mut(&key) {
+                            next.open = next.open.or(saving.open);
+                        }
+                        task
+                    }
+                    None => {
+                        let then = self.continue_after(saving.then);
+                        match saving.open {
+                            Some(replace) => Task::batch([then, self.open_file(path, replace)]),
+                            None => then,
+                        }
+                    }
+                }
+            }
+            // What was to follow the save (quitting, closing the package) does not: a save
+            // that works later is only a save. The file is opened as it is, if it is there.
+            Err(e) => {
+                self.set_status(e, true);
+                match saving.open {
+                    Some(replace) => self.open_file(path, replace),
+                    None => Task::none(),
+                }
+            }
+        };
+        match self.ui.after_saving.take() {
+            Some(action) if self.ui.saving.is_empty() => Task::batch([task, self.guarded(action)]),
+            waiting => {
+                self.ui.after_saving = waiting;
+                task
+            }
         }
     }
 
@@ -388,11 +537,6 @@ impl App {
         self.packages().into_iter().filter(|(_, d)| d.is_dirty()).map(|(k, _)| k).collect()
     }
 
-    /// Where the view of each graph of the package being edited is, to save with it.
-    pub(super) fn views_to_save(&self) -> HashMap<GraphId, ViewState> {
-        self.views_of(self.doc_key)
-    }
-
     /// Where the view of each graph of the package open as `key` is.
     pub(super) fn views_of(&self, key: u64) -> HashMap<GraphId, ViewState> {
         let mut views: HashMap<GraphId, ViewState> =
@@ -403,15 +547,14 @@ impl App {
         views
     }
 
-    /// The package being edited was saved at `path`: whatever was read of that file is its
+    /// The package open as `key` was saved at `path`: whatever was read of that file is its
     /// copy now.
-    pub(super) fn saved_as(&mut self, path: &Path) {
-        let key = path.display().to_string();
-        crate::workspace::remember(&mut self.ui.recent, &key);
-        self.forget_file(&key);
+    fn saved_as(&mut self, key: u64, path: &Path) {
+        let file = path.display().to_string();
+        crate::workspace::remember(&mut self.ui.recent, &file);
+        self.forget_file(&file);
         // Another package open in the Explorer from the same file is this one now.
-        let doc_key = self.doc_key;
-        self.shelf.retain(|p| p.key == doc_key || p.doc.key().as_deref() != Some(key.as_str()));
+        self.shelf.retain(|p| p.key == key || p.doc.key().as_deref() != Some(file.as_str()));
     }
 
     // ------------------------------------------------------------------ graphs used as nodes

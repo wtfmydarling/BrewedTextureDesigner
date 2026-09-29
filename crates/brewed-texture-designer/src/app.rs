@@ -319,7 +319,14 @@ pub struct Ui {
     pub context: Option<ContextMenu>,
     pub add_menu: Option<AddMenu>,
     pub dialog: Option<Dialog>,
+    /// What follows the next save that is asked for (see `App::save_package`).
     pub after_save: Option<PendingAction>,
+    /// The packages being saved, by their key.
+    pub saving: HashMap<u64, packages::Saving>,
+    /// The package files being opened.
+    pub opening: HashSet<String>,
+    /// What waits for the packages being saved to be written (quitting, closing one).
+    pub after_saving: Option<PendingAction>,
     pub drag: Option<DragPayload>,
     /// A panel item was pressed; it becomes a drag once the cursor moves.
     pub press: Option<(DragPayload, Point)>,
@@ -763,6 +770,11 @@ pub enum Message {
     FirstFrame(window::Id),
     /// Quitting: whether the window fills the screen, for the next session.
     Quitting(bool),
+    /// A package was written, or could not be (see `App::save_package`): its key, and where.
+    Saved(u64, PathBuf, Result<(), String>),
+    /// A package file was read, with the packages it uses, or could not be (see
+    /// `App::open_file`): where, and whether it takes the place of the package being edited.
+    Opened(String, bool, Result<Arc<packages::Opened>, String>),
     Expression(NodeId, text_editor::Action),
     ColorPicker(Option<ColorTarget>),
     GradientStop(NodeId, String, usize),
@@ -941,6 +953,9 @@ impl App {
                 add_menu: None,
                 dialog: None,
                 after_save: None,
+                saving: HashMap::new(),
+                opening: HashSet::new(),
+                after_saving: None,
                 drag: None,
                 press: None,
                 cursor: Point::ORIGIN,
@@ -986,9 +1001,7 @@ impl App {
             #[cfg(any(test, feature = "dev-tools"))]
             dev: dev::Dev::new(&opts.dev),
         };
-        for path in opts.open.clone() {
-            app.open_path(path);
-        }
+        let opened: Vec<Task<Message>> = opts.open.iter().map(|path| app.open_file(path.clone(), false)).collect();
         if let Some(root) = &opts.recovery {
             app.start_autosave(root);
         }
@@ -1034,7 +1047,7 @@ impl App {
             });
             Task::batch([appear, host.map(Message::Host), crate::window_size::hold(id)])
         });
-        (app, Task::batch([setup, scenario, lighting]))
+        (app, Task::batch([setup, scenario, lighting, Task::batch(opened)]))
     }
 
     /// The main window (as opposed to the eyedropper's windows).
@@ -1609,25 +1622,19 @@ impl App {
         self.refresh();
     }
 
-    fn save_to(&mut self, path: PathBuf) -> bool {
-        let path = PathBuf::from(packages::clean(&path));
-        let views = self.views_to_save();
-        match project::save(&path, self.doc.package(), &views, self.doc.current()) {
-            Ok(()) => {
-                self.set_status(format!("Saved {}", path.display()), false);
-                self.saved_as(&path);
-                self.doc.mark_saved(path);
-                self.forget_saved();
-                true
-            }
-            Err(e) => {
-                self.set_status(e, true);
-                // What was to follow the save (quitting, closing the package) does not: a save
-                // that works later is only a save.
-                self.ui.after_save = None;
-                false
-            }
-        }
+    /// Do `job` off the UI thread (reading or writing a package may take a while), and take
+    /// what it comes to as `then` says: none, if what did it stopped. In the tests, at once:
+    /// they take the work of a message as done once it is handled.
+    pub(crate) fn in_background<T: Send + 'static>(
+        &mut self,
+        job: impl FnOnce() -> T + Send + 'static,
+        then: impl Fn(Option<T>) -> Message + Send + 'static,
+    ) -> Task<Message> {
+        #[cfg(test)]
+        let task = self.handle(then(Some(job())));
+        #[cfg(not(test))]
+        let task = Task::perform(blocking(job), then);
+        task
     }
 
     fn pick_save_path(&self) -> Task<Message> {
@@ -1700,6 +1707,11 @@ impl App {
     /// discards, or, quitting, about each package with unsaved changes in turn.
     fn guarded(&mut self, action: PendingAction) -> Task<Message> {
         self.close_popups();
+        // What is being saved is written first: quitting or closing waits for it.
+        if !self.ui.saving.is_empty() {
+            self.ui.after_saving = Some(action);
+            return Task::none();
+        }
         let asking = match &action {
             PendingAction::Quit => self.dirty_packages().into_iter().find(|k| !self.ui.discarded.contains(k)),
             PendingAction::Close(key) => self.package_doc(*key).filter(|d| d.is_dirty()).map(|_| *key),
@@ -1736,10 +1748,7 @@ impl App {
                 Task::none()
             }
             #[cfg(any(test, feature = "dev-tools"))]
-            PendingAction::OpenPath(path) => {
-                self.open_path(path);
-                Task::none()
-            }
+            PendingAction::OpenPath(path) => self.open_file(path, true),
             PendingAction::Close(key) => {
                 self.close_package(key);
                 Task::none()
@@ -1983,7 +1992,7 @@ impl App {
             }
             Message::OpenPicked(path) => {
                 if let Some(path) = path {
-                    self.open_package(path);
+                    return self.open_file(path, false);
                 }
             }
             Message::OpenRecent(path) => {
@@ -1993,7 +2002,7 @@ impl App {
                     self.ui.recent.retain(|p| *p != path);
                     self.set_status(format!("{path} is not there any more: it is taken off the recent packages"), true);
                 } else {
-                    self.open_package(PathBuf::from(path));
+                    return self.open_file(PathBuf::from(path), false);
                 }
             }
             Message::ClearRecent => {
@@ -2004,11 +2013,7 @@ impl App {
                 self.close_popups();
                 self.take_typed_names();
                 match self.doc.path().cloned() {
-                    Some(path) => {
-                        if self.save_to(path) {
-                            return self.continue_after_save();
-                        }
-                    }
+                    Some(path) => return self.save_package(self.doc_key, path),
                     None => return self.pick_save_path(),
                 }
             }
@@ -2022,9 +2027,7 @@ impl App {
                     if path.extension().is_none() {
                         path.set_extension(project::FILE_EXTENSION);
                     }
-                    if self.save_to(path) {
-                        return self.continue_after_save();
-                    }
+                    return self.save_package(self.doc_key, path);
                 }
                 None => self.ui.after_save = None,
             },
@@ -2224,6 +2227,8 @@ impl App {
                 self.save_workspace(maximized);
                 return self.hide_and_exit();
             }
+            Message::Saved(key, path, result) => return self.saved(key, path, result),
+            Message::Opened(file, replace, result) => self.opened(file, replace, result),
             Message::ChoiceMenu(Some((node, key))) => return self.open_choice_menu(node, key),
             Message::ChoiceMenu(None) => self.ui.choice_menu = None,
             Message::ChoiceSearch(query) => return self.search_choice_menu(query),
@@ -2360,8 +2365,9 @@ impl App {
         Task::none()
     }
 
-    fn continue_after_save(&mut self) -> Task<Message> {
-        match self.ui.after_save.take() {
+    /// What was to follow a save, once it is done.
+    fn continue_after(&mut self, then: Option<PendingAction>) -> Task<Message> {
+        match then {
             // Quitting: the other packages with unsaved changes ask in their turn.
             Some(PendingAction::Quit) => self.guarded(PendingAction::Quit),
             Some(action) => self.proceed(action),
@@ -2598,8 +2604,7 @@ impl App {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
         if ext == project::FILE_EXTENSION {
             self.close_popups();
-            self.open_package(path);
-            return Task::none();
+            return self.open_file(path, false);
         }
         let path = packages::clean(&path);
         // An image, vector graphics or a font: the node that reads it (and the package lists it).
