@@ -43,7 +43,7 @@ fn thumbnail(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         for (var sx = 0; sx < n; sx++) {
             let sub = (vec2<f32>(f32(sx), f32(sy)) + 0.5) / f32(n);
             let uv = (vec2<f32>(gid.xy) + sub) / vec2<f32>(size);
-            acc = acc + widen(sample_bilinear(in0, uv, 0u), GRAY0);
+            acc = acc + widen(sample_bilinear(in0, uv, 0u), gray_input(0u));
         }
     }
     let c = acc / f32(n * n);

@@ -242,10 +242,8 @@ fn main() -> iced::Result {
         .default_font(style::ui_font())
         .antialiasing(antialiasing)
         .run();
-    if let Err(iced::Error::GraphicsCreationFailed(e)) = &ran
-        && chosen
-    {
-        let said = settings::graphics_failed(&mut store, &e.to_string());
+    if let Err(iced::Error::GraphicsCreationFailed(e)) = &ran {
+        let said = if chosen { settings::graphics_failed(&mut store, &e.to_string()) } else { settings::environment_failed(&e.to_string()) };
         log::error!("{said}");
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)

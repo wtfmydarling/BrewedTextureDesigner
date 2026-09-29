@@ -14,17 +14,14 @@ const TAU: f32 = 6.28318530717959;
 
 // Kernels see every image as a color image: they read each input through `widen` (see
 // show.wgsl, which comes before this), which spreads the one channel of a grayscale image
-// over red, green and blue, with an opaque alpha. GRAYn says input n (binding n + 1) is
-// grayscale; each pipeline is built with them set for the images it reads. A kernel writes
-// the same way whatever it writes to: a grayscale image keeps the red channel.
-override GRAY0: bool = false;
-override GRAY1: bool = false;
-override GRAY2: bool = false;
-override GRAY3: bool = false;
-override GRAY4: bool = false;
-override GRAY5: bool = false;
-override GRAY6: bool = false;
-override GRAY7: bool = false;
+// over red, green and blue, with an opaque alpha. `gray_input(n)` says input n (binding n + 1)
+// is grayscale: which are is said with the size of the image drawn (see `TARGET`), not built
+// into the pipeline, so that one pipeline draws from grayscale images and color ones alike
+// (DX12 takes a while to build one). A kernel writes the same way whatever it writes to: a
+// grayscale image keeps the red channel.
+fn gray_input(n: u32) -> bool {
+    return (TARGET.z & (1u << n)) != 0u;
+}
 
 // The kind of image a kernel that makes several kinds (the types of noise) is built for.
 // Each kind is a pipeline of its own, with only the code of its kind: the compiler drops the
@@ -36,7 +33,8 @@ override KIND: u32 = 0u;
 // renders to, where a compute shader could store to only a few: a grayscale image is
 // written as it is kept, one channel.
 
-// The size of the image being drawn (in the buffer of the parameters, after them).
+// The size of the image being drawn, and which inputs are grayscale, as bits (in the buffer of
+// the parameters, after them).
 @group(0) @binding(15) var<uniform> TARGET: vec4<u32>;
 
 @vertex
@@ -60,20 +58,28 @@ fn tile_y(t: u32) -> bool { return (t & 2u) != 0u; }
 // `i` modulo `n`, from 0 to n - 1 whatever the sign of `i`. The remainder is only ever taken
 // of a number of zero or more: of a negative one, NVIDIA's Vulkan driver (616.92 still) gets
 // it wrong in some kernels (the corners of simplex noise left of the image), where DX12,
-// Mesa and the WGSL spec agree on it.
+// Mesa and the WGSL spec agree on it. And it is taken of unsigned numbers: DX12's shaders have
+// no division of signed ones, which FXC makes of a dozen instructions or more each time, and
+// every read of an image that wraps has a few of them (Tile Sampler took two seconds to
+// compile on DX12).
 fn wrap_i(i: i32, n: i32) -> i32 {
-    if (i >= 0) { return i % n; }
-    return (i + n * (1 + (-i) / n)) % n;
+    let m = u32(max(n, 1));
+    if (i >= 0) { return i32(u32(i) % m); }
+    // -1 is n - 1, -n is 0: counted down from n - 1 by -(i + 1), which is 0 or more.
+    return i32(m - 1u - u32(-(i + 1)) % m);
+}
+
+// Column or row `i` of an image `n` pixels across: wrapped where the image tiles, else clamped
+// to its edge.
+fn edge(i: i32, n: i32, tiles: bool) -> i32 {
+    return select(clamp(i, 0, n - 1), wrap_i(i, n), tiles);
 }
 
 // Texel fetch from the mip level `level` that wraps on tiled axes and clamps to the edge
 // otherwise.
 fn fetch_level(tex: texture_2d<f32>, p: vec2<i32>, level: i32, tiling: u32) -> vec4<f32> {
     let d = vec2<i32>(textureDimensions(tex, level));
-    var q: vec2<i32>;
-    q.x = select(clamp(p.x, 0, d.x - 1), wrap_i(p.x, d.x), tile_x(tiling));
-    q.y = select(clamp(p.y, 0, d.y - 1), wrap_i(p.y, d.y), tile_y(tiling));
-    return textureLoad(tex, q, level);
+    return textureLoad(tex, vec2<i32>(edge(p.x, d.x, tile_x(tiling)), edge(p.y, d.y, tile_y(tiling))), level);
 }
 
 fn fetch(tex: texture_2d<f32>, p: vec2<i32>, tiling: u32) -> vec4<f32> {
@@ -82,16 +88,22 @@ fn fetch(tex: texture_2d<f32>, p: vec2<i32>, tiling: u32) -> vec4<f32> {
 
 // The mip level `level` read between its pixels, as a linear filter reads it, but in the
 // precision the image has: floats of 32 bits cannot be filtered on every device, and a filter
-// weighs the pixels in steps of 1/256 on most.
+// weighs the pixels in steps of 1/256 on most. (Its size asked once, its two columns and two
+// rows wrapped or clamped once: this is in many shaders, some many times.)
 fn bilinear_level(tex: texture_2d<f32>, uv: vec2<f32>, level: i32, tiling: u32) -> vec4<f32> {
-    let st = uv * vec2<f32>(textureDimensions(tex, level)) - 0.5;
+    let d = vec2<i32>(textureDimensions(tex, level));
+    let st = uv * vec2<f32>(d) - 0.5;
     let fl = floor(st);
     let i = vec2<i32>(fl);
     let f = st - fl;
-    let a = fetch_level(tex, i, level, tiling);
-    let b = fetch_level(tex, i + vec2<i32>(1, 0), level, tiling);
-    let c = fetch_level(tex, i + vec2<i32>(0, 1), level, tiling);
-    let e = fetch_level(tex, i + vec2<i32>(1, 1), level, tiling);
+    let x0 = edge(i.x, d.x, tile_x(tiling));
+    let x1 = edge(i.x + 1, d.x, tile_x(tiling));
+    let y0 = edge(i.y, d.y, tile_y(tiling));
+    let y1 = edge(i.y + 1, d.y, tile_y(tiling));
+    let a = textureLoad(tex, vec2<i32>(x0, y0), level);
+    let b = textureLoad(tex, vec2<i32>(x1, y0), level);
+    let c = textureLoad(tex, vec2<i32>(x0, y1), level);
+    let e = textureLoad(tex, vec2<i32>(x1, y1), level);
     return mix(mix(a, b, f.x), mix(c, e, f.x), f.y);
 }
 

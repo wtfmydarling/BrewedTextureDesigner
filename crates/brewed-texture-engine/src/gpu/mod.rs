@@ -288,6 +288,109 @@ fn kernel_source(src: &KernelSource) -> String {
     format!("{COMMON_WGSL}\n{}", src.source)
 }
 
+/// The bindings of a kernel that reads `inputs` images: its parameters, the images (read texel
+/// by texel, or through a sampler by the kernels that filter; or integers), the sampler of those
+/// that filter, and the size of the image drawn.
+fn layout_entries(inputs: usize, filtered: bool, uint: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
+    let uniform = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+        count: None,
+    };
+    let mut entries = vec![uniform(0)];
+    for i in 0..inputs {
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 1 + i as u32,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: if uint { wgpu::TextureSampleType::Uint } else { wgpu::TextureSampleType::Float { filterable: filtered } },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        });
+    }
+    if filtered {
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 1 + inputs as u32,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        });
+    }
+    entries.push(uniform(TARGET_BINDING));
+    entries
+}
+
+/// The pipeline of a kernel: WGSL `source`, whose fragment entry `entry` draws `output` from
+/// what `layout` binds, making the kind of image `kind`.
+fn kernel_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    source: &str,
+    entry: &str,
+    layout: &wgpu::BindGroupLayout,
+    output: wgpu::TextureFormat,
+    kind: u32,
+) -> wgpu::RenderPipeline {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) });
+    let pipeline_layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: &[layout], push_constant_ranges: &[] });
+    let constants = [("KIND", f64::from(kind))];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("cover"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some(entry),
+            compilation_options: wgpu::PipelineCompilationOptions { constants: &constants, ..Default::default() },
+            targets: &[Some(wgpu::ColorTargetState { format: output, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+/// Build each built-in kernel once (the first kind of those that make several), drawing color
+/// images and grayscale ones (in half floats, as a graph makes them by default), the one that
+/// takes the longest first, on the thread this is called on and while nothing waits for it:
+/// for what the device keeps of what it built. DX12 keeps the shaders it compiled, by their
+/// source, and a driver keeps its own: a kernel the engine builds for a node later is there in
+/// a moment, where the Tile Sampler's took most of a second on DX12. Nothing is kept here, and
+/// nothing asks the device what went wrong: its error scopes are the device's, not the
+/// thread's, and the engine's are its own (the kernels build, the tests say so).
+pub fn warm_up(device: &wgpu::Device) {
+    let mut sources: Vec<&KernelSource> = KERNELS.iter().collect();
+    sources.sort_by_key(|src| src.name != "tile_sampler");
+    let mut layouts: HashMap<(usize, bool, bool), wgpu::BindGroupLayout> = HashMap::new();
+    for src in sources {
+        let layout = layouts.entry((src.inputs, src.filtered, src.uint)).or_insert_with(|| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("warm-up"),
+                entries: &layout_entries(src.inputs, src.filtered, src.uint),
+            })
+        });
+        let source = kernel_source(src);
+        let outputs = match src.writes {
+            Some(format) => vec![format],
+            None => vec![COLOR_FORMAT, GRAY_FORMAT],
+        };
+        for output in outputs {
+            let _ = kernel_pipeline(device, src.name, &source, src.entry, layout, output, 0);
+        }
+    }
+}
+
 /// GPU memory an image texture takes, with all its mip levels.
 pub fn texture_bytes(texture: &wgpu::Texture) -> u64 {
     let (mut w, mut h) = (u64::from(texture.width()), u64::from(texture.height()));
@@ -356,9 +459,10 @@ pub struct Kernel {
     filtered: bool,
 }
 
-/// A kernel as built for the images it runs on: its name (or source), the format it writes,
-/// which of its inputs are grayscale, and the kind of image it makes.
-type KernelKey = (String, wgpu::TextureFormat, u8, u32);
+/// A kernel as built for the images it runs on: its name (or source), the format it writes, and
+/// the kind of image it makes. (Whichever of its inputs are grayscale: see `gray_input` in
+/// common.wgsl.)
+type KernelKey = (String, wgpu::TextureFormat, u32);
 
 /// Scratch images kept for reuse, each with whether it was used since the last evaluation
 /// began (see [`Gpu::start_use`]).
@@ -724,44 +828,6 @@ impl Gpu {
         if let Some(l) = self.layouts.borrow().get(&(inputs, filtered, uint)) {
             return l.clone();
         }
-        let uniform = |binding: u32| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let mut entries = vec![uniform(0)];
-        for i in 0..inputs {
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: 1 + i as u32,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    // Read texel by texel, or through a sampler by the kernels that filter; or
-                    // integers.
-                    sample_type: if uint {
-                        wgpu::TextureSampleType::Uint
-                    } else {
-                        wgpu::TextureSampleType::Float { filterable: filtered }
-                    },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            });
-        }
-        if filtered {
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: 1 + inputs as u32,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            });
-        }
-        entries.push(uniform(TARGET_BINDING));
         let kind = match (filtered, uint) {
             (true, _) => "_filtered",
             (false, true) => "_uint",
@@ -769,15 +835,14 @@ impl Gpu {
         };
         let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some(&format!("layout_{inputs}_inputs{kind}")),
-            entries: &entries,
+            entries: &layout_entries(inputs, filtered, uint),
         });
         self.layouts.borrow_mut().insert((inputs, filtered, uint), layout.clone());
         layout
     }
 
     /// Build WGSL into a kernel drawing `output`, capturing validation errors instead of
-    /// panicking. `gray` has bit n set when input n is grayscale; `kind` is the kind of image
-    /// it makes.
+    /// panicking. `kind` is the kind of image it makes.
     #[allow(clippy::too_many_arguments)]
     fn build_kernel(
         &self,
@@ -787,57 +852,11 @@ impl Gpu {
         inputs: usize,
         (filtered, uint): (bool, bool),
         output: wgpu::TextureFormat,
-        gray: u8,
         kind: u32,
     ) -> Result<Rc<Kernel>, String> {
         let layout = self.layout(inputs, filtered, uint);
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(label),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
-        let pipeline_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(label),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
-        });
-        let bit = |n: u8| if gray & (1 << n) != 0 { 1.0 } else { 0.0 };
-        let constants = [
-            ("GRAY0", bit(0)),
-            ("GRAY1", bit(1)),
-            ("GRAY2", bit(2)),
-            ("GRAY3", bit(3)),
-            ("GRAY4", bit(4)),
-            ("GRAY5", bit(5)),
-            ("GRAY6", bit(6)),
-            ("GRAY7", bit(7)),
-            ("KIND", f64::from(kind)),
-        ];
-        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("cover"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: wgpu::PipelineCompilationOptions { constants: &constants, ..Default::default() },
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: output,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        let pipeline = kernel_pipeline(&self.device, label, source, entry, &layout, output, kind);
         if let Some(err) = pollster::block_on(self.device.pop_error_scope()) {
             // The device is the window's too, and wgpu's error scopes are the device's, not the
             // thread's: what went wrong meanwhile in the window lands here. Only what the
@@ -854,13 +873,12 @@ impl Gpu {
 
     /// A built-in kernel writing color images from color images, compiled on first use.
     pub fn kernel(&self, name: &str) -> Result<Rc<Kernel>, String> {
-        self.kernel_variant(name, COLOR_FORMAT, 0, 0)
+        self.kernel_variant(name, COLOR_FORMAT, 0)
     }
 
-    /// A built-in kernel as built for writing `output`, reading grayscale images at the
-    /// inputs whose bits are set in `gray`, and making the kind of image `kind`.
-    pub fn kernel_variant(&self, name: &str, output: wgpu::TextureFormat, gray: u8, kind: u32) -> Result<Rc<Kernel>, String> {
-        let key = (name.to_string(), output, gray, kind);
+    /// A built-in kernel as built for writing `output`, and making the kind of image `kind`.
+    pub fn kernel_variant(&self, name: &str, output: wgpu::TextureFormat, kind: u32) -> Result<Rc<Kernel>, String> {
+        let key = (name.to_string(), output, kind);
         if let Some(k) = self.kernels.borrow().get(&key) {
             return k.clone();
         }
@@ -871,7 +889,7 @@ impl Gpu {
         } else if kind < src.kinds {
             let label = if src.kinds > 1 { format!("{name} {kind}") } else { name.to_string() };
             let reads = (src.filtered, src.uint);
-            self.build_kernel(&label, &kernel_source(src), src.entry, src.inputs, reads, output, gray, kind)
+            self.build_kernel(&label, &kernel_source(src), src.entry, src.inputs, reads, output, kind)
         } else {
             Err(format!("'{name}' makes {} kinds of image, not a kind {kind}", src.kinds))
         };
@@ -882,11 +900,11 @@ impl Gpu {
     /// A kernel generated at runtime (Pixel Math) writing `output`, cached by its source text.
     /// Its source says itself which inputs are grayscale.
     pub fn dynamic_kernel(&self, source: &str, inputs: usize, output: wgpu::TextureFormat) -> Result<Rc<Kernel>, String> {
-        let key = (format!("dyn:{inputs}:{source}"), output, 0, 0);
+        let key = (format!("dyn:{inputs}:{source}"), output, 0);
         if let Some(k) = self.kernels.borrow().get(&key) {
             return k.clone();
         }
-        let result = self.build_kernel("pixel_math", source, "main", inputs, (false, false), output, 0, 0);
+        let result = self.build_kernel("pixel_math", source, "main", inputs, (false, false), output, 0);
         let mut cache = self.kernels.borrow_mut();
         if cache.len() > 256 {
             cache.retain(|(k, ..), _| !k.starts_with("dyn:"));
@@ -919,7 +937,7 @@ impl Gpu {
         let mut contents = params.to_vec();
         contents.resize(target_at as usize, 0);
         let [w, h] = output.level_size();
-        contents.extend_from_slice(bytemuck::bytes_of(&[w, h, 0, 0]));
+        contents.extend_from_slice(bytemuck::bytes_of(&[w, h, u32::from(Self::gray_inputs(inputs)), 0]));
         let (buffer, at) = self.uniform_slot(&contents);
         let range = |offset: u64, size: u64| {
             let size = wgpu::BufferSize::new(size);
@@ -996,7 +1014,7 @@ impl Gpu {
         inputs: &[&GpuImage],
         output: &GpuImage,
     ) -> Result<(), String> {
-        let k = self.kernel_variant(kernel, output.format(), Self::gray_inputs(inputs), 0)?;
+        let k = self.kernel_variant(kernel, output.format(), 0)?;
         self.draw(encoder, &k, params, inputs, output, 0);
         Ok(())
     }
@@ -1011,7 +1029,7 @@ impl Gpu {
         inputs: &[&GpuImage],
         output: &GpuImage,
     ) -> Result<(), String> {
-        let k = self.kernel_variant(kernel, output.format(), Self::gray_inputs(inputs), kind)?;
+        let k = self.kernel_variant(kernel, output.format(), kind)?;
         self.draw(encoder, &k, params, inputs, output, 0);
         Ok(())
     }
@@ -1045,7 +1063,7 @@ impl Gpu {
         }
         let read: Vec<&GpuImage> = inputs.iter().zip(&copies).map(|(img, copy)| copy.as_ref().unwrap_or(img)).collect();
         let result = result.and_then(|()| {
-            let k = self.kernel_variant(kernel, output.format(), Self::gray_inputs(&read), 0)?;
+            let k = self.kernel_variant(kernel, output.format(), 0)?;
             self.draw(encoder, &k, params, &read, output, tiling);
             Ok(())
         });
@@ -1418,7 +1436,7 @@ mod tests {
         let failed: Vec<String> = KERNELS
             .iter()
             .flat_map(|src| (0..src.kinds).map(move |kind| (src.name, src.writes.unwrap_or(COLOR_FORMAT), kind)))
-            .filter_map(|(name, output, kind)| gpu.kernel_variant(name, output, 0, kind).err())
+            .filter_map(|(name, output, kind)| gpu.kernel_variant(name, output, kind).err())
             .collect();
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         window.join().unwrap();
@@ -1438,26 +1456,32 @@ mod tests {
         let mut failures = Vec::new();
         for src in KERNELS {
             let name = src.name;
-            // Every way the engine builds them: drawing color images or grayscale ones, from
-            // color or grayscale inputs, and every kind of image.
-            let gray_inputs = ((1u16 << src.inputs) - 1) as u8;
+            // Every way the engine builds them: drawing color images or grayscale ones (from
+            // color or grayscale inputs alike), and every kind of image.
             let outputs = match src.writes {
                 Some(format) => vec![format],
                 None => vec![COLOR_FORMAT, GRAY_FORMAT],
             };
             for output in outputs {
-                for gray in [0, gray_inputs] {
-                    for kind in 0..src.kinds {
-                        if let Err(e) = gpu.kernel_variant(name, output, gray, kind) {
-                            failures.push(format!("{name} ({output:?}, gray {gray:b}, kind {kind}): {e}"));
-                        }
+                for kind in 0..src.kinds {
+                    if let Err(e) = gpu.kernel_variant(name, output, kind) {
+                        failures.push(format!("{name} ({output:?}, kind {kind}): {e}"));
                     }
                 }
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n\n"));
         // A kind the kernel does not make is an error, not a pipeline.
-        assert!(gpu.kernel_variant("noise", GRAY_FORMAT, 0, 1000).is_err());
+        assert!(gpu.kernel_variant("noise", GRAY_FORMAT, 1000).is_err());
+    }
+
+    /// Building every kernel ahead (see `warm_up`) goes without a word from the device.
+    #[test]
+    fn every_kernel_is_built_ahead() {
+        let Ok(gpu) = Gpu::headless() else { return };
+        gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        warm_up(&gpu.device);
+        assert!(pollster::block_on(gpu.device.pop_error_scope()).is_none());
     }
 
     #[test]
@@ -1561,3 +1585,4 @@ mod tests {
         }
     }
 }
+

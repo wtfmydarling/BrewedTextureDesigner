@@ -117,7 +117,7 @@ fn posterize(c: vec4<f32>) -> vec4<f32> {
 fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gid = pixel(at);
     let size = target_size();
-    let c = widen(read_input(in0, gid.xy, size, P.tiling), GRAY0);
+    let c = widen(read_input(in0, gid.xy, size, P.tiling), gray_input(0u));
     var o = c;
     switch P.op {
         case 0u: { o = levels(c); }

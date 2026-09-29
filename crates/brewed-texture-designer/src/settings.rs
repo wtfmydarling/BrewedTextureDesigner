@@ -555,16 +555,43 @@ fn file_name(path: &Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
 }
 
-/// The graphics API `settings` choose, for iced and the engine to take (the environment says
-/// it to them): unless the environment says one already. True if it is the settings' choice.
+/// The graphics APIs `settings` let iced and the engine take (the environment says them to
+/// them), unless the environment says its own already: the one chosen, or, automatically, those
+/// this system has. Never OpenGL (see [`Graphics`]), which wgpu takes where the others are not
+/// there. True if the settings said them.
 pub fn choose_graphics(settings: &Settings) -> bool {
-    if settings.graphics == Graphics::Auto || graphics_from_environment().is_some() {
+    if graphics_from_environment().is_some() {
         return false;
     }
     // SAFETY: called by `main` before anything else runs: no other thread reads the
     // environment meanwhile.
-    unsafe { std::env::set_var("WGPU_BACKEND", settings.graphics.id()) };
+    unsafe { std::env::set_var("WGPU_BACKEND", graphics_list(settings.graphics)) };
     true
+}
+
+/// What `WGPU_BACKEND` says for `graphics`: it; for Automatic, every one this system has.
+fn graphics_list(graphics: Graphics) -> String {
+    match graphics {
+        Graphics::Auto => Graphics::here().iter().filter(|g| **g != Graphics::Auto).map(|g| g.id()).collect::<Vec<_>>().join(","),
+        chosen => chosen.id().to_string(),
+    }
+}
+
+/// What the program needs to draw, on this system.
+fn graphics_needed() -> &'static str {
+    if cfg!(windows) {
+        "It needs a graphics card with DirectX 12 or Vulkan, and its driver."
+    } else if cfg!(target_os = "macos") {
+        "It needs a Mac with Metal."
+    } else {
+        "It needs a graphics card with Vulkan, and its Vulkan driver: Mesa's (AMD, Intel) or NVIDIA's."
+    }
+}
+
+/// The graphics API the environment says could not start (`why`): what to tell the user.
+pub fn environment_failed(why: &str) -> String {
+    let said = graphics_from_environment().unwrap_or_default();
+    format!("{} could not start with WGPU_BACKEND={said}, as the environment says: {why}.", brewed_texture_core::APP_NAME)
 }
 
 /// The graphics API the environment says (`WGPU_BACKEND`), which comes before the settings'.
@@ -573,9 +600,13 @@ pub fn graphics_from_environment() -> Option<String> {
 }
 
 /// The graphics API the settings chose could not start (`why`): the next start lets wgpu
-/// choose (else the program would not start again). What to tell the user.
+/// choose (else the program would not start again). What to tell the user. Chosen
+/// automatically, none this system has could: what the program needs.
 pub fn graphics_failed(store: &mut Store, why: &str) -> String {
     let chosen = store.settings().graphics;
+    if chosen == Graphics::Auto {
+        return format!("{} could not start: {why}.\n\n{}", brewed_texture_core::APP_NAME, graphics_needed());
+    }
     let next = match store.save(&Settings { graphics: Graphics::Auto, ..store.settings() }) {
         Ok(()) => "The next time, it starts with the one it finds best.".to_string(),
         Err(e) => format!("{e}. There, api = \"auto\" under [graphics] lets it start with the one it finds best."),
@@ -626,6 +657,23 @@ mod tests {
             assert!(!changed.differ(&Settings::default(), page), "{page:?}");
         }
         assert_eq!(changed, Settings::default(), "every setting is on a page");
+    }
+
+    /// Automatically, the graphics APIs this system has, and never OpenGL.
+    #[test]
+    fn automatically_never_opengl() {
+        let auto = graphics_list(Graphics::Auto);
+        let expected = if cfg!(windows) {
+            "vulkan,dx12"
+        } else if cfg!(target_os = "macos") {
+            "metal"
+        } else {
+            "vulkan"
+        };
+        assert_eq!(auto, expected);
+        use brewed_texture_engine::wgpu::Backends;
+        assert_eq!(Backends::from_comma_list(&auto) & Backends::GL, Backends::empty());
+        assert_eq!(graphics_list(Graphics::Dx12), "dx12");
     }
 
     /// A file the first version of the settings wrote (every setting as it was by default then)
@@ -719,7 +767,11 @@ mod tests {
         let said = graphics_failed(&mut store, "no adapter");
         assert!(said.contains("could not start with Vulkan") && said.contains("no adapter") && said.contains("The next time"), "{said}");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "[graphics]\n");
-        assert_eq!(Store::open(Some(path.clone())).settings().graphics, Graphics::Auto);
+        let mut store = Store::open(Some(path.clone()));
+        assert_eq!(store.settings().graphics, Graphics::Auto);
+        // Chosen automatically, none could: what the program needs.
+        let said = graphics_failed(&mut store, "no adapter");
+        assert!(said.contains("could not start: no adapter") && said.contains("It needs"), "{said}");
         // Kept nowhere: nothing is written.
         let mut nowhere = Store::open(None);
         assert!(nowhere.save(&Settings { undo_steps: 20, ..Settings::default() }).is_ok() && nowhere.path().is_none());

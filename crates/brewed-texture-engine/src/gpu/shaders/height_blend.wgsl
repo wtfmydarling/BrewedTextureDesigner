@@ -16,13 +16,13 @@ struct Params {
 fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gid = pixel(at);
     let size = target_size();
-    let top = luminance(widen(read_input(in0, gid.xy, size, P.tiling), GRAY0).rgb) + P.offset;
-    let bottom = luminance(widen(read_input(in1, gid.xy, size, P.tiling), GRAY1).rgb);
+    let top = luminance(widen(read_input(in0, gid.xy, size, P.tiling), gray_input(0u)).rgb) + P.offset;
+    let bottom = luminance(widen(read_input(in1, gid.xy, size, P.tiling), gray_input(1u)).rgb);
     // How far above the other the top one has to be to show fully.
     let width = mix(0.25, 0.0005, clamp(P.contrast, 0.0, 1.0));
     var shown = smoothstep(-width, width, top - bottom);
     if (P.masked == 1u) {
-        shown = shown * clamp(luminance(widen(read_input(in2, gid.xy, size, P.tiling), GRAY2).rgb), 0.0, 1.0);
+        shown = shown * clamp(luminance(widen(read_input(in2, gid.xy, size, P.tiling), gray_input(2u)).rgb), 0.0, 1.0);
     }
     let v = select(mix(bottom, top, shown), shown, P.output == 1u);
     return vec4<f32>(v, v, v, 1.0);

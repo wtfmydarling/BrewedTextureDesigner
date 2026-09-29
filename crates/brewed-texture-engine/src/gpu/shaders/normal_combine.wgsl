@@ -25,8 +25,8 @@ fn unpacked(c: vec4<f32>, connected: u32) -> vec3<f32> {
 fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gid = pixel(at);
     let size = target_size();
-    let n1 = unpacked(widen(read_input(in0, gid.xy, size, P.tiling), GRAY0), P.base);
-    var n2 = unpacked(widen(read_input(in1, gid.xy, size, P.tiling), GRAY1), P.detail);
+    let n1 = unpacked(widen(read_input(in0, gid.xy, size, P.tiling), gray_input(0u)), P.base);
+    var n2 = unpacked(widen(read_input(in1, gid.xy, size, P.tiling), gray_input(1u)), P.detail);
     n2 = normalize(vec3<f32>(n2.xy * max(P.intensity, 0.0), max(n2.z, 1e-4)));
     var n: vec3<f32>;
     switch P.technique {
@@ -40,7 +40,7 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     }
     n = normalize(n);
     if (P.masked == 1u) {
-        let m = clamp(luminance(widen(read_input(in2, gid.xy, size, P.tiling), GRAY2).rgb), 0.0, 1.0);
+        let m = clamp(luminance(widen(read_input(in2, gid.xy, size, P.tiling), gray_input(2u)).rgb), 0.0, 1.0);
         n = normalize(mix(n1, n, m));
     }
     return vec4<f32>(n * 0.5 + 0.5, 1.0);

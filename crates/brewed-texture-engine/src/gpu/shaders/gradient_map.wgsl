@@ -25,12 +25,12 @@ fn pick(c: vec4<f32>) -> f32 {
 fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gid = pixel(at);
     let size = target_size();
-    let c = widen(read_input(in0, gid.xy, size, P.tiling), GRAY0);
+    let c = widen(read_input(in0, gid.xy, size, P.tiling), gray_input(0u));
     let n = i32(textureDimensions(lut).x);
     // The table holds n samples from t = 0 to t = 1 (both included).
     let x = clamp(pick(c), 0.0, 1.0) * f32(n - 1);
     let i0 = i32(floor(x));
     let i1 = min(i0 + 1, n - 1);
-    let col = mix(widen(textureLoad(lut, vec2<i32>(i0, 0), 0), GRAY1), widen(textureLoad(lut, vec2<i32>(i1, 0), 0), GRAY1), x - f32(i0));
+    let col = mix(widen(textureLoad(lut, vec2<i32>(i0, 0), 0), gray_input(1u)), widen(textureLoad(lut, vec2<i32>(i1, 0), 0), gray_input(1u)), x - f32(i0));
     return vec4<f32>(col.rgb, select(col.a, col.a * c.a, P.keep_alpha != 0u));
 }

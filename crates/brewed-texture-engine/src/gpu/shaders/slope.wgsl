@@ -11,7 +11,7 @@ struct Params {
 @group(0) @binding(2) var map_tex: texture_2d<f32>;
 
 fn map_value(uv: vec2<f32>) -> f32 {
-    return luminance(widen(sample_bilinear(map_tex, uv, P.tiling), GRAY1).rgb);
+    return luminance(widen(sample_bilinear(map_tex, uv, P.tiling), gray_input(1u)).rgb);
 }
 
 // Moves every pixel along dir by the brightness of the map.
@@ -21,7 +21,7 @@ fn directional_warp(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> 
     let size = target_size();
     let uv = out_uv(gid.xy, size);
     let src = uv - vec2<f32>(P.dir_x, P.dir_y) * map_value(uv);
-    return widen(sample_bilinear(in0, src, P.tiling), GRAY0);
+    return widen(sample_bilinear(in0, src, P.tiling), gray_input(0u));
 }
 
 // Follows the slope of the map downhill (uphill for a negative amount) and blurs,
@@ -34,7 +34,7 @@ fn slope_blur(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let step_len = P.amount / f32(n);
     let e = 1.0 / vec2<f32>(max(textureDimensions(map_tex), vec2<u32>(2u)));
     var p = out_uv(gid.xy, size);
-    let first = widen(sample_bilinear(in0, p, P.tiling), GRAY0);
+    let first = widen(sample_bilinear(in0, p, P.tiling), gray_input(0u));
     var acc = first;
     var lo = first;
     var hi = first;
@@ -46,7 +46,7 @@ fn slope_blur(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         // Flat areas do not move; slopes move at full speed.
         let dir = select(vec2<f32>(0.0), -g / len, len > 1e-6) * smoothstep(0.0, 0.004, len);
         p = p + dir * step_len;
-        let c = widen(sample_bilinear(in0, p, P.tiling), GRAY0);
+        let c = widen(sample_bilinear(in0, p, P.tiling), gray_input(0u));
         acc = acc + c;
         lo = min(lo, c);
         hi = max(hi, c);

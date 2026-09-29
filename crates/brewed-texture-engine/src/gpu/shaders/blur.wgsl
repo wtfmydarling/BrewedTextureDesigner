@@ -20,7 +20,7 @@ fn blur_1d(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     var wsum = 0.0;
     for (var i = -P.radius; i <= P.radius; i++) {
         let w = exp(f32(i * i) * k);
-        acc = acc + widen(fetch(in0, p + dir * i, P.tiling), GRAY0) * w;
+        acc = acc + widen(fetch(in0, p + dir * i, P.tiling), gray_input(0u)) * w;
         wsum = wsum + w;
     }
     return acc / wsum;
@@ -32,8 +32,8 @@ fn downsample(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gid = pixel(at);
     let size = target_size();
     let p = vec2<i32>(gid.xy) * 2;
-    let c = widen(fetch(in0, p, P.tiling), GRAY0) + widen(fetch(in0, p + vec2<i32>(1, 0), P.tiling), GRAY0)
-          + widen(fetch(in0, p + vec2<i32>(0, 1), P.tiling), GRAY0) + widen(fetch(in0, p + vec2<i32>(1, 1), P.tiling), GRAY0);
+    let c = widen(fetch(in0, p, P.tiling), gray_input(0u)) + widen(fetch(in0, p + vec2<i32>(1, 0), P.tiling), gray_input(0u))
+          + widen(fetch(in0, p + vec2<i32>(0, 1), P.tiling), gray_input(0u)) + widen(fetch(in0, p + vec2<i32>(1, 1), P.tiling), gray_input(0u));
     return c * 0.25;
 }
 
@@ -43,7 +43,7 @@ fn resample(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gid = pixel(at);
     let size = target_size();
     let uv = out_uv(gid.xy, size);
-    return widen(sample_bilinear(in0, uv, P.tiling), GRAY0);
+    return widen(sample_bilinear(in0, uv, P.tiling), gray_input(0u));
 }
 
 // 2x2 maximum (output half the input size, rounded up): whether anything is set, a level at a

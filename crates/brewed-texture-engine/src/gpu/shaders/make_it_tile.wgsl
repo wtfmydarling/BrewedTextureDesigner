@@ -21,7 +21,7 @@ fn shifted(t: f32) -> f32 {
 
 fn copy(uv: vec2<f32>, shift: vec2<f32>) -> vec4<f32> {
     // The image read around as if it tiled: its own seams are where its copy does not show.
-    return widen(sample_bilinear(in0, fract(uv + shift), 3u), GRAY0);
+    return widen(sample_bilinear(in0, fract(uv + shift), 3u), gray_input(0u));
 }
 
 @fragment

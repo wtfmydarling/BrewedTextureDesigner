@@ -22,12 +22,12 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let uv = out_uv(gid.xy, size);
     var amount = 1.0;
     if (P.mapped == 1u) {
-        amount = clamp(luminance(widen(read_input(in1, gid.xy, size, P.tiling), GRAY1).rgb), 0.0, 1.0);
+        amount = clamp(luminance(widen(read_input(in1, gid.xy, size, P.tiling), gray_input(1u)).rgb), 0.0, 1.0);
     }
     let radius = vec2<f32>(P.radius_x, P.radius_y) * amount;
     let pixels = radius.x * f32(textureDimensions(in0, 0).x);
     if (pixels < 0.5) {
-        return widen(sample_bilinear(in0, uv, P.tiling), GRAY0);
+        return widen(sample_bilinear(in0, uv, P.tiling), gray_input(0u));
     }
     // Sixteen samples fill a disc of the radius: a gap of about half the radius between them.
     let level = log2(max(pixels * 0.5, 1.0));
@@ -37,7 +37,7 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         let d = sqrt((f32(i) + 0.5) / f32(TAPS));
         let a = f32(i) * GOLDEN;
         let w = exp(-2.0 * d * d);
-        sum = sum + widen(trilinear(in0, uv + vec2<f32>(cos(a), sin(a)) * d * radius, level, P.tiling), GRAY0) * w;
+        sum = sum + widen(trilinear(in0, uv + vec2<f32>(cos(a), sin(a)) * d * radius, level, P.tiling), gray_input(0u)) * w;
         weights = weights + w;
     }
     return sum / weights;

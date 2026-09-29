@@ -33,5 +33,5 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
             q.y = reflect_coord(p.y, ay, true);
         }
     }
-    return widen(fetch(in0, q, P.tiling), GRAY0);
+    return widen(fetch(in0, q, P.tiling), gray_input(0u));
 }

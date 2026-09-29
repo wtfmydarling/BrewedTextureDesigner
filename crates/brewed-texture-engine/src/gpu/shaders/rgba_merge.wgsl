@@ -26,9 +26,9 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gid = pixel(at).xy;
     let size = target_size();
     return vec4<f32>(
-        channel(red_tex, 0u, GRAY0, P.red, gid, size),
-        channel(green_tex, 1u, GRAY1, P.green, gid, size),
-        channel(blue_tex, 2u, GRAY2, P.blue, gid, size),
-        channel(alpha_tex, 3u, GRAY3, P.alpha, gid, size),
+        channel(red_tex, 0u, gray_input(0u), P.red, gid, size),
+        channel(green_tex, 1u, gray_input(1u), P.green, gid, size),
+        channel(blue_tex, 2u, gray_input(2u), P.blue, gid, size),
+        channel(alpha_tex, 3u, gray_input(3u), P.alpha, gid, size),
     );
 }

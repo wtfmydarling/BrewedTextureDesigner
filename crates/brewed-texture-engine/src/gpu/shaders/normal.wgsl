@@ -6,7 +6,7 @@ struct Params {
 @group(0) @binding(1) var in0: texture_2d<f32>;
 
 fn h(p: vec2<i32>) -> f32 {
-    return luminance(widen(fetch(in0, p, P.tiling), GRAY0).rgb);
+    return luminance(widen(fetch(in0, p, P.tiling), gray_input(0u)).rgb);
 }
 
 @fragment

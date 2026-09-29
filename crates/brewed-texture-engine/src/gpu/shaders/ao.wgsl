@@ -24,7 +24,7 @@ const BIAS: f32 = 0.05;
 
 // The height around `uv`, averaged over a patch about `width` pixels of the image across.
 fn height_over(uv: vec2<f32>, width: f32) -> f32 {
-    return luminance(widen(textureSampleLevel(in0, smp, uv, log2(max(width, 1.0))), GRAY0).rgb);
+    return luminance(widen(textureSampleLevel(in0, smp, uv, log2(max(width, 1.0))), gray_input(0u)).rgb);
 }
 
 @fragment

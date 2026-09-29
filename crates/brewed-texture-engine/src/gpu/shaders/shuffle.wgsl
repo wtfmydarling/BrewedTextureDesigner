@@ -27,8 +27,8 @@ fn pick(src: u32, a: vec4<f32>, b: vec4<f32>) -> f32 {
 fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gid = pixel(at);
     let size = target_size();
-    let a = widen(read_input(a_tex, gid.xy, size, P.tiling), GRAY0);
-    let b = widen(read_input(b_tex, gid.xy, size, P.tiling), GRAY1);
+    let a = widen(read_input(a_tex, gid.xy, size, P.tiling), gray_input(0u));
+    let b = widen(read_input(b_tex, gid.xy, size, P.tiling), gray_input(1u));
     let o = vec4<f32>(pick(P.red, a, b), pick(P.green, a, b), pick(P.blue, a, b), pick(P.alpha, a, b));
     return o;
 }

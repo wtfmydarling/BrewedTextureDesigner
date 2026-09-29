@@ -42,23 +42,68 @@ const STACK: u32 = 2u;
 // Stacked, the tiles over a pixel that count: the highest four (a fifth is all but hidden).
 const LAYERS: i32 = 4;
 
-// Pattern `which` at `uv`, from the mip level `lod`; clamped: a pattern is read within itself.
-fn pattern(which: u32, uv: vec2<f32>, lod: f32) -> vec4<f32> {
+// The pixel `p` of pattern `which`'s mip level `level`. (Only what is read of a pattern is
+// chosen among the four: what reads between pixels and levels is once in the shader, not once
+// for each pattern, which DX12's shader compiler took the longest over.)
+fn pattern_texel(which: u32, p: vec2<i32>, level: i32) -> vec4<f32> {
     switch which {
-        case 0u: { return widen(trilinear(pattern1, uv, lod, 0u), GRAY0); }
-        case 1u: { return widen(trilinear(pattern2, uv, lod, 0u), GRAY1); }
-        case 2u: { return widen(trilinear(pattern3, uv, lod, 0u), GRAY2); }
-        default: { return widen(trilinear(pattern4, uv, lod, 0u), GRAY3); }
+        case 0u: { return textureLoad(pattern1, p, level); }
+        case 1u: { return textureLoad(pattern2, p, level); }
+        case 2u: { return textureLoad(pattern3, p, level); }
+        default: { return textureLoad(pattern4, p, level); }
+    }
+}
+
+// The size of pattern `which`'s mip level `level`.
+fn pattern_level_size(which: u32, level: i32) -> vec2<i32> {
+    switch which {
+        case 0u: { return vec2<i32>(textureDimensions(pattern1, level)); }
+        case 1u: { return vec2<i32>(textureDimensions(pattern2, level)); }
+        case 2u: { return vec2<i32>(textureDimensions(pattern3, level)); }
+        default: { return vec2<i32>(textureDimensions(pattern4, level)); }
+    }
+}
+
+fn pattern_levels(which: u32) -> u32 {
+    switch which {
+        case 0u: { return textureNumLevels(pattern1); }
+        case 1u: { return textureNumLevels(pattern2); }
+        case 2u: { return textureNumLevels(pattern3); }
+        default: { return textureNumLevels(pattern4); }
     }
 }
 
 fn pattern_size(which: u32) -> vec2<f32> {
-    switch which {
-        case 0u: { return vec2<f32>(textureDimensions(pattern1)); }
-        case 1u: { return vec2<f32>(textureDimensions(pattern2)); }
-        case 2u: { return vec2<f32>(textureDimensions(pattern3)); }
-        default: { return vec2<f32>(textureDimensions(pattern4)); }
+    return vec2<f32>(pattern_level_size(which, 0));
+}
+
+// Pattern `which`'s mip level `level` at `uv`, between its pixels, as `bilinear_level` reads an
+// image; clamped: a pattern is read within itself.
+fn pattern_bilinear(which: u32, uv: vec2<f32>, level: i32) -> vec4<f32> {
+    let d = pattern_level_size(which, level);
+    let st = uv * vec2<f32>(d) - 0.5;
+    let fl = floor(st);
+    let f = st - fl;
+    let lo = clamp(vec2<i32>(fl), vec2<i32>(0), d - 1);
+    let hi = clamp(vec2<i32>(fl) + 1, vec2<i32>(0), d - 1);
+    let a = pattern_texel(which, lo, level);
+    let b = pattern_texel(which, vec2<i32>(hi.x, lo.y), level);
+    let c = pattern_texel(which, vec2<i32>(lo.x, hi.y), level);
+    let e = pattern_texel(which, hi, level);
+    return mix(mix(a, b, f.x), mix(c, e, f.x), f.y);
+}
+
+// Pattern `which` at `uv`, from between the mip levels around `lod`, as `trilinear` reads an
+// image; clamped: a pattern is read within itself.
+fn pattern(which: u32, uv: vec2<f32>, lod: f32) -> vec4<f32> {
+    let l = clamp(lod, 0.0, f32(pattern_levels(which) - 1u));
+    let l0 = floor(l);
+    var read = pattern_bilinear(which, uv, i32(l0));
+    if (l != l0) {
+        read = mix(read, pattern_bilinear(which, uv, i32(l0) + 1), l - l0);
     }
+    // (Widened once: read between pixels, a gray is the same gray.)
+    return widen(read, gray_input(which));
 }
 
 // The `k`-th of the connected patterns (the bits of `P.patterns`).
@@ -160,18 +205,18 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
             // Where the maps are read for the tile.
             let at_map = center / amount;
             if ((P.maps & MAP_MASK) != 0u) {
-                var m = map_value(mask_map, at_map, GRAY4);
+                var m = map_value(mask_map, at_map, gray_input(4u));
                 if (P.mask_invert != 0u) { m = 1.0 - m; }
                 if (m < P.mask_threshold) { continue; }
             }
             var sc = P.scale * (1.0 - P.random_scale * rand01(h3));
             if ((P.maps & MAP_SCALE) != 0u) {
-                sc = sc * mix(1.0, map_value(scale_map, at_map, GRAY5), P.scale_map);
+                sc = sc * mix(1.0, map_value(scale_map, at_map, gray_input(5u)), P.scale_map);
             }
             if (sc <= 0.0) { continue; }
             var rot = P.rotation + (rand01(h2) * 2.0 - 1.0) * P.random_rotation;
             if ((P.maps & MAP_ROTATION) != 0u) {
-                rot = rot + map_value(rotation_map, at_map, GRAY6) * P.rotation_map;
+                rot = rot + map_value(rotation_map, at_map, gray_input(6u)) * P.rotation_map;
             }
             var q = rotate_ccw(g - center, -rot);
             // Mirrored across, and up and down, each by its own chance.
@@ -199,7 +244,7 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
             if (P.color == 1u) {
                 tint = tint * own_color(h9);
             } else if (P.color == 2u && (P.maps & MAP_COLOR) != 0u) {
-                tint = tint * widen(sample_bilinear(color_map, at_map, P.tiling), GRAY7).rgb;
+                tint = tint * widen(sample_bilinear(color_map, at_map, P.tiling), gray_input(7u)).rgb;
             }
             let rgb = c.rgb * tint;
             if (P.blend == ADD) {

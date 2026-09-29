@@ -56,10 +56,10 @@ fn blend_channel(mode: u32, a: f32, b: f32) -> f32 {
 fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gid = pixel(at);
     let size = target_size();
-    let fg = widen(read_input(fg_tex, gid.xy, size, P.tiling), GRAY0);
-    let bg = widen(read_input(bg_tex, gid.xy, size, P.tiling), GRAY1);
+    let fg = widen(read_input(fg_tex, gid.xy, size, P.tiling), gray_input(0u));
+    let bg = widen(read_input(bg_tex, gid.xy, size, P.tiling), gray_input(1u));
     // (A color mask, as every grayscale input reads one: its luminance.)
-    let mask = luminance(widen(read_input(mask_tex, gid.xy, size, P.tiling), GRAY2).rgb);
+    let mask = luminance(widen(read_input(mask_tex, gid.xy, size, P.tiling), gray_input(2u)).rgb);
 
     let blended = vec3<f32>(
         blend_channel(P.mode, bg.r, fg.r),

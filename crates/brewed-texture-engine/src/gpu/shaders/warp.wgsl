@@ -7,7 +7,7 @@ struct Params {
 @group(0) @binding(2) var warp_tex: texture_2d<f32>;
 
 fn height(uv: vec2<f32>) -> f32 {
-    return luminance(widen(sample_bilinear(warp_tex, uv, P.tiling), GRAY1).rgb);
+    return luminance(widen(sample_bilinear(warp_tex, uv, P.tiling), gray_input(1u)).rgb);
 }
 
 @fragment
@@ -20,5 +20,5 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gx = (height(uv + vec2<f32>(d.x, 0.0)) - height(uv - vec2<f32>(d.x, 0.0))) / (2.0 * d.x);
     let gy = (height(uv + vec2<f32>(0.0, d.y)) - height(uv - vec2<f32>(0.0, d.y))) / (2.0 * d.y);
     let src = uv + vec2<f32>(gx, gy) * P.intensity * 0.02;
-    return widen(sample_bilinear(in0, src, P.tiling), GRAY0);
+    return widen(sample_bilinear(in0, src, P.tiling), gray_input(0u));
 }

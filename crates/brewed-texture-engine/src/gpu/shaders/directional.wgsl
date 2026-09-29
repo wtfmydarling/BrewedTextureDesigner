@@ -22,7 +22,7 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     var acc = vec4<f32>(0.0);
     for (var i = 0; i < n; i++) {
         let t = start + (f32(i) + 0.5) / f32(n);
-        acc = acc + widen(sample_bilinear(in0, uv + dir * t, P.tiling), GRAY0);
+        acc = acc + widen(sample_bilinear(in0, uv + dir * t, P.tiling), gray_input(0u));
     }
     return acc / f32(n);
 }

@@ -116,6 +116,10 @@ impl EngineService {
     pub fn spawn(device: wgpu::Device, queue: wgpu::Queue, adapter: String, emit: Emit) -> EngineService {
         let (tx, rx) = channel();
         let name = adapter.clone();
+        // Every kernel built once meanwhile, for what the device keeps of it (see
+        // `gpu::warm_up`): the first of a kind of node is not waited for.
+        let warm = device.clone();
+        let _ = std::thread::Builder::new().name("brewed-texture-warm-up".into()).spawn(move || crate::gpu::warm_up(&warm));
         let thread = std::thread::Builder::new()
             .name("brewed-texture-engine".into())
             .spawn(move || {

@@ -20,7 +20,7 @@ fn seed(@builtin(position) at: vec4<f32>) -> @location(0) vec4<u32> {
     let gid = pixel(at);
     let size = target_size();
     // (A color mask reads as its luminance.)
-    let v = luminance(widen(read_input(in0, gid.xy, size, P.tiling), GRAY0).rgb);
+    let v = luminance(widen(read_input(in0, gid.xy, size, P.tiling), gray_input(0u)).rgb);
     // `inside`: the pixels of the shapes are the seeds (distances from them); else those
     // around them (distances into them).
     let is_in = v >= P.threshold;
@@ -36,7 +36,7 @@ fn seed(@builtin(position) at: vec4<f32>) -> @location(0) vec4<u32> {
 fn label(@builtin(position) at: vec4<f32>) -> @location(0) vec4<u32> {
     let gid = pixel(at);
     let size = target_size();
-    let v = luminance(widen(read_input(in0, gid.xy, size, P.tiling), GRAY0).rgb);
+    let v = luminance(widen(read_input(in0, gid.xy, size, P.tiling), gray_input(0u)).rgb);
     if (v >= P.threshold) {
         return vec4<u32>(gid.x + gid.y * size.x + 1u, 0u, 0u, 0u);
     }
@@ -49,7 +49,7 @@ fn label(@builtin(position) at: vec4<f32>) -> @location(0) vec4<u32> {
 fn runs_seed(@builtin(position) at: vec4<f32>) -> @location(0) vec4<u32> {
     let gid = pixel(at);
     let size = target_size();
-    let v = luminance(widen(read_input(in0, gid.xy, size, P.tiling), GRAY0).rgb);
+    let v = luminance(widen(read_input(in0, gid.xy, size, P.tiling), gray_input(0u)).rgb);
     if (v >= P.threshold) {
         return vec4<u32>(65535u);
     }

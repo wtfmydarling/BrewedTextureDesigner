@@ -11,7 +11,7 @@ struct Params {
 @group(0) @binding(2) var color_tex: texture_2d<f32>;
 
 fn h(p: vec2<i32>) -> f32 {
-    return luminance(widen(fetch(height_tex, p, P.tiling), GRAY0).rgb);
+    return luminance(widen(fetch(height_tex, p, P.tiling), gray_input(0u)).rgb);
 }
 
 @fragment
@@ -27,7 +27,7 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let light = normalize(vec3<f32>(P.light_x, P.light_y, P.light_z));
     let shade = max(dot(n, light), 0.0) / max(light.z, 1e-3);
     if (P.mode == 1u) {
-        let c = widen(read_input(color_tex, gid.xy, size, P.tiling), GRAY1);
+        let c = widen(read_input(color_tex, gid.xy, size, P.tiling), gray_input(1u));
         return vec4<f32>(c.rgb * shade, c.a);
     } else {
         return gray(clamp(0.5 * shade, 0.0, 1.0));

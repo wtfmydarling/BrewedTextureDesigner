@@ -16,7 +16,7 @@ struct Params {
 // an image read back as its node shows it, or the top level of a copy a kernel filters.
 @fragment
 fn show(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
-    let c = widen(read_input(src, pixel(at).xy, target_size(), 0u), GRAY0);
+    let c = widen(read_input(src, pixel(at).xy, target_size(), 0u), gray_input(0u));
     return as_output(c, P.format);
 }
 

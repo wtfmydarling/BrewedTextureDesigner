@@ -21,7 +21,7 @@ fn through(v: f32) -> f32 {
 @fragment
 fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gid = pixel(at);
-    let c = widen(read_input(in0, gid.xy, target_size(), P.tiling), GRAY0);
+    let c = widen(read_input(in0, gid.xy, target_size(), P.tiling), gray_input(0u));
     var o = c;
     switch P.channels {
         case 1u: { o.r = through(c.r); }
