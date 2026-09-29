@@ -1547,10 +1547,40 @@ fn occlusion_is_smooth_and_the_same_in_every_direction() {
 /// Every look of the noise node: each type, and each style of the types that have them,
 /// set on `noise` in turn; `f` gets its name.
 fn each_noise_look(g: &mut Graph, noise: NodeId, mut f: impl FnMut(&mut Graph, &str)) {
-    for (t, name) in brewed_texture_core::nodes::NOISE_TYPES.iter().enumerate() {
+    use brewed_texture_core::nodes::{NOISE_TYPES, NOISE_WEAVE, WEAVES};
+    for (t, name) in NOISE_TYPES.iter().enumerate() {
         set(g, noise, "type", ParamValue::Enum(t as u32));
-        f(g, name);
+        if t as u32 != NOISE_WEAVE {
+            f(g, name);
+            continue;
+        }
+        // Each weave repeats after a different number of threads.
+        for (w, weave) in WEAVES.iter().enumerate() {
+            set(g, noise, "weave", ParamValue::Enum(w as u32));
+            f(g, &format!("{name} {weave}"));
+        }
+        set(g, noise, "weave", ParamValue::Enum(0));
     }
+}
+
+/// The shader's names for the types of noise are the node's, in the same order (the last,
+/// white noise, is what any other number draws).
+#[test]
+fn the_shader_knows_every_noise_by_its_number() {
+    let source = include_str!("gpu/shaders/noise.wgsl");
+    let types = brewed_texture_core::nodes::NOISE_TYPES;
+    let mut known = 0;
+    for line in source.lines() {
+        let Some(rest) = line.strip_prefix("const ") else { continue };
+        let Some((name, value)) = rest.split_once(": u32 = ") else { continue };
+        let Some(Ok(n)) = value.strip_suffix("u;").map(str::parse::<usize>) else { continue };
+        if name.starts_with("BASIS_") || name.chars().any(|c| c.is_ascii_lowercase()) {
+            continue;
+        }
+        assert_eq!(types[n].to_uppercase().replace(' ', "_"), name, "the shader's {name} is {n}");
+        known += 1;
+    }
+    assert_eq!(known, types.len() - 1, "the shader draws every type but white noise by its number");
 }
 
 /// Every look of the noise node with its defaults, each tiled 2×2 so seams would show

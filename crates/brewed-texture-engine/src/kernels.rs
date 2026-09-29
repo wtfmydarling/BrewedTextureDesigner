@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::eval::Params;
 use brewed_texture_core::expr;
-use brewed_texture_core::nodes::{NOISE_CRACKS, NOISE_FIBERS, NOISE_SCRATCHES, NOISE_VEINS, NOISE_WOOD, TILE_PATTERN_IMAGE};
+use brewed_texture_core::nodes::{NOISE_CRACKS, NOISE_DIRECTIONAL_SCRATCHES, NOISE_FIBERS, NOISE_SCRATCHES, NOISE_VEINS, NOISE_WEAVE, NOISE_WOOD, TILE_PATTERN_IMAGE, WEAVE_REPEATS};
 
 use crate::gpu::{Gpu, GpuImage, RUN_FORMAT, SEED_FORMAT};
 
@@ -273,6 +273,9 @@ struct NoiseU {
     angle: f32,
     spread: f32,
     thickness: f32,
+    /// How a weave's threads cross (see `WEAVES`).
+    pattern: u32,
+    _pad: [u32; 3],
 }
 
 #[repr(C)]
@@ -706,7 +709,13 @@ fn gradient(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 fn noise(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let p = cx.params;
     let kind = p.u("type");
-    let scale = p.i("scale").clamp(1, 4096);
+    let mut scale = p.i("scale").clamp(1, 4096);
+    let pattern = p.u("weave").min(WEAVE_REPEATS.len() as u32 - 1);
+    if kind == NOISE_WEAVE {
+        // A whole number of repeats of the weave, so that it tiles.
+        let repeat = WEAVE_REPEATS[pattern as usize];
+        scale = ((scale + repeat - 1) / repeat * repeat).min(4096);
+    }
     // Lines are as wide as they are at any resolution: a width in pixels of a 1024 px
     // image, in cells.
     let width = match kind {
@@ -715,7 +724,7 @@ fn noise(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     };
     let width = width.max(0.0) / 1024.0 * scale as f32;
     let density = match kind {
-        NOISE_FIBERS | NOISE_SCRATCHES => p.f("line_density"),
+        NOISE_FIBERS | NOISE_SCRATCHES | NOISE_DIRECTIONAL_SCRATCHES => p.f("line_density"),
         _ => p.f("density"),
     };
     let count = if kind == NOISE_WOOD { p.i("rings").clamp(1, 256) } else { 0 };
@@ -736,6 +745,8 @@ fn noise(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         angle: p.f("angle"),
         spread: p.f("spread").clamp(0.0, 1.0),
         thickness: p.f("thickness").clamp(0.0, 1.0),
+        pattern,
+        _pad: [0; 3],
     };
     // Each type is a pipeline of its own (see common.wgsl's KIND).
     cx.gpu.run_kind(cx.encoder, "noise", kind, bytes(&u), &[], cx.output)?;

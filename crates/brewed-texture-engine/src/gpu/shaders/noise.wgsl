@@ -9,6 +9,7 @@ struct Params {
     scale: i32, octaves: i32, seed: u32, tiling: u32,
     invert: u32, stretch: i32, count: i32, length: f32,
     width: f32, angle: f32, spread: f32, thickness: f32,
+    pattern: u32, pad0: u32, pad1: u32, pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -18,32 +19,42 @@ struct Params {
 const PERLIN: u32 = 0u;
 const SIMPLEX: u32 = 1u;
 const VALUE: u32 = 2u;
-const BILLOW: u32 = 3u;
-const RIDGED: u32 = 4u;
-const LIQUID: u32 = 5u;
-const MARBLE: u32 = 6u;
-const WOOD: u32 = 7u;
-const VEINS: u32 = 8u;
-const STREAKS: u32 = 9u;
-const FLOW: u32 = 10u;
-const FIBERS: u32 = 11u;
-const SCRATCHES: u32 = 12u;
-const RIPPLES: u32 = 13u;
-const TURING: u32 = 14u;
-const RAINDROPS: u32 = 15u;
-const CAUSTICS: u32 = 16u;
-const CELLS: u32 = 17u;
-const CRACKS: u32 = 18u;
-const CRYSTAL: u32 = 19u;
-const MOSAIC: u32 = 20u;
-const STONES: u32 = 21u;
-const SCALES: u32 = 22u;
-const BLOCKS: u32 = 23u;
-const TRUCHET: u32 = 24u;
-const MAZE: u32 = 25u;
-const SPOTS: u32 = 26u;
-const BLOTCHES: u32 = 27u;
-const CRATERS: u32 = 28u;
+const GAUSSIAN: u32 = 3u;
+const BILLOW: u32 = 4u;
+const RIDGED: u32 = 5u;
+const PLASMA: u32 = 6u;
+const LIQUID: u32 = 7u;
+const MARBLE: u32 = 8u;
+const WOOD: u32 = 9u;
+const VEINS: u32 = 10u;
+const STREAKS: u32 = 11u;
+const FLOW: u32 = 12u;
+const CURL: u32 = 13u;
+const FIBERS: u32 = 14u;
+const SCRATCHES: u32 = 15u;
+const DIRECTIONAL_SCRATCHES: u32 = 16u;
+const RIPPLES: u32 = 17u;
+const WAVEFORM: u32 = 18u;
+const TURING: u32 = 19u;
+const RAINDROPS: u32 = 20u;
+const CAUSTICS: u32 = 21u;
+const CELLS: u32 = 22u;
+const VORONOI: u32 = 23u;
+const VORONOI_FRACTAL: u32 = 24u;
+const CRACKS: u32 = 25u;
+const CRYSTAL: u32 = 26u;
+const MOSAIC: u32 = 27u;
+const STONES: u32 = 28u;
+const SCALES: u32 = 29u;
+const WEAVE: u32 = 30u;
+const BLOCKS: u32 = 31u;
+const TRUCHET: u32 = 32u;
+const MAZE: u32 = 33u;
+const SPOTS: u32 = 34u;
+const BLOTCHES: u32 = 35u;
+const MOISTURE: u32 = 36u;
+const DIRT: u32 = 37u;
+const CRATERS: u32 = 38u;
 
 // ------------------------------------------------------------------ lattices
 
@@ -189,6 +200,8 @@ const BASIS_BILLOW: u32 = 2u;
 const BASIS_SIMPLEX: u32 = 3u;
 // One random value per cell, with hard edges.
 const BASIS_BLOCK: u32 = 4u;
+// Gaussian bells of random weights scattered over the cells (see `gaussian`).
+const BASIS_GAUSSIAN: u32 = 5u;
 
 // Where octave `o` is shifted to. Doubling the frequency puts every lattice point of an
 // octave on one of the next; shifted, the points (where gradient noise is always zero)
@@ -214,6 +227,7 @@ fn fbm_r(p: vec2<f32>, period: vec2<i32>, seed: u32, basis: u32, octaves: i32, r
             case BASIS_VALUE: { n = value_noise(q, per, s); }
             case BASIS_BILLOW: { n = abs(perlin(q, per, s)); }
             case BASIS_SIMPLEX: { n = simplex(q, per, s) * 0.5 + 0.5; }
+            case BASIS_GAUSSIAN: { n = gaussian(q, per, s); }
             default: { n = rand01(cell_hash(vec2<i32>(floor(q)), per, s)); }
         }
         sum = sum + n * amp;
@@ -227,6 +241,28 @@ fn fbm_r(p: vec2<f32>, period: vec2<i32>, seed: u32, basis: u32, octaves: i32, r
 // With the node's octaves and roughness.
 fn fbm(p: vec2<f32>, period: vec2<i32>, seed: u32, basis: u32) -> f32 {
     return fbm_r(p, period, seed, basis, P.octaves, P.roughness);
+}
+
+// Gaussian noise (sparse convolution): bells of random weights, a few scattered in every cell,
+// summed. Round, soft blobs, with no grid showing through; in [0, 1].
+fn gaussian(p: vec2<f32>, period: vec2<i32>, seed: u32) -> f32 {
+    const IMPULSES: i32 = 3;
+    let i = vec2<i32>(floor(p));
+    var sum = 0.0;
+    // A bell is all but nothing a cell from its middle.
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let cell = i + vec2<i32>(dx, dy);
+            var h = cell_hash(cell, period, seed);
+            for (var k = 0; k < IMPULSES; k++) {
+                h = pcg(h);
+                let d = p - vec2<f32>(cell) - rand2(h);
+                let w = rand01(pcg(h ^ 0x6c62272eu)) * 2.0 - 1.0;
+                sum = sum + w * exp(-4.0 * dot(d, d));
+            }
+        }
+    }
+    return clamp(0.5 + sum * 0.4, 0.0, 1.0);
 }
 
 // Gradient fBm clusters around 0.5: stretched to use the whole range.
@@ -310,9 +346,29 @@ fn current(p: vec2<f32>, period: vec2<i32>, seed: u32) -> vec2<f32> {
     return vec2<f32>(cos(a), -sin(a));
 }
 
+// Which way the curl of a smooth noise runs at `p`: along its contour lines, round its hills and
+// hollows. A current that neither gathers nor spreads anywhere, winding in eddies.
+fn curl_current(p: vec2<f32>, period: vec2<i32>, seed: u32) -> vec2<f32> {
+    let a = perlin_d(p, period, seed);
+    let b = perlin_d(p * 2.0 + octave_shift(1), period * 2, seed + 1013u);
+    // The slope of a + b / 2 (the finer octave's slope counts twice over its half).
+    let slope = a.yz + b.yz;
+    let c = vec2<f32>(slope.y, -slope.x);
+    return c / max(length(c), 1e-5);
+}
+
+// Which way the current of `flow` runs at `p`: `current`, or `curl_current`.
+fn way(p: vec2<f32>, period: vec2<i32>, seed: u32, curl: bool) -> vec2<f32> {
+    if (curl) {
+        return curl_current(p, period, seed);
+    }
+    return current(p, period, seed);
+}
+
 // Flow: fine grain smeared along a current, as wind, water or a brush leave it: every point
-// the average of the grain `length` / 4 cells up and down its streamline.
-fn flow(p: vec2<f32>, period: vec2<i32>, seed: u32) -> f32 {
+// the average of the grain `length` / 4 cells up and down its streamline. Along the curl of a
+// noise (`curl`), round and round its eddies.
+fn flow(p: vec2<f32>, period: vec2<i32>, seed: u32, curl: bool) -> f32 {
     const STEPS: i32 = 12;
     const GRAIN: f32 = 24.0;
     let step = max(P.length, 0.01) * 0.25 / f32(STEPS);
@@ -323,8 +379,8 @@ fn flow(p: vec2<f32>, period: vec2<i32>, seed: u32) -> f32 {
     var behind = p;
     for (var k = 0; k < STEPS; k++) {
         // Half a step first, to follow the bends (midpoint integration).
-        ahead = ahead + current(ahead + current(ahead, period, seed) * step * 0.5, period, seed) * step;
-        behind = behind - current(behind - current(behind, period, seed) * step * 0.5, period, seed) * step;
+        ahead = ahead + way(ahead + way(ahead, period, seed, curl) * step * 0.5, period, seed, curl) * step;
+        behind = behind - way(behind - way(behind, period, seed, curl) * step * 0.5, period, seed, curl) * step;
         sum = sum + value_noise(ahead * GRAIN, grain, gs) + value_noise(behind * GRAIN, grain, gs);
     }
     let mean = sum / f32(2 * STEPS + 1);
@@ -377,9 +433,10 @@ fn fibers(p: vec2<f32>, period: vec2<i32>, seed: u32, aa: f32) -> f32 {
     return v;
 }
 
-// Straight lines in every direction, `length` cells long and `width` cells wide in the
-// middle, thinner towards their ends; on average `8 × density` start in a cell.
-fn scratches(p: vec2<f32>, period: vec2<i32>, seed: u32, aa: f32) -> f32 {
+// Straight lines in every direction (`directional`: mostly `angle`'s, within `spread`),
+// `length` cells long and `width` cells wide in the middle, thinner towards their ends; on
+// average `8 × density` start in a cell.
+fn scratches(p: vec2<f32>, period: vec2<i32>, seed: u32, aa: f32, directional: bool) -> f32 {
     let half = max(P.length, 0.01) * 0.5;
     let expected = P.density * 8.0;
     let count = i32(ceil(expected));
@@ -401,7 +458,9 @@ fn scratches(p: vec2<f32>, period: vec2<i32>, seed: u32, aa: f32) -> f32 {
                 h = pcg(h);
                 let cy = rand01(h);
                 h = pcg(h);
-                let a = rand01(h) * PI;
+                var a = rand01(h) * PI;
+                // (At most 30° either way: brushed, not scattered.)
+                if (directional) { a = radians(P.angle) + (rand01(h) - 0.5) * P.spread * PI / 3.0; }
                 h = pcg(h);
                 let len = half * mix(0.45, 1.0, rand01(h));
                 h = pcg(h);
@@ -544,6 +603,29 @@ fn caustics(p: vec2<f32>, period: vec2<i32>, seed: u32) -> f32 {
     return 1.0 - exp(-light * 0.15);
 }
 
+// Waveform: bars side by side, as the loudness of a sound is drawn: `scale` rows of them, each
+// bar reaching up and down from the middle of its row as far as a smooth noise along the row
+// says (`density` how loud), give or take; `thickness` how wide the bars are between their gaps.
+fn waveform(p: vec2<f32>, period: vec2<i32>, seed: u32, aa: f32) -> f32 {
+    const BARS: i32 = 12;
+    let row = i32(floor(p.y));
+    let y = p.y - floor(p.y) - 0.5;
+    let bars = period.x * BARS;
+    let x = p.x * f32(BARS);
+    let bar = i32(floor(x));
+    // The loudness along the row, over a few bars, and each bar's own share of it.
+    let centre = (f32(bar) + 0.5) / f32(BARS);
+    let loud = fbm_r(vec2<f32>(centre, f32(row) + 0.5), period, seed, BASIS_GRADIENT, 3, 0.5);
+    let own = rand01(cell_hash(vec2<i32>(bar, row), vec2<i32>(bars, period.y), seed ^ 0x3243f6a8u));
+    let reach = clamp((loud - 0.5) * 2.2 + P.density, 0.0, 1.0) * mix(0.55, 1.0, own) * 0.46;
+    let across = abs(x - floor(x) - 0.5) * 2.0;
+    let wide = mix(0.2, 0.95, P.thickness);
+    let px = aa * f32(BARS) * 2.0;
+    let in_bar = 1.0 - smoothstep(wide - px, wide + px, across);
+    let in_reach = 1.0 - smoothstep(reach - aa, reach + aa, abs(y));
+    return in_bar * in_reach;
+}
+
 // ------------------------------------------------------------------ cells
 
 struct Voronoi {
@@ -656,6 +738,79 @@ fn scales(p: vec2<f32>, period: vec2<i32>, seed: u32) -> f32 {
     return 0.0;
 }
 
+// Voronoi: how far every point is from the border of its cell, half a cell in and more white,
+// the borders black: the gaps between stones, tiles or scales.
+fn voronoi_edges(p: vec2<f32>, period: vec2<i32>, seed: u32) -> f32 {
+    let c = voronoi(p, period, seed);
+    return clamp(cell_border(p, c.near, period, seed) * 2.0, 0.0, 1.0);
+}
+
+// Voronoi, octave over octave: cells within cells, each layer of them finer and `roughness`
+// times as strong as the last.
+fn voronoi_fractal(p: vec2<f32>, period: vec2<i32>, seed: u32) -> f32 {
+    var sum = 0.0;
+    var total = 0.0;
+    var amp = 1.0;
+    var freq = 1;
+    for (var o = 0; o < clamp(P.octaves, 1, 10); o++) {
+        let q = p * f32(freq) + octave_shift(o);
+        let per = period * freq;
+        sum = sum + voronoi_edges(q, per, seed + u32(o) * 1013u) * amp;
+        total = total + amp;
+        amp = amp * P.roughness;
+        freq = freq * 2;
+    }
+    return sum / max(total, 1e-5);
+}
+
+// ------------------------------------------------------------------ cloth
+
+// Whether the warp (the thread down) lies over the weft (the thread across) where they cross in
+// cell `c`, as `P.pattern` weaves them: plain, twill, basket or satin.
+fn warp_over(c: vec2<i32>) -> bool {
+    switch P.pattern {
+        case 1u: { return wrap_i(c.x + c.y, 4) < 2; }
+        // (Halved by a shift: DX12 has no division of signed numbers.)
+        case 2u: { return wrap_i((c.x >> 1u) + (c.y >> 1u), 2) == 0; }
+        case 3u: { return wrap_i(c.x * 2 - c.y, 5) != 0; }
+        default: { return wrap_i(c.x + c.y, 2) == 0; }
+    }
+}
+
+// Weave: threads down and across, each passing over and under the others as cloth is woven:
+// every thread round, rising over the threads it lies on and sinking under the others, of a
+// shade of its own and with a fine grain along it; the gaps between them black. `scale` threads
+// each way (a whole number of the weave's repeats), `thickness` how much of the gap they fill.
+fn weave(p: vec2<f32>, period: vec2<i32>, seed: u32, aa: f32) -> f32 {
+    let i = vec2<i32>(floor(p));
+    // The crossing, where the threads' middles are, at the middle of the cell.
+    let f = p - floor(p) - 0.5;
+    let c = lattice(i, period);
+    let over = warp_over(c);
+    let half = mix(0.3, 0.5, P.thickness);
+    // Warp: along y at the middle of its column; weft: along x at the middle of its row.
+    let aw = abs(f.x) / half;
+    let at = abs(f.y) / half;
+    let lift = select(-1.0, 1.0, over);
+    // The height of each along its length: up where it lies over, down where under, the same
+    // on both sides of a border between cells.
+    let hw = 0.5 + 0.22 * lift * cos(PI * f.y) + 0.28 * sqrt(max(1.0 - aw * aw, 0.0));
+    let ht = 0.5 - 0.22 * lift * cos(PI * f.x) + 0.28 * sqrt(max(1.0 - at * at, 0.0));
+    // A shade for each thread, and a fine grain along it.
+    let tone_w = mix(0.82, 1.0, rand01(cell_hash(vec2<i32>(c.x, 0), vec2<i32>(period.x, 1), seed)));
+    let tone_t = mix(0.82, 1.0, rand01(cell_hash(vec2<i32>(0, c.y), vec2<i32>(1, period.y), seed ^ 0x9e3779b9u)));
+    let grain_w = value_noise(vec2<f32>(p.x * 24.0, p.y * 3.0), period * vec2<i32>(24, 3), seed ^ 0x7f4a7c15u);
+    let grain_t = value_noise(vec2<f32>(p.x * 3.0, p.y * 24.0), period * vec2<i32>(3, 24), seed ^ 0x2545f491u);
+    let edge = aa / half;
+    let cover_w = 1.0 - smoothstep(1.0 - edge, 1.0 + edge, aw);
+    let cover_t = 1.0 - smoothstep(1.0 - edge, 1.0 + edge, at);
+    let vw = hw * tone_w * mix(0.9, 1.0, grain_w) * cover_w;
+    let vt = ht * tone_t * mix(0.9, 1.0, grain_t) * cover_t;
+    // The one on top shows where both are.
+    let warp_on_top = (over && cover_w > 0.0) || cover_t <= 0.0;
+    return select(max(vt, vw * (1.0 - cover_t)), max(vw, vt * (1.0 - cover_w)), warp_on_top);
+}
+
 // ------------------------------------------------------------------ tiles
 
 // Truchet tiles: every cell holds two quarter circles joining the middles of its sides,
@@ -692,6 +847,42 @@ fn maze(p: vec2<f32>, period: vec2<i32>, seed: u32, aa: f32) -> f32 {
 }
 
 // ------------------------------------------------------------------ scattered
+
+// Moisture: wet patches, as water leaves them on stone, wood or cloth: where fractal noise rises
+// over a level (the lower it is, the more is wet), wetter towards their middles, with a tide
+// line along their edges where the water dried last.
+fn moisture(p: vec2<f32>, period: vec2<i32>, seed: u32) -> f32 {
+    let n = clouds(p, period, seed);
+    let level = mix(0.75, 0.3, P.density);
+    let inside = smoothstep(level - 0.015, level + 0.015, n);
+    let depth = clamp((n - level) / max(1.0 - level, 1e-3), 0.0, 1.0);
+    let tide = exp(-pow((n - level) / 0.012, 2.0));
+    return clamp(inside * mix(0.5, 1.0, sqrt(depth)) + tide * 0.4, 0.0, 1.0);
+}
+
+// Dirt: grime as it gathers: patches of it where fractal noise rises (`density` how much),
+// specks of three sizes in and around them, and a fine grain all over.
+fn dirt(p: vec2<f32>, period: vec2<i32>, seed: u32) -> f32 {
+    let level = mix(0.8, 0.35, P.density);
+    let patches = smoothstep(level - 0.08, level + 0.12, clouds(p, period, seed));
+    var specks = 0.0;
+    for (var k = 0; k < 3; k++) {
+        let f = 4 << u32(k);
+        let q = p * f32(f);
+        let per = period * f;
+        let cell = vec2<i32>(floor(q));
+        let h = cell_hash(cell, per, seed ^ (0x51ed270bu * u32(k + 1)));
+        // A few cells hold a speck, more where the patches are.
+        let chance = mix(0.03, 0.25, patches) * (0.5 + P.density);
+        if (rand01(h) < chance) {
+            let d = length(q - vec2<f32>(cell) - 0.5 - (rand2(pcg(h)) - 0.5) * 0.5);
+            let r = mix(0.15, 0.45, rand01(pcg(h ^ 0x6a09e667u)));
+            specks = max(specks, (1.0 - smoothstep(r * 0.6, r, d)) * mix(0.5, 1.0, rand01(pcg(h ^ 0xbb67ae85u))));
+        }
+    }
+    let grain = value_noise(p * 32.0, period * 32, seed ^ 0x3c6ef372u);
+    return clamp(max(patches * mix(0.55, 1.0, grain), specks), 0.0, 1.0);
+}
 
 // Soft round spots of random sizes and strengths, in `density` of the cells.
 fn spots(p: vec2<f32>, period: vec2<i32>, seed: u32) -> f32 {
@@ -779,11 +970,19 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         case VALUE: {
             v = (fbm(p, base, seed, BASIS_VALUE) - 0.5) * 1.6 + 0.5;
         }
+        case GAUSSIAN: {
+            v = (fbm(p, base, seed, BASIS_GAUSSIAN) - 0.5) * 1.8 + 0.5;
+        }
         case BILLOW: {
             v = fbm(p, base, seed, BASIS_BILLOW) * 1.8;
         }
         case RIDGED: {
             v = ridged(p, base, seed);
+        }
+        case PLASMA: {
+            // Fractal noise folded over on itself: bands of light and dark wind through it.
+            let n = fbm(p, base, seed, BASIS_GRADIENT);
+            v = 0.5 + 0.5 * sin((n - 0.5) * TAU * (1.0 + 2.0 * P.distortion));
         }
         case LIQUID: {
             // Read where other noises push the point, themselves read where yet others push
@@ -812,16 +1011,25 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
             v = (fbm(uv * vec2<f32>(period), period, seed, BASIS_VALUE) - 0.5) * 1.8 + 0.5;
         }
         case FLOW: {
-            v = flow(p, base, seed);
+            v = flow(p, base, seed, false);
+        }
+        case CURL: {
+            v = flow(p, base, seed, true);
         }
         case FIBERS: {
             v = fibers(p, base, seed, aa);
         }
         case SCRATCHES: {
-            v = scratches(p, base, seed, aa);
+            v = scratches(p, base, seed, aa, false);
+        }
+        case DIRECTIONAL_SCRATCHES: {
+            v = scratches(p, base, seed, aa, true);
         }
         case RIPPLES: {
             v = ripples(p, base, seed);
+        }
+        case WAVEFORM: {
+            v = waveform(p, base, seed, aa);
         }
         case TURING: {
             v = turing(p, base, seed);
@@ -834,6 +1042,12 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         }
         case CELLS: {
             v = voronoi(p, base, seed).f1 / 1.1;
+        }
+        case VORONOI: {
+            v = voronoi_edges(p, base, seed);
+        }
+        case VORONOI_FRACTAL: {
+            v = voronoi_fractal(p, base, seed);
         }
         case CRACKS: {
             v = cracks(p, base, seed, aa);
@@ -856,6 +1070,9 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         case SCALES: {
             v = scales(p, base, seed);
         }
+        case WEAVE: {
+            v = weave(p, base, seed, aa);
+        }
         case BLOCKS: {
             v = (fbm(p, base, seed, BASIS_BLOCK) - 0.5) * 1.4 + 0.5;
         }
@@ -872,6 +1089,12 @@ fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
             // Where fractal noise rises over a level: the lower the level, the more it covers.
             let level = mix(0.8, 0.2, P.density);
             v = smoothstep(level - 0.025, level + 0.025, clouds(p, base, seed));
+        }
+        case MOISTURE: {
+            v = moisture(p, base, seed);
+        }
+        case DIRT: {
+            v = dirt(p, base, seed);
         }
         case CRATERS: {
             v = craters(p, base, seed);

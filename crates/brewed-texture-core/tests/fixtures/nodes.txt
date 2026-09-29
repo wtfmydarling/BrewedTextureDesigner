@@ -286,31 +286,41 @@ noise p:type choice
 noise p:type = perlin
 noise p:type = simplex
 noise p:type = value
+noise p:type = gaussian
 noise p:type = billow
 noise p:type = ridged
+noise p:type = plasma
 noise p:type = liquid
 noise p:type = marble
 noise p:type = wood
 noise p:type = veins
 noise p:type = streaks
 noise p:type = flow
+noise p:type = curl
 noise p:type = fibers
 noise p:type = scratches
+noise p:type = directional_scratches
 noise p:type = ripples
+noise p:type = waveform
 noise p:type = turing
 noise p:type = raindrops
 noise p:type = caustics
 noise p:type = cells
+noise p:type = voronoi
+noise p:type = voronoi_fractal
 noise p:type = cracks
 noise p:type = crystal
 noise p:type = mosaic
 noise p:type = stones
 noise p:type = scales
+noise p:type = weave
 noise p:type = blocks
 noise p:type = truchet
 noise p:type = maze
 noise p:type = spots
 noise p:type = blotches
+noise p:type = moisture
+noise p:type = dirt
 noise p:type = craters
 noise p:type = white_noise
 noise p:scale int
@@ -328,6 +338,11 @@ noise p:length float
 noise p:width float
 noise p:line_width float
 noise p:thickness float
+noise p:weave choice
+noise p:weave = plain
+noise p:weave = twill
+noise p:weave = basket
+noise p:weave = satin
 noise p:seed int
 noise p:invert bool
 bitmap

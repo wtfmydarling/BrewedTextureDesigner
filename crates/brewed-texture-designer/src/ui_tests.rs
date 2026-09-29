@@ -1067,7 +1067,7 @@ fn choices_are_picked_by_their_pictures() {
         assert!(matches!(w.operate(focusable::focus::<()>(view::choices::search_id())), Outcome::None));
         assert_eq!(w.focused(), Some(view::choices::search_id()), "the search field takes the keyboard");
         assert!(w.input(&typing("voronoi")) > 0, "the search field got nothing");
-        let cellular = ["Cells", "Cracks", "Crystal", "Mosaic", "Stones"];
+        let cellular = ["Cells", "Voronoi", "Voronoi Fractal", "Cracks", "Crystal", "Mosaic", "Stones"];
         for (i, name) in NOISE_TYPES.iter().enumerate() {
             // (The field says what the type is now.)
             let in_field = usize::from(i as u32 == walked);
