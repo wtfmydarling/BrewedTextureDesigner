@@ -93,7 +93,7 @@ fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
         item("Save As…", app.key_of(Command::SaveAs), Some(Message::SaveAs)),
         item("Close Package", "", Some(Message::Explorer(ExplorerMessage::Close(key)))),
         separator(),
-        item("Export Outputs…", app.key_of(Command::Export), Some(Message::ExportAll)),
+        item("Export…", app.key_of(Command::Export), Some(Message::Export(crate::app::export_dialog::ExportMessage::Open))),
         separator(),
         item("Open the Demo", "", Some(Message::LoadDemo)),
         separator(),

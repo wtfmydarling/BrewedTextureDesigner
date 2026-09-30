@@ -1401,6 +1401,18 @@ impl Engine {
         Ok((stored.width, stored.height, stored.to_f32()))
     }
 
+    /// The texture size of the last evaluation: how big an export writes its files.
+    pub fn resolution(&self) -> [u32; 2] {
+        self.last_resolution
+    }
+
+    /// The pixels as they are stored, at the image's own size (a uniform color's one pixel; see
+    /// [`Engine::read_stored`] for them spread over the texture size).
+    pub fn read_own(&self, node: NodeId) -> Result<StoredImage, String> {
+        let image = self.image(node).ok_or("The node has no image")?;
+        self.gpu.read_stored_blocking(image)
+    }
+
     /// The same pixels as they are stored (see [`StoredImage`]): what an export writes.
     pub fn read_stored(&self, node: NodeId) -> Result<StoredImage, String> {
         let image = self.image(node).ok_or("The node has no image")?;

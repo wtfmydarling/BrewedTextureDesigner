@@ -3321,3 +3321,101 @@ fn examples_and_templates_are_computed() {
     }
     assert!(e.gpu.take_errors().is_empty());
 }
+
+/// A file packed of channels of several images (an export preset's ORM, mask map…): as big as
+/// the texture, a uniform color's one pixel read everywhere, a channel turned over where it is
+/// to be, a value where there is no image.
+#[test]
+fn channels_of_images_are_packed_into_one_file() {
+    use crate::export::{DEPTH_8, Packed, write_packed};
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let gray = |g: &mut Graph, v: f32| {
+        let c = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+        set(g, c, "color", ParamValue::Color([v, v, v, 1.0]));
+        set(g, c, "output", ParamValue::Enum(1));
+        let out = g.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+        g.connect(c, "o:output", out, "i:input").unwrap();
+        out
+    };
+    // Not 0.5: 1 − 0.5 is 127.5 of 255, between two bytes, and GPUs round its last bit apart.
+    let (a, b) = (gray(&mut g, 0.2), gray(&mut g, 0.4));
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let out = g.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+    g.connect(noise, "o:output", out, "i:input").unwrap();
+    evaluate_blocking(&mut e, &g);
+    let images: std::collections::HashMap<_, _> = [a, b, out].into_iter().map(|n| (n, e.read_own(n).unwrap())).collect();
+    assert_eq!((images[&a].width, images[&a].height), (1, 1), "a uniform color's one pixel");
+    let dir = std::env::temp_dir().join(format!("brewed-pack-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("orm.png");
+    let pack = vec![
+        Packed::Channel { node: a, channel: 0, invert: false },
+        Packed::Channel { node: b, channel: 0, invert: true },
+        Packed::Value(0.8),
+        Packed::Channel { node: out, channel: 0, invert: false },
+    ];
+    write_packed(&file, &pack, &images, [RES, RES], DEPTH_8).unwrap();
+    let png = image::open(&file).unwrap().to_rgba8();
+    assert_eq!(png.dimensions(), (RES, RES), "as big as the texture");
+    let noise_px = e.read_image(out).unwrap().2;
+    for (x, y) in [(0, 0), (100, 37), (RES - 1, RES - 1)] {
+        let p = png.get_pixel(x, y).0;
+        for (c, want) in [51, 153, 204].into_iter().enumerate() {
+            assert!((i32::from(p[c]) - want).abs() <= 1, "channel {c} at ({x}, {y}): {} not {want}", p[c]);
+        }
+        let want = (pixel(&noise_px, x, y)[0] * 255.0).round() as i32;
+        assert!((i32::from(p[3]) - want).abs() <= 1, "the noise in alpha at ({x}, {y}): {} not {want}", p[3]);
+    }
+    // Three channels: RGB; one: gray.
+    write_packed(&file, &pack[..3], &images, [RES, RES], DEPTH_8).unwrap();
+    assert_eq!(image::open(&file).unwrap().color(), image::ColorType::Rgb8);
+    write_packed(&file, &pack[..1], &images, [RES, RES], DEPTH_8).unwrap();
+    assert_eq!(image::open(&file).unwrap().color(), image::ColorType::L8);
+    // Nothing but uniform colors: the texture's size still.
+    write_packed(&file, &pack[..2], &images, [RES, RES], DEPTH_8).unwrap();
+    assert_eq!(image::open(&file).unwrap().to_rgb8().dimensions(), (RES, RES));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What a preset writes of an Output is what arrives at it, as the graph computes it: not the
+/// Output's own image, which is in the channels and at the bit depth of its own file (here its
+/// alpha, of 8 bits).
+#[test]
+fn presets_write_what_arrives_at_outputs() {
+    use crate::export::{DEPTH_16, Packed, nodes_of, read_what_arrives, write_packed};
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let out = g.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+    g.connect(noise, "o:output", out, "i:input").unwrap();
+    set(&mut g, out, "format", ParamValue::Enum(6));
+    evaluate_blocking(&mut e, &g);
+    let dir = std::env::temp_dir().join(format!("brewed-arrives-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut job = crate::ExportJob {
+        node: out,
+        path: dir.join("height.png"),
+        format: 0,
+        bit_depth: DEPTH_16,
+        pack: vec![Packed::Channel { node: out, channel: 0, invert: false }],
+    };
+    read_what_arrives(&mut job, &g);
+    assert_eq!(nodes_of(&job), [noise]);
+    let images = [(noise, e.read_own(noise).unwrap())].into_iter().collect();
+    write_packed(&job.path, &job.pack, &images, [RES, RES], job.bit_depth).unwrap();
+    let png = image::open(&job.path).unwrap();
+    assert_eq!(png.color(), image::ColorType::L16, "gray, of 16 bits");
+    let png = png.to_luma16();
+    let noise_px = e.read_image(noise).unwrap().2;
+    let mut finer = false;
+    for (x, y) in [(3, 5), (100, 37), (180, 90), (RES - 1, RES - 2)] {
+        let v = pixel(&noise_px, x, y)[0];
+        let written = f32::from(png.get_pixel(x, y).0[0]) / 65535.0;
+        assert!((written - v).abs() < 1e-3, "({x}, {y}): {written} for {v}");
+        // Between the steps of 8 bits.
+        finer |= (written * 255.0 - (written * 255.0).round()).abs() > 0.01;
+    }
+    assert!(finer, "16 bits of what arrives, not the Output's 8");
+    let _ = std::fs::remove_dir_all(&dir);
+}

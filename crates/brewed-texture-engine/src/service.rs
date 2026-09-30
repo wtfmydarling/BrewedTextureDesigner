@@ -35,6 +35,10 @@ pub struct ExportJob {
     pub format: u32,
     /// See [`export::DEPTH_8`] and friends.
     pub bit_depth: u32,
+    /// The channels the file is made of (gray of one; red, green and blue of three; and alpha
+    /// of four) of what arrives at the Outputs they name (see [`export::read_what_arrives`]),
+    /// in place of `node`'s image: what an export preset writes. None: `node`'s image as it is.
+    pub pack: Vec<export::Packed>,
 }
 
 pub enum Request {
@@ -248,12 +252,19 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         if engine.receive_files() {
             pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
         }
+        // A preset writes what arrives at the Outputs, as the graph about to be computed makes
+        // it: the nodes it comes from are read.
+        if let Some((_, graph, _)) = pending.evaluate.as_ref().or(current.as_ref()) {
+            for job in pending.exports.iter_mut().filter(|j| !j.pack.is_empty()) {
+                export::read_what_arrives(job, graph);
+            }
+        }
         // What is read after this round: the views' nodes and the nodes asked about. Whatever
         // of them has no image is computed, even if nothing changed.
         engine.set_preview(preview);
         engine.set_materials(&materials);
         let asked: Vec<NodeId> =
-            pending.stats.iter().copied().chain(pending.probe.map(|(node, _)| node)).chain(pending.exports.iter().map(|j| j.node)).collect();
+            pending.stats.iter().copied().chain(pending.probe.map(|(node, _)| node)).chain(pending.exports.iter().flat_map(export::nodes_of)).collect();
         let read: Vec<NodeId> = preview.iter().chain(&materials).chain(&asked).copied().collect();
         engine.ask(asked);
         if engine.missing(&read) {
@@ -315,6 +326,34 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
             (emit)(Event::Probe { node, pixel, rgba: engine.probe(node, pixel) });
         }
         for job in pending.exports {
+            // Packed of several images: each read as it is stored, at its own size (a uniform
+            // color's one pixel), the file made of them off the engine thread.
+            if !job.pack.is_empty() {
+                let mut images = std::collections::HashMap::new();
+                let mut failed = None;
+                for node in export::nodes_of(&job) {
+                    if images.contains_key(&node) {
+                        continue;
+                    }
+                    match engine.read_own(node) {
+                        Ok(image) => {
+                            images.insert(node, image);
+                        }
+                        Err(e) => failed = Some(e),
+                    }
+                }
+                match failed {
+                    Some(e) => (emit)(Event::Exported(Err(e))),
+                    None => {
+                        let (emit, size) = (emit.clone(), engine.resolution());
+                        std::thread::spawn(move || {
+                            let result = export::write_packed(&job.path, &job.pack, &images, size, job.bit_depth).map(|_| job.path);
+                            (emit)(Event::Exported(result));
+                        });
+                    }
+                }
+                continue;
+            }
             match engine.read_stored(job.node) {
                 Ok(image) => {
                     let emit = emit.clone();

@@ -3,8 +3,11 @@
 //! the Output's format says (see [`brewed_texture_core::nodes::OUTPUT_DEPTHS`]). Channel
 //! selection and quantization run multithreaded with SIMD.
 
+use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use brewed_texture_core::graph::NodeId;
 use brewed_texture_core::nodes::output_format_channels;
 
 use crate::gpu::StoredImage;
@@ -13,6 +16,146 @@ use crate::simd;
 pub use brewed_texture_core::nodes::{
     DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_DXT1, DEPTH_DXT2, DEPTH_DXT3, DEPTH_DXT4, DEPTH_DXT5,
 };
+
+/// A channel of a file packed of several images (see [`write_packed`], and
+/// `brewed_texture_core::export_presets`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Packed {
+    /// A channel of an image (0 red … 3 alpha; a grayscale image is the same in the first
+    /// three), turned over (1 − it) where `invert`. Of an Output, it is what arrives at it (see
+    /// [`read_what_arrives`]).
+    Channel { node: NodeId, channel: u8, invert: bool },
+    /// The same value everywhere.
+    Value(f32),
+}
+
+/// The images a job reads.
+pub fn nodes_of(job: &crate::service::ExportJob) -> Vec<NodeId> {
+    if job.pack.is_empty() {
+        return vec![job.node];
+    }
+    job.pack
+        .iter()
+        .filter_map(|p| match p {
+            Packed::Channel { node, .. } => Some(*node),
+            Packed::Value(_) => None,
+        })
+        .collect()
+}
+
+/// Point the channels of a packed job at what arrives at the Outputs they name, in `graph` as
+/// the engine computes it (the graphs used as nodes laid out in it): the image as the graph
+/// makes it, in all its channels and at its precision. An Output's own image is in the
+/// channels and at the bit depth of its own file: of an Output of 8 bits, a file of 16 would
+/// have 8. An Output nothing arrives at stays (it has no image either).
+pub fn read_what_arrives(job: &mut crate::service::ExportJob, graph: &brewed_texture_core::Graph) {
+    let arrives = brewed_texture_core::graph::input_socket_key("input");
+    for p in &mut job.pack {
+        if let Packed::Channel { node, .. } = p
+            && graph.node(*node).is_some_and(|n| n.kind == brewed_texture_core::NodeKind::OUTPUT)
+            && let Some(link) = graph.links.iter().find(|l| l.to == *node && l.to_socket == arrives)
+        {
+            *node = link.from;
+        }
+    }
+}
+
+/// Write the file packed of the channels `pack` says of `images` (gray of one; red, green and
+/// blue of three; and alpha of four), `size` big (the texture size): an image of another size
+/// (a uniform color is a single pixel) is read where the file's pixel is. Composed a band of
+/// rows at a time into the file's samples, as an image is written (see [`write_stored`]), at
+/// `bit_depth` as an Output's is.
+pub fn write_packed(
+    path: &Path,
+    pack: &[Packed],
+    images: &HashMap<NodeId, StoredImage>,
+    size: [u32; 2],
+    bit_depth: u32,
+) -> Result<(), String> {
+    let [width, height] = size;
+    // Those of another size whole (they are small), the others a band at a time.
+    let other = images.iter().filter(|(_, i)| [i.width, i.height] != size).map(|(n, i)| (*n, i.to_f32())).collect();
+    let packed = PackedRows { width, height, pack, images, other };
+    // As an Output writes R, RGB and RGBA.
+    let format = match pack.len() {
+        1 => 3,
+        4.. => 0,
+        _ => 1,
+    };
+    let rows = (simd::BAND / width.max(1)).max(1);
+    brewed_texture_core::files::replace(path, |beside| write_in_bands(beside, &packed, format, bit_depth, rows))
+}
+
+/// Rows of pixels a file is written of, a band at a time, as RGBA floats (see
+/// [`StoredImage::rows_to_f32`]): an image as the GPU stores it, or the channels of several
+/// packed into one (see [`write_packed`]).
+trait Rows {
+    fn size(&self) -> (u32, u32);
+    fn band(&self, rows: Range<u32>) -> Vec<f32>;
+}
+
+impl Rows for StoredImage {
+    fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    fn band(&self, rows: Range<u32>) -> Vec<f32> {
+        self.rows_to_f32(rows)
+    }
+}
+
+/// The channels of several images packed into one image `width` × `height` (see
+/// [`write_packed`]).
+struct PackedRows<'a> {
+    width: u32,
+    height: u32,
+    pack: &'a [Packed],
+    images: &'a HashMap<NodeId, StoredImage>,
+    /// The images of another size, whole, as RGBA floats.
+    other: HashMap<NodeId, Vec<f32>>,
+}
+
+impl Rows for PackedRows<'_> {
+    fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    fn band(&self, rows: Range<u32>) -> Vec<f32> {
+        let width = self.width as usize;
+        let mut band = vec![1.0f32; width * (rows.end - rows.start) as usize * 4];
+        // The rows of each image as big as the file, read once.
+        let mut read: HashMap<NodeId, Vec<f32>> = HashMap::new();
+        for (c, source) in self.pack.iter().take(4).enumerate() {
+            let targets = band.iter_mut().skip(c).step_by(4);
+            let (node, channel, invert) = match source {
+                Packed::Value(v) => {
+                    targets.for_each(|s| *s = *v);
+                    continue;
+                }
+                Packed::Channel { node, channel, invert } => (*node, usize::from((*channel).min(3)), *invert),
+            };
+            let turn = |v: f32| if invert { 1.0 - v } else { v };
+            match (self.other.get(&node), self.images.get(&node)) {
+                (Some(pixels), Some(image)) => {
+                    let (w, h) = (image.width as usize, image.height as usize);
+                    for (i, s) in targets.enumerate() {
+                        let (x, y) = (i % width, rows.start as usize + i / width);
+                        let (sx, sy) = (x * w / width, y * h / self.height as usize);
+                        *s = turn(pixels[(sy * w + sx) * 4 + channel]);
+                    }
+                }
+                (None, Some(image)) => {
+                    let values = read.entry(node).or_insert_with(|| image.rows_to_f32(rows.clone()));
+                    for (s, v) in targets.zip(values.iter().skip(channel).step_by(4)) {
+                        *s = turn(*v);
+                    }
+                }
+                _ => targets.for_each(|s| *s = 0.0),
+            }
+        }
+        band
+    }
+}
 
 /// Make an output name safe to use as a file name.
 pub fn sanitize_file_name(name: &str) -> String {
@@ -106,15 +249,16 @@ pub fn write_stored(path: &Path, image: &StoredImage, format: u32, bit_depth: u3
 /// The samples of a file: the channels it keeps of the pixels, as `quantize` makes them,
 /// converted `rows` at a time.
 fn samples<T: Copy + Default + Send + Sync>(
-    image: &StoredImage,
+    image: &impl Rows,
     channels: &[usize],
     rows: u32,
     quantize: fn(&[f32], &mut [T]),
 ) -> Vec<T> {
-    let mut out = Vec::with_capacity(image.width as usize * image.height as usize * channels.len());
+    let (width, height) = image.size();
+    let mut out = Vec::with_capacity(width as usize * height as usize * channels.len());
     let mut q = Vec::new();
-    for y in (0..image.height).step_by(rows as usize) {
-        let rgba = image.rows_to_f32(y..(y + rows).min(image.height));
+    for y in (0..height).step_by(rows as usize) {
+        let rgba = image.band(y..(y + rows).min(height));
         q.clear();
         q.resize(rgba.len(), T::default());
         quantize(&rgba, &mut q);
@@ -123,8 +267,8 @@ fn samples<T: Copy + Default + Send + Sync>(
     out
 }
 
-fn write_in_bands(path: &Path, image: &StoredImage, format: u32, bit_depth: u32, rows: u32) -> Result<(), String> {
-    let (width, height) = (image.width, image.height);
+fn write_in_bands(path: &Path, image: &impl Rows, format: u32, bit_depth: u32, rows: u32) -> Result<(), String> {
+    let (width, height) = image.size();
     let channels = file_channels(format);
     let err = |e: image::ImageError| e.to_string();
     let size_err = || "image buffer size mismatch".to_string();
@@ -195,9 +339,10 @@ fn write_in_bands(path: &Path, image: &StoredImage, format: u32, bit_depth: u32,
 /// (BC1, BC2 or BC3; DXT2 and DXT4 with the colors multiplied by the alpha), with its
 /// mipmaps: the pixels as the output keeps them, as RGBA of 8 bits (what it writes of fewer
 /// channels is kept with an opaque alpha, one channel as gray, RG with an empty blue).
-fn write_dds(path: &Path, image: &StoredImage, depth: u32, rows: u32) -> Result<(), String> {
+fn write_dds(path: &Path, image: &impl Rows, depth: u32, rows: u32) -> Result<(), String> {
     use rayon::prelude::*;
-    let (width, height) = (image.width as usize, image.height as usize);
+    let (width, height) = image.size();
+    let (width, height) = (width as usize, height as usize);
     let mut rgba: Vec<u8> = samples(image, &[0, 1, 2, 3], rows, simd::quantize_u8);
     if depth == DEPTH_DXT2 || depth == DEPTH_DXT4 {
         rgba.par_chunks_mut(4).for_each(|px| {

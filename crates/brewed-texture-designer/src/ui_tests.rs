@@ -440,6 +440,40 @@ fn packages_opened_last_have_their_pictures() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// File → Export… (Ctrl+E) asks what is written: the Outputs as they are (as the export wrote
+/// them before there were presets), or what an engine expects of a material, the maps packed
+/// as it packs them; the files are listed before they are written.
+#[test]
+fn exports_follow_the_preset_chosen() {
+    use crate::app::export_dialog::ExportMessage as X;
+    use brewed_texture_core::export_presets::Preset;
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    let dir = std::env::temp_dir().join(format!("brewed-export-dialog-{}", std::process::id()));
+    w.send(Message::Export(X::Open));
+    let Some(Dialog::Export(dialog)) = w.app.ui.dialog.clone() else { panic!("the export dialog") };
+    assert_eq!((dialog.preset, dialog.directx), (Preset::Outputs, false), "as before; the demo's normals are OpenGL's");
+    // As they are: every Output, as the export always wrote them.
+    let outputs = w.app.graph().nodes_of(NodeKind::OUTPUT).count();
+    assert_eq!(w.app.export_plan(&dialog, &dir).len(), outputs);
+    w.send(Message::Export(X::Preset(Preset::Unreal)));
+    w.send(Message::Export(X::Folder(Some(dir.clone()))));
+    w.input(&[]);
+    for said in ["Export Brick Wall", "Unreal Engine", "Unity (HDRP)", "glTF 2.0", "T_Brick_Wall_ORM.png", "T_Brick_Wall_Normal.png"] {
+        assert!(!texts(&mut w, said).is_empty(), "{said}");
+    }
+    w.snapshot("export");
+    let Some(Dialog::Export(dialog)) = w.app.ui.dialog.clone() else { panic!() };
+    let plan = w.app.export_plan(&dialog, &dir);
+    let names: Vec<String> = plan.iter().map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, ["T_Brick_Wall_BaseColor.png", "T_Brick_Wall_Normal.png", "T_Brick_Wall_ORM.png", "T_Brick_Wall_Height.png"]);
+    assert!(plan[1].1.said.contains("green turned over"), "OpenGL normals for Unreal: {}", plan[1].1.said);
+    assert!(plan[2].1.said.ends_with("B 0 (no metallic)"), "no metallic map: the value written: {}", plan[2].1.said);
+    w.send(Message::Export(X::Export));
+    assert_eq!(w.app.ui.dialog, None);
+    assert_eq!(w.app.res.exports_pending, 4);
+    assert_eq!(w.app.ui.export_preset, Preset::Unreal, "offered next time");
+}
+
 /// Pressing a library item, moving onto the graph and releasing adds the node there.
 #[test]
 fn library_items_can_be_dropped_on_the_graph() {
@@ -1574,7 +1608,7 @@ fn stays_inside(message: &Message) -> bool {
         Message::Open
         | Message::Save
         | Message::SaveAs
-        | Message::ExportAll
+        | Message::Export(crate::app::export_dialog::ExportMessage::Browse)
         | Message::ExportNode(_)
         | Message::BrowseFile(..)
         | Message::Pick(_)

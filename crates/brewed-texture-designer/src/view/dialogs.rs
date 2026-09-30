@@ -90,6 +90,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
         Dialog::Recover => recover(app),
         Dialog::Settings(settings) => crate::view::settings::view(app, settings),
         Dialog::NewGraph(dialog) => new_graph(app, dialog),
+        Dialog::Export(dialog) => export(app, dialog),
         Dialog::Shortcuts => {
             let line = |keys: String, what: String| {
                 row![
@@ -221,6 +222,95 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
     ]
     .spacing(14);
     modal(dialog_box(body, 560.0), None)
+}
+
+/// The export dialog: what is written, in what, and where; and the files, listed.
+fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog) -> Element<'a, Message> {
+    use brewed_texture_core::export_presets::Preset;
+    use brewed_texture_core::nodes::{DEPTH_8, DEPTH_16};
+    use crate::app::export_dialog::ExportMessage as X;
+    let say = Message::Export;
+    let label = |t: &'static str| text(t).size(style::TEXT_SIZE).color(style::TEXT_DIM).width(Length::Fixed(110.0));
+    let mut presets = column![].spacing(4);
+    for preset in Preset::ALL {
+        let chosen = preset == dialog.preset;
+        presets = presets.push(
+            button(column![text(preset.name()).size(style::TEXT_SIZE).font(style::bold()), text(preset.about()).size(style::SMALL).color(style::TEXT_DIM)].spacing(3))
+                .width(Length::Fill)
+                .padding([7, 10])
+                .style(style::option_button(chosen, false))
+                .on_press(say(X::Preset(preset))),
+        );
+    }
+    let segmented = |options: Vec<(&'static str, Message, bool)>| {
+        let mut r = row![].spacing(0);
+        for (name, message, chosen) in options {
+            r = r.push(button(text(name).size(style::TEXT_SIZE)).padding([5, 10]).style(style::segment(chosen)).on_press(message));
+        }
+        container(r).style(style::segments)
+    };
+    let mut body = column![
+        text(format!("Export {}", app.doc.entry().name)).size(18).font(style::bold()),
+        row![label("Preset"), presets].align_y(Alignment::Start),
+    ]
+    .spacing(12);
+    if dialog.preset != Preset::Outputs {
+        body = body.push(
+            row![
+                label("Normal maps"),
+                segmented(vec![
+                    ("OpenGL (Y+)", say(X::DirectX(false)), !dialog.directx),
+                    ("DirectX (Y−)", say(X::DirectX(true)), dialog.directx),
+                ]),
+                text("as the graph makes them").size(style::SMALL).color(style::TEXT_FAINT),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        );
+        body = body.push(
+            row![
+                label("Format"),
+                segmented(vec![("PNG 8 bits", say(X::Depth(DEPTH_8)), dialog.depth == DEPTH_8), ("PNG 16 bits", say(X::Depth(DEPTH_16)), dialog.depth == DEPTH_16)]),
+            ]
+            .align_y(Alignment::Center),
+        );
+    }
+    let folder = dialog.folder.as_ref().map_or_else(|| "No folder chosen yet".to_string(), |f| f.display().to_string());
+    body = body.push(
+        row![
+            label("Folder"),
+            container(text(folder).size(style::TEXT_SIZE).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true),
+            button(text("Browse…").size(style::TEXT_SIZE)).padding([5, 12]).style(style::button).on_press(say(X::Browse)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    );
+    // The files, before they are written.
+    let planned = app.export_plan(dialog, dialog.folder.as_deref().unwrap_or(std::path::Path::new("")));
+    let mut files = column![].spacing(3);
+    for (path, file) in &planned {
+        let name = path.file_name().map_or_else(|| file.name.clone(), |n| n.to_string_lossy().into_owned());
+        let mut line = row![text(name).size(style::SMALL).font(style::mono()).width(Length::FillPortion(3))].spacing(10);
+        if !file.said.is_empty() {
+            line = line.push(text(format!("← {}", file.said)).size(style::SMALL).color(style::TEXT_DIM).width(Length::FillPortion(4)));
+        }
+        files = files.push(line);
+    }
+    if planned.is_empty() {
+        files = files.push(text("None: the graph has no Output of what this writes (give Outputs their Usage).").size(style::SMALL).color(style::WARNING));
+    }
+    body = body.push(row![label("Files"), container(scrollable(files).height(Length::Shrink)).max_height(160.0).width(Length::Fill)].align_y(Alignment::Start));
+    let ready = dialog.folder.is_some() && !planned.is_empty();
+    body = body.push(
+        row![
+            space().width(Length::Fill),
+            button(text("Cancel").size(style::TEXT_SIZE)).padding([6, 14]).style(style::flat_button).on_press(Message::Dialog(None)),
+            button(text("Export").size(style::TEXT_SIZE)).padding([6, 18]).style(style::primary_button).on_press_maybe(ready.then(|| say(X::Export))),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    );
+    modal(dialog_box(body, 680.0), None)
 }
 
 /// Id of the name field of the New Package dialog (it takes the keyboard as it opens).

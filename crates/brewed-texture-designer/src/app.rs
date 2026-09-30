@@ -7,6 +7,7 @@
 //! with images, thumbnails and reports as [`Event`]s.
 
 pub(crate) mod autosave;
+pub(crate) mod export_dialog;
 #[cfg(any(test, feature = "dev-tools"))]
 pub(crate) mod dev;
 pub(crate) mod home;
@@ -236,6 +237,8 @@ pub enum Dialog {
     Settings(Box<SettingsDialog>),
     /// A new package, or a new graph of one, from a template (see [`home`]).
     NewGraph(home::NewGraphDialog),
+    /// What is exported of the graph, in what and where (see [`export_dialog`]).
+    Export(export_dialog::ExportDialog),
     /// Files a package names that are not there (see [`MissingFiles`]).
     Missing(MissingFiles),
 }
@@ -333,6 +336,9 @@ pub struct Ui {
     pub home_recent: Vec<home::Recent>,
     /// The template a new graph was made from last (the next one is offered it).
     pub last_template: brewed_texture_core::templates::Template,
+    /// What the last export wrote, and where (the next is offered them).
+    pub export_preset: brewed_texture_core::export_presets::Preset,
+    pub export_folder: Option<PathBuf>,
     pub menu: Option<MenuId>,
     pub context: Option<ContextMenu>,
     pub add_menu: Option<AddMenu>,
@@ -717,7 +723,8 @@ pub enum Message {
     Save,
     SaveAs,
     SavePicked(Option<PathBuf>),
-    ExportAll,
+    /// All the Outputs exported into a folder (the autopilot's; people use the export dialog).
+    #[cfg_attr(not(any(test, feature = "dev-tools")), allow(dead_code))]
     ExportFolderPicked(Option<PathBuf>),
     ExportNode(NodeId),
     ExportNodePicked(NodeId, Option<PathBuf>),
@@ -789,6 +796,8 @@ pub enum Message {
     Home(home::HomeMessage),
     /// The dialog of a new package or graph.
     NewGraph(home::NewGraphMessage),
+    /// The export dialog (see [`export_dialog`]).
+    Export(export_dialog::ExportMessage),
     PanelPress(DragPayload),
     PanelAdd(DragPayload),
     // properties
@@ -864,7 +873,7 @@ fn answered_from(message: &Message) -> Option<PathBuf> {
     match message {
         Message::Asked(_, answer) => answered_from(answer),
         Message::OpenPicked(p) | Message::SavePicked(p) | Message::ExportNodePicked(_, p) | Message::FilePicked(_, p) => file(p),
-        Message::ExportFolderPicked(folder) => folder.clone(),
+        Message::ExportFolderPicked(folder) | Message::Export(export_dialog::ExportMessage::Folder(folder)) => folder.clone(),
         Message::Preview(PreviewMessage::EnvironmentPicked(p)) => file(p),
         Message::Explorer(ExplorerMessage::Located(_, _, p) | ExplorerMessage::ResourceSavePicked(_, _, p)) => file(p),
         Message::Explorer(ExplorerMessage::FilesPicked(_, files) | ExplorerMessage::ImportPicked(_, files)) => {
@@ -1000,6 +1009,8 @@ impl App {
                 home: opts.home.then_some(home::HomePage::Home),
                 home_recent: Vec::new(),
                 last_template: brewed_texture_core::templates::Template::Pbr,
+                export_preset: brewed_texture_core::export_presets::Preset::Outputs,
+                export_folder: None,
                 menu: None,
                 context: None,
                 add_menu: None,
@@ -1888,6 +1899,7 @@ impl App {
                 path,
                 format: self.eval.params(n.id).map_or(n.enum_value("format"), |p| p.u("format")),
                 bit_depth: n.enum_value("bit_depth"),
+                pack: Vec::new(),
             })
             .collect()
     }
@@ -2091,25 +2103,6 @@ impl App {
                 }
                 None => self.ui.after_save = None,
             },
-            Message::ExportAll => {
-                self.close_popups();
-                if self.graph().nodes_of(NodeKind::OUTPUT).next().is_none() {
-                    self.set_status("The graph has no Output nodes to export", true);
-                } else {
-                    let here = self.here();
-                    let folder = self.dialog_folder(None, false);
-                    return Task::perform(
-                        blocking(move || {
-                            let mut dialog = rfd::FileDialog::new().set_title("Export outputs to folder");
-                            if let Some(folder) = folder {
-                                dialog = dialog.set_directory(folder);
-                            }
-                            dialog.pick_folder()
-                        }),
-                        move |p| Message::Asked(here, Box::new(Message::ExportFolderPicked(p.flatten()))),
-                    );
-                }
-            }
             Message::ExportFolderPicked(Some(dir)) => {
                 let jobs = self.export_jobs(&dir);
                 self.res.exports_pending += jobs.len();
@@ -2146,6 +2139,7 @@ impl App {
                         path,
                         format: self.eval.params(id).map_or(node.enum_value("format"), |p| p.u("format")),
                         bit_depth: node.enum_value("bit_depth"),
+                        pack: Vec::new(),
                     };
                     self.res.exports_pending += 1;
                     self.send(Request::Export(vec![job]));
@@ -2309,6 +2303,7 @@ impl App {
             Message::LookAtLibrary => return self.look_at_library(),
             Message::Home(message) => return self.home_message(message),
             Message::NewGraph(message) => return self.new_graph_message(message),
+            Message::Export(message) => return self.export_message(message),
             Message::LibraryLooked(found) => return self.library_looked(found),
             Message::LibraryRead { package, graph, name, pos, result } => self.library_read(package, graph, name, pos, result),
             Message::LibraryToggle(c) => {
@@ -2805,7 +2800,7 @@ impl App {
             Command::Open => Message::Open,
             Command::Save => Message::Save,
             Command::SaveAs => Message::SaveAs,
-            Command::Export => Message::ExportAll,
+            Command::Export => Message::Export(export_dialog::ExportMessage::Open),
             Command::Settings => Message::Settings(SettingsMessage::Open),
             Command::Undo => Message::Undo,
             Command::Redo => Message::Redo,

@@ -37,10 +37,11 @@ usage: brewed-texture-designer [FILE.brewtex]...
                                [--size N|WxH] [--precision 8|16|32] [--out DIR]
 
   --render         compute the graphs of a package without a window and write their
-                   Output nodes as File > Export Outputs does: into DIR (the current folder
-                   by default), in a folder for each graph when there are several; print
-                   each file written. Exit code 0: all went well, 1: something went wrong
-                   on the way (said on stderr), 2: nothing could be rendered
+                   Output nodes as File > Export… writes them as they are: into DIR (the
+                   current folder by default), in a folder for each graph when there are
+                   several; print each file written. Exit code 0: all went well, 1:
+                   something went wrong on the way (said on stderr), 2: nothing could be
+                   rendered
   --graph NAME     render this graph (again for more). Without it: the graphs no other
                    graph of the package uses; those it uses are computed in them
   --set NAME=VALUE set an Input Value: 0.5, 4, true, 0.2,0.8, #9E4229 or 0.6,0.3,0.2;

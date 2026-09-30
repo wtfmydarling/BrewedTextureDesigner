@@ -75,7 +75,7 @@ commands! {
     Open: "open", "Open Package…", Anywhere, ["Ctrl+O"];
     Save: "save", "Save", Anywhere, ["Ctrl+S"];
     SaveAs: "save_as", "Save As…", Anywhere, ["Ctrl+Shift+S"];
-    Export: "export", "Export Outputs…", Anywhere, ["Ctrl+E"];
+    Export: "export", "Export…", Anywhere, ["Ctrl+E"];
     Settings: "settings", "Settings…", Anywhere, ["Ctrl+,"];
     Undo: "undo", "Undo", Window, ["Ctrl+Z"];
     Redo: "redo", "Redo", Window, ["Ctrl+Y", "Ctrl+Shift+Z"];

@@ -19,6 +19,7 @@ pub mod demo;
 pub mod document;
 pub mod edit;
 pub mod eval;
+pub mod export_presets;
 pub mod expr;
 pub mod files;
 pub mod gradient;
