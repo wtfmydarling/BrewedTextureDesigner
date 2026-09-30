@@ -28,8 +28,14 @@ pub struct Workspace {
     /// Whether the environment image showed behind the model, and how blurred.
     pub background: Option<bool>,
     pub blur: Option<f32>,
-    /// The package files opened or saved last, the latest first (see [`remember`]).
+    /// The package files opened or saved last, the latest first (see [`remember`]), and when
+    /// each was, in seconds since 1970.
     pub recent: Vec<String>,
+    pub opened: std::collections::BTreeMap<String, u64>,
+    /// How the Home screen shows them: as pictures ("grid") or as a list ("list"), sorted by
+    /// what column ("opened", "name-desc"…).
+    pub home_layout: Option<String>,
+    pub home_sort: Option<String>,
     /// The folder a file dialog was answered from last.
     pub last_folder: Option<String>,
 }
@@ -139,6 +145,9 @@ mod tests {
             background: Some(false),
             blur: Some(0.6),
             recent: vec!["C:/work/walls.brewtex".into()],
+            opened: [("C:/work/walls.brewtex".to_string(), 1_790_000_000)].into_iter().collect(),
+            home_layout: Some("list".into()),
+            home_sort: Some("name-desc".into()),
             last_folder: Some("C:/work".into()),
         };
         let json = serde_json::to_string(&w).unwrap();

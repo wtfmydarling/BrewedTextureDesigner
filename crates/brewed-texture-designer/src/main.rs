@@ -62,8 +62,9 @@ tools for developing the program:
        brewed-texture-designer --autopilot [MINUTES] [--seed N]
 
   --screenshot     start, wait until everything is computed, save a screenshot and quit
+  --picture OUT    the same, saving the picture of the model a saved package gets
   --scenario       UI state for the screenshot: add-menu, file-menu, context-menu, home,
-                   learn, home-about, gradient, math, levels, inputs, transform, tiling, dialog, tile,
+                   learn, home-about, example:ID (brick-wall, fx-maps, pixel-math), gradient, math, levels, inputs, transform, tiling, dialog, tile,
                    choices, lighting-menu, tile-sampler, shape:NAME (mat-ball …),
                    environment:FILE, exposure:EV, blur:0..1; several joined by ';'
   --select KIND    select the first node of this type (e.g. math, levels)
@@ -140,6 +141,11 @@ fn main() -> iced::Result {
             #[cfg(any(test, feature = "dev-tools"))]
             "--screenshot" => {
                 options.dev.screenshot = value(i).map(PathBuf::from);
+                i += 1;
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--picture" => {
+                options.dev.picture = value(i).map(PathBuf::from);
                 i += 1;
             }
             #[cfg(any(test, feature = "dev-tools"))]
@@ -247,6 +253,8 @@ fn main() -> iced::Result {
         .title(App::title)
         .theme(App::theme)
         .subscription(App::subscription)
+        .font(style::UI_FONTS[0])
+        .font(style::UI_FONTS[1])
         .default_font(style::ui_font())
         .antialiasing(antialiasing)
         .run();

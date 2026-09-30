@@ -410,7 +410,7 @@ impl App {
         } else {
             self.add_package(loaded.package, path, loaded.views, loaded.open);
         }
-        crate::workspace::remember(&mut self.ui.recent, &file);
+        super::home::remember(&mut self.ui.recent, &mut self.ui.recent_opened, &file);
         let mut msg = format!("Opened {file}");
         if !notes.is_empty() {
             msg.push_str(&format!(" ({})", notes.join("; ")));
@@ -584,7 +584,7 @@ impl App {
     /// copy now.
     fn saved_as(&mut self, key: u64, path: &Path) {
         let file = path.display().to_string();
-        crate::workspace::remember(&mut self.ui.recent, &file);
+        super::home::remember(&mut self.ui.recent, &mut self.ui.recent_opened, &file);
         self.forget_file(&file);
         // Another package open in the Explorer from the same file is this one now.
         self.shelf.retain(|p| p.key == key || p.doc.key().as_deref() != Some(file.as_str()));

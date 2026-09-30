@@ -20,6 +20,18 @@ pub enum Template {
 impl Template {
     pub const ALL: [Template; 2] = [Template::Pbr, Template::Empty];
 
+    /// What names it where a name of words will not do (what the Home screen is told of it).
+    pub fn id(self) -> &'static str {
+        match self {
+            Template::Pbr => "pbr",
+            Template::Empty => "empty",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Template> {
+        Template::ALL.into_iter().find(|t| t.id() == id)
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Template::Pbr => "PBR (Metallic/Roughness)",
@@ -101,6 +113,19 @@ pub enum Example {
 
 impl Example {
     pub const ALL: [Example; 3] = [Example::BrickWall, Example::FxMaps, Example::PixelMath];
+
+    /// What names it where a name of words will not do.
+    pub fn id(self) -> &'static str {
+        match self {
+            Example::BrickWall => "brick-wall",
+            Example::FxMaps => "fx-maps",
+            Example::PixelMath => "pixel-math",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Example> {
+        Example::ALL.into_iter().find(|e| e.id() == id)
+    }
 
     pub fn name(self) -> &'static str {
         match self {

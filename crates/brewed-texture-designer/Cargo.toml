@@ -20,6 +20,7 @@ dev-tools = ["brewed-texture-engine/dev-tools"]
 [dependencies]
 brewed-texture-core.workspace = true
 brewed-texture-engine.workspace = true
+home-screen.workspace = true
 iced.workspace = true
 rfd.workspace = true
 futures.workspace = true

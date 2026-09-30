@@ -347,6 +347,9 @@ pub struct Ui {
     pub home: Option<home::HomePage>,
     /// The packages opened last, as the Home screen shows them.
     pub home_recent: Vec<home::Recent>,
+    /// How the Home screen shows the packages opened last, and sorts them.
+    pub home_layout: home_screen::Layout,
+    pub home_sort: home_screen::Sort,
     /// The template a new graph was made from last (the next one is offered it).
     pub last_template: brewed_texture_core::templates::Template,
     /// What the last export wrote, and where (the next is offered them).
@@ -416,6 +419,8 @@ pub struct Ui {
     pub discarded: HashSet<u64>,
     /// The package files opened or saved last, the latest first (File menu).
     pub recent: Vec<String>,
+    /// When each of them was opened or saved last, in seconds since 1970.
+    pub recent_opened: std::collections::BTreeMap<String, u64>,
     /// The page of the settings dialog shown last.
     pub settings_page: settings::Page,
     /// Settings the program takes only when it starts were applied: it offers to start again.
@@ -532,6 +537,12 @@ pub struct App {
     /// The pictures of package files, as PNG, by path: what their files had, or were saved with
     /// (see [`home`]).
     pictures: HashMap<String, Arc<Vec<u8>>>,
+    /// What the Home screen shows that stays as it is (see [`home`]).
+    pub home: home::HomeLists,
+    /// The device the window and the engine share, once iced made it, and the pipeline of the
+    /// 3D view that draws the pictures of packages with it (see `view3d::picture`).
+    gpu: Option<gpu::GpuHandles>,
+    picture_pipeline: Option<view::view3d::Pipeline>,
     /// Where the earlier versions of the packages are kept (see [`versions`]).
     versions: Option<brewed_texture_core::versions::Versions>,
     /// The tools for developing the program: screenshots, the autopilot (see [`dev`]).
@@ -1028,6 +1039,8 @@ impl App {
                 library_folded: HashSet::new(),
                 home: opts.home.then_some(home::HomePage::Home),
                 home_recent: Vec::new(),
+                home_layout: home::layout_of(opts.workspace.as_ref().and_then(|w| w.home_layout.as_deref())),
+                home_sort: home::sort_of(opts.workspace.as_ref().and_then(|w| w.home_sort.as_deref())),
                 last_template: brewed_texture_core::templates::Template::Pbr,
                 export_preset: brewed_texture_core::export_presets::Preset::Outputs,
                 export_folder: None,
@@ -1071,6 +1084,7 @@ impl App {
                 renaming_file: None,
                 discarded: HashSet::new(),
                 recent: opts.workspace.as_ref().map(|w| w.recent.clone()).unwrap_or_default(),
+                recent_opened: opts.workspace.as_ref().map(|w| w.opened.clone()).unwrap_or_default(),
                 settings_page: settings::Page::General,
                 restart_offer: false,
                 restarting: false,
@@ -1084,6 +1098,9 @@ impl App {
             host: eyedropper::Host::default(),
             library: library::Library::default(),
             pictures: HashMap::new(),
+            home: home::HomeLists::new(),
+            gpu: None,
+            picture_pipeline: None,
             versions: opts.versions.clone().map(brewed_texture_core::versions::Versions::new),
             #[cfg(any(test, feature = "dev-tools"))]
             dev: dev::Dev::new(&opts.dev),
@@ -1903,6 +1920,9 @@ impl App {
             maximized,
             realtime: Some(self.ui.realtime),
             recent: self.ui.recent.clone(),
+            opened: self.ui.recent_opened.iter().filter(|(p, _)| self.ui.recent.contains(p)).map(|(p, t)| (p.clone(), *t)).collect(),
+            home_layout: Some(home::layout_said(self.ui.home_layout).into()),
+            home_sort: Some(home::sort_said(self.ui.home_sort)),
             last_folder: self.ui.last_folder.as_ref().map(|f| f.display().to_string()),
             ..Workspace::default()
         }
@@ -1979,6 +1999,7 @@ impl App {
             Message::PreviewMade(path, of, made) => return self.preview_made(path, of, made),
             Message::PollGpu => {
                 if let Some(handles) = gpu::take() {
+                    self.gpu = Some(handles.clone());
                     #[cfg(any(test, feature = "dev-tools"))]
                     if let Some(pilot) = &mut self.dev.pilot {
                         pilot.watch(handles.device.clone());
@@ -2103,6 +2124,7 @@ impl App {
             Message::ClearRecent => {
                 self.close_popups();
                 self.ui.recent.clear();
+                self.ui.recent_opened.clear();
             }
             Message::Save => {
                 self.close_popups();

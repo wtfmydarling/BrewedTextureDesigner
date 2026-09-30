@@ -338,7 +338,8 @@ pub fn map_names(app: &App) -> Vec<&'static str> {
     SLOT_NAMES.iter().zip(found).filter(|(_, f)| *f).map(|(n, _)| *n).collect()
 }
 
-pub fn view(app: &App) -> Element<'_, Message> {
+/// The maps the model wears (see [`Scene::maps`]), and which of them are gray.
+fn maps_of(app: &App) -> ([Option<wgpu::TextureView>; 7], u32) {
     let mut maps: [Option<wgpu::TextureView>; 7] = Default::default();
     let mut gray = 0u32;
     for img in &app.res.materials {
@@ -349,6 +350,103 @@ pub fn view(app: &App) -> Element<'_, Message> {
             }
         }
     }
+    (maps, gray)
+}
+
+/// A picture of the model as the 3D view shows it, `size` pixels square, on the background the
+/// view has: what lists of packages show of one (see `app::home`). None when the model wears
+/// no map of the graph's (nothing of the package on it), or the GPU could not draw it. The
+/// view's pipeline, made once, is kept in `pipeline`.
+pub fn picture(app: &App, pipeline: &mut Option<Pipeline>, gpu: &crate::gpu::GpuHandles, size: u32) -> Option<::image::RgbaImage> {
+    use shader::Primitive as _;
+    let (maps, gray) = maps_of(app);
+    if maps.iter().all(Option::is_none) {
+        return None;
+    }
+    let l = &app.ui.preview.lighting;
+    let primitive = Primitive {
+        camera: app.ui.preview.view3d,
+        maps,
+        gray,
+        environment: l.shown.clone(),
+        exposure: l.exposure.clamp(-12.0, 12.0).exp2(),
+        background: l.background.then_some(l.blur.clamp(0.0, 1.0)),
+    };
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let pipeline = pipeline.get_or_insert_with(|| <Pipeline as shader::Pipeline>::new(device, queue, format));
+    let side = size as f32;
+    primitive.prepare(pipeline, device, queue, &Rectangle::new(iced::Point::ORIGIN, iced::Size::new(side, side)), &Viewport::with_physical_size(iced::Size::new(size, size), 1.0));
+    let extent = wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("brewed 3d picture"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let target = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("brewed 3d picture") });
+    // (Clear: the model is drawn over what is there.)
+    drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("brewed 3d picture"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    }));
+    primitive.render(pipeline, &mut encoder, &target, &Rectangle { x: 0, y: 0, width: size, height: size });
+    let row = size * 4;
+    let padded = row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("brewed 3d picture"),
+        size: u64::from(padded) * u64::from(size),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(size) },
+        },
+        extent,
+    );
+    queue.submit([encoder.finish()]);
+    let (sent, got) = std::sync::mpsc::channel();
+    buffer.slice(..).map_async(wgpu::MapMode::Read, move |mapped| {
+        let _ = sent.send(mapped);
+    });
+    device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+    got.recv().ok()?.ok()?;
+    let mut rgba = Vec::with_capacity((row * size) as usize);
+    {
+        let mapped = buffer.slice(..).get_mapped_range();
+        for (y, line) in mapped.chunks(padded as usize).enumerate() {
+            // The view's background where the model is not: from 48 at the top to 18 at the
+            // bottom, as the view is drawn on.
+            let back = (48.0 - 30.0 * y as f32 / side.max(1.0)).round() as u8;
+            for px in line[..row as usize].chunks(4) {
+                let a = f32::from(px[3]) / 255.0;
+                let over = |c: u8| (f32::from(c) + f32::from(back) * (1.0 - a)).round().min(255.0) as u8;
+                rgba.extend_from_slice(&[over(px[0]), over(px[1]), over(px[2]), 255]);
+            }
+        }
+    }
+    buffer.unmap();
+    ::image::RgbaImage::from_raw(size, size, rgba)
+}
+
+pub fn view(app: &App) -> Element<'_, Message> {
+    let (maps, gray) = maps_of(app);
     let missing = maps.iter().all(Option::is_none);
     let l = &app.ui.preview.lighting;
     let scene = Scene {

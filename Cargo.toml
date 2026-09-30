@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/brewed-texture-core", "crates/brewed-texture-engine", "crates/brewed-texture-designer"]
+members = ["crates/brewed-texture-core", "crates/brewed-texture-engine", "crates/brewed-texture-designer", "crates/home-screen"]
 
 [workspace.package]
 version = "0.2.0"
@@ -12,6 +12,8 @@ repository = "https://example.invalid/brewed-texture-designer"
 [workspace.dependencies]
 brewed-texture-core = { path = "crates/brewed-texture-core" }
 brewed-texture-engine = { path = "crates/brewed-texture-engine" }
+# The Home screen of the set of programs this one belongs to.
+home-screen = { path = "crates/home-screen" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

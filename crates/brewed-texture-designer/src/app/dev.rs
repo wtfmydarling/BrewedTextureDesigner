@@ -19,6 +19,9 @@ use crate::view;
 pub struct DevOptions {
     /// Save a screenshot once everything is computed, then quit.
     pub screenshot: Option<PathBuf>,
+    /// Save the picture of the model, as the package's picture is made (see
+    /// `view3d::picture`), once everything is computed, then quit.
+    pub picture: Option<PathBuf>,
     /// UI state to show in the screenshot.
     pub scenario: Option<String>,
     /// Select the first node of this type at startup.
@@ -84,7 +87,7 @@ impl App {
 
     /// Ticks to see when a screenshot can be taken, and the autopilot's turns.
     pub(super) fn dev_subscriptions(&self, subs: &mut Vec<Subscription<Message>>) {
-        if self.opts.dev.screenshot.is_some() && self.ui.status.is_none() {
+        if (self.opts.dev.screenshot.is_some() || self.opts.dev.picture.is_some()) && self.ui.status.is_none() {
             subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
         }
         if self.dev.pilot.as_ref().is_some_and(|p| !p.is_done()) {
@@ -120,6 +123,12 @@ impl App {
             // names the GPU: the engine started on the Home screen).
             "home" => self.ui.home = Some(super::home::HomePage::Home),
             "learn" => self.ui.home = Some(super::home::HomePage::Learn),
+            other if other.starts_with("example:") => {
+                match brewed_texture_core::templates::Example::from_id(&other["example:".len()..]) {
+                    Some(example) => return self.home_message(super::home::HomeMessage::Example(example)),
+                    None => log::warn!("unknown example '{other}'"),
+                }
+            }
             "home-about" => {
                 self.ui.home = Some(super::home::HomePage::Home);
                 self.ui.dialog = Some(Dialog::About);
@@ -259,7 +268,7 @@ impl App {
     }
 
     pub(super) fn maybe_screenshot(&mut self) -> Task<Message> {
-        if self.opts.dev.screenshot.is_none() || self.dev.screenshot_requested {
+        if (self.opts.dev.screenshot.is_none() && self.opts.dev.picture.is_none()) || self.dev.screenshot_requested {
             return Task::none();
         }
         let settled = self.res.evaluated_revision == self.eval_revision
@@ -280,8 +289,21 @@ impl App {
             }
             return Task::none();
         }
-        let Some(id) = self.window else { return Task::none() };
         self.dev.screenshot_requested = true;
+        if let Some(path) = self.opts.dev.picture.clone() {
+            let picture = self.gpu.clone().and_then(|gpu| {
+                let mut pipeline = self.picture_pipeline.take();
+                let picture = crate::view::view3d::picture(self, &mut pipeline, &gpu, 512);
+                self.picture_pipeline = pipeline;
+                picture
+            });
+            match picture.map(|p| p.save(&path)) {
+                Some(Ok(())) => println!("picture saved to {}", path.display()),
+                other => eprintln!("picture failed: {other:?}"),
+            }
+            return iced::exit();
+        }
+        let Some(id) = self.window else { return Task::none() };
         window::screenshot(id).map(Message::Screenshot)
     }
 

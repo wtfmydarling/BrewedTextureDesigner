@@ -20,12 +20,21 @@ const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Au
 /// 09:05:40", "28 Sep, 18:40:12", "28 Sep 2025, 18:40:12"; how long ago, where the system does
 /// not tell the time of day.
 pub fn said(ms: u64) -> String {
+    said_with(ms, true)
+}
+
+/// [`said`], to the minute: "Today, 14:32".
+pub fn said_minutes(ms: u64) -> String {
+    said_with(ms, false)
+}
+
+fn said_with(ms: u64, seconds: bool) -> String {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     let at = (ms / 1000) as i64;
     let (Some(then), Some(today)) = (local(at), local(now)) else {
         return ago(UNIX_EPOCH + std::time::Duration::from_millis(ms));
     };
-    let clock = format!("{:02}:{:02}:{:02}", then.hour, then.minute, then.second);
+    let clock = if seconds { format!("{:02}:{:02}:{:02}", then.hour, then.minute, then.second) } else { format!("{:02}:{:02}", then.hour, then.minute) };
     let day = |l: &Local| (l.year, l.month, l.day);
     let month = MONTHS[(then.month.clamp(1, 12) - 1) as usize];
     if day(&then) == day(&today) {

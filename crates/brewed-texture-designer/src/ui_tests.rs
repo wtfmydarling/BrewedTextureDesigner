@@ -40,6 +40,14 @@ impl Harness {
 
     /// [`Harness::new`], the program started with `opts`.
     fn started(view: View, size: Size, opts: StartupOptions) -> Option<Harness> {
+        // The interface's fonts, as the program gives them to the window.
+        static FONTS: std::sync::Once = std::sync::Once::new();
+        FONTS.call_once(|| {
+            let mut fonts = iced::advanced::graphics::text::font_system().write().expect("the font system");
+            for bytes in crate::style::UI_FONTS {
+                fonts.load_font(std::borrow::Cow::Borrowed(bytes));
+            }
+        });
         let renderer = futures::executor::block_on(<iced::Renderer as Headless>::new(crate::style::ui_font(), Pixels(13.0), None))?;
         let (mut app, _) = App::boot(opts);
         app.ui.window_size = size;
@@ -351,7 +359,18 @@ fn the_program_starts_on_the_home_screen() {
     w.input(&[]);
     assert_eq!(w.app.ui.home, Some(HomePage::Home));
     assert!(w.app.blank(), "nothing is being edited");
-    for said in ["Welcome to Brewed Texture Designer", "New Package…", "Open…", "RECENT", "Learn", "RESOURCES"] {
+    for said in [
+        "Welcome to Brewed Texture Designer",
+        "New Package…",
+        "Open…",
+        "Start from a template",
+        "PBR (Metallic/Roughness)",
+        "More templates…",
+        "Recent",
+        "Learn",
+        "Resources",
+        "Shortcuts",
+    ] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
     w.snapshot("home");
@@ -395,6 +414,17 @@ fn the_program_starts_on_the_home_screen() {
     assert_eq!(w.app.packages().len(), 2);
     assert_eq!(w.app.doc.package().graphs.len(), 5);
     assert_eq!(w.app.ui.home, None);
+
+    // A template of the row, at once: a package of it, as the settings make new graphs.
+    w.send(Message::Home(HomeMessage::Show(HomePage::Home)));
+    w.send(Message::Home(HomeMessage::Screen(home_screen::Event::Start(Template::Empty.id().into()))));
+    assert_eq!(w.app.ui.home, None);
+    assert_eq!(w.app.packages().len(), 2, "in place of the example, untouched (as a package opened)");
+    assert!(w.app.graph().nodes.is_empty());
+    assert_eq!(w.app.graph().resolution, [w.app.settings.graph_size; 2]);
+    // The shortcuts, from Learn and from the resources.
+    w.send(Message::Home(HomeMessage::Screen(home_screen::Event::Lesson("shortcuts".into()))));
+    assert_eq!(w.app.ui.dialog, Some(Dialog::Shortcuts));
 }
 
 /// The packages opened last are on the Home screen, with the pictures their files have; one
@@ -433,6 +463,17 @@ fn packages_opened_last_have_their_pictures() {
     h.input(&[]);
     assert!(!texts(&mut h, "walls").is_empty() && !texts(&mut h, "Not found where it was").is_empty());
     h.snapshot("home_recent");
+    // As a list: a column each, and sorted by the one clicked (again: the other way).
+    h.send(Message::Home(HomeMessage::Screen(home_screen::Event::Layout(home_screen::Layout::List))));
+    h.input(&[]);
+    for said in ["Name", "Opened", "Modified", "Size", "Location"] {
+        assert!(!texts(&mut h, said).is_empty(), "{said}");
+    }
+    h.snapshot("home_recent_list");
+    h.send(Message::Home(HomeMessage::Screen(home_screen::Event::Sort(home_screen::Column::Name))));
+    assert_eq!((h.app.ui.home_sort.by, h.app.ui.home_sort.descending), (home_screen::Column::Name, false));
+    h.send(Message::Home(HomeMessage::Screen(home_screen::Event::Sort(home_screen::Column::Name))));
+    assert!(h.app.ui.home_sort.descending);
     h.send(Message::Home(HomeMessage::Open(walls.display().to_string())));
     assert_eq!(h.app.ui.home, None);
     assert_eq!(h.app.packages().len(), 1, "in place of the blank one");

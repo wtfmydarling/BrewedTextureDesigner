@@ -134,15 +134,22 @@ pub fn color_of(c: [f32; 4]) -> Color {
     Color { r: q(c[0]), g: q(c[1]), b: q(c[2]), a: q(c[3]) }
 }
 
+/// The fonts of the interface, the same on every system: Inter, one file of every weight and
+/// one of its italics (SIL Open Font License 1.1, see assets/fonts/Inter-LICENSE.txt). A
+/// system's own fonts differ from system to system, and one had no bold of every size.
+pub const UI_FONTS: [&[u8]; 2] =
+    [include_bytes!("../assets/fonts/InterVariable.ttf"), include_bytes!("../assets/fonts/InterVariable-Italic.ttf")];
+
 pub fn ui_font() -> Font {
-    if cfg!(windows) { Font::with_name("Segoe UI") } else { Font::DEFAULT }
+    Font::with_name("Inter Variable")
 }
 
 pub fn bold() -> Font {
     Font { weight: iced::font::Weight::Semibold, ..ui_font() }
 }
 
-/// For a value that is no longer the one it came with: heavy enough to see at a glance.
+/// Titles and headings, and a value that is no longer the one it came with: heavy enough to
+/// see at a glance.
 pub fn heavy() -> Font {
     Font { weight: iced::font::Weight::Bold, ..ui_font() }
 }
@@ -393,23 +400,6 @@ pub fn segment(chosen: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::S
 }
 
 /// A row of a list or menu: full width, highlighted when hovered or selected.
-/// A tile to click (a package on the Home screen): raised, outlined lighter while hovered.
-pub fn tile_button(_: &Theme, status: button_w::Status) -> button_w::Style {
-    let (background, line) = match status {
-        button_w::Status::Hovered => (RAISED, BORDER_LIGHT),
-        button_w::Status::Pressed => (HOVER, BORDER_LIGHT),
-        _ => (HEADER, LINE),
-    };
-    let text = if status == button_w::Status::Disabled { TEXT_FAINT } else { TEXT };
-    button_w::Style {
-        background: Some(Background::Color(background)),
-        text_color: text,
-        border: Border { color: line, width: 1.0, radius: 4.0.into() },
-        shadow: Shadow::default(),
-        snap: true,
-    }
-}
-
 pub fn row_button(selected: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
     move |_, status| {
         let bg = match (selected, status) {
