@@ -157,6 +157,11 @@ pub enum Edit {
         id: CommentId,
         text: String,
     },
+    /// What a comment says under its title.
+    SetCommentDescription {
+        id: CommentId,
+        text: String,
+    },
     SetCommentColor {
         id: CommentId,
         color: [f32; 4],
@@ -276,7 +281,7 @@ impl Edit {
             Edit::RemoveComments(_) => "Delete Comment",
             Edit::MoveComment { .. } => "Move",
             Edit::ResizeComment { .. } => "Resize Comment",
-            Edit::SetCommentText { .. } => "Edit Comment",
+            Edit::SetCommentText { .. } | Edit::SetCommentDescription { .. } => "Edit Comment",
             Edit::SetCommentColor { .. } => "Color Comment",
             Edit::Batch(edits) => edits.last().map_or("Edit", Edit::label),
         }
@@ -301,6 +306,7 @@ impl Edit {
             Edit::MoveComment { id, .. } => MergeKey::Comment(*id, 0),
             Edit::ResizeComment { id, .. } => MergeKey::Comment(*id, 1),
             Edit::SetCommentText { id, .. } => MergeKey::Comment(*id, 2),
+            Edit::SetCommentDescription { id, .. } => MergeKey::Comment(*id, 3),
             _ => return None,
         })
     }
@@ -622,6 +628,14 @@ impl Edit {
                 comment.text = text;
                 EditResult::changed()
             }
+            Edit::SetCommentDescription { id, text } => {
+                let comment = graph.comment_mut(id).ok_or("The comment no longer exists")?;
+                if comment.description == text {
+                    return Ok(EditResult::unchanged());
+                }
+                comment.description = text;
+                EditResult::changed()
+            }
             Edit::SetCommentColor { id, color } => {
                 if !color.iter().all(|c| c.is_finite()) {
                     return Err("That is not a color".into());
@@ -865,6 +879,28 @@ mod tests {
                 assert_eq!(read, g, "round {round} step {step}: {edit:?}");
             }
         }
+    }
+
+    /// What a comment says under its title is its own: said as it is typed (one step of undo
+    /// for all of it, not the title's), in the file and read back from it, and not in the file
+    /// when it says nothing.
+    #[test]
+    fn a_comment_says_what_its_nodes_do() {
+        use crate::graph::Comment;
+        let mut g = Graph::default();
+        let id = g.add_comment("Bricks".into(), [0.0, 0.0], [400.0, 300.0]);
+        let say = |text: &str| Edit::SetCommentDescription { id, text: text.into() };
+        assert!(say("Rows").apply(&mut g).unwrap().changed);
+        assert!(!say("Rows").apply(&mut g).unwrap().changed, "the same words change nothing");
+        assert_eq!(say("R").merge_key(), say("Rows of bricks").merge_key());
+        assert_ne!(say("R").merge_key(), Edit::SetCommentText { id, text: "R".into() }.merge_key());
+        assert_eq!(say("R").label(), "Edit Comment");
+        assert!(Edit::SetCommentDescription { id: CommentId(999), text: "R".into() }.apply(&mut g).is_err());
+        let json = serde_json::to_string(&g.comments[0]).unwrap();
+        assert!(json.contains(r#""description":"Rows""#), "{json}");
+        assert_eq!(serde_json::from_str::<Comment>(&json).unwrap(), g.comments[0]);
+        let silent = serde_json::to_string(&Comment { description: String::new(), ..g.comments[0].clone() }).unwrap();
+        assert!(!silent.contains("description"), "{silent}");
     }
 
     #[test]

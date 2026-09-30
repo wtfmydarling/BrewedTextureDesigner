@@ -297,7 +297,7 @@ impl App {
                 self.picture_pipeline = pipeline;
                 picture
             });
-            match picture.map(|p| p.save(&path)) {
+            match picture.map(|p| save_picture(&p, &path)) {
                 Some(Ok(())) => println!("picture saved to {}", path.display()),
                 other => eprintln!("picture failed: {other:?}"),
             }
@@ -327,4 +327,19 @@ fn find_kind(graph: &Graph, name: &str) -> Option<NodeId> {
         .iter()
         .find(|n| n.kind.id() == name || n.def().name.to_lowercase().replace(' ', "_") == name)
         .map(|n| n.id)
+}
+
+/// Save a picture of the model: as it is, or, as a .jpg, as a lesson of Learn shows it (see
+/// `LESSON_PICTURES`): its middle, as wide as it is and 10 high for 16 wide.
+fn save_picture(picture: &::image::RgbaImage, path: &std::path::Path) -> Result<(), String> {
+    let jpeg = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"));
+    if !jpeg {
+        return picture.save(path).map_err(|e| e.to_string());
+    }
+    let (w, h) = picture.dimensions();
+    let band = (w * 10 / 16).min(h);
+    let middle = ::image::imageops::crop_imm(picture, 0, (h - band) / 2, w, band).to_image();
+    let rgb = ::image::DynamicImage::ImageRgba8(middle).to_rgb8();
+    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    ::image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), 90).encode_image(&rgb).map_err(|e| e.to_string())
 }

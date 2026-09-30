@@ -814,8 +814,8 @@ fn diamond(center: Point, r: f32) -> Path {
 }
 
 impl GraphCanvas<'_> {
-    /// A comment frame: a colored box behind the nodes, with its text in the title bar and
-    /// a corner to resize it by.
+    /// A comment frame: a colored box behind the nodes, with its text in the title bar, its
+    /// description under it, and a corner to resize it by.
     fn draw_comment(&self, frame: &mut Frame, comment: &Comment, l: &CommentLayout, hovered: bool) {
         let z = self.transform().zoom;
         let color = style::color_of(comment.color);
@@ -830,10 +830,12 @@ impl GraphCanvas<'_> {
         let (width, outline) = if selected { (2.0, style::ACCENT) } else { (1.4, style::alpha(color, 0.8)) };
         frame.stroke(&body, Stroke::default().with_width(width).with_color(outline));
 
-        let size = scaled(13.5, z);
-        if size >= 5.0 {
+        // Read from further out than the text of nodes, as large as the title bar holds: what
+        // a frame is about is what a graph seen whole says.
+        let size = scaled(13.5, z).max(10.0).min(l.header.height - 1.0);
+        if size >= 7.0 {
             let content = if comment.text.is_empty() { "Comment".to_string() } else { comment.text.clone() };
-            let max_chars = ((l.rect.width - 14.0 * z) / (7.2 * z)).max(3.0) as usize;
+            let max_chars = ((l.rect.width - 14.0 * z) / (7.2 * size / 13.5)).max(3.0) as usize;
             let faint = comment.text.is_empty();
             let text_color = if faint { style::alpha(Color::WHITE, 0.5) } else { style::mix(color, Color::WHITE, 0.78) };
             frame.fill_text(Text {
@@ -847,6 +849,29 @@ impl GraphCanvas<'_> {
                 line_height: LineHeight::default(),
                 shaping: Shaping::Auto,
                 max_width: f32::INFINITY,
+            });
+        }
+        // What the nodes do, under the title, wrapped to the frame and as far down as it goes.
+        let small = scaled(layout::DESCRIPTION_SIZE, z);
+        if !comment.description.is_empty() && small >= 5.0 {
+            let body = Rectangle::new(
+                Point::new(l.rect.x, l.header.y + l.header.height),
+                Size::new(l.rect.width, (l.rect.height - l.header.height).max(0.0)),
+            );
+            let content = comment.description.clone();
+            frame.with_clip(body, |frame| {
+                frame.fill_text(Text {
+                    content,
+                    position: Point::new(body.x + layout::DESCRIPTION_PAD * z, body.y + layout::DESCRIPTION_PAD * z),
+                    color: style::alpha(style::mix(color, Color::WHITE, 0.85), 0.92),
+                    size: Pixels(small),
+                    font: style::ui_font(),
+                    align_x: TextAlign::Left,
+                    align_y: Vertical::Top,
+                    line_height: LineHeight::Relative(layout::DESCRIPTION_LINE),
+                    shaping: Shaping::Advanced,
+                    max_width: (body.width - 2.0 * layout::DESCRIPTION_PAD * z).max(1.0),
+                });
             });
         }
         // The corner: three lines, brighter when the mouse is on the comment.

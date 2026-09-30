@@ -397,6 +397,8 @@ pub struct Ui {
     pub gradient_stop: HashMap<(NodeId, String), usize>,
     /// The expression editor's text buffer (node, content).
     pub expression: Option<(NodeId, text_editor::Content)>,
+    /// The text buffer of the editor of the selected comment's description.
+    pub description: Option<(CommentId, text_editor::Content)>,
     pub plot_var: usize,
     pub plot_range: (f32, f32),
     pub expanded_vars: HashSet<String>,
@@ -858,6 +860,8 @@ pub enum Message {
     /// `App::open_file`): where, and whether it takes the place of the package being edited.
     Opened(String, bool, Result<Arc<packages::Opened>, String>),
     Expression(NodeId, text_editor::Action),
+    /// Typing in the description of a comment.
+    Description(CommentId, text_editor::Action),
     ColorPicker(Option<ColorTarget>),
     GradientStop(NodeId, String, usize),
     /// Replace a gradient and select one of its stops.
@@ -1073,6 +1077,7 @@ impl App {
                 frame_rate_at: None,
                 gradient_stop: HashMap::new(),
                 expression: None,
+                description: None,
                 plot_var: 0,
                 plot_range: (-5.0, 5.0),
                 expanded_vars: HashSet::new(),
@@ -1133,6 +1138,7 @@ impl App {
             None => Task::none(),
         };
         app.sync_expression();
+        app.sync_description();
         // The app runs as a daemon (the eyedropper opens more windows): it opens its main
         // window itself.
         let (main, open) = window::open(main_window_settings(opts.workspace.as_ref()));
@@ -1718,7 +1724,9 @@ impl App {
         self.close_popups();
         self.ui.selection.clear();
         self.ui.selected_link = None;
+        self.ui.selected_comment = None;
         self.ui.expression = None;
+        self.ui.description = None;
         self.ui.color_picker = None;
         self.ui.gradient_stop.clear();
         self.ui.expanded_vars.clear();
@@ -1968,6 +1976,7 @@ impl App {
         let task = self.handle(message);
         self.refresh();
         self.sync_expression();
+        self.sync_description();
         // A file a package began to use is looked at now, not at the next look.
         if !self.res.looking && self.new_files() {
             return Task::batch([task, self.look_at_files()]);
@@ -2383,6 +2392,7 @@ impl App {
                 return self.add_payload(payload, [pos[0] - 80.0, pos[1] - 40.0]);
             }
             Message::Expression(node, action) => self.expression_action(node, action),
+            Message::Description(id, action) => self.description_action(id, action),
             Message::ColorPicker(target) => {
                 // The picker floats where it was opened, so nothing in the panels moves.
                 self.ui.color_picker_at = self.ui.cursor + Vector::new(-120.0, 18.0);
@@ -2549,6 +2559,45 @@ impl App {
             let text = content.text().trim_end_matches(['\n', '\r']).to_string();
             if text != current {
                 self.apply(Edit::SetParam { node, key: key.into(), value: ParamValue::Text(text) });
+            }
+        }
+    }
+
+    /// Typing in the description of a comment: it says it as it is typed (one step of undo
+    /// for all of it, see `Edit::merge_key`).
+    fn description_action(&mut self, id: CommentId, action: text_editor::Action) {
+        let Some(current) = self.graph().comment(id).map(|c| c.description.clone()) else { return };
+        let content = match &mut self.ui.description {
+            Some((cid, content)) if *cid == id => content,
+            _ => {
+                self.ui.description = Some((id, text_editor::Content::with_text(&current)));
+                &mut self.ui.description.as_mut().expect("just set").1
+            }
+        };
+        let is_edit = action.is_edit();
+        content.perform(action);
+        if is_edit {
+            // (The editor ends what it holds with a line of its own.)
+            let text = content.text().trim_end_matches(['\n', '\r']).to_string();
+            if text != current {
+                self.apply(Edit::SetCommentDescription { id, text });
+            }
+        }
+    }
+
+    /// Keep the buffer of the description editor as the selected comment's description, as
+    /// `sync_expression` does the expression's: replaced only when it changed from outside.
+    fn sync_description(&mut self) {
+        let Some(comment) = self.ui.selected_comment.and_then(|id| self.doc.graph().comment(id)) else {
+            self.ui.description = None;
+            return;
+        };
+        match &self.ui.description {
+            Some((id, content)) if *id == comment.id && content.text().trim_end_matches(['\n', '\r']) == comment.description => {}
+            _ => {
+                let mut content = text_editor::Content::with_text(&comment.description);
+                content.perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
+                self.ui.description = Some((comment.id, content));
             }
         }
     }

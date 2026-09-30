@@ -1190,10 +1190,23 @@ fn comments_group_nodes_and_travel_with_them() {
     drag(&mut w, inside, Point::new(inside.x - 10.0, inside.y + 10.0));
     assert_eq!(w.app.ui.selected_comment, None, "the body of a comment is not a handle");
 
-    // Selected again by its title bar, Delete removes the frame and keeps the nodes.
-    let title = Point::new(rect.x + 40.0, rect.y + 8.0);
+    // Selected again by its title bar, Delete removes the frame and keeps the nodes. (As
+    // small as it can be, it is a third of its width in, whatever the zoom.)
+    let title = Point::new(rect.x + rect.width / 3.0, rect.y + 4.0);
     drag(&mut w, title, title);
     assert_eq!(w.app.ui.selected_comment, Some(id));
+    // What it says under its title is typed in the properties panel: one step of undo.
+    for c in "Rough mortar".chars() {
+        w.send(Message::Description(id, iced::widget::text_editor::Action::Edit(iced::widget::text_editor::Edit::Insert(c))));
+    }
+    let said = |w: &Harness| w.app.graph().comment(id).expect("the comment").description.clone();
+    assert_eq!(said(&w), "Rough mortar");
+    w.input(&[]);
+    assert!(!texts(&mut w, "Description").is_empty(), "the panel names it");
+    w.send(Message::Undo);
+    assert_eq!(said(&w), "");
+    w.send(Message::Redo);
+    assert_eq!(said(&w), "Rough mortar");
     w.send(Message::Delete);
     assert!(w.app.graph().comment(id).is_none());
     assert!(w.app.graph().node(levels).is_some(), "deleting a comment keeps its nodes");

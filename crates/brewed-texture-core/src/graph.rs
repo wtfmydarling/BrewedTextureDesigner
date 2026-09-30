@@ -40,8 +40,13 @@ pub fn coordinate(v: f32) -> f32 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Comment {
     pub id: CommentId,
+    /// Its title.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
+    /// What the nodes it frames do, said under its title (as a frame of Substance Designer
+    /// says it): wrapped to its width.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     #[serde(rename = "position")]
     pub pos: [f32; 2],
     pub size: [f32; 2],
@@ -928,7 +933,7 @@ impl Graph {
     /// Add a comment frame; it is drawn behind the nodes it covers.
     pub fn add_comment(&mut self, text: String, pos: [f32; 2], size: [f32; 2]) -> CommentId {
         let id = CommentId(self.alloc_id());
-        let mut comment = Comment { id, text, pos, size, color: Comment::gray() };
+        let mut comment = Comment { id, text, description: String::new(), pos, size, color: Comment::gray() };
         comment.normalize();
         self.comments.push(comment);
         id

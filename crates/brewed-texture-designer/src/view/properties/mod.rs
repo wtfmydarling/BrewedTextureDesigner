@@ -138,6 +138,18 @@ fn graph_view(app: &App) -> Element<'_, Message> {
 fn comment_view(app: &App, id: brewed_texture_core::CommentId) -> Element<'_, Message> {
     let Some(comment) = app.graph().comment(id) else { return space().into() };
     let open = app.ui.color_picker == Some(ColorTarget::Comment(id));
+    let description: Element<'_, Message> = match &app.ui.description {
+        Some((cid, content)) if *cid == id => iced::widget::text_editor(content)
+            .placeholder("What do they do? Said under the title.")
+            .on_action(move |a| Message::Description(id, a))
+            .size(style::TEXT_SIZE)
+            .padding(6)
+            .min_height(64)
+            .max_height(240)
+            .style(style::text_editor)
+            .into(),
+        _ => container(text(comment.description.as_str()).size(style::TEXT_SIZE)).padding(6).style(style::field_box).into(),
+    };
     container(
         column![
             row![
@@ -155,6 +167,7 @@ fn comment_view(app: &App, id: brewed_texture_core::CommentId) -> Element<'_, Me
                 .size(style::TEXT_SIZE)
                 .padding([4, 6])
                 .style(style::text_input),
+            column![text("Description").size(style::SMALL).color(style::TEXT_DIM), description].spacing(4),
             row![
                 text("Color").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W)),
                 swatch(comment.color, open, Message::ColorPicker(Some(ColorTarget::Comment(id)))),

@@ -256,7 +256,9 @@ node that uses the graph.
 
 ### Comments
 
-`{"id": 27, "text": "The shape of the bricks", "position": [x, y], "size": [w, h], "color": [r, g, b, a]}`
+`{"id": 27, "text": "The shape of the bricks", "description": "A Tile Generator lays…", "position": [x, y], "size": [w, h], "color": [r, g, b, a]}`
+
+`text` is its title; `description` (optional) is said under it, wrapped to its width.
 
 ## `editor.json`
 

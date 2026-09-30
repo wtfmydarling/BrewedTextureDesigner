@@ -144,6 +144,11 @@ pub fn bezier_distance(points: &[Point; 4], p: Point) -> f32 {
 /// Height of the title bar of a comment, in graph units: the part that can be grabbed to
 /// move it. The rest of a comment lets the mouse through to the nodes and the canvas.
 pub const COMMENT_HEADER_H: f32 = 30.0;
+/// The description of a comment under its title: its size, how far apart its lines are (in
+/// sizes), and how far it keeps from the frame's sides and title.
+pub const DESCRIPTION_SIZE: f32 = 12.5;
+pub const DESCRIPTION_LINE: f32 = 1.35;
+pub const DESCRIPTION_PAD: f32 = 8.0;
 /// Side of the corner that resizes a comment, in graph units.
 pub const COMMENT_GRIP: f32 = 18.0;
 
@@ -169,4 +174,93 @@ pub fn comment_layout(comment: &Comment, t: &Transform, offset: Vector, resize: 
         Size::new(side, side),
     );
     CommentLayout { id: comment.id, rect, header, grip }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use brewed_texture_core::Precision;
+    use brewed_texture_core::templates::{Example, Template};
+
+    /// How far down the description of `comment` reaches, at most, below its top: its lines
+    /// wrapped as wide as the frame is, counted with the widest letters the font has on
+    /// average (so it says more lines than there are, never fewer).
+    fn said_to(comment: &Comment) -> f32 {
+        if comment.description.is_empty() {
+            return COMMENT_HEADER_H;
+        }
+        let per_line = (((comment.size[0] - 2.0 * DESCRIPTION_PAD) / (DESCRIPTION_SIZE * 0.58)) as usize).max(1);
+        let lines: usize = comment
+            .description
+            .split('\n')
+            .map(|paragraph| {
+                // Word by word, as the text wraps.
+                let mut lines = 1;
+                let mut line = 0;
+                for word in paragraph.split(' ') {
+                    let n = word.chars().count();
+                    if line > 0 && line + 1 + n > per_line {
+                        lines += 1;
+                        line = n;
+                    } else {
+                        line += if line > 0 { 1 + n } else { n };
+                    }
+                }
+                lines
+            })
+            .sum();
+        COMMENT_HEADER_H + DESCRIPTION_PAD + lines as f32 * DESCRIPTION_SIZE * DESCRIPTION_LINE + DESCRIPTION_PAD
+    }
+
+    /// Where something is in a graph, and how large: its top left corner and its size.
+    type Place = ([f32; 2], [f32; 2]);
+
+    fn overlap(a: Place, b: Place) -> bool {
+        let (ap, asz) = a;
+        let (bp, bsz) = b;
+        ap[0] < bp[0] + bsz[0] && bp[0] < ap[0] + asz[0] && ap[1] < bp[1] + bsz[1] && bp[1] < ap[1] + asz[1]
+    }
+
+    /// The graphs the program makes itself, the examples of Learn and the templates of a new
+    /// graph, are laid out as someone careful would: no node over another, every node wholly
+    /// in a frame or out of it, below what the frame says; and every graph of an example says
+    /// what it does, in a frame's description.
+    #[test]
+    fn examples_and_templates_are_laid_out_apart() {
+        let mut graphs: Vec<(String, Graph, bool)> = Vec::new();
+        for example in Example::ALL {
+            for entry in example.package().0.graphs {
+                graphs.push((format!("{} / {}", example.name(), entry.name), Graph::clone(&entry.graph), true));
+            }
+        }
+        for template in Template::ALL {
+            graphs.push((template.name().into(), template.graph([512, 512], Precision::Half), false));
+        }
+        let mut wrong = Vec::new();
+        for (name, g, example) in &graphs {
+            let boxes: Vec<(&Node, Place)> = g.nodes.iter().map(|n| (n, (n.pos, node_size(g, n)))).collect();
+            for (i, (a, ab)) in boxes.iter().enumerate() {
+                for (b, bb) in &boxes[i + 1..] {
+                    if overlap(*ab, *bb) {
+                        wrong.push(format!("{name}: {} over {}", a.def().name, b.def().name));
+                    }
+                }
+            }
+            for c in &g.comments {
+                for (n, (pos, size)) in &boxes {
+                    if c.holds(*pos, *size) {
+                        if pos[1] < c.pos[1] + said_to(c) {
+                            wrong.push(format!("{name}: {} over what '{}' says (below {})", n.def().name, c.text, c.pos[1] + said_to(c)));
+                        }
+                    } else if overlap((c.pos, c.size), (*pos, *size)) {
+                        wrong.push(format!("{name}: {} half in '{}'", n.def().name, c.text));
+                    }
+                }
+            }
+            if *example && !g.comments.iter().any(|c| !c.description.is_empty()) {
+                wrong.push(format!("{name} says nothing of what it does"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
 }

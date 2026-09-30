@@ -166,14 +166,22 @@ impl Template {
                 }
                 let rows = maps.len() as f32;
                 for (row, (name, color, gray, usage)) in maps.into_iter().enumerate() {
-                    let y = row as f32 * 130.0;
+                    let y = row as f32 * ROW;
                     let value = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, y]);
                     set(&mut g, value, "color", ParamValue::Color(color));
                     set(&mut g, value, "output", ParamValue::Enum(u32::from(gray)));
                     let output = output(&mut g, name, usage, [340.0, y]);
                     let _ = g.connect(value, "o:output", output, "i:input");
                 }
-                g.add_comment("Replace each uniform value with what makes the map".into(), [-30.0, -60.0], [290.0, rows * 130.0 + 40.0]);
+                frame(
+                    &mut g,
+                    "Replace each uniform value with what makes the map",
+                    "Each Output is one map of the material, named as its file is, and the 3D view uses it as its \
+                     usage says. The uniform colors only hold a value: connect what makes each map in their place.",
+                    [-30.0, -110.0],
+                    [568.0, 110.0 + (rows - 1.0) * ROW + TALL + 30.0],
+                    GRAY,
+                );
             }
             Template::GrayFilter | Template::ColorFilter => {
                 let input = g.add_node(NodeKind::IMAGE_INPUT, [0.0, 0.0]);
@@ -185,20 +193,44 @@ impl Template {
                 }
                 let output = output(&mut g, "output", 0, [420.0, 0.0]);
                 let _ = g.connect(input, "o:output", output, "i:input");
-                g.add_comment("Put what changes the image between its input and its output".into(), [-30.0, -60.0], [560.0, 200.0]);
+                frame(
+                    &mut g,
+                    "Put what changes the image between its input and its output",
+                    "The Input is the image the filter is given where it is used as a node; the Output is what it \
+                     gives back. Connect the nodes that change it between them.",
+                    [-30.0, -90.0],
+                    [648.0, 90.0 + TALL + 30.0],
+                    GRAY,
+                );
             }
             Template::PixelProcessor => {
                 let math = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
                 set(&mut g, math, "expression", ParamValue::Text("vec3(u, v, 0.5)".into()));
                 let output = output(&mut g, "output", 0, [340.0, 0.0]);
                 let _ = g.connect(math, "o:output", output, "i:input");
-                g.add_comment("Pixel Math: each pixel is what its expression says of it (u and v: where it is)".into(), [-30.0, -60.0], [480.0, 220.0]);
+                frame(
+                    &mut g,
+                    "Pixel Math: every pixel is what its expression says",
+                    "The expression is worked out for every pixel on the GPU: u and v say where the pixel is, 0 to 1 \
+                     across and down, and vec3(u, v, 0.5) makes a color of them. Change it in the properties.",
+                    [-30.0, -110.0],
+                    [568.0, 110.0 + 216.0 + 30.0],
+                    GRAY,
+                );
             }
             Template::FxMap => {
                 let fx = g.add_node(NodeKind::FX_MAP, [0.0, 0.0]);
                 let output = output(&mut g, "output", 0, [340.0, 0.0]);
                 let _ = g.connect(fx, "o:output", output, "i:input");
-                g.add_comment("An FX-Map: its program says where each splat goes, how big and how bright".into(), [-30.0, -60.0], [480.0, 220.0]);
+                frame(
+                    &mut g,
+                    "An FX-Map: its program says where each splat goes, how big and how bright",
+                    "The program runs once for every splat: x and y say where it goes, size how big, value how \
+                     bright. How many there are, and the pattern each draws, are in the properties.",
+                    [-30.0, -110.0],
+                    [568.0, 110.0 + FX_TALL + 30.0],
+                    GRAY,
+                );
             }
             Template::Empty => {}
         }
@@ -209,6 +241,25 @@ impl Template {
 fn set(g: &mut Graph, node: NodeId, key: &str, value: ParamValue) {
     if let Some(p) = g.node_mut(node).and_then(|n| n.param_mut(key)) {
         p.value = value;
+    }
+}
+
+/// How far apart the rows of nodes are: as tall as a node with its picture, and a gap.
+const ROW: f32 = 240.0;
+/// How tall a node with its picture and one row of sockets is drawn, and an FX-Map.
+const TALL: f32 = 198.0;
+const FX_TALL: f32 = 296.0;
+/// The colors of frames: gray for what a template says to do, blue for what the nodes of an
+/// example do.
+const GRAY: [f32; 4] = [0.49, 0.49, 0.49, 1.0];
+const HOW: [f32; 4] = [0.28, 0.51, 0.8, 1.0];
+
+/// A frame titled `title` that says `description` under it, at `pos`, `size` big.
+fn frame(g: &mut Graph, title: &str, description: &str, pos: [f32; 2], size: [f32; 2], color: [f32; 4]) {
+    let id = g.add_comment(title.into(), pos, size);
+    if let Some(c) = g.comment_mut(id) {
+        c.description = description.into();
+        c.color = color;
     }
 }
 
@@ -282,89 +333,143 @@ impl Example {
     }
 }
 
-/// A graph of an FX-Map running `program` (count, depths, pattern, blending) into an Output
-/// named `name`, over a background of `background`, if any.
-#[allow(clippy::too_many_arguments)]
-fn fx_map_graph(program: &str, count: i32, (from, depth): (i32, i32), pattern: u32, blend: u32, background: Option<f32>, name: &str, usage: u32) -> (Graph, NodeId) {
-    let mut g = Graph { resolution: [1024, 1024], ..Graph::default() };
-    let fx = g.add_node(NodeKind::FX_MAP, [0.0, 0.0]);
-    set(&mut g, fx, "program", ParamValue::Text(program.into()));
-    set(&mut g, fx, "count", ParamValue::Int(count));
-    set(&mut g, fx, "from_depth", ParamValue::Int(from));
-    set(&mut g, fx, "depth", ParamValue::Int(depth));
-    set(&mut g, fx, "pattern", ParamValue::Enum(pattern));
-    set(&mut g, fx, "blend", ParamValue::Enum(blend));
-    if let Some(v) = background {
-        let b = g.add_node(NodeKind::UNIFORM_COLOR, [-300.0, 0.0]);
-        set(&mut g, b, "color", ParamValue::Color([v, v, v, 1.0]));
-        set(&mut g, b, "output", ParamValue::Enum(1));
-        let _ = g.connect(b, "o:output", fx, "i:background");
+/// A graph of the FX-Map example: an FX-Map running `program` into an Output, over a
+/// background, if any, in a frame that says what it does.
+struct FxExample {
+    title: &'static str,
+    about: &'static str,
+    program: &'static str,
+    count: i32,
+    /// From which depth to which.
+    depths: (i32, i32),
+    pattern: u32,
+    blend: u32,
+    background: Option<f32>,
+    output: &'static str,
+    usage: u32,
+}
+
+impl FxExample {
+    fn graph(&self) -> (Graph, NodeId) {
+        let mut g = Graph { resolution: [1024, 1024], ..Graph::default() };
+        let fx = g.add_node(NodeKind::FX_MAP, [0.0, 0.0]);
+        set(&mut g, fx, "program", ParamValue::Text(self.program.into()));
+        set(&mut g, fx, "count", ParamValue::Int(self.count));
+        set(&mut g, fx, "from_depth", ParamValue::Int(self.depths.0));
+        set(&mut g, fx, "depth", ParamValue::Int(self.depths.1));
+        set(&mut g, fx, "pattern", ParamValue::Enum(self.pattern));
+        set(&mut g, fx, "blend", ParamValue::Enum(self.blend));
+        let mut left = -30.0;
+        if let Some(v) = self.background {
+            let b = g.add_node(NodeKind::UNIFORM_COLOR, [-320.0, 0.0]);
+            set(&mut g, b, "color", ParamValue::Color([v, v, v, 1.0]));
+            set(&mut g, b, "output", ParamValue::Enum(1));
+            let _ = g.connect(b, "o:output", fx, "i:background");
+            left = -350.0;
+        }
+        let out = output(&mut g, self.output, self.usage, [400.0, 0.0]);
+        let _ = g.connect(fx, "o:output", out, "i:input");
+        frame(&mut g, self.title, self.about, [left, -150.0], [598.0 - left, 150.0 + FX_TALL + 30.0], HOW);
+        (g, fx)
     }
-    let out = output(&mut g, name, usage, [320.0, 0.0]);
-    let _ = g.connect(fx, "o:output", out, "i:input");
-    (g, fx)
 }
 
 fn fx_maps() -> (Package, Option<NodeId>) {
     const MAX: u32 = 0;
     const ADD: u32 = 1;
     const STACK: u32 = 2;
-    let graphs: [(&str, (Graph, NodeId)); 5] = [
-        ("Scattered", fx_map_graph(crate::nodes::DEFAULT_FX_MAP_PROGRAM, 64, (0, 0), 0, MAX, None, "scattered", USAGE_HEIGHT)),
+    let examples = [
+        (
+            "Scattered",
+            FxExample {
+                title: "64 splats at random",
+                about: "At depth 0 the whole image is one cell, and it draws Count splats: 64. The program says what \
+                        each is, reading rand(k), a random number of its own: where it goes (x, y), how big, how far \
+                        turned and how bright. Where splats overlap, Max keeps the brighter. The Output is a height: \
+                        the 3D view raises the model by it.",
+                program: crate::nodes::DEFAULT_FX_MAP_PROGRAM,
+                count: 64,
+                depths: (0, 0),
+                pattern: 0,
+                blend: MAX,
+                background: None,
+                output: "scattered",
+                usage: USAGE_HEIGHT,
+            },
+        ),
         (
             "Bricks",
-            fx_map_graph(
-                "# Two bricks a cell, the lower row half a brick along.\ny = 0.25 + 0.5 * i\nx = 0.5 * i\nsize = 0.94, 0.44\nvalue = 0.45 + 0.55 * rand(1)",
-                2,
-                (3, 3),
-                2,
-                MAX,
-                None,
-                "bricks",
-                USAGE_HEIGHT,
-            ),
+            FxExample {
+                title: "Bricks laid in rows",
+                about: "Depth 3 splits the image into 8 x 8 cells, and each draws Count splats: 2, numbered by i. \
+                        The program lays the first in the upper half of its cell and the second in the lower half, \
+                        half a brick along (x = 0.5 * i): rows of bricks, each as wide as its cell and not quite \
+                        half as high, each as bright as its own random number says.",
+                program: "# Two bricks a cell, the lower row half a brick along.\ny = 0.25 + 0.5 * i\nx = 0.5 * i\nsize = 0.94, 0.44\nvalue = 0.45 + 0.55 * rand(1)",
+                count: 2,
+                depths: (3, 3),
+                pattern: 2,
+                blend: MAX,
+                background: None,
+                output: "bricks",
+                usage: USAGE_HEIGHT,
+            },
         ),
         (
             "Clouds",
-            fx_map_graph(
-                "# A splat at every depth, each finer one weaker: clouds.\nsize = 1.4\nvalue = (rand(1) - 0.5) * 0.6^depth",
-                1,
-                (0, 8),
-                12,
-                ADD,
-                Some(0.5),
-                "clouds",
-                USAGE_HEIGHT,
-            ),
+            FxExample {
+                title: "Clouds of ever finer splats",
+                about: "From depth 0 to depth 8 every split of the image draws, one splat a cell: 1 at depth 0, 4 at \
+                        1, 16 at 2, and 65 536 at 8. Each is a soft blob a little larger than its cell, lighter or \
+                        darker at random, and the finer the weaker (0.6^depth). Add sums them over the gray of the \
+                        background: clouds, made as noise is made of octaves.",
+                program: "# A splat at every depth, each finer one weaker: clouds.\nsize = 1.4\nvalue = (rand(1) - 0.5) * 0.6^depth",
+                count: 1,
+                depths: (0, 8),
+                pattern: 12,
+                blend: ADD,
+                background: Some(0.5),
+                output: "clouds",
+                usage: USAGE_HEIGHT,
+            },
         ),
         (
             "Confetti",
-            fx_map_graph(
-                "x = rand(1); y = rand(2)\nsize = 0.02 + 0.03 * rand(3), 0.01 + 0.01 * rand(4)\nangle = 360 * rand(5)\ncolor = rand(6), rand(7), rand(8)",
-                600,
-                (0, 0),
-                1,
-                STACK,
-                None,
-                "confetti",
-                USAGE_BASE_COLOR,
-            ),
+            FxExample {
+                title: "Confetti in colors",
+                about: "600 splats in the one cell of depth 0, each a little strip placed, sized and turned at \
+                        random. A program that gives color makes the image a color one; Stack lays each later \
+                        splat over the earlier ones. The Output is a base color: the 3D view shows it as the \
+                        model's colors.",
+                program: "x = rand(1); y = rand(2)\nsize = 0.02 + 0.03 * rand(3), 0.01 + 0.01 * rand(4)\nangle = 360 * rand(5)\ncolor = rand(6), rand(7), rand(8)",
+                count: 600,
+                depths: (0, 0),
+                pattern: 1,
+                blend: STACK,
+                background: None,
+                output: "confetti",
+                usage: USAGE_BASE_COLOR,
+            },
         ),
         (
             "Dots",
-            fx_map_graph(
-                "# A dot in every cell of a 32 x 32 grid, one in five left out.\nsize = 0.9 * rand(1)^0.5\nvalue = 0.3 + 0.7 * rand(2)\ndraw = rand(3) < 0.8",
-                1,
-                (5, 5),
-                0,
-                MAX,
-                None,
-                "dots",
-                USAGE_HEIGHT,
-            ),
+            FxExample {
+                title: "A dot in every cell, some left out",
+                about: "Depth 5 splits the image into 32 x 32 cells, each with one dot in its middle (x and y are 0.5 \
+                        when the program does not say). Its size and brightness are random; draw = rand(3) < 0.8 \
+                        leaves about one in five out: draw is 0 where the comparison does not hold.",
+                program: "# A dot in every cell of a 32 x 32 grid, one in five left out.\nsize = 0.9 * rand(1)^0.5\nvalue = 0.3 + 0.7 * rand(2)\ndraw = rand(3) < 0.8",
+                count: 1,
+                depths: (5, 5),
+                pattern: 0,
+                blend: MAX,
+                background: None,
+                output: "dots",
+                usage: USAGE_HEIGHT,
+            },
         ),
     ];
-    let mut graphs = graphs.into_iter();
+    let mut graphs = examples.iter().map(|(name, example)| (*name, example.graph()));
     let (name, (first, preview)) = graphs.next().expect("graphs");
     let mut package = Package::new(name, first);
     for (name, (graph, _)) in graphs {
@@ -377,7 +482,7 @@ fn pixel_math() -> (Package, Option<NodeId>) {
     // A normal from a height.
     let mut g = Graph { resolution: [1024, 1024], ..Graph::default() };
     let height = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
-    let normal = g.add_node(NodeKind::PIXEL_MATH, [320.0, 0.0]);
+    let normal = g.add_node(NodeKind::PIXEL_MATH, [300.0, 0.0]);
     set(
         &mut g,
         normal,
@@ -393,27 +498,50 @@ fn pixel_math() -> (Package, Option<NodeId>) {
         ),
     );
     let _ = g.connect(height, "o:output", normal, &crate::graph::var_socket_key("h"));
-    let out = output(&mut g, "normal", USAGE_NORMAL, [640.0, 0.0]);
+    let out = output(&mut g, "normal", USAGE_NORMAL, [600.0, 0.0]);
     let _ = g.connect(normal, "o:output", out, "i:input");
-    let heights = output(&mut g, "height", USAGE_HEIGHT, [640.0, 160.0]);
+    let heights = output(&mut g, "height", USAGE_HEIGHT, [600.0, ROW]);
     let _ = g.connect(height, "o:output", heights, "i:input");
+    frame(
+        &mut g,
+        "A normal worked out from how the height slopes",
+        "Pixel Math works out every pixel of its image from its expression. Here it reads the height h a pixel \
+         to either side: dx and dy are how much it rises across and down. The normal leans away from the rise: \
+         vec3(-dx, -dy, 0.02), made one long by normalize, the small z saying how steep a slope looks. n * 0.5 + \
+         0.5 turns it from -1..1 into the colors of a normal map. The normal lights the model in the 3D view; the \
+         height raises it.",
+        [-30.0, -130.0],
+        [828.0, 130.0 + ROW + TALL + 30.0],
+        HOW,
+    );
     let mut package = Package::new("Normal from Height", g);
 
     // Three maps in the channels of one.
     let mut g = Graph { resolution: [1024, 1024], ..Graph::default() };
     let mut maps = Vec::new();
     for (row, (kind, name)) in [(crate::nodes::NOISE_CELLS, "ao"), (0, "rough"), (crate::nodes::NOISE_WEAVE, "metal")].into_iter().enumerate() {
-        let noise = g.add_node(NodeKind::NOISE, [0.0, row as f32 * 170.0]);
+        let noise = g.add_node(NodeKind::NOISE, [0.0, row as f32 * ROW]);
         set(&mut g, noise, "type", ParamValue::Enum(kind));
         maps.push((noise, name));
     }
-    let packed = g.add_node(NodeKind::PIXEL_MATH, [320.0, 170.0]);
+    let packed = g.add_node(NodeKind::PIXEL_MATH, [300.0, ROW]);
     set(&mut g, packed, "expression", ParamValue::Text("# Occlusion in red, roughness in green, metallic in blue.\nvec3(ao, rough, metal)".into()));
     for (noise, name) in maps {
         let _ = g.connect(noise, "o:output", packed, &crate::graph::var_socket_key(name));
     }
-    let out = output(&mut g, "orm", crate::nodes::USAGE_BASE_COLOR, [640.0, 170.0]);
+    let out = output(&mut g, "orm", crate::nodes::USAGE_BASE_COLOR, [600.0, ROW]);
     let _ = g.connect(packed, "o:output", out, "i:input");
+    frame(
+        &mut g,
+        "Three maps in the channels of one",
+        "Game engines read several gray maps from the channels of one picture: fewer files, less memory. Each \
+         Noise here is one map: occlusion, roughness, metallic. vec3(ao, rough, metal) makes one color of the \
+         three, occlusion in red, roughness in green, metallic in blue: ORM, as Unreal Engine packs them. The \
+         Output shows it as the model's base color, to see all three at once.",
+        [-30.0, -130.0],
+        [828.0, 130.0 + 2.0 * ROW + TALL + 30.0],
+        HOW,
+    );
     package.add_graph("Channel Packing", g);
     (package, Some(normal))
 }

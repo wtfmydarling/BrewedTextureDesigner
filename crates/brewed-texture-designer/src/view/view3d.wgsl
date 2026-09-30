@@ -43,6 +43,8 @@ struct VOut {
     @location(1) normal: vec3<f32>,
     @location(2) tangent: vec4<f32>,
     @location(3) uv: vec2<f32>,
+    // Where the model's surface is before the height moves it.
+    @location(4) surface: vec3<f32>,
 };
 
 fn has(bit: u32) -> bool {
@@ -69,7 +71,38 @@ fn vs(v: VIn) -> VOut {
     o.normal = v.normal;
     o.tangent = v.tangent;
     o.uv = uv;
+    o.surface = v.pos;
     return o;
+}
+
+fn height_at(uv: vec2<f32>) -> f32 {
+    return read_map(textureSample(height_map, samp, uv), 2u).r;
+}
+
+// Which way the surface the height map makes of the model faces, where no normal map says: it
+// rises as far as the view displaces it, so its normal leans away from where it rises (the
+// surface gradient of the height, as Mikkelsen works it out from how the surface and the
+// texture change across the screen). Flat parts show it as the rounded ones do.
+fn from_height(n: vec3<f32>, surface: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
+    // How u and v change along the surface, in the world.
+    let dp1 = dpdx(surface);
+    let dp2 = dpdy(surface);
+    let duv1 = dpdx(uv);
+    let duv2 = dpdy(uv);
+    let r1 = cross(dp2, n);
+    let r2 = cross(n, dp1);
+    let det = dot(dp1, r1);
+    let inv = select(0.0, 1.0 / det, abs(det) > 1e-20);
+    let grad_u = (r1 * duv1.x + r2 * duv2.x) * inv;
+    let grad_v = (r1 * duv1.y + r2 * duv2.y) * inv;
+    // How the height rises along u and along v: over a texel, or as far as a pixel reaches
+    // where the texture is seen from far.
+    let step = max(max(abs(duv1), abs(duv2)), 1.0 / vec2<f32>(textureDimensions(height_map, 0)));
+    let du = vec2<f32>(step.x, 0.0);
+    let dv = vec2<f32>(0.0, step.y);
+    let rise_u = (height_at(uv + du) - height_at(uv - du)) / (2.0 * step.x);
+    let rise_v = (height_at(uv + dv) - height_at(uv - dv)) / (2.0 * step.y);
+    return normalize(n - u.params.x * (rise_u * grad_u + rise_v * grad_v));
 }
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
@@ -178,6 +211,8 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
         let m = read_map(textureSample(normal_map, samp, i.uv), 1u).rgb * 2.0 - 1.0;
         // OpenGL normal maps: +y points up in the texture, i.e. against v.
         n = normalize(t * m.x + b * m.y + n * m.z);
+    } else if (has(2u)) {
+        n = from_height(n, i.surface, i.uv);
     }
     // Seen from behind (the plane, the cloth), a surface faces the other way.
     if (!front) {

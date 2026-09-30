@@ -45,6 +45,14 @@ pub enum HomeMessage {
     Screen(Event),
 }
 
+/// The pictures of the lessons of Learn: the model of each example as the 3D view shows it,
+/// made with `--picture assets/lessons/ID.jpg --scenario example:ID` (dev-tools).
+const LESSON_PICTURES: [(Example, &[u8]); 3] = [
+    (Example::BrickWall, include_bytes!("../../assets/lessons/brick-wall.jpg")),
+    (Example::FxMaps, include_bytes!("../../assets/lessons/fx-maps.jpg")),
+    (Example::PixelMath, include_bytes!("../../assets/lessons/pixel-math.jpg")),
+];
+
 /// What the Home screen shows that stays as it is: the templates to start from, the lessons,
 /// the resources.
 pub struct HomeLists {
@@ -81,7 +89,7 @@ impl HomeLists {
                 id: e.id().into(),
                 title: e.name().into(),
                 about: e.about().into(),
-                picture: None,
+                picture: LESSON_PICTURES.iter().find(|(of, _)| *of == e).map(|(_, bytes)| image::Handle::from_bytes(*bytes)),
                 glyph: match e {
                     Example::BrickWall => Glyph::Material,
                     Example::FxMaps => Glyph::Pattern,
@@ -434,4 +442,21 @@ fn png(picture: &::image::RgbaImage) -> Option<Vec<u8>> {
     let mut png = Vec::new();
     picture.write_to(&mut std::io::Cursor::new(&mut png), ::image::ImageFormat::Png).ok()?;
     Some(png)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every example of Learn has its picture, as wide as the cards show it on a screen of three
+    /// times the pixels, and 10 high for 16 wide as they are.
+    #[test]
+    fn every_lesson_has_its_picture() {
+        for example in Example::ALL {
+            let (_, bytes) = LESSON_PICTURES.iter().find(|(of, _)| *of == example).expect("a picture of every example");
+            let picture = ::image::load_from_memory(bytes).expect("a picture");
+            assert_eq!((picture.width(), picture.height()), (512, 320), "{example:?}");
+        }
+        assert!(HomeLists::new().lessons.iter().filter(|l| l.picture.is_some()).count() == Example::ALL.len());
+    }
 }

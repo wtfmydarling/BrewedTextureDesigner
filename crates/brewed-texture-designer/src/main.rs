@@ -62,7 +62,8 @@ tools for developing the program:
        brewed-texture-designer --autopilot [MINUTES] [--seed N]
 
   --screenshot     start, wait until everything is computed, save a screenshot and quit
-  --picture OUT    the same, saving the picture of the model a saved package gets
+  --picture OUT    the same, saving the picture of the model a saved package gets (a .jpg: as a
+                   lesson of Learn shows it, 16 wide for 10 high)
   --scenario       UI state for the screenshot: add-menu, file-menu, context-menu, home,
                    learn, home-about, example:ID (brick-wall, fx-maps, pixel-math), gradient, math, levels, inputs, transform, tiling, dialog, tile,
                    choices, lighting-menu, tile-sampler, shape:NAME (mat-ball …),
