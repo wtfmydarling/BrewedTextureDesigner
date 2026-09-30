@@ -185,6 +185,7 @@ own graphs needs nothing beside it.
 | `input_values` | array | Its input values (below). Optional. |
 | `comments` | array | Frames drawn around groups of nodes (below). Optional. |
 | `next_id` | integer | The id the next node or comment gets: above every id of the graph. |
+| `attributes` | object | What the graph says of itself, for the Library: `description` (what it makes), `category` (where the Library shows it, `Noises/Grunge`; none: under the package's name), `hidden` (`true`: not in the Library). Each optional, and the object too. |
 | `extras` | object | What other programs keep with the graph. Optional. |
 
 Ids of nodes and comments are integers from 1, below 2<sup>48</sup>, each its own in the graph
@@ -223,7 +224,7 @@ node when it was saved, so its sockets and values stay while the graph cannot be
 | `package` | string | The package file the graph is in (see *Paths*). Not there: this package. |
 | `graph` | integer | The graph's id in that package. |
 | `name` | string | Its name when the node last saw it: what the graph is found by if its package has no graph of that id any more. |
-| `interface` | object | Its `outputs` (`[{"name": …}]`, one for each name of its Output nodes) and its `params`: its input values (below, with a `label` each), which are the node's parameters. |
+| `interface` | object | Its `outputs` (`[{"name": …}]`, one for each name of its Output nodes), its `params`: its input values (below, with a `label` each), which are the node's parameters, and its `description` (what the graph says it makes; optional). |
 
 ### Links
 

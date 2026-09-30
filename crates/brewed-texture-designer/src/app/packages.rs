@@ -151,16 +151,26 @@ pub struct Saving {
     open: Option<bool>,
 }
 
+/// The package files the graphs of a package use, each read (or why it could not be).
+pub(crate) type Dependencies = Vec<(String, Result<Package, String>)>;
+
 /// A package file read, with the package files its graphs use (see [`App::open_file`]).
 #[derive(Debug)]
 pub struct Opened {
     loaded: project::Loaded,
-    deps: Vec<(String, Result<Package, String>)>,
+    deps: Dependencies,
+}
+
+impl Opened {
+    /// The package read, and the package files its graphs use.
+    pub(crate) fn into_parts(self) -> (project::Loaded, Dependencies) {
+        (self.loaded, self.deps)
+    }
 }
 
 /// The package file at `file`, and the package files its graphs use, as deep as they use
 /// others, but those in `known` (open, or read already).
-fn read_with_dependencies(file: &str, mut known: HashSet<String>) -> Result<Opened, String> {
+pub(crate) fn read_with_dependencies(file: &str, mut known: HashSet<String>) -> Result<Opened, String> {
     let loaded = project::load(Path::new(file))?;
     known.insert(file.to_string());
     let mut wanted: Vec<String> = loaded.package.dependencies().into_iter().collect();
@@ -202,7 +212,7 @@ impl App {
         }
     }
 
-    fn all_docs(&self) -> impl Iterator<Item = &Document> {
+    pub(super) fn all_docs(&self) -> impl Iterator<Item = &Document> {
         std::iter::once(&self.doc).chain(self.shelf.iter().map(|p| &p.doc))
     }
 
@@ -377,21 +387,7 @@ impl App {
                 return;
             }
         };
-        let open: HashSet<String> = self.all_docs().filter_map(Document::key).collect();
-        for (dep, read) in deps {
-            if open.contains(&dep) || self.deps.contains_key(&dep) || self.unreadable.contains(&dep) {
-                continue;
-            }
-            match read {
-                Ok(package) => {
-                    self.deps.insert(dep, package);
-                }
-                Err(e) => {
-                    log::warn!("a package that is used cannot be read: {e}");
-                    self.unreadable.insert(dep);
-                }
-            }
-        }
+        self.take_dependencies(deps);
         let notes = loaded.notes.clone();
         let path = Some(PathBuf::from(&file));
         if replace {
@@ -414,6 +410,25 @@ impl App {
         }
         self.set_status(msg, false);
         self.ask_for_missing();
+    }
+
+    /// Keep the package files `deps` read, which graphs use (but those open, or kept already).
+    pub(crate) fn take_dependencies(&mut self, deps: Dependencies) {
+        let open: HashSet<String> = self.all_docs().filter_map(Document::key).collect();
+        for (dep, read) in deps {
+            if open.contains(&dep) || self.deps.contains_key(&dep) || self.unreadable.contains(&dep) {
+                continue;
+            }
+            match read {
+                Ok(package) => {
+                    self.deps.insert(dep, package);
+                }
+                Err(e) => {
+                    log::warn!("a package that is used cannot be read: {e}");
+                    self.unreadable.insert(dep);
+                }
+            }
+        }
     }
 
     /// Save the package open as `key` at `path`, off the UI thread (a package that holds large
@@ -450,13 +465,15 @@ impl App {
         let task = match result {
             Ok(()) => {
                 self.set_status(format!("Saved {}", path.display()), false);
+                // Into a library folder: the Library shows it as it is now.
+                let library = if self.in_library(&path) { self.look_at_library() } else { Task::none() };
                 if let Some(doc) = self.package_doc_mut(key) {
                     let same = *doc.package() == saving.package;
                     doc.saved_at(path.clone(), same);
                 }
                 self.saved_as(key, &path);
                 self.forget_saved();
-                match saving.again {
+                let after = match saving.again {
                     Some(again) => {
                         self.ui.after_save = saving.then;
                         let task = self.save_package(key, again);
@@ -473,7 +490,8 @@ impl App {
                             None => then,
                         }
                     }
-                }
+                };
+                Task::batch([after, library])
             }
             // What was to follow the save (quitting, closing the package) does not: a save
             // that works later is only a save. The file is opened as it is, if it is there.
@@ -710,6 +728,11 @@ impl App {
     pub fn drop_refusal(&self, payload: &DragPayload) -> Option<String> {
         match payload {
             DragPayload::Graph { key, graph, .. } => self.graph_refusal(*key, *graph),
+            // (A package not read yet has nothing to refuse until it is.)
+            DragPayload::Library { package, graph, name } => match self.open_key(package) {
+                Some(key) => self.graph_refusal(key, *graph),
+                None => self.use_refusal(&GraphRef { package: Some(package.clone()), graph: *graph, name: name.clone() }),
+            },
             _ => None,
         }
     }
@@ -1359,17 +1382,13 @@ impl App {
     }
 
     /// What a panel item dragged onto the graph becomes.
-    pub(super) fn add_package_payload(&mut self, payload: DragPayload, pos: [f32; 2]) -> bool {
+    pub(super) fn add_package_payload(&mut self, payload: DragPayload, pos: [f32; 2]) -> Task<Message> {
         match payload {
-            DragPayload::Graph { key, graph, .. } => {
-                self.add_graph_node(key, graph, pos);
-                true
-            }
-            DragPayload::Resource { path, kind, .. } => {
-                self.add_resource_node(path, kind, Some(pos));
-                true
-            }
-            _ => false,
+            DragPayload::Graph { key, graph, .. } => self.add_graph_node(key, graph, pos),
+            DragPayload::Resource { path, kind, .. } => self.add_resource_node(path, kind, Some(pos)),
+            DragPayload::Library { package, graph, name } => return self.add_library_graph(package, graph, name, pos),
+            _ => {}
         }
+        Task::none()
     }
 }

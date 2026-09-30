@@ -793,6 +793,29 @@ impl std::fmt::Display for Precision {
     }
 }
 
+/// What a graph says of itself, for the Library of the packages that have it (see
+/// `library` in the designer): as Substance Designer's graph attributes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphAttributes {
+    /// What it makes, a sentence or two: the tip of it in the Library, and of the nodes that use
+    /// it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Where the Library shows it: a category, or categories in categories (`Noises/Grunge`);
+    /// none, under the name of its package.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
+    /// Not shown in the Library (a graph the others use, not one to use itself).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+impl GraphAttributes {
+    pub fn is_empty(&self) -> bool {
+        *self == GraphAttributes::default()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Graph {
     pub resolution: [u32; 2],
@@ -810,6 +833,9 @@ pub struct Graph {
     pub comments: Vec<Comment>,
     /// The id the next node or comment gets.
     pub next_id: u64,
+    /// What it says of itself, for the Library.
+    #[serde(default, skip_serializing_if = "GraphAttributes::is_empty")]
+    pub attributes: GraphAttributes,
     /// What other programs keep with the graph (see [`crate::project`]): kept as it is.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extras: serde_json::Map<String, serde_json::Value>,
@@ -825,6 +851,7 @@ impl Default for Graph {
             resolution: [2048, 2048],
             precision: Precision::Half,
             next_id: 1,
+            attributes: GraphAttributes::default(),
             extras: serde_json::Map::new(),
         }
     }

@@ -4,7 +4,7 @@
 
 use crate::gradient::Gradient;
 use crate::instance::Instance;
-use crate::graph::{Clipboard, CommentId, Graph, Link, MAX_RESOLUTION, MIN_RESOLUTION, NodeId, Precision, SocketRef, coordinate};
+use crate::graph::{Clipboard, CommentId, Graph, GraphAttributes, Link, MAX_RESOLUTION, MIN_RESOLUTION, NodeId, Precision, SocketRef, coordinate};
 use crate::nodes::{ImageKind, NodeKind};
 use crate::types::{DataType, ParamValue, Value, can_connect};
 
@@ -79,6 +79,8 @@ pub enum Edit {
     },
     SetResolution([u32; 2]),
     SetPrecision(Precision),
+    /// What the graph says of itself, for the Library.
+    SetAttributes(GraphAttributes),
     /// Paste with the top-left of the copied nodes at `at`.
     Paste {
         clipboard: Clipboard,
@@ -258,6 +260,7 @@ impl Edit {
             Edit::SetLocalVar { .. } => "Change Variable",
             Edit::SetResolution(_) => "Change Size",
             Edit::SetPrecision(_) => "Change Precision",
+            Edit::SetAttributes(_) => "Change Graph Attributes",
             Edit::Paste { .. } => "Paste",
             Edit::Duplicate { .. } => "Duplicate",
             Edit::SetVariable { .. }
@@ -455,6 +458,13 @@ impl Edit {
                     return Ok(EditResult::unchanged());
                 }
                 graph.resolution = res;
+                EditResult::changed()
+            }
+            Edit::SetAttributes(attributes) => {
+                if graph.attributes == attributes {
+                    return Ok(EditResult::unchanged());
+                }
+                graph.attributes = attributes;
                 EditResult::changed()
             }
             Edit::SetPrecision(precision) => {

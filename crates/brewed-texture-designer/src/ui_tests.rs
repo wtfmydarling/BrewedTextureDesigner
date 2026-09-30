@@ -248,6 +248,93 @@ fn programs_of_fx_maps_are_typed_line_after_line() {
     panel.snapshot("fx_map_program");
 }
 
+/// The graphs of the packages in a library folder, as deep as it goes, show in the Library
+/// under the categories they say (not those kept out of it, nor those with no Output), found
+/// by what they say they make; one added becomes a node that uses it, its package read then;
+/// and a package changed on disk shows as it is when the folders are looked at again.
+#[test]
+fn library_folders_offer_their_graphs() {
+    use brewed_texture_core::project;
+    use brewed_texture_core::{Graph, GraphAttributes, package::Package};
+    let dir = std::env::temp_dir().join(format!("brewed-library-{}", std::process::id()));
+    let deeper = dir.join("metals");
+    std::fs::create_dir_all(&deeper).unwrap();
+    let file = deeper.join("rust.brewtex");
+    let write = |description: &str| {
+        let mut rust = Graph::default();
+        rust.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+        rust.attributes = GraphAttributes { description: description.into(), category: "Metals/Rust".into(), hidden: false };
+        let mut package = Package::new("Rust", rust);
+        let mut helper = Graph::default();
+        helper.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+        helper.attributes.hidden = true;
+        package.add_graph("Helper", helper);
+        package.add_graph("Nothing", Graph::default());
+        project::save(&file, &package, &std::collections::HashMap::new(), package.first()).unwrap();
+    };
+    write("Orange rust");
+    std::fs::write(dir.join("broken.brewtex"), b"no package").unwrap();
+
+    let mut w = harness!(view::library::view, 300.0, 1400.0);
+    assert!(w.app.library.graphs.is_empty(), "no folder: nothing but the program's own nodes");
+    let mut settings = w.app.settings.clone();
+    settings.library_folders = vec![dir.display().to_string()];
+    w.app.set_settings(settings);
+    w.send(Message::LookAtLibrary);
+    let graphs = w.app.library.graphs.clone();
+    assert_eq!(graphs.len(), 1, "{graphs:?}");
+    assert_eq!((graphs[0].name.as_str(), graphs[0].category.as_str(), graphs[0].description.as_str()), ("Rust", "Metals/Rust", "Orange rust"));
+    assert_eq!(graphs[0].package, file.display().to_string());
+    assert_eq!(w.app.library.problems.len(), 1, "what is no package says so: {:?}", w.app.library.problems);
+    w.input(&[]);
+    assert!(!texts(&mut w, "METALS/RUST").is_empty() && !texts(&mut w, "Rust").is_empty(), "in the Library, under its category");
+    w.send(Message::LibrarySearch("orange".into()));
+    assert!(!texts(&mut w, "Rust").is_empty(), "found by what it says it makes");
+    w.send(Message::LibrarySearch("copper".into()));
+    assert!(texts(&mut w, "Rust").is_empty());
+    w.send(Message::LibrarySearch(String::new()));
+
+    // Added: a node that uses it, its package read.
+    let used = |app: &App| app.graph().nodes_of(NodeKind::GRAPH_INSTANCE).count();
+    let before = used(&w.app);
+    let payload = DragPayload::Library { package: graphs[0].package.clone(), graph: graphs[0].graph, name: "Rust".into() };
+    w.send(Message::PanelAdd(payload.clone()));
+    assert_eq!(used(&w.app), before + 1);
+    let node = w.app.graph().nodes_of(NodeKind::GRAPH_INSTANCE).max_by_key(|n| n.id).unwrap();
+    let instance = node.instance.as_deref().unwrap();
+    assert_eq!(instance.graph.package.as_deref(), Some(graphs[0].package.as_str()));
+    assert_eq!(instance.interface.description, "Orange rust");
+    // Again: from the package read already.
+    w.send(Message::PanelAdd(payload));
+    assert_eq!(used(&w.app), before + 2);
+
+    w.snapshot("library_panel");
+
+    // Changed on disk: as it is now, once looked at again.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    write("Rust of iron");
+    w.send(Message::LookAtLibrary);
+    assert_eq!(w.app.library.graphs[0].description, "Rust of iron");
+
+    // The page of the folders; and what a graph says of itself, with nothing in it chosen.
+    let mut root = harness!(view::root, 1400.0, 900.0);
+    let mut settings = root.app.settings.clone();
+    settings.library_folders = vec![dir.display().to_string()];
+    root.app.set_settings(settings);
+    root.send(Message::LookAtLibrary);
+    root.send(Message::Settings(crate::app::SettingsMessage::OpenPage(crate::settings::Page::Library)));
+    root.input(&[]);
+    assert!(!texts(&mut root, "Add Folder…").is_empty() && !texts(&mut root, "1 graph in the Library.").is_empty());
+    root.snapshot("settings_library");
+    root.send(Message::Settings(crate::app::SettingsMessage::Cancel));
+    root.send(Message::Graph(GraphMessage::ClearSelection));
+    root.send(Message::Edit(Edit::SetAttributes(GraphAttributes { description: "A brick wall".into(), category: "Walls".into(), hidden: false })));
+    root.input(&[]);
+    assert!(!texts(&mut root, "ATTRIBUTES").is_empty(), "what the graph says of itself");
+    root.snapshot("graph_attributes");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Pressing a library item, moving onto the graph and releasing adds the node there.
 #[test]
 fn library_items_can_be_dropped_on_the_graph() {
@@ -1391,6 +1478,7 @@ fn stays_inside(message: &Message) -> bool {
         | Message::SaveThen(_)
         | Message::Proceed(PendingAction::Quit)
         | Message::Preview(PreviewMessage::BrowseEnvironment)
+        | Message::Settings(crate::app::SettingsMessage::AddLibraryFolder)
         | Message::Explorer(
             ExplorerMessage::Save(_)
                 | ExplorerMessage::SaveAs(_)

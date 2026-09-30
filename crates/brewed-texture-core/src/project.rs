@@ -337,6 +337,43 @@ pub fn load(path: &Path) -> Result<Loaded, String> {
     read_from(BufReader::new(file), path.parent())
 }
 
+/// A graph of a package file, as a library shows it (see [`read_graphs`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GraphSummary {
+    pub id: GraphId,
+    pub name: String,
+    pub attributes: crate::graph::GraphAttributes,
+    /// How many Output nodes it has: what a node that uses it gives.
+    pub outputs: usize,
+}
+
+/// The graphs of the package file at `path`: their names and what they say of themselves,
+/// read without the files the package holds (a library looks at many packages).
+pub fn read_graphs(path: &Path) -> Result<Vec<GraphSummary>, String> {
+    let cannot = |e: String| format!("Cannot read {}: {e}", path.display());
+    let file = std::fs::File::open(path).map_err(|e| cannot(e.to_string()))?;
+    let mut archive = Archive::new(BufReader::new(file)).map_err(|e| if e.contains("not an archive") { not_a_package() } else { e })?;
+    if archive.entry(MANIFEST).is_none() {
+        return Err(not_a_package());
+    }
+    let manifest: Manifest =
+        serde_json::from_slice(&archive.read(MANIFEST, MAX_JSON)?).map_err(|e| format!("The package cannot be read: {e}"))?;
+    if manifest.format != FORMAT {
+        return Err(not_a_package());
+    }
+    if manifest.version > VERSION {
+        return Err(format!("{} was made by a newer version of {}", path.display(), crate::APP_NAME));
+    }
+    let mut graphs = Vec::with_capacity(manifest.graphs.len());
+    for item in &manifest.graphs {
+        let bytes = archive.read(&graph_entry(item.id), MAX_JSON).map_err(|e| format!("The graph '{}' cannot be read: {e}", item.name))?;
+        let graph: Graph = serde_json::from_slice(&bytes).map_err(|e| format!("The graph '{}' cannot be read: {e}", item.name))?;
+        let outputs = graph.nodes_of(crate::NodeKind::OUTPUT).count();
+        graphs.push(GraphSummary { id: item.id, name: item.name.clone(), attributes: graph.attributes, outputs });
+    }
+    Ok(graphs)
+}
+
 /// Read a package file of `bytes`, which is in `dir`: its relative paths are taken from there.
 pub fn from_bytes(bytes: &[u8], dir: Option<&Path>) -> Result<Loaded, String> {
     read_from(Cursor::new(bytes), dir)
@@ -968,6 +1005,35 @@ mod tests {
         assert_eq!(not(b"\x89PNG\r\n\x1a\n\xff\xfe"), "This is not a Brewed Texture Designer package");
         assert!(not(b"").ends_with("a.brewtex is empty"));
         assert!(load(&dir).unwrap_err().contains("not a file"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What a graph says of itself is kept with it, and read with the names of the graphs of a
+    /// package without the files it holds (as a library reads many).
+    #[test]
+    fn graphs_are_read_with_what_they_say_of_themselves() {
+        use crate::graph::GraphAttributes;
+        let dir = std::env::temp_dir().join(format!("brewed_graph_list_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rust.brewtex");
+        let mut rust = Graph::default();
+        rust.add_node(crate::NodeKind::OUTPUT, [0.0, 0.0]);
+        rust.attributes = GraphAttributes { description: "Orange rust".into(), category: "Metals/Rust".into(), hidden: false };
+        let mut package = Package::new("Rust", rust);
+        let mut helper = Graph::default();
+        helper.attributes.hidden = true;
+        let helper = package.add_graph("Helper", helper);
+        save(&path, &package, &HashMap::new(), package.first()).unwrap();
+        assert_eq!(load(&path).unwrap().package, package);
+        let graphs = read_graphs(&path).unwrap();
+        assert_eq!(graphs.len(), 2);
+        assert_eq!((graphs[0].name.as_str(), graphs[0].outputs, graphs[0].attributes.category.as_str()), ("Rust", 1, "Metals/Rust"));
+        assert_eq!((graphs[1].id, graphs[1].outputs, graphs[1].attributes.hidden), (helper, 0, true));
+        // Said only where they are not as by default.
+        let mut archive = Archive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let helper_json = String::from_utf8(archive.read(&graph_entry(helper), 1 << 20).unwrap()).unwrap();
+        assert!(helper_json.contains("\"hidden\": true") && !helper_json.contains("description"), "{helper_json}");
+        assert!(read_graphs(&dir).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -138,6 +138,10 @@ pub struct Interface {
     pub outputs: Vec<Port>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<InstanceParam>,
+    /// What the graph says it makes (its description, see
+    /// [`crate::graph::GraphAttributes`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
 }
 
 /// The Outputs of `graph` that are its outputs as a node, in the order of the sockets: of the
@@ -170,7 +174,7 @@ impl Interface {
                 image: v.image.clone(),
             })
             .collect();
-        Interface { inputs: Vec::new(), outputs, params }
+        Interface { inputs: Vec::new(), outputs, params, description: graph.attributes.description.clone() }
     }
 
     pub fn param(&self, name: &str) -> Option<&InstanceParam> {

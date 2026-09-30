@@ -71,6 +71,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a SettingsDialog) -> Element<'a, Message
     let body: Vec<Element<'a, Message>> = match page {
         Page::General => general(applied, draft),
         Page::Packages => packages(applied, draft),
+        Page::Library => library(app, applied, draft),
         Page::Recovery => recovery(applied, draft),
         Page::Graphics => graphics(app, applied, draft),
         Page::Shortcuts => shortcuts(applied, dialog),
@@ -398,6 +399,54 @@ impl std::fmt::Display for Minutes {
             n => write!(f, "Every {n} minutes"),
         }
     }
+}
+
+fn library<'a>(app: &App, applied: &Settings, draft: &'a Settings) -> Vec<Element<'a, Message>> {
+    let mut rows = Vec::new();
+    for (i, folder) in draft.library_folders.iter().enumerate() {
+        // What the Library found in it, once it was looked at (a folder added here is when the
+        // settings are applied).
+        let graphs = app.library.graphs.iter().filter(|g| std::path::Path::new(&g.package).starts_with(folder)).count();
+        let about = if !applied.library_folders.contains(folder) {
+            "Looked at once the settings are applied.".to_string()
+        } else if app.library.looking() && graphs == 0 {
+            "Being looked at…".to_string()
+        } else {
+            match graphs {
+                0 => "No graph of a package in it has an Output (or it is not there).".to_string(),
+                1 => "1 graph in the Library.".to_string(),
+                n => format!("{n} graphs in the Library."),
+            }
+        };
+        let remove = button(text("Remove").size(style::TEXT_SIZE)).padding([4, 10]).style(style::button).on_press(say(SettingsMessage::RemoveLibraryFolder(i)));
+        let mut row = Row::new(folder.as_str(), about, container(remove).align_right(Length::Fill));
+        row.pending = !applied.library_folders.contains(folder);
+        rows.push(row);
+    }
+    let add = button(row![icon(Icon::Plus, 13.0, style::TEXT), text("Add Folder…").size(style::TEXT_SIZE)].spacing(6).align_y(Alignment::Center))
+        .padding([4, 10])
+        .style(style::button)
+        .on_press(say(SettingsMessage::AddLibraryFolder));
+    let removed = applied.library_folders.iter().any(|f| !draft.library_folders.contains(f));
+    let about = if draft.library_folders.is_empty() {
+        "None yet: the Library offers the program's own nodes."
+    } else {
+        "Every package file in these folders, as deep as they go, offers its graphs that have an Output: in the \
+         Library, under the categories they say (a graph's Category, in its properties; else the name of its \
+         package), to drag onto the graph as nodes."
+    };
+    let mut add_row = Row::new("A folder more", about, container(add).align_right(Length::Fill));
+    add_row.pending = removed;
+    rows.push(add_row);
+    let mut out = vec![group("Folders", rows)];
+    if !app.library.problems.is_empty() {
+        let mut said: Vec<String> = app.library.problems.iter().take(4).cloned().collect();
+        if app.library.problems.len() > 4 {
+            said.push(format!("And {} more.", app.library.problems.len() - 4));
+        }
+        out.push(container(text(said.join("\n")).size(style::SMALL)).padding(8).width(Length::Fill).style(style::message_box(style::WARNING)).into());
+    }
+    out
 }
 
 fn recovery<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>> {

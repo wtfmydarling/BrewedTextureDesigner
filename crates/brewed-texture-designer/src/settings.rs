@@ -39,6 +39,10 @@ const TEMPLATE: &str = r#"# The settings of Brewed Texture Designer. Edit → Se
 # or "float32" (32 bits float).
 [new_graphs]
 
+# folders: the folders whose packages offer their graphs in the Library as nodes, as deep as
+# the folders go (none by default): folders = ["D:/Textures/Library"].
+[library]
+
 # keep: keep unsaved work, to offer it back after a crash (true by default).
 # every_minutes: how often (1 to 60; 2 by default).
 [recovery]
@@ -73,6 +77,8 @@ pub struct Settings {
     /// A new graph: the size of its images, and what they are kept in.
     pub graph_size: u32,
     pub graph_precision: Precision,
+    /// The folders whose packages offer their graphs in the Library (see `app::library`).
+    pub library_folders: Vec<String>,
     /// Unsaved work is kept for recovery after a crash (see `app::autosave`), every so many
     /// minutes.
     pub keep_unsaved: bool,
@@ -94,6 +100,7 @@ impl Default for Settings {
             new_files: NewFiles::Embed,
             graph_size: 2048,
             graph_precision: Precision::Half,
+            library_folders: Vec::new(),
             keep_unsaved: true,
             keep_every: 2,
             graphics: Graphics::Auto,
@@ -108,18 +115,20 @@ impl Default for Settings {
 pub enum Page {
     General,
     Packages,
+    Library,
     Recovery,
     Graphics,
     Shortcuts,
 }
 
 impl Page {
-    pub const ALL: [Page; 5] = [Page::General, Page::Packages, Page::Recovery, Page::Graphics, Page::Shortcuts];
+    pub const ALL: [Page; 6] = [Page::General, Page::Packages, Page::Library, Page::Recovery, Page::Graphics, Page::Shortcuts];
 
     pub fn name(self) -> &'static str {
         match self {
             Page::General => "General",
             Page::Packages => "Packages",
+            Page::Library => "Library",
             Page::Recovery => "Recovery",
             Page::Graphics => "Graphics",
             Page::Shortcuts => "Shortcuts",
@@ -131,6 +140,7 @@ impl Page {
         match self {
             Page::General => "Undo, the packages offered again, the file dialogs, the mouse wheel.",
             Page::Packages => "The files taken into packages, and the graphs made in them.",
+            Page::Library => "Folders of packages whose graphs the Library offers as nodes.",
             Page::Recovery => "Unsaved work kept, to be offered back after a crash.",
             Page::Graphics => "How the program draws: taken when it starts.",
             Page::Shortcuts => "The keys of the commands. Click a key to give another; Esc always closes what is open.",
@@ -186,6 +196,7 @@ impl Settings {
                 self.graph_size = from.graph_size;
                 self.graph_precision = from.graph_precision;
             }
+            Page::Library => self.library_folders = from.library_folders.clone(),
             Page::Recovery => {
                 self.keep_unsaved = from.keep_unsaved;
                 self.keep_every = from.keep_every;
@@ -328,6 +339,7 @@ fn read(doc: &DocumentMut) -> (Settings, Vec<String>) {
     let new_files = get("files", "new");
     let size = get("new_graphs", "size");
     let precision = get("new_graphs", "precision");
+    let folders = get("library", "folders");
     let keep = get("recovery", "keep");
     let every = get("recovery", "every_minutes");
     let api = get("graphics", "api");
@@ -355,6 +367,7 @@ fn read(doc: &DocumentMut) -> (Settings, Vec<String>) {
         new_files: named(new_files, "files.new", &NEW_FILES, d.new_files, &mut said),
         graph_size: number(size, "new_graphs.size", d.graph_size, 16, 8192, &mut said),
         graph_precision: named(precision, "new_graphs.precision", &PRECISIONS, d.graph_precision, &mut said),
+        library_folders: texts(folders, "library.folders", &mut said),
         keep_unsaved: boolean(keep, "recovery.keep", d.keep_unsaved, &mut said),
         keep_every: number(every, "recovery.every_minutes", d.keep_every, 1, 60, &mut said),
         graphics: named(api, "graphics.api", &graphics, d.graphics, &mut said),
@@ -381,6 +394,24 @@ fn number(value: Option<Value>, name: &str, default: u32, min: u32, max: u32, sa
         said(format!("{name} is {n}: taken as {held}, from {min} to {max}"));
     }
     held as u32
+}
+
+/// A list of texts the file says (none: an empty one); what is not a text is left out.
+fn texts(value: Option<Value>, name: &str, said: &mut impl FnMut(String)) -> Vec<String> {
+    let Some(value) = value else { return Vec::new() };
+    let Some(array) = value.as_array() else {
+        said(format!("{name} is {}, not a list of folders", value.to_string().trim()));
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in array.iter() {
+        match item.as_str() {
+            Some(text) if !out.iter().any(|t: &String| t == text) => out.push(text.to_string()),
+            Some(_) => {}
+            None => said(format!("{name} has {}, not a folder", item.to_string().trim())),
+        }
+    }
+    out
 }
 
 /// True or false, as the file says; `default` for none, or for another value.
@@ -453,6 +484,7 @@ fn write(doc: &mut DocumentMut, before: &Settings, now: &Settings) {
     setting!(new_files, "files", "new", Value::from(id_of(&NEW_FILES, &now.new_files)));
     setting!(graph_size, "new_graphs", "size", whole(now.graph_size));
     setting!(graph_precision, "new_graphs", "precision", Value::from(id_of(&PRECISIONS, &now.graph_precision)));
+    setting!(library_folders, "library", "folders", Value::Array(now.library_folders.iter().map(String::as_str).collect()));
     setting!(keep_unsaved, "recovery", "keep", Value::from(now.keep_unsaved));
     setting!(keep_every, "recovery", "every_minutes", whole(now.keep_every));
     setting!(graphics, "graphics", "api", Value::from(now.graphics.id()));
@@ -644,6 +676,7 @@ mod tests {
             new_files: NewFiles::Link,
             graph_size: 512,
             graph_precision: Precision::Full,
+            library_folders: vec!["D:/Textures".into()],
             keep_unsaved: false,
             keep_every: 10,
             graphics: Graphics::Vulkan,
@@ -703,13 +736,13 @@ mod tests {
         let settings = store.settings();
         assert_eq!(settings, Settings::default());
         assert!(!path.exists(), "not written before a setting changes");
-        let mut changed = Settings { undo_steps: 500, graphics: Graphics::Vulkan, ..settings };
+        let mut changed = Settings { undo_steps: 500, graphics: Graphics::Vulkan, library_folders: vec!["D:/Textures".into()], ..settings };
         changed.shortcuts.set(Command::Redo, vec![Chord::parse("Ctrl+Shift+Z").unwrap()]);
         changed.shortcuts.set(Command::Frame, Vec::new());
         store.save(&changed).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let said = |text: &str, key: &str| text.lines().any(|l| l.starts_with(key));
-        for line in ["undo_steps = 500", "api = \"vulkan\"", "redo = [\"Ctrl+Shift+Z\"]", "frame = []"] {
+        for line in ["undo_steps = 500", "api = \"vulkan\"", "redo = [\"Ctrl+Shift+Z\"]", "frame = []", "folders = [\"D:/Textures\"]"] {
             assert!(said(&text, line), "{line}: {text}");
         }
         for key in ["recent_packages", "file_dialogs", "new ", "size", "keep", "every_minutes", "antialiasing", "undo "] {

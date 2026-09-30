@@ -12,7 +12,7 @@ use iced::{Alignment, Element, Length};
 use brewed_texture_core::graph::{Node, NodeId, param_socket_key};
 use brewed_texture_core::nodes::{NodeKind, ParamDef, ParamKind};
 use brewed_texture_core::package::Package;
-use brewed_texture_core::{Curve, DataType, Edit, Gradient, Interpolation, ParamValue, Tiling, Value};
+use brewed_texture_core::{Curve, DataType, Edit, Gradient, GraphAttributes, Interpolation, ParamValue, Tiling, Value};
 
 use crate::app::{App, ColorTarget, FileTarget, Message};
 use crate::icons::{Icon, icon};
@@ -52,27 +52,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
         0 if app.ui.selected_comment.is_some_and(|id| app.graph().comment(id).is_some()) => {
             comment_view(app, app.ui.selected_comment.expect("a selected comment"))
         }
-        0 => {
-            let g = app.graph();
-            container(
-                column![
-                    text("Select a node to edit its parameters.").size(style::TEXT_SIZE).color(style::TEXT_DIM),
-                    text(format!(
-                        "Graph: {} nodes, {} links, {} input values, {}×{} px",
-                        g.nodes.len(),
-                        g.links.len(),
-                        g.variables.len(),
-                        g.resolution[0],
-                        g.resolution[1]
-                    ))
-                    .size(style::SMALL)
-                    .color(style::TEXT_FAINT),
-                ]
-                .spacing(8),
-            )
-            .padding(10)
-            .into()
-        }
+        0 => scrollable(container(graph_view(app)).padding(iced::Padding { top: 0.0, right: 12.0, bottom: 16.0, left: 10.0 }))
+            .height(Length::Fill)
+            .style(style::scrollable)
+            .into(),
         1 => scrollable(container(node_view(app, ids[0])).padding(iced::Padding { top: 0.0, right: 12.0, bottom: 16.0, left: 10.0 }))
             .height(Length::Fill)
             .style(style::scrollable)
@@ -88,6 +71,70 @@ pub fn comment_text_id() -> iced::widget::Id {
 }
 
 /// The comment frame being worked on: what it says, and what color it is.
+/// The graph being edited, when nothing in it is chosen: what it holds, and what it says of
+/// itself for the Library of the packages that have it (Settings → Library).
+fn graph_view(app: &App) -> Element<'_, Message> {
+    let g = app.graph();
+    let a = g.attributes.clone();
+    let with = |change: fn(&mut GraphAttributes, String), a: GraphAttributes| {
+        move |value: String| {
+            let mut a = a.clone();
+            change(&mut a, value);
+            Message::Edit(Edit::SetAttributes(a))
+        }
+    };
+    let label = |name: &'static str| text(name).size(style::TEXT_SIZE).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W));
+    let shown = {
+        let a = a.clone();
+        move |on: bool| Message::Edit(Edit::SetAttributes(GraphAttributes { hidden: !on, ..a.clone() }))
+    };
+    column![
+        text("Select a node to edit its parameters.").size(style::TEXT_SIZE).color(style::TEXT_DIM),
+        text(format!(
+            "Graph: {} nodes, {} links, {} input values, {}×{} px",
+            g.nodes.len(),
+            g.links.len(),
+            g.variables.len(),
+            g.resolution[0],
+            g.resolution[1]
+        ))
+        .size(style::SMALL)
+        .color(style::TEXT_FAINT),
+        section("Attributes"),
+        text("What the graph says of itself: in the Library, where its package is in a library folder (Settings → Library), and in the tips of the nodes that use it.")
+            .size(style::SMALL)
+            .color(style::TEXT_DIM),
+        row![
+            label("Description"),
+            text_input("What it makes", &a.description)
+                .on_input(with(|a, v| a.description = v, a.clone()))
+                .size(style::TEXT_SIZE)
+                .padding([4, 6])
+                .style(style::text_input),
+        ]
+        .align_y(Alignment::Center),
+        row![
+            label("Category"),
+            text_input("Noises/Grunge (none: the package's name)", &a.category)
+                .on_input(with(|a, v| a.category = v, a.clone()))
+                .size(style::TEXT_SIZE)
+                .padding([4, 6])
+                .style(style::text_input),
+        ]
+        .align_y(Alignment::Center),
+        row![
+            label("Show in Library"),
+            toggler(!a.hidden).on_toggle(shown).size(16.0),
+            text("Off for a graph the others use, not one to use itself").size(style::SMALL).color(style::TEXT_FAINT),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(10)
+    .padding(iced::Padding { top: 10.0, ..iced::Padding::ZERO })
+    .into()
+}
+
 fn comment_view(app: &App, id: brewed_texture_core::CommentId) -> Element<'_, Message> {
     let Some(comment) = app.graph().comment(id) else { return space().into() };
     let open = app.ui.color_picker == Some(ColorTarget::Comment(id));
@@ -229,10 +276,15 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
         }
         None => format!("{} · {}", d.name, d.category.name()),
     };
+    // A node that uses a graph: what the graph says it makes, if it says.
+    let about = match &node.instance {
+        Some(instance) if !instance.interface.description.is_empty() => instance.interface.description.as_str(),
+        _ => d.description,
+    };
     let mut col = column![
         head,
         text(kind).size(style::SMALL).color(style::TEXT_FAINT),
-        text(d.description).size(style::SMALL).color(style::TEXT_DIM),
+        text(about).size(style::SMALL).color(style::TEXT_DIM),
         messages(app, node),
     ]
     .spacing(6);

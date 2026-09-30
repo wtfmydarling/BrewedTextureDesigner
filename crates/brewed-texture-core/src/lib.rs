@@ -35,7 +35,7 @@ pub use document::Document;
 pub use edit::{Edit, EditResult};
 pub use curve::Curve;
 pub use gradient::{Gradient, GradientStop, Interpolation};
-pub use graph::{Clipboard, Comment, CommentId, Graph, Link, Node, NodeId, Precision, SocketInfo, SocketKind, SocketRef, Variable};
+pub use graph::{Clipboard, Comment, CommentId, Graph, GraphAttributes, Link, Node, NodeId, Precision, SocketInfo, SocketKind, SocketRef, Variable};
 pub use instance::{GraphId, GraphRef, Instance, Interface};
 pub use package::{Package, PackageEdit, Resource, ResourceKind};
 pub use nodes::{Category, NodeDef, NodeKind, ParamDef, ParamKind, Role};

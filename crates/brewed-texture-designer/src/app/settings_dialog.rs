@@ -42,6 +42,10 @@ pub enum SettingsMessage {
     ClearKey(Command, usize),
     /// Give a command its keys by default.
     ResetKeys(Command),
+    /// Choose a folder for the Library (a dialog of the system), and the one chosen.
+    AddLibraryFolder,
+    LibraryFolderPicked(Option<PathBuf>),
+    RemoveLibraryFolder(usize),
     Apply,
     /// Forget the draft, and close.
     Cancel,
@@ -110,10 +114,39 @@ impl App {
                 dialog.note = taken_from(&dialog.draft.shortcuts, &taken);
                 dialog.capturing = None;
             }
+            SettingsMessage::AddLibraryFolder => {
+                let folder = dialog.draft.library_folders.last().map(PathBuf::from);
+                return Task::perform(
+                    super::blocking(move || {
+                        let mut picker = rfd::FileDialog::new().set_title("A folder of packages for the Library");
+                        if let Some(folder) = folder {
+                            picker = picker.set_directory(folder);
+                        }
+                        picker.pick_folder()
+                    }),
+                    |picked| Message::Settings(SettingsMessage::LibraryFolderPicked(picked.flatten())),
+                );
+            }
+            SettingsMessage::LibraryFolderPicked(Some(folder)) => {
+                let folder = folder.display().to_string();
+                if !dialog.draft.library_folders.contains(&folder) {
+                    dialog.draft.library_folders.push(folder);
+                }
+            }
+            SettingsMessage::LibraryFolderPicked(None) => {}
+            SettingsMessage::RemoveLibraryFolder(i) => {
+                if i < dialog.draft.library_folders.len() {
+                    dialog.draft.library_folders.remove(i);
+                }
+            }
             SettingsMessage::Apply => {
                 dialog.capturing = None;
                 let draft = dialog.draft.clone();
+                let looked = draft.library_folders != self.settings.library_folders;
                 self.set_settings(draft);
+                if looked {
+                    return self.look_at_library();
+                }
             }
             SettingsMessage::Cancel => self.ui.dialog = None,
         }

@@ -9,6 +9,7 @@
 pub(crate) mod autosave;
 #[cfg(any(test, feature = "dev-tools"))]
 pub(crate) mod dev;
+pub(crate) mod library;
 pub(crate) mod packages;
 pub(crate) mod settings_dialog;
 
@@ -72,6 +73,9 @@ pub enum DragPayload {
     Variable(String),
     /// A graph of a package open in the Explorer: it becomes a node that uses it.
     Graph { key: u64, graph: GraphId, name: String },
+    /// A graph of a package in a library folder (see [`library`]): it becomes a node that uses
+    /// it, its package read first if it has to be.
+    Library { package: String, graph: GraphId, name: String },
     /// A file of a package (and what the package calls it): it becomes the node that reads it.
     Resource { path: String, kind: ResourceKind, name: String },
 }
@@ -93,7 +97,7 @@ impl DragPayload {
         match self {
             DragPayload::Node(k) => k.def().name.to_string(),
             DragPayload::Variable(v) => format!("Input '{v}'"),
-            DragPayload::Graph { name, .. } => format!("Graph '{name}'"),
+            DragPayload::Graph { name, .. } | DragPayload::Library { name, .. } => format!("Graph '{name}'"),
             DragPayload::Resource { name, .. } => name.clone(),
         }
     }
@@ -315,6 +319,8 @@ pub struct Ui {
     pub panes: pane_grid::State<Pane>,
     pub library_search: String,
     pub library_collapsed: HashSet<Category>,
+    /// The categories of the library folders' graphs folded in the Library.
+    pub library_folded: HashSet<String>,
     pub menu: Option<MenuId>,
     pub context: Option<ContextMenu>,
     pub add_menu: Option<AddMenu>,
@@ -489,6 +495,8 @@ pub struct App {
     started: Instant,
     /// What the eyedropper needs to know about the app (its Wayland connection).
     host: eyedropper::Host,
+    /// The graphs of the library folders (see [`library`]).
+    pub library: library::Library,
     /// The tools for developing the program: screenshots, the autopilot (see [`dev`]).
     #[cfg(any(test, feature = "dev-tools"))]
     dev: dev::Dev,
@@ -749,6 +757,13 @@ pub enum Message {
     // library & drag and drop
     LibrarySearch(String),
     LibraryToggle(Category),
+    /// Fold or unfold a category of the library folders' graphs.
+    LibraryFold(String),
+    /// Look at the library folders again (see [`library`]).
+    LookAtLibrary,
+    LibraryLooked(Option<Arc<HashMap<String, library::Looked>>>),
+    /// The package of a graph of the Library dropped on the graph was read.
+    LibraryRead { package: String, graph: GraphId, name: String, pos: [f32; 2], result: Result<Arc<packages::Opened>, String> },
     PanelPress(DragPayload),
     PanelAdd(DragPayload),
     // properties
@@ -948,6 +963,7 @@ impl App {
                 panes: opts.workspace.as_ref().map_or_else(default_panes, |w| panes(&w.splits)),
                 library_search: String::new(),
                 library_collapsed: HashSet::new(),
+                library_folded: HashSet::new(),
                 menu: None,
                 context: None,
                 add_menu: None,
@@ -998,10 +1014,12 @@ impl App {
             window: None,
             started: Instant::now(),
             host: eyedropper::Host::default(),
+            library: library::Library::default(),
             #[cfg(any(test, feature = "dev-tools"))]
             dev: dev::Dev::new(&opts.dev),
         };
-        let opened: Vec<Task<Message>> = opts.open.iter().map(|path| app.open_file(path.clone(), false)).collect();
+        let mut opened: Vec<Task<Message>> = opts.open.iter().map(|path| app.open_file(path.clone(), false)).collect();
+        opened.push(app.look_at_library());
         if let Some(root) = &opts.recovery {
             app.start_autosave(root);
         }
@@ -1123,6 +1141,7 @@ impl App {
                             | window::Event::Closed
                             | window::Event::Opened { .. }
                             | window::Event::Resized(_)
+                            | window::Event::Focused
                             | window::Event::FileDropped(_),
                     )
             );
@@ -2241,6 +2260,14 @@ impl App {
             }
             Message::AddMenu(msg) => return self.add_menu_message(msg),
             Message::LibrarySearch(q) => self.ui.library_search = q,
+            Message::LibraryFold(category) => {
+                if !self.ui.library_folded.remove(&category) {
+                    self.ui.library_folded.insert(category);
+                }
+            }
+            Message::LookAtLibrary => return self.look_at_library(),
+            Message::LibraryLooked(found) => return self.library_looked(found),
+            Message::LibraryRead { package, graph, name, pos, result } => self.library_read(package, graph, name, pos, result),
             Message::LibraryToggle(c) => {
                 if !self.ui.library_collapsed.remove(&c) {
                     self.ui.library_collapsed.insert(c);
@@ -2254,7 +2281,7 @@ impl App {
                 self.ui.press = None;
                 self.ui.drag = None;
                 let pos = self.ui.graph_view.center();
-                self.add_payload(payload, [pos[0] - 80.0, pos[1] - 40.0]);
+                return self.add_payload(payload, [pos[0] - 80.0, pos[1] - 40.0]);
             }
             Message::Expression(node, action) => self.expression_action(node, action),
             Message::ColorPicker(target) => {
@@ -2375,17 +2402,15 @@ impl App {
         }
     }
 
-    fn add_payload(&mut self, payload: DragPayload, pos: [f32; 2]) {
+    fn add_payload(&mut self, payload: DragPayload, pos: [f32; 2]) -> Task<Message> {
         let edit = match payload {
             DragPayload::Node(kind) => Edit::AddNode { kind, pos },
             DragPayload::Variable(name) => Edit::AddVariableNode { name, pos },
-            other => {
-                self.add_package_payload(other, pos);
-                return;
-            }
+            other => return self.add_package_payload(other, pos),
         };
         self.apply(edit);
         self.doc.seal();
+        Task::none()
     }
 
     fn auto_levels(&mut self, node: NodeId) {
@@ -2573,6 +2598,8 @@ impl App {
                 self.ui.window_size = size;
             }
             E::Window(window::Event::FileDropped(path)) => return self.file_dropped(path),
+            // Come back to: what was put in the library folders meanwhile shows.
+            E::Window(window::Event::Focused) => return self.window_come_back(),
             E::Window(_) => {}
             E::Mouse(mouse::Event::CursorMoved { position }) => {
                 self.ui.cursor = position;
@@ -2878,7 +2905,7 @@ impl App {
             GraphMessage::Drop { payload, graph_pos } => {
                 self.ui.drag = None;
                 self.ui.press = None;
-                self.add_payload(payload, [graph_pos[0] - 80.0, graph_pos[1] - 12.0]);
+                return self.add_payload(payload, [graph_pos[0] - 80.0, graph_pos[1] - 12.0]);
             }
             GraphMessage::Error(e) => self.set_status(e, true),
         }
