@@ -62,6 +62,9 @@ enum Step {
     Note(String),
     /// Something to check about the app now: what is wrong, if anything.
     Check(Check),
+    /// Take away a folder of files the flight is done with (written, read back and checked):
+    /// they would only fill the disk.
+    Tidy(PathBuf),
 }
 
 type Check = Box<dyn Fn(&App) -> Option<String>>;
@@ -251,6 +254,7 @@ impl Autopilot {
                 if !self.next_batch(app) {
                     self.done = true;
                     self.summary(app);
+                    self.tidy();
                     return None;
                 }
                 continue;
@@ -275,6 +279,9 @@ impl Autopilot {
                 Step::Pause(d) => {
                     self.pause_until = Some(now + d);
                     return None;
+                }
+                Step::Tidy(dir) => {
+                    let _ = std::fs::remove_dir_all(&dir);
                 }
                 Step::Note(what) => {
                     let m = app.res.memory;
@@ -333,6 +340,23 @@ impl Autopilot {
                     return false;
                 }
             }
+        }
+    }
+
+    /// The flight is over: of what it wrote, only its log stays, when it found nothing (the
+    /// files it made and exported take a few hundred MB a flight, and every seed has a folder);
+    /// what it found is looked into with the files it was found with.
+    fn tidy(&self) {
+        if !self.findings.is_empty() {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(folder(self.flight.seed)) else { return };
+        for path in entries.flatten().map(|e| e.path()) {
+            if path.file_name().is_some_and(|n| n == "autopilot.log") {
+                continue;
+            }
+            // (What the program still holds, its recovery session, it takes away as it quits.)
+            let _ = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
         }
     }
 
@@ -1642,6 +1666,8 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                         Err(e) => Some(format!("{} cannot be read back: {e}", f.display())),
                     })
                 })),
+                // Five maps of 8192²: 1.7 GB, gone once they are read back.
+                Step::Tidy(large.clone()),
             ]);
             steps.extend(back_home("exporting at 8192"));
             Some(steps)
