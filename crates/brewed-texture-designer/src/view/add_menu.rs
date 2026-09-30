@@ -17,8 +17,8 @@ const ROW_H: f32 = 26.0;
 const ROW_PITCH: f32 = ROW_H + 1.0;
 const MIN_ROWS: usize = 3;
 const MAX_ROWS: usize = 12;
-/// Two lines of description under the list.
-const HINT_H: f32 = 32.0;
+/// Up to five lines of description under the list (see `brewed_texture_core::nodes::MAX_DESCRIPTION`).
+const HINT_H: f32 = 80.0;
 /// Everything around the list: padding, title, search field, description, spacing.
 const CHROME_H: f32 = 8.0 + 18.0 + 6.0 + 28.0 + 6.0 + 6.0 + HINT_H + 8.0;
 
@@ -114,7 +114,7 @@ pub fn view<'a>(app: &'a App, menu: &'a AddMenu) -> Element<'a, Message> {
             .height(Length::Fixed(list_height(kinds.len())))
             .on_scroll(|viewport| Message::AddMenu(AddMenuMessage::Scrolled(viewport.absolute_offset().y)))
             .style(style::scrollable),
-        container(text(hint).size(style::SMALL).color(style::TEXT_DIM)).height(Length::Fixed(HINT_H)),
+        container(text(hint).size(style::SMALL).color(style::TEXT_DIM)).height(Length::Fixed(HINT_H)).clip(true),
     ]
     .spacing(6);
     let size = Size::new(WIDTH, CHROME_H + list_height(kinds.len()));

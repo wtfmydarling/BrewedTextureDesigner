@@ -1,5 +1,6 @@
-//! A widget that shows a floating element (a menu) below itself while `expanded`.
-//! Clicking outside of both calls `on_dismiss`.
+//! A widget that shows a floating element (a menu) below itself while `expanded`, or beside
+//! itself (a submenu, see [`DropDown::beside`]). Clicking outside of both calls `on_dismiss`.
+//! A menu may hold such widgets itself: their menus float over it.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::overlay;
@@ -13,6 +14,7 @@ pub struct DropDown<'a, Message> {
     menu: Element<'a, Message>,
     expanded: bool,
     on_dismiss: Option<Message>,
+    beside: bool,
 }
 
 pub fn dropdown<'a, Message>(
@@ -20,12 +22,19 @@ pub fn dropdown<'a, Message>(
     menu: impl Into<Element<'a, Message>>,
     expanded: bool,
 ) -> DropDown<'a, Message> {
-    DropDown { underlay: underlay.into(), menu: menu.into(), expanded, on_dismiss: None }
+    DropDown { underlay: underlay.into(), menu: menu.into(), expanded, on_dismiss: None, beside: false }
 }
 
 impl<Message> DropDown<'_, Message> {
     pub fn on_dismiss(mut self, message: Message) -> Self {
         self.on_dismiss = Some(message);
+        self
+    }
+
+    /// The menu floats beside the widget, its first item level with it: to the right, or to the
+    /// left where the right has no room (a submenu of a menu item).
+    pub fn beside(mut self) -> Self {
+        self.beside = true;
         self
     }
 }
@@ -126,6 +135,7 @@ impl<'a, Message: Clone + 'a> Widget<Message, iced::Theme, iced::Renderer> for D
             menu: &mut self.menu,
             tree: menu_tree,
             on_dismiss: self.on_dismiss.clone(),
+            beside: self.beside,
         }));
         Some(overlay::Group::with_children(underlay_overlay.into_iter().chain(Some(menu)).collect()).overlay())
     }
@@ -136,11 +146,22 @@ struct MenuOverlay<'a, 'b, Message> {
     menu: &'b mut Element<'a, Message>,
     tree: &'b mut Tree,
     on_dismiss: Option<Message>,
+    beside: bool,
 }
 
 impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer> for MenuOverlay<'_, '_, Message> {
     fn layout(&mut self, renderer: &iced::Renderer, bounds: Size) -> layout::Node {
         const GAP: f32 = 2.0;
+        // (What a menu is padded by: its first item is level with the item it comes from.)
+        const PADDING: f32 = 4.0;
+        if self.beside {
+            let node = self.menu.as_widget_mut().layout(self.tree, renderer, &layout::Limits::new(Size::ZERO, bounds));
+            let size = node.size();
+            let right = self.anchor.x + self.anchor.width + GAP;
+            let x = if right + size.width <= bounds.width { right } else { (self.anchor.x - GAP - size.width).max(0.0) };
+            let y = (self.anchor.y - PADDING).min(bounds.height - size.height).max(0.0);
+            return node.move_to(Point::new(x, y));
+        }
         // Below the anchor, or above it when there is more room there; never over it, and
         // as low as the room is (a menu that scrolls then shows the rest).
         let top = self.anchor.y + self.anchor.height + GAP;
@@ -197,6 +218,16 @@ impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer> for 
 
     fn operate(&mut self, layout: Layout<'_>, renderer: &iced::Renderer, operation: &mut dyn widget::Operation) {
         self.menu.as_widget_mut().operate(self.tree, layout, renderer, operation);
+    }
+
+    /// What floats over the menu: a submenu of one of its items.
+    fn overlay<'c>(
+        &'c mut self,
+        layout: Layout<'c>,
+        renderer: &iced::Renderer,
+    ) -> Option<overlay::Element<'c, Message, iced::Theme, iced::Renderer>> {
+        let viewport = layout.bounds();
+        self.menu.as_widget_mut().overlay(self.tree, layout, renderer, &viewport, Vector::ZERO)
     }
 }
 

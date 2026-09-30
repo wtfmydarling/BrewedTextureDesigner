@@ -117,9 +117,8 @@ pub static IMAGE_INPUT: NodeDef = NodeDef {
     id: "image_input",
     name: "Image Input",
     category: Category::Values,
-    description: "An image the graph takes: an input value of the graph (shown in Input Values) whose value \
-                  is a picture; Image Inputs with the same name share one. Used as a node in another graph, the \
-                  graph has a parameter of this name: a picture of that node's, or, exposed, a socket.",
+    description: "An image the graph takes, shown in Input Values; Image Inputs of one name share it. Where the \
+                  graph is used as a node, it is a parameter of that node: a picture, or, exposed, a socket.",
     keywords: "input image graph instance socket parameter picture",
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,

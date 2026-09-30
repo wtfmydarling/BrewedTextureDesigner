@@ -63,15 +63,17 @@ const MAX_JSON: u64 = 256 << 20;
 const MAX_OTHER: u64 = 64 << 20;
 const MAX_OTHERS: u64 = 256 << 20;
 
-/// Where the editor showed a graph (not part of undo).
+/// Where the editor showed a graph (not part of undo). A file keeps only the node the 2D view
+/// showed: where the graph view was, and how near, is the editor's while it runs (a package
+/// opens with its graph shown whole), and moving it is no change of the package.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ViewState {
     /// The node the 2D view showed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<NodeId>,
-    #[serde(rename = "pan", default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub graph_pan: Option<[f32; 2]>,
-    #[serde(rename = "zoom", default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub graph_zoom: Option<f32>,
 }
 
@@ -272,27 +274,11 @@ fn write<W: Write>(
     if let Some(dir) = dir {
         package.map_paths(|p| relative_path(p, dir));
     }
-    let files = package
-        .resources
-        .iter()
-        .map(|r| serde_json::to_value(FileItem { file: r.path.clone(), name: r.name.clone(), extras: r.extras.clone() }))
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("The package cannot be written: {e}"))?;
     // The entries of graphs and of the files the package holds (each once), in order.
     let graph_entries: Vec<String> = package.graphs.iter().map(|g| graph_entry(g.id)).collect();
     let file_entries: Vec<Option<String>> =
         package.resources.iter().map(|r| crate::files::embedded_file(&r.path).map(|f| format!("{FILES}{f}"))).collect();
-    let manifest = Manifest {
-        format: FORMAT.into(),
-        version: VERSION,
-        generator: format!("{} {}", crate::APP_NAME, env!("CARGO_PKG_VERSION")),
-        graphs: package.graphs.iter().map(|g| GraphItem { id: g.id, name: g.name.clone() }).collect(),
-        files,
-        next_graph: package.next_graph(),
-        extensions_used: Vec::new(),
-        extensions_required: Vec::new(),
-        extras: package.extras.clone(),
-    };
+    let manifest = manifest(&package)?;
     let editor = Editor {
         open,
         views: package
@@ -338,6 +324,80 @@ fn write<W: Write>(
         zip.add_prepared(name, prepared?).map_err(io)?;
     }
     zip.finish().map_err(io)
+}
+
+/// What `package.json` says of `package`, its paths as they are.
+fn manifest(package: &Package) -> Result<Manifest, String> {
+    let files = package
+        .resources
+        .iter()
+        .map(|r| serde_json::to_value(FileItem { file: r.path.clone(), name: r.name.clone(), extras: r.extras.clone() }))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("The package cannot be written: {e}"))?;
+    Ok(Manifest {
+        format: FORMAT.into(),
+        version: VERSION,
+        generator: format!("{} {}", crate::APP_NAME, env!("CARGO_PKG_VERSION")),
+        graphs: package.graphs.iter().map(|g| GraphItem { id: g.id, name: g.name.clone() }).collect(),
+        files,
+        next_graph: package.next_graph(),
+        extensions_used: Vec::new(),
+        extensions_required: Vec::new(),
+        extras: package.extras.clone(),
+    })
+}
+
+/// What a package holds, as a hash: of its `package.json` and its graphs as a file says them
+/// (its paths as they are), and of what other programs keep in it; not of where the editor
+/// showed it, its picture, nor what a snapshot says of it. A package saved again as it was has
+/// the same (see [`crate::versions`]), whatever its view did meanwhile.
+pub fn fingerprint(package: &Package) -> Result<String, String> {
+    let mut parts = vec![json(&manifest(package)?, "The package")?];
+    for g in &package.graphs {
+        parts.push(json(&*g.graph, &format!("The graph '{}'", g.name))?);
+    }
+    for (name, bytes) in &package.other_entries {
+        parts.push(name.as_bytes().to_vec());
+        parts.push(bytes.to_vec());
+    }
+    Ok(hash_of(&parts))
+}
+
+/// [`fingerprint`] of the package file at `path` (one written with its paths as they are, as a
+/// snapshot is): of its entries as they are.
+pub fn fingerprint_file(path: &Path) -> Result<String, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+    let mut archive = Archive::new(BufReader::new(file))?;
+    let bytes = archive.read(MANIFEST, MAX_JSON)?;
+    let manifest: Manifest = serde_json::from_slice(&bytes).map_err(|e| format!("The package cannot be read: {e}"))?;
+    let mut parts = vec![bytes];
+    for item in &manifest.graphs {
+        parts.push(archive.read(&graph_entry(item.id), MAX_JSON)?);
+    }
+    let others: Vec<String> = archive.entries().iter().map(|e| e.name.clone()).filter(|n| is_other(n)).collect();
+    for name in others {
+        let bytes = archive.read(&name, MAX_OTHER)?;
+        parts.push(name.into_bytes());
+        parts.push(bytes);
+    }
+    Ok(hash_of(&parts))
+}
+
+/// The hash of `parts` one after the other, each told apart by its length.
+fn hash_of(parts: &[Vec<u8>]) -> String {
+    let mut all = Vec::with_capacity(parts.iter().map(|p| p.len() + 8).sum());
+    for part in parts {
+        all.extend_from_slice(&(part.len() as u64).to_le_bytes());
+        all.extend_from_slice(part);
+    }
+    crate::files::sha256(&all)
+}
+
+/// Is `name` an entry other programs put in a package, kept as it is: none the format names,
+/// nor the folders some tools list (their entries' names make them).
+fn is_other(name: &str) -> bool {
+    let ours = [MIMETYPE, MANIFEST, EDITOR, RECOVERY, PICTURE].contains(&name) || name.starts_with(GRAPHS) || name.starts_with(FILES);
+    !ours && !(name.ends_with('/') && archive::is_entry_name(name.trim_end_matches('/')))
 }
 
 /// An entry of a package file, to be made ready (see [`archive::Prepared`]).
@@ -521,11 +581,9 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
     if missing > 0 {
         notes.push(format!("{missing} file(s) the package holds are not in its file"));
     }
-    // What other programs put in the package, as it is; not the folders some tools list (their
-    // entries' names make them), nor what no entry may be named (it could not be written back).
-    let ours = |name: &str| [MIMETYPE, MANIFEST, EDITOR, RECOVERY, PICTURE].contains(&name) || name.starts_with(GRAPHS) || name.starts_with(FILES);
-    let others: Vec<String> =
-        archive.entries().iter().map(|e| e.name.clone()).filter(|n| !ours(n) && !(n.ends_with('/') && archive::is_entry_name(n.trim_end_matches('/')))).collect();
+    // What other programs put in the package, as it is; not what no entry may be named (it
+    // could not be written back).
+    let others: Vec<String> = archive.entries().iter().map(|e| e.name.clone()).filter(|n| is_other(n)).collect();
     let mut kept = 0;
     let mut other_entries = Vec::new();
     for name in others {
@@ -590,9 +648,31 @@ mod tests {
         (package, views, open)
     }
 
+    /// A package's fingerprint is that of its file, whatever the view did; a node moved, or
+    /// renamed, is another.
+    #[test]
+    fn fingerprints_say_what_a_package_holds() {
+        let (mut package, views, open) = demo();
+        let dir = std::env::temp_dir().join(format!("brewed-fingerprint-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.brewtex");
+        let unsaved = Unsaved { path: None, title: "a".into(), time: 1 };
+        save_snapshot(&file, &package, &views, open, &unsaved).unwrap();
+        let first = fingerprint(&package).unwrap();
+        assert_eq!(fingerprint_file(&file).unwrap(), first, "the package's is its file's");
+        let elsewhere = [(open, ViewState { graph_pan: Some([500.0, 9.0]), graph_zoom: Some(2.0), ..views[&open].clone() })].into_iter().collect();
+        save_snapshot(&file, &package, &elsewhere, open, &Unsaved { time: 2, ..unsaved.clone() }).unwrap();
+        assert_eq!(fingerprint_file(&file).unwrap(), first, "the view moved: the same package");
+        let graph = Arc::make_mut(&mut package.graphs[0].graph);
+        graph.nodes[0].pos[0] += 1.0;
+        assert_ne!(fingerprint(&package).unwrap(), first, "a node moved: another");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A package is read as it was written: its graphs, the files it holds and those it links
-    /// to, where its views were, the graph edited; written twice, it is the same bytes; its
-    /// entries are those the format names, `mimetype` first.
+    /// to, the node each view showed (not where the view was, nor how near: the editor's), the
+    /// graph edited; written twice, it is the same bytes; its entries are those the format
+    /// names, `mimetype` first.
     #[test]
     fn roundtrip() {
         let (mut package, views, open) = demo();
@@ -608,7 +688,7 @@ mod tests {
         let loaded = from_bytes(&bytes, None).unwrap();
         assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
         assert_eq!(loaded.package, package);
-        assert_eq!(loaded.views[&open], views[&open]);
+        assert_eq!(loaded.views[&open], ViewState { preview: views[&open].preview, ..ViewState::default() });
         assert_eq!(loaded.open, second);
         let held: Vec<_> = loaded.package.resources.iter().filter_map(|r| r.data.clone()).collect();
         assert_eq!(held, [png.clone(), font], "the bytes of the files it holds");

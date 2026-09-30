@@ -112,8 +112,9 @@ impl Versions {
 
     /// Keep `package`, saved as the file at `path` (or, for [`Kind::Replaced`], open from it),
     /// as a version of `kind`: the files it holds first, each once (one kept already is only
-    /// marked as wanted). Then those beyond the newest `keep` go: all, when `keep` is 0, and
-    /// none is kept.
+    /// marked as wanted). Not when it is what the newest version holds (see
+    /// [`crate::project::fingerprint`]): saved again as it was, or with only its view moved.
+    /// Then those beyond the newest `keep` go: all, when `keep` is 0, and none is kept.
     pub fn keep(
         &self,
         path: &Path,
@@ -123,7 +124,11 @@ impl Versions {
         kind: Kind,
         keep: usize,
     ) -> Result<(), String> {
-        if keep > 0 {
+        if keep > 0 && self.newest_holds(path, package) {
+            if kind == Kind::Saved {
+                self.saw(path);
+            }
+        } else if keep > 0 {
             let folder = self.folder(path);
             made(&folder)?;
             made(&self.root.join(HELD_FOLDER))?;
@@ -163,6 +168,15 @@ impl Versions {
         }
         self.saw(path);
         Ok(())
+    }
+
+    /// Whether the newest version of `path` holds `package` as it is.
+    fn newest_holds(&self, path: &Path, package: &Package) -> bool {
+        let Some(newest) = self.of(path).into_iter().next() else { return false };
+        match (project::fingerprint(package), project::fingerprint_file(&newest.file)) {
+            (Ok(now), Ok(then)) => now == then,
+            _ => false,
+        }
     }
 
     /// The package `version` holds, with the files it held (each taken only if it is the bytes
@@ -420,6 +434,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A package saved again as it was, or with only its view moved, is no new version; a node
+    /// moved is.
+    #[test]
+    fn saves_of_the_same_package_are_one_version() {
+        let dir = root("same");
+        let versions = Versions::new(dir.join("History"));
+        let file = dir.join("walls.brewtex");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut p = package("Wall", b"same bricks");
+        let open = p.first();
+        let save = |p: &Package, views: &HashMap<GraphId, ViewState>| {
+            versions.before_writing(&file, 20).unwrap();
+            project::save(&file, p, views, open).unwrap();
+            versions.keep(&file, p, views, open, Kind::Saved, 20).unwrap();
+        };
+        for _ in 0..5 {
+            save(&p, &HashMap::new());
+        }
+        let moved = [(open, ViewState { graph_pan: Some([300.0, 20.0]), graph_zoom: Some(1.5), ..ViewState::default() })].into_iter().collect();
+        save(&p, &moved);
+        assert_eq!(versions.of(&file).len(), 1, "saved six times as it was");
+        let mut graph = crate::graph::Graph::default();
+        graph.add_node(crate::NodeKind::BLUR, [10.0, 20.0]);
+        p.graphs[0].graph = std::sync::Arc::new(graph);
+        save(&p, &HashMap::new());
+        assert_eq!(versions.of(&file).len(), 2, "a node added: a version");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A file about to be written over that the versions have not got is kept first: one saved
     /// before versions were kept, or changed elsewhere since; once, not before every save. One
     /// that is not a package is kept as it is.
@@ -442,7 +485,7 @@ mod tests {
         assert_eq!(kinds(&versions), [Kind::Saved, Kind::Found]);
         assert_eq!(versions.load(&versions.of(&file)[1]).unwrap().package.graphs[0].name, "Before");
         save(&new);
-        assert_eq!(kinds(&versions), [Kind::Saved, Kind::Saved, Kind::Found], "seen: not kept again");
+        assert_eq!(kinds(&versions), [Kind::Saved, Kind::Found], "seen, and saved as it was: nothing kept again");
         // Written elsewhere meanwhile (another size).
         let elsewhere = package("Elsewhere, and longer", b"their bricks");
         project::save(&file, &elsewhere, &HashMap::new(), elsewhere.first()).unwrap();

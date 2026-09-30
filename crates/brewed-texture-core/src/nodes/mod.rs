@@ -149,6 +149,9 @@ pub(crate) const fn value(key: &'static str, label: &'static str, ty: DataType) 
 }
 
 pub(crate) const NO_SOCKETS: &[SocketDef] = &[];
+/// The longest a node's description may be: a few lines under its name in the node menus
+/// (what its parameters do, their tips say).
+pub const MAX_DESCRIPTION: usize = 200;
 /// The files of pictures a Bitmap (and the image of an Image Input) reads.
 pub const PICTURE_FILES: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "exr", "hdr"];
 /// An output of the kind of the inputs.
@@ -920,6 +923,18 @@ impl NodeKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the node menus show of a node under its name fits them: a few lines, not a page.
+    #[test]
+    fn descriptions_fit_the_node_menus() {
+        let long: Vec<String> = NodeKind::ALL
+            .iter()
+            .map(|k| k.def())
+            .filter(|d| d.description.chars().count() > MAX_DESCRIPTION)
+            .map(|d| format!("{} ({})", d.name, d.description.chars().count()))
+            .collect();
+        assert!(long.is_empty(), "longer than {MAX_DESCRIPTION} characters: {long:?}");
+    }
 
     #[test]
     fn ids_are_unique_and_resolvable() {

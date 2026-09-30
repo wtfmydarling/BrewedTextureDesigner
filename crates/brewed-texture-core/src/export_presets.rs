@@ -60,8 +60,9 @@ impl Preset {
         }
     }
 
-    /// The normal maps it writes: DirectX's (Y−), or OpenGL's (Y+).
-    fn directx(self) -> bool {
+    /// The normal maps it writes: DirectX's (Y−), or OpenGL's (Y+). Unreal Engine reads only
+    /// DirectX's (it has since 4.x), whatever the graph makes.
+    pub fn directx(self) -> bool {
         self == Preset::Unreal
     }
 }

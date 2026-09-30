@@ -8,6 +8,7 @@ pub mod dialogs;
 pub mod editors;
 pub mod explorer;
 pub mod frames;
+pub mod gpu_probe;
 pub mod graph;
 pub mod home;
 pub mod inputs;
@@ -51,9 +52,14 @@ pub fn root(app: &App) -> Element<'_, Message> {
         hovered_split: pane_grid::Line { color: style::ACCENT_DIM, width: 2.0 },
     });
 
-    // The Home screen, in place of the editor while it is shown (the editor is behind it).
+    // The Home screen, in place of the editor while it is shown (the editor is behind it); with
+    // it, the probe that has the engine start meanwhile (see `gpu_probe`).
     let window = match app.ui.home {
-        Some(page) => column![toolbar::menu_bar(app), container(home::view(app, page)).height(Length::Fill).style(style::window_bar)],
+        Some(page) => column![
+            toolbar::menu_bar(app),
+            container(home::view(app, page)).height(Length::Fill).style(style::window_bar),
+            gpu_probe::probe(),
+        ],
         None => column![
             toolbar::menu_bar(app),
             container(grid).height(Length::Fill).style(style::window_bar),

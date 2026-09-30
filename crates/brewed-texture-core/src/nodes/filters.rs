@@ -195,11 +195,9 @@ pub static PIXEL_MATH: NodeDef = NodeDef {
     id: "pixel_math",
     name: "Pixel Math",
     category: Category::Filters,
-    description: "Evaluates an expression for every pixel on the GPU. Unknown words become image inputs, which \
-                  sample(image, x, y) reads anywhere (x and y from 0 to 1, like u and v) and image.rgb reads the \
-                  channels of; u, v, px, py, width and height are built in, vec2, vec3 and vec4 make vectors, and \
-                  lines of name = value before the value give names values. One value makes a grayscale image; \
-                  two to four (red, green, blue, alpha), or a vector, a color one.",
+    description: "An expression computed for every pixel on the GPU. Unknown words are image inputs (img.rgb, \
+                  sample(img, x, y)); u, v, width, height and vectors are built in. One value is gray, a vector \
+                  color.",
     keywords: "expression formula shader per pixel custom processor color",
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,
@@ -230,9 +228,8 @@ pub static DISTANCE: NodeDef = NodeDef {
     id: "distance",
     name: "Distance",
     category: Category::Filters,
-    description: "How far each pixel is from the shapes of a mask: white on them, fading to black at the \
-                  distance; or into them from their edges; or signed, gray at the edges. Where the texture \
-                  tiles, distances go across its edges.",
+    description: "How far each pixel is from the shapes of a mask: white on them, fading to black at the distance; \
+                  or inward from their edges; or signed. Distances cross the edges where it tiles.",
     keywords: "distance field sdf glow outline expand grow spread jump flood",
     inputs: &[gray("mask", "Mask")],
     outputs: GRAY_OUT,
@@ -281,9 +278,8 @@ pub static FLOOD_FILL: NodeDef = NodeDef {
     id: "flood_fill",
     name: "Flood Fill",
     category: Category::Filters,
-    description: "Gives each shape of a mask (each region of it, connected across the edges where the texture \
-                  tiles) a random gray or color of its own: every brick, tile or puzzle piece different. Black \
-                  around the shapes.",
+    description: "Gives each shape of a mask (connected across the edges where it tiles) a random gray or color of \
+                  its own: every brick, tile or puzzle piece different. Black around the shapes.",
     keywords: "flood fill random color grayscale islands regions per tile variation connected",
     inputs: &[gray("mask", "Mask")],
     outputs: IMAGE_OUT,

@@ -172,6 +172,13 @@ pub enum MenuId {
     Help,
 }
 
+/// A submenu of a menu's item, open while the item is pointed at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubMenu {
+    /// File → Open Recent Package.
+    Recent,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ContextTarget {
     Node(NodeId),
@@ -346,6 +353,7 @@ pub struct Ui {
     pub export_preset: brewed_texture_core::export_presets::Preset,
     pub export_folder: Option<PathBuf>,
     pub menu: Option<MenuId>,
+    pub submenu: Option<SubMenu>,
     pub context: Option<ContextMenu>,
     pub add_menu: Option<AddMenu>,
     pub dialog: Option<Dialog>,
@@ -736,7 +744,6 @@ pub enum Message {
     ExportFolderPicked(Option<PathBuf>),
     ExportNode(NodeId),
     ExportNodePicked(NodeId, Option<PathBuf>),
-    LoadDemo,
     Quit,
     Proceed(PendingAction),
     /// Save, then continue with the action (unsaved changes dialog).
@@ -780,6 +787,8 @@ pub enum Message {
     Menu(Option<MenuId>),
     /// The mouse is over a menu title: switch to it if another menu is open.
     MenuHover(MenuId),
+    /// A submenu of the open menu is opened, or closed.
+    SubMenu(Option<SubMenu>),
     /// A menu item was chosen: close the menus, then handle the item's message.
     FromMenu(Box<Message>),
     Context(Option<ContextMenu>),
@@ -1023,6 +1032,7 @@ impl App {
                 export_preset: brewed_texture_core::export_presets::Preset::Outputs,
                 export_folder: None,
                 menu: None,
+                submenu: None,
                 context: None,
                 add_menu: None,
                 dialog: None,
@@ -1424,6 +1434,7 @@ impl App {
 
     fn close_popups(&mut self) {
         self.ui.menu = None;
+        self.ui.submenu = None;
         self.ui.context = None;
         self.ui.add_menu = None;
         self.ui.choice_menu = None;
@@ -2059,10 +2070,6 @@ impl App {
                 self.close_popups();
                 return self.pick_package();
             }
-            Message::LoadDemo => {
-                self.close_popups();
-                self.open_demo();
-            }
             Message::Quit => {
                 self.ui.discarded.clear();
                 return self.guarded(PendingAction::Quit);
@@ -2264,11 +2271,18 @@ impl App {
             Message::Menu(m) => {
                 self.ui.context = None;
                 self.ui.add_menu = None;
+                self.ui.submenu = None;
                 self.ui.menu = if self.ui.menu == m { None } else { m };
             }
             Message::MenuHover(id) => {
-                if self.ui.menu.is_some() {
+                if self.ui.menu.is_some_and(|open| open != id) {
                     self.ui.menu = Some(id);
+                    self.ui.submenu = None;
+                }
+            }
+            Message::SubMenu(s) => {
+                if self.ui.menu.is_some() {
+                    self.ui.submenu = s;
                 }
             }
             Message::Context(c) => {

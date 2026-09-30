@@ -20,7 +20,7 @@ The reference implementation is `crates/brewed-texture-core` (`project.rs` for t
 walls.brewtex                          a ZIP archive
 ├── mimetype                           application/vnd.brewed-texture.package+zip (first, stored)
 ├── package.json                       the manifest: the graphs, the files and their names
-├── editor.json                        which graph was open, where each view was
+├── editor.json                        which graph was open, what each 2D view showed
 ├── thumbnail.png                      a picture of the package, for lists of packages
 ├── graphs/1.json                      a graph each, by its id
 ├── graphs/4.json
@@ -263,11 +263,13 @@ node that uses the graph.
 How the editor showed the package (optional: a package without it opens at its first graph):
 
 ```json
-{ "open": 1, "views": [{ "graph": 1, "preview": 22, "pan": [120.0, -40.0], "zoom": 0.8 }] }
+{ "open": 1, "views": [{ "graph": 1, "preview": 22 }] }
 ```
 
-`open` is the graph being edited; each view is where a graph's view was (`pan`, `zoom`) and the
-node its 2D view showed (`preview`), each optional.
+`open` is the graph being edited; each view says the node a graph's 2D view showed (`preview`,
+optional). Where the graph view was, and how near, is not kept: a package opens with each graph
+shown whole, and moving the view is no change of the package (a `pan` or `zoom` of a file
+written before is not read).
 
 ## `thumbnail.png`
 

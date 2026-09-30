@@ -542,11 +542,6 @@ impl App {
         self.add_package(package, None, HashMap::new(), open);
     }
 
-    /// The demo, as a package of its own in the Explorer.
-    pub(super) fn open_demo(&mut self) {
-        let _ = self.home_message(super::home::HomeMessage::Example(brewed_texture_core::templates::Example::BrickWall));
-    }
-
     /// Close the package open as `key` (its unsaved changes go). The last one leaves an empty
     /// package in its place.
     pub(super) fn close_package(&mut self, key: u64) {

@@ -134,7 +134,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             modal(dialog.into(), Some(Message::Dialog(None)))
         }
         Dialog::About => {
-            let gpu = if app.adapter.is_empty() { "starting…".to_string() } else { app.adapter.clone() };
+            let gpu = if app.adapter.is_empty() { "detecting…".to_string() } else { app.adapter.clone() };
             let title = row![
                 iced::widget::image(crate::brand::logo_large()).width(Length::Fixed(48.0)).height(Length::Fixed(48.0)),
                 column![
@@ -250,23 +250,35 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
         }
         container(r).style(style::segments)
     };
+    // (A first base: the window is to be made again, as its user said, and says so.)
     let mut body = column![
+        text("ПЕРЕДЕЛАТЬ!!!").size(30).font(style::heavy()).color(style::ERROR),
         text(format!("Export {}", app.doc.entry().name)).size(18).font(style::bold()),
         row![label("Preset"), presets].align_y(Alignment::Start),
     ]
     .spacing(12);
     if dialog.preset != Preset::Outputs {
+        // What the graph makes, and what the preset writes of it.
+        let (wants, writes) = if dialog.preset.directx() { ("DirectX (Y−)", "DirectX") } else { ("OpenGL (Y+)", "OpenGL") };
+        let written = if dialog.directx == dialog.preset.directx() {
+            format!("{} reads {wants} normal maps: written as the graph makes them", dialog.preset.name())
+        } else {
+            format!("{} reads {wants} normal maps: the green channel is turned over to make them {writes}'s", dialog.preset.name())
+        };
         body = body.push(
             row![
-                label("Normal maps"),
-                segmented(vec![
-                    ("OpenGL (Y+)", say(X::DirectX(false)), !dialog.directx),
-                    ("DirectX (Y−)", say(X::DirectX(true)), dialog.directx),
-                ]),
-                text("as the graph makes them").size(style::SMALL).color(style::TEXT_FAINT),
+                label("Graph's normals"),
+                column![
+                    segmented(vec![
+                        ("OpenGL (Y+)", say(X::DirectX(false)), !dialog.directx),
+                        ("DirectX (Y−)", say(X::DirectX(true)), dialog.directx),
+                    ]),
+                    text(written).size(style::SMALL).color(style::TEXT_DIM),
+                ]
+                .spacing(4),
             ]
             .spacing(8)
-            .align_y(Alignment::Center),
+            .align_y(Alignment::Start),
         );
         body = body.push(
             row![
@@ -300,7 +312,7 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
     if planned.is_empty() {
         files = files.push(text("None: the graph has no Output of what this writes (give Outputs their Usage).").size(style::SMALL).color(style::WARNING));
     }
-    body = body.push(row![label("Files"), container(scrollable(files).height(Length::Shrink)).max_height(160.0).width(Length::Fill)].align_y(Alignment::Start));
+    body = body.push(row![label("Files"), container(scrollable(files).height(Length::Shrink).spacing(8)).max_height(160.0).width(Length::Fill)].align_y(Alignment::Start));
     let ready = dialog.folder.is_some() && !planned.is_empty();
     body = body.push(
         row![
@@ -367,7 +379,7 @@ fn versions<'a>(app: &'a App, dialog: &'a crate::app::versions::VersionsDialog) 
         text(format!("Each save keeps the package as it was saved: the newest {kept} of it, beside the settings, never beside the package."))
             .size(style::TEXT_SIZE)
             .color(style::TEXT_DIM),
-        container(scrollable(list).height(Length::Shrink).style(style::scrollable)).max_height(360.0),
+        container(scrollable(list).height(Length::Shrink).spacing(8).style(style::scrollable)).max_height(360.0),
         text(restoring).size(style::SMALL).color(style::TEXT_FAINT),
         row![
             space().width(Length::Fill),
@@ -432,7 +444,7 @@ fn recover(app: &App) -> Element<'_, Message> {
         ))
         .size(style::TEXT_SIZE)
         .color(style::TEXT_DIM),
-        scrollable(list).height(Length::Shrink).style(style::scrollable),
+        scrollable(list).height(Length::Shrink).spacing(8).style(style::scrollable),
         text(
             "Recovered, each opens with the changes it had, not saved yet: saving saves it where it was. \
              Later, they are offered again the next time the program starts."
@@ -500,7 +512,7 @@ fn missing_files<'a>(app: &'a App, missing: &'a MissingFiles) -> Element<'a, Mes
     if let Some(note) = &missing.note {
         body = body.push(container(text(note).size(style::SMALL)).padding(6).width(Length::Fill).style(style::message_box(style::WARNING)));
     }
-    body = body.push(scrollable(list).height(Length::Shrink).style(style::scrollable));
+    body = body.push(scrollable(list).height(Length::Shrink).spacing(8).style(style::scrollable));
     body = body.push(
         row![
             text("Left missing, they show nothing.").size(style::SMALL).color(style::TEXT_FAINT),

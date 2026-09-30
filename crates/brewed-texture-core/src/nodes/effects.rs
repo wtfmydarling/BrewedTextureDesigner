@@ -90,9 +90,8 @@ pub static BEVEL: NodeDef = NodeDef {
     id: "bevel",
     name: "Bevel",
     category: Category::Effects,
-    description: "A height map of the shapes of a mask with their edges beveled: rising from the edge to full \
-                  height over the width, in the profile chosen; outward, the slope goes down around the shapes. \
-                  Where the texture tiles, the shapes go across its edges.",
+    description: "A height map of a mask's shapes with beveled edges: rising from the edge to full height over the \
+                  width, in the profile chosen; outward, sloping down around them. Crosses tiling edges.",
     keywords: "bevel chamfer round edge height inset rounded corner",
     inputs: &[gray("mask", "Mask")],
     outputs: GRAY_OUT,
@@ -113,9 +112,8 @@ pub static HEIGHT_BLEND: NodeDef = NodeDef {
     id: "height_blend",
     name: "Height Blend",
     category: Category::Effects,
-    description: "Two height maps together, the higher one showing where it is higher: stones in sand, moss \
-                  in the cracks. The top one is raised by the offset; the contrast sharpens where one gives \
-                  way to the other. It gives the height, or where the top one shows.",
+    description: "Two height maps together, the higher showing where it is higher: stones in sand, moss in cracks. \
+                  Offset raises the top one; Contrast sharpens where they meet. Gives the height, or the mask.",
     keywords: "height blend combine max mix terrain layer",
     inputs: &[gray("top", "Top"), gray("bottom", "Bottom"), gray_opt("mask", "Mask")],
     outputs: GRAY_OUT,

@@ -96,9 +96,8 @@ pub static GRADIENT_MAP: NodeDef = NodeDef {
     id: "gradient_map",
     name: "Gradient Map",
     category: Category::Adjustments,
-    description: "Colorizes an image with a color ramp of any number of stops: its luminance, or the channel \
-                  it reads, picks the color. The gradient can be picked from anything on the screen: drag \
-                  across it and the colors along the way become the ramp.",
+    description: "Colors an image with a ramp of any number of stops, its luminance (or a channel) picking the \
+                  color. Pick the gradient from the screen: drag across anything, and its colors become the ramp.",
     keywords: "colorize ramp lut palette",
     // Either kind: the channel it reads is one of a color image.
     inputs: IMAGE_IN,
@@ -143,9 +142,8 @@ pub static GRADIENT_DYNAMIC: NodeDef = NodeDef {
     id: "gradient_dynamic",
     name: "Gradient Dynamic",
     category: Category::Adjustments,
-    description: "A gradient map whose gradient is an image: each value picks the color at its place along a line \
-                  of the Gradient image, a row or a column, where Position says, or where the Position Map says \
-                  for each pixel.",
+    description: "A gradient map whose gradient is an image: each value picks the color along a row or column of \
+                  the Gradient image, at Position, or where the Position Map says for each pixel.",
     keywords: "gradient map colorize dynamic remap lookup image",
     inputs: &[gray("input", "Input"), color_image("gradient", "Gradient"), gray_opt("position_map", "Position Map")],
     outputs: COLOR_OUT,
@@ -184,8 +182,7 @@ pub static RGBA_MERGE: NodeDef = NodeDef {
     name: "RGBA Merge",
     category: Category::Adjustments,
     description: "Puts four grayscale images into the red, green, blue and alpha of one color image, as game \
-                  engines take several maps in one (occlusion, roughness and metallic: ORM). A channel with \
-                  nothing connected has its value.",
+                  engines take several maps in one (ORM: occlusion, roughness, metallic). Unconnected: its value.",
     keywords: "pack packing channels merge combine orm mask rgba",
     inputs: &[gray_opt("red", "Red"), gray_opt("green", "Green"), gray_opt("blue", "Blue"), gray_opt("alpha", "Alpha")],
     outputs: COLOR_OUT,

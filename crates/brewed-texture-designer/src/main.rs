@@ -62,8 +62,8 @@ tools for developing the program:
        brewed-texture-designer --autopilot [MINUTES] [--seed N]
 
   --screenshot     start, wait until everything is computed, save a screenshot and quit
-  --scenario       UI state for the screenshot: add-menu, file-menu, context-menu,
-                   gradient, math, levels, inputs, transform, tiling, dialog, tile,
+  --scenario       UI state for the screenshot: add-menu, file-menu, context-menu, home,
+                   learn, home-about, gradient, math, levels, inputs, transform, tiling, dialog, tile,
                    choices, lighting-menu, tile-sampler, shape:NAME (mat-ball …),
                    environment:FILE, exposure:EV, blur:0..1; several joined by ';'
   --select KIND    select the first node of this type (e.g. math, levels)

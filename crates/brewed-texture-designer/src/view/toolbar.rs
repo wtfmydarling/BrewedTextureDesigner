@@ -7,7 +7,7 @@ use iced::widget::{button, column, container, image, pick_list, row, rule, space
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::{Edit, Precision};
 
-use crate::app::{App, Dialog, ExplorerMessage, MenuId, Message, PreviewMessage, SettingsMessage};
+use crate::app::{App, Dialog, ExplorerMessage, MenuId, Message, PreviewMessage, SettingsMessage, SubMenu};
 use crate::icons::{Icon, icon};
 use crate::shortcuts::Command;
 use crate::style;
@@ -50,7 +50,56 @@ fn separator<'a>() -> Element<'a, Message> {
 }
 
 fn menu_body<'a>(items: Vec<Element<'a, Message>>) -> Element<'a, Message> {
-    container(column(items).spacing(1).width(Length::Fixed(250.0))).padding(4).style(style::popup).into()
+    menu_of_width(items, 250.0)
+}
+
+fn menu_of_width<'a>(items: Vec<Element<'a, Message>>, width: f32) -> Element<'a, Message> {
+    container(column(items).spacing(1).width(Length::Fixed(width))).padding(4).style(style::popup).into()
+}
+
+/// An item of a menu that has a submenu: gone to, it closes the submenu open.
+fn beside_submenu(item: Element<'_, Message>) -> Element<'_, Message> {
+    iced::widget::mouse_area(item).on_enter(Message::SubMenu(None)).into()
+}
+
+/// Open Recent Package ▸, whose submenu (open while the item is pointed at) lists the packages
+/// opened or saved last, as many as the settings say, each by its name and folder, then Clear
+/// Recent Packages; or says there are none.
+fn recent_packages(app: &App) -> Element<'_, Message> {
+    let open = app.ui.submenu == Some(SubMenu::Recent);
+    let offered = app.settings.recent_packages as usize;
+    let mut items: Vec<Element<'_, Message>> = app
+        .ui
+        .recent
+        .iter()
+        .take(offered)
+        .map(|path| {
+            let p = std::path::Path::new(path);
+            let name = p.file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+            let folder = p.parent().and_then(|f| f.file_name()).map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+            recent_item(name, folder, Message::OpenRecent(path.clone()))
+        })
+        .collect();
+    if items.is_empty() {
+        items.push(item("No recent packages", "", None));
+    } else {
+        items.extend([separator(), item("Clear Recent Packages", "", Some(Message::ClearRecent))]);
+    }
+    let label = button(
+        row![
+            text("Open Recent Package").size(style::TEXT_SIZE).color(style::TEXT),
+            space().width(Length::Fill),
+            text("▸").size(style::SMALL).color(style::TEXT_DIM),
+        ]
+        .spacing(16)
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .padding([4, 10])
+    .style(style::row_button(open))
+    .on_press(Message::SubMenu(Some(SubMenu::Recent)));
+    let anchor = iced::widget::mouse_area(label).on_enter(Message::SubMenu(Some(SubMenu::Recent)));
+    dropdown(anchor, menu_of_width(items, 320.0), open).beside().on_dismiss(Message::Menu(None)).into()
 }
 
 fn menu<'a>(app: &'a App, id: MenuId, title: &'a str, items: Vec<Element<'a, Message>>) -> Element<'a, Message> {
@@ -64,27 +113,16 @@ fn menu<'a>(app: &'a App, id: MenuId, title: &'a str, items: Vec<Element<'a, Mes
 
 fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
     let key = app.doc_key;
+    let h = beside_submenu;
     let mut items = vec![
-        item("Home Screen", "", Some(Message::Home(crate::app::home::HomeMessage::Show(crate::app::home::HomePage::Home)))),
+        h(item("Home Screen", "", Some(Message::Home(crate::app::home::HomeMessage::Show(crate::app::home::HomePage::Home))))),
         separator(),
-        item("New Package…", app.key_of(Command::New), Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(None)))),
-        item("New Graph…", "", Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(Some(key))))),
-        item("Open Package…", app.key_of(Command::Open), Some(Message::Open)),
+        h(item("New Package…", app.key_of(Command::New), Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(None))))),
+        h(item("New Graph…", "", Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(Some(key)))))),
+        h(item("Open Package…", app.key_of(Command::Open), Some(Message::Open))),
+        recent_packages(app),
     ];
-    // The packages opened or saved last (as many as the settings say): each by its name, and
-    // the folder it is in.
-    let offered = app.settings.recent_packages as usize;
-    if !app.ui.recent.is_empty() && offered > 0 {
-        items.push(separator());
-        for path in app.ui.recent.iter().take(offered) {
-            let p = std::path::Path::new(path);
-            let name = p.file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
-            let folder = p.parent().and_then(|f| f.file_name()).map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-            items.push(recent_item(name, folder, Message::OpenRecent(path.clone())));
-        }
-        items.push(item("Clear Recent Packages", "", Some(Message::ClearRecent)));
-    }
-    items.extend([
+    let items_after: Vec<Element<'_, Message>> = vec![
         separator(),
         item("Link Files…", "", Some(Message::Explorer(ExplorerMessage::LinkFiles(key)))),
         item("Collect Files", "", Some(Message::Explorer(ExplorerMessage::CollectFiles(key)))),
@@ -100,10 +138,9 @@ fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
         separator(),
         item("Export…", app.key_of(Command::Export), Some(Message::Export(crate::app::export_dialog::ExportMessage::Open))),
         separator(),
-        item("Open the Demo", "", Some(Message::LoadDemo)),
-        separator(),
         item("Quit", "", Some(Message::Quit)),
-    ]);
+    ];
+    items.extend(items_after.into_iter().map(h));
     items
 }
 

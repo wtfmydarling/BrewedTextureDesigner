@@ -175,9 +175,8 @@ pub static TILE_SAMPLER: NodeDef = NodeDef {
     id: "tile_sampler",
     name: "Tile Sampler",
     category: Category::Generators,
-    description: "Places patterns on a grid, each tile varied at random and by maps: which tiles stay (Mask Map), \
-                  how big they are (Scale Map), how far they are turned (Rotation Map) and their color (Color Map). \
-                  With several patterns connected, each tile takes one of them at random.",
+    description: "Places patterns on a grid, each tile varied at random and by maps: which stay (Mask), their size \
+                  (Scale), turn (Rotation) and color (Color). With several patterns, each tile takes one.",
     keywords: "scatter splatter tiles stones pebbles instances grid maps sampler",
     inputs: &[
         image_opt("pattern_1", "Pattern 1"),
@@ -275,10 +274,8 @@ pub static FX_MAP: NodeDef = NodeDef {
     id: "fx_map",
     name: "FX-Map",
     category: Category::Generators,
-    description: "Draws patterns, as many as it is told, each as its program says: the image is split in four \
-                  again and again (Depth), every cell of a split draws Count splats, and the program gives each its \
-                  place, size, turn, brightness or color, opacity, and whether it is drawn at all, from its number, \
-                  its cell, random numbers of its own and the images and values it names.",
+    description: "Draws patterns as its program says: the image is split in four again and again (Depth), each \
+                  cell draws Count splats, and the program gives each its place, size, turn, color and opacity.",
     keywords: "fxmap fx map splatter scatter splat quadrant iterate pattern program script stamps particles substance",
     inputs: &[
         image_opt("background", "Background"),
@@ -565,9 +562,8 @@ pub static NOISE: NodeDef = NodeDef {
     id: "noise",
     name: "Noise",
     category: Category::Generators,
-    description: "Tileable procedural noises: clouds, ridges, plasma, marble, wood, streaks, flow, curl eddies, \
-                  fibers, scratches, ripples, waveforms, Turing patterns, caustics, cells, cracks, stones, scales, \
-                  woven cloth, Truchet tiles, mazes, spots, dirt, craters and white noise.",
+    description: "Tileable noises: clouds, ridges, plasma, marble, wood, flow, curl, fibers, scratches, waves, \
+                  cells, cracks, stones, scales, woven cloth, mazes, spots, dirt, craters and more.",
     keywords: "perlin simplex value gaussian fbm clouds billow ridged plasma liquid warp swirl marble wood veins \
                streaks flow curl fibers fur hair scratches ripples waveform gabor turing reaction raindrops rain \
                caustics voronoi worley cells cracks crystal mosaic stones scales weave fabric cloth blocks truchet \
@@ -668,9 +664,8 @@ pub static SVG: NodeDef = NodeDef {
     id: "svg",
     name: "SVG",
     category: Category::Generators,
-    description: "Vector graphics from an SVG file, drawn sharp at any texture size: in their colors, or as how \
-                  much of each pixel they cover (a mask). Moved, turned and scaled without losing an edge; where \
-                  the texture tiles, what leaves one edge comes back at the other.",
+    description: "Vector graphics from an SVG file, sharp at any texture size: in their colors, or as a mask of \
+                  what they cover. Moved, turned and scaled without losing an edge; they wrap where it tiles.",
     keywords: "vector svg illustrator inkscape shape logo pattern mask file",
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,
@@ -694,9 +689,8 @@ pub static TEXT: NodeDef = NodeDef {
     id: "text",
     name: "Text",
     category: Category::Generators,
-    description: "A line of text, drawn sharp at any texture size: white where the letters are. In its font \
-                  file, or in Inter, built in, for what the font does not have; the same on every system. Where \
-                  the texture tiles, what leaves one edge comes back at the other.",
+    description: "A line of text, sharp at any texture size: white where the letters are. In its font, or in Inter \
+                  (built in) for what the font lacks; the same on every system. It wraps where it tiles.",
     keywords: "text font letters numbers label words typography type",
     inputs: NO_SOCKETS,
     outputs: GRAY_OUT,

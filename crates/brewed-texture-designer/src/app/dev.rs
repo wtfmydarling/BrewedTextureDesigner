@@ -116,6 +116,14 @@ impl App {
         let first = |kind: NodeKind| graph.nodes_of(kind).next().map(|n| n.id);
         match scenario {
             "file-menu" => self.ui.menu = Some(MenuId::File),
+            // The Home screen (the demo behind it), its Learn page, and About over it (which
+            // names the GPU: the engine started on the Home screen).
+            "home" => self.ui.home = Some(super::home::HomePage::Home),
+            "learn" => self.ui.home = Some(super::home::HomePage::Learn),
+            "home-about" => {
+                self.ui.home = Some(super::home::HomePage::Home);
+                self.ui.dialog = Some(Dialog::About);
+            }
             "add-menu" => {
                 self.ui.add_menu = Some(AddMenu {
                     at: Point::new(700.0, 300.0),

@@ -2472,7 +2472,7 @@ fn the_explorer_and_its_menus() {
     let gone = dir.join("gone.ttf");
     w.send(Message::Explorer(ExplorerMessage::FilesPicked(key, vec![picture.clone(), gone.clone(), dir.join("notes.txt")])));
     assert_eq!(w.app.doc.package().resources.len(), 2, "a picture and a font; not a text");
-    w.send(Message::LoadDemo);
+    w.send(Message::Home(crate::app::home::HomeMessage::Example(brewed_texture_core::templates::Example::BrickWall)));
     w.send(Message::Explorer(ExplorerMessage::NewGraph(w.app.doc_key)));
     assert!(w.app.ui.renaming_graph.is_some(), "a new graph is named first");
     w.send(Message::Explorer(ExplorerMessage::CommitRename));
@@ -3407,6 +3407,7 @@ fn the_wheel_undo_and_recent_packages_are_as_the_settings_say() {
     assert_eq!(w.app.ui.recent.len(), 3);
     apply_settings(&mut w, |s| s.recent_packages = 2);
     w.send(Message::Menu(Some(MenuId::File)));
+    w.send(Message::SubMenu(Some(crate::app::SubMenu::Recent)));
     draw_frame(&mut w, std::time::Instant::now());
     let offered = ["a.brewtex", "b.brewtex", "c.brewtex"].map(|name| texts(&mut w, name).len());
     // (The Explorer names them too: the menu, once more for each it offers.)
@@ -3514,12 +3515,12 @@ fn files_chosen_or_dropped_are_held() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The packages opened or saved last are in the File menu, the latest first, each by its name
-/// and folder: one opens it again; one that is not there any more goes off the list, saying so;
-/// Clear Recent Packages forgets them all.
+/// The packages opened or saved last are in File → Open Recent Package, the latest first, each
+/// by its name and folder: one opens it again; one that is not there any more goes off the list,
+/// saying so; Clear Recent Packages forgets them all, and the submenu says there are none.
 #[test]
 fn packages_opened_last_are_offered_again() {
-    use crate::app::MenuId;
+    use crate::app::{MenuId, SubMenu};
     let mut w = harness!(view::root, 1280.0, 800.0);
     let dir = scratch("recent");
     let (walls, floors) = (dir.join("walls.brewtex"), dir.join("floors.brewtex"));
@@ -3535,11 +3536,17 @@ fn packages_opened_last_are_offered_again() {
     let before = names.map(|name| texts(&mut w, name).len());
     w.send(Message::Menu(Some(MenuId::File)));
     draw_frame(&mut w, std::time::Instant::now());
+    assert!(!texts(&mut w, "Open Recent Package").is_empty());
+    assert_eq!(texts(&mut w, "Clear Recent Packages").len(), before[2], "in the submenu, not in the menu");
+    assert!(texts(&mut w, "Open the Demo").is_empty());
+    w.send(Message::SubMenu(Some(SubMenu::Recent)));
+    draw_frame(&mut w, std::time::Instant::now());
     for (name, before) in names.into_iter().zip(before) {
         assert_eq!(texts(&mut w, name).len(), before + 1, "{name}");
     }
     w.snapshot("recent-packages");
     w.send(Message::Menu(None));
+    assert_eq!(w.app.ui.submenu, None, "closed with the menu");
 
     // Opened again from the menu: in the Explorer, the latest now.
     for key in package_keys(&w.app) {
@@ -3557,8 +3564,10 @@ fn packages_opened_last_are_offered_again() {
     w.send(Message::ClearRecent);
     assert!(w.app.ui.recent.is_empty());
     w.send(Message::Menu(Some(MenuId::File)));
+    w.send(Message::SubMenu(Some(SubMenu::Recent)));
     draw_frame(&mut w, std::time::Instant::now());
     assert!(texts(&mut w, "Clear Recent Packages").is_empty(), "no list, no clearing it");
+    assert!(!texts(&mut w, "No recent packages").is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
