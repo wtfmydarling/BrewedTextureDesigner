@@ -202,6 +202,52 @@ fn expression_editor_keeps_focus_while_typing() {
     assert_eq!(panel.focused(), Some(editor_id()), "the editor lost the focus on undo");
 }
 
+/// The program of an FX-Map is typed as an expression is, a line after another: what it reads
+/// and never sets becomes an input of the node, and where it is wrong it says so.
+#[test]
+fn programs_of_fx_maps_are_typed_line_after_line() {
+    let mut panel = harness!(view::properties::view, 420.0, 1600.0);
+    panel.send(Message::Edit(Edit::AddNode { kind: NodeKind::FX_MAP, pos: [0.0, 0.0] }));
+    let fx = panel.app.graph().nodes_of(NodeKind::FX_MAP).next().expect("an FX-Map added").id;
+    panel.send(Message::Graph(GraphMessage::Select { node: fx, mode: SelectMode::Replace }));
+    panel.input(&[]);
+    assert!(!texts(&mut panel, "PROGRAM").is_empty(), "a section of its program");
+    assert!(matches!(panel.operate(focusable::focus::<()>(editor_id())), Outcome::None));
+    assert_eq!(panel.focused(), Some(editor_id()), "the editor takes the focus");
+
+    // A new line at the end, where typing goes on, and a statement on it.
+    let enter = Key::Named(keyboard::key::Named::Enter);
+    let physical = keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified);
+    let pressed = iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key: enter.clone(),
+        modified_key: enter,
+        physical_key: physical,
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::default(),
+        text: Some("\n".into()),
+        repeat: false,
+    });
+    assert!(panel.input(&[pressed]) > 0);
+    assert!(panel.input(&typing("opacity = mask")) > 0);
+    let program = |panel: &Harness| panel.app.graph().node(fx).unwrap().text("program").to_string();
+    assert!(program(&panel).ends_with("\nopacity = mask"), "{:?}", program(&panel));
+    let error = |panel: &Harness| panel.app.eval.node(fx).and_then(|e| e.error().map(str::to_string));
+    assert_eq!(error(&panel), None);
+    let sockets = |panel: &Harness| {
+        let g = panel.app.graph();
+        g.input_sockets(g.node(fx).unwrap()).into_iter().map(|s| s.key).collect::<Vec<_>>()
+    };
+    assert!(sockets(&panel).contains(&"v:mask".to_string()), "{:?}", sockets(&panel));
+    // Wrong while it is typed, and the sockets stay; right again.
+    panel.input(&typing(" *"));
+    assert!(error(&panel).is_some_and(|e| e.contains("program is incorrect")), "{:?}", error(&panel));
+    assert!(sockets(&panel).contains(&"v:mask".to_string()));
+    assert_eq!(panel.focused(), Some(editor_id()), "the editor keeps the focus");
+    panel.input(&typing(" 2"));
+    assert_eq!(error(&panel), None);
+    panel.snapshot("fx_map_program");
+}
+
 /// Pressing a library item, moving onto the graph and releasing adds the node there.
 #[test]
 fn library_items_can_be_dropped_on_the_graph() {

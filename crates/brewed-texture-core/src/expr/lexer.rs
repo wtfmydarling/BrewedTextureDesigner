@@ -30,6 +30,11 @@ pub enum TokenKind {
     Bang,
     Question,
     Colon,
+    /// `=`: gives a name a value in a script (see [`super::script`]); in an expression, a
+    /// mistake for `==`.
+    Assign,
+    /// `;`: between the statements of a script.
+    Semicolon,
     /// Something the language does not understand, with a human readable reason.
     Error(String),
     Eof,
@@ -61,6 +66,8 @@ impl TokenKind {
             TokenKind::Bang => "'!'".into(),
             TokenKind::Question => "'?'".into(),
             TokenKind::Colon => "':'".into(),
+            TokenKind::Assign => "'=' (to compare values, write '==')".into(),
+            TokenKind::Semicolon => "';'".into(),
             TokenKind::Error(_) => "invalid input".into(),
             TokenKind::Eof => "end of expression".into(),
         }
@@ -95,6 +102,14 @@ pub fn tokenize(src: &str) -> Vec<Token> {
 
         if c.is_whitespace() {
             i += 1;
+            continue;
+        }
+
+        // A comment, to the end of the line.
+        if c == '#' {
+            while char_at(i).is_some_and(|c| c != '\n') {
+                i += 1;
+            }
             continue;
         }
 
@@ -180,7 +195,8 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             (':', _) => (TokenKind::Colon, 1),
             ('π', _) => (TokenKind::Ident("pi".into()), 1),
             ('τ', _) => (TokenKind::Ident("tau".into()), 1),
-            ('=', _) => (TokenKind::Error("Unexpected '=' (use '==' to compare values)".into()), 1),
+            ('=', _) => (TokenKind::Assign, 1),
+            (';', _) => (TokenKind::Semicolon, 1),
             ('&', _) => (TokenKind::Error("Unexpected '&' (use '&&' for logical AND)".into()), 1),
             ('|', _) => (TokenKind::Error("Unexpected '|' (use '||' for logical OR)".into()), 1),
             ('[' | '{', _) => (TokenKind::Error(format!("Unexpected '{c}' (use '(' for grouping)")), 1),

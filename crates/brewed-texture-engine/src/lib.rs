@@ -10,6 +10,7 @@
 
 pub mod engine;
 pub mod export;
+mod fx_map;
 pub mod gpu;
 pub mod kernels;
 pub mod render;

@@ -42,6 +42,7 @@ pub enum Func {
     Radians,
     If,
     Hash,
+    Rand,
     Sample,
 }
 
@@ -110,6 +111,14 @@ pub static FUNCTIONS: &[FuncInfo] = &[
     f("rad", Func::Radians, 1, 1, "rad(deg)", "Degrees to radians"),
     f("if", Func::If, 3, 3, "if(cond, a, b)", "a when cond ≠ 0, otherwise b"),
     f("hash", Func::Hash, 1, 1, "hash(x)", "Deterministic pseudo-random number in [0, 1)"),
+    f(
+        "rand",
+        Func::Rand,
+        1,
+        1,
+        "rand(k)",
+        "The k-th random number from 0 to 1: of each splat in FX-Map (and its seed), of each pixel in Pixel Math; elsewhere the same for the same k",
+    ),
     f(
         "sample",
         Func::Sample,
@@ -263,6 +272,8 @@ pub fn call(func: Func, a: &[f64]) -> f64 {
             }
         }
         Func::Hash => pcg_hash((x as f32).to_bits()) as f64 / 4_294_967_296.0,
+        // Of nothing in particular: the random numbers of seed 0.
+        Func::Rand => super::script::rand(0, x),
         // A value is the same wherever it is read: only an image of Pixel Math differs.
         Func::Sample => x,
     }

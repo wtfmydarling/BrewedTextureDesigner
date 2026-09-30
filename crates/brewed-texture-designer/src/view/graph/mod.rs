@@ -982,7 +982,9 @@ impl GraphCanvas<'_> {
         // Body: expression, thumbnail, value.
         let text_x = l.rect.x + 8.0 * z;
         let line = |i: f32| l.body_top + (i + 0.5) * LINE_H * z;
-        if node.is_expression_node() && show_text {
+        // (A program is lines of its own: the node shows what it makes.)
+        let script = node.def().expression_language() == Some(brewed_texture_core::expr::Language::Splats);
+        if node.is_expression_node() && !script && show_text {
             let max_chars = ((l.rect.width - 16.0 * z) / (6.6 * z)).max(3.0) as usize;
             let y = if d.has_image() { l.body_top - 0.5 * LINE_H * z } else { line(0.0) };
             frame.fill_text(Text {

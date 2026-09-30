@@ -229,6 +229,108 @@ pub static TILE_SAMPLER: NodeDef = NodeDef {
     role: Role::Image,
 };
 
+/// What an FX-Map program reads of each splat (see [`FX_MAP`]).
+pub const FX_MAP_BUILTINS: &[&str] = &["i", "count", "depth", "cells", "col", "row", "u", "v", "seed", "width", "height"];
+
+/// What an FX-Map program sets of each splat, each with how many values it takes (see the tip
+/// of the program of [`FX_MAP`]).
+pub const FX_MAP_OUTPUTS: &[(&str, usize, usize)] = &[
+    ("x", 1, 1),
+    ("y", 1, 1),
+    ("size", 1, 2),
+    ("angle", 1, 1),
+    ("value", 1, 1),
+    ("color", 3, 4),
+    ("opacity", 1, 1),
+    ("draw", 1, 1),
+    ("image", 1, 1),
+];
+
+/// What each of [`FX_MAP_OUTPUTS`] is where the program does not set it.
+pub const FX_MAP_STARTS: &[&[f64]] =
+    &[&[0.5], &[0.5], &[1.0, 1.0], &[0.0], &[1.0], &[1.0, 1.0, 1.0, 1.0], &[1.0], &[1.0], &[1.0]];
+
+/// The language of FX-Map programs.
+pub static FX_MAP_RULES: crate::expr::script::ScriptRules =
+    crate::expr::script::ScriptRules { builtins: FX_MAP_BUILTINS, outputs: FX_MAP_OUTPUTS };
+
+/// How the splats of an FX-Map combine with what is under them.
+pub const FX_MAP_BLENDS: &[&str] = &["Max", "Add", "Stack", "Subtract", "Min", "Multiply"];
+const FX_MAP_BLEND_IDS: &[&str] = &["max", "add", "stack", "subtract", "min", "multiply"];
+pub const FX_MAP_BLEND_MIN: u32 = 4;
+pub const FX_MAP_BLEND_MULTIPLY: u32 = 5;
+
+/// The most splats an FX-Map draws: its cells times its count, at all its depths.
+pub const MAX_SPLATS: u64 = 1 << 24;
+
+/// The program a new FX-Map runs: splats of every size, turn and brightness, anywhere.
+pub const DEFAULT_FX_MAP_PROGRAM: &str = "# Each splat: where it is in its cell, how big, turned and bright.
+x = rand(1)
+y = rand(2)
+size = 0.05 + 0.15 * rand(3)
+angle = 360 * rand(4)
+value = 0.3 + 0.7 * rand(5)";
+
+pub static FX_MAP: NodeDef = NodeDef {
+    id: "fx_map",
+    name: "FX-Map",
+    category: Category::Generators,
+    description: "Draws patterns, as many as it is told, each as its program says: the image is split in four \
+                  again and again (Depth), every cell of a split draws Count splats, and the program gives each its \
+                  place, size, turn, brightness or color, opacity, and whether it is drawn at all, from its number, \
+                  its cell, random numbers of its own and the images and values it names.",
+    keywords: "fxmap fx map splatter scatter splat quadrant iterate pattern program script stamps particles substance",
+    inputs: &[
+        image_opt("background", "Background"),
+        image_opt("pattern_1", "Pattern 1"),
+        image_opt("pattern_2", "Pattern 2"),
+        image_opt("pattern_3", "Pattern 3"),
+        image_opt("pattern_4", "Pattern 4"),
+    ],
+    outputs: IMAGE_OUT,
+    params: &[
+        script("program", "Program", DEFAULT_FX_MAP_PROGRAM).tip(
+            "What each splat is, one name = value after another. It sets x and y, where the splat is \
+             across and down its cell, from 0 to 1 (0.5, its middle); size, how big it is, a share of its \
+             cell, or two values, width and height (1); angle, how far it is turned, in degrees \
+             counter-clockwise (0); value, how bright (1); color, red, green, blue and alpha, which makes \
+             the image a color one; opacity (1); draw, 0 to leave it out (1); image, which pattern input it \
+             draws, 1 to 4 (1). It reads i, the splat's number in its cell from 0, and count; depth, and \
+             cells, how many there are across at it; col and row, its cell's; u and v, the middle of its \
+             cell in the image, 0 to 1; seed; width and height of the image in pixels; and rand(k), the \
+             splat's k-th random number. Other names are inputs: an image connected to one is read at u, v \
+             (sample(image, x, y) reads it anywhere), and a name of an input value of the graph reads it.",
+        ),
+        int("count", "Count", 64, 1, 256).at_least(1.0).tip("How many splats each cell draws; the program's i counts them from 0."),
+        int("depth", "Depth", 0, 0, 12)
+            .bounded()
+            .tip("How many times the image is split in four: at 0 the whole image is the one cell, at 1 it has 4, at 2 16 (4 × 4), and so on."),
+        int("from_depth", "From Depth", 0, 0, 12).bounded().tip(
+            "The splits drawn from: every depth from this one to Depth draws its cells, the finer over the \
+             coarser (as clouds are made of ever finer ones). At Depth or more, only Depth.",
+        ),
+        choice("pattern", "Pattern", 0, TILE_PATTERNS, TILE_PATTERN_IDS).pictured(),
+        float("softness", "Softness", 0.02, 0.0, 1.0).bounded().when("pattern", SOLID_SHAPES),
+        int("sides", "Sides", 6, 3, 16).bounded().when("pattern", &[SHAPE_POLYGON, SHAPE_STAR]),
+        float("inner_radius", "Inner Radius", 0.5, 0.05, 1.0).when("pattern", &[SHAPE_STAR]),
+        float("thickness", "Thickness", 0.2, 0.01, 1.0).when("pattern", &[SHAPE_RING, SHAPE_CROSS]),
+        float("corner_radius", "Corner Radius", 0.25, 0.0, 1.0).when("pattern", &[SHAPE_ROUNDED]),
+        choice("blend", "Blending", 0, FX_MAP_BLENDS, FX_MAP_BLEND_IDS).tip(
+            "How each splat combines with what is under it: the brighter wins, they add up, the later lies \
+             over the earlier, it takes itself away, the darker wins, or it multiplies what is under it. A \
+             grayscale pattern covers as much as it is bright; a color one, as its alpha says.",
+        ),
+        int("seed", "Seed", 0, 0, 9999).bounded(),
+        choice("channel", "Read Channel", 0, READ_CHANNELS, filters::READ_CHANNEL_IDS)
+            .fixed()
+            .tip("Which channel of the images connected to the program's names it reads."),
+        boolean("auto_bind", "Auto-bind", true)
+            .fixed()
+            .tip("Names of the program nothing is connected to take the value of the graph's input value of that name."),
+    ],
+    role: Role::Image,
+};
+
 pub static GRADIENT: NodeDef = NodeDef {
     id: "gradient",
     name: "Gradient",

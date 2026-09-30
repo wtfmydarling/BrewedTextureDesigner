@@ -204,13 +204,7 @@ pub static PIXEL_MATH: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         expression("expression", "Expression", "u * v", true),
-        choice(
-            "channel",
-            "Read Channel",
-            0,
-            &["Luminance", "Red", "Green", "Blue", "Alpha"],
-            &["luminance", "red", "green", "blue", "alpha"],
-        )
+        choice("channel", "Read Channel", 0, READ_CHANNELS, READ_CHANNEL_IDS)
             .fixed()
             .tip("Which channel of connected images the variables read."),
         boolean("auto_bind", "Auto-bind", true)
@@ -222,6 +216,10 @@ pub static PIXEL_MATH: NodeDef = NodeDef {
 
 /// Built-in per-pixel variables of the Pixel Math node.
 pub const PIXEL_MATH_BUILTINS: &[&str] = &["u", "v", "px", "py", "width", "height"];
+
+/// Which channel of the images its expression names a Pixel Math or an FX-Map reads.
+pub const READ_CHANNELS: &[&str] = &["Luminance", "Red", "Green", "Blue", "Alpha"];
+pub(crate) const READ_CHANNEL_IDS: &[&str] = &["luminance", "red", "green", "blue", "alpha"];
 
 /// What a Distance node makes of the distances, in the order of its "mode" parameter.
 pub const DISTANCE_MODES: &[&str] = &["From the Shapes", "Into the Shapes", "Signed"];

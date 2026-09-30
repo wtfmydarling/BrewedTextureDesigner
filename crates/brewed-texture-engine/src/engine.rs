@@ -984,13 +984,14 @@ impl Engine {
             lut = Some(image);
         }
 
-        // Pixel Math variables.
+        // Pixel Math variables (and those of an FX-Map program).
         let mut vars = Vec::new();
         if d.is_pixel_expression() {
+            let builtins = d.expression_language().map_or(PIXEL_MATH_BUILTINS, |l| l.builtins());
             for v in &ne.vars {
                 let var = match &v.source {
                     VarSource::Builtin => {
-                        let b = PIXEL_MATH_BUILTINS.iter().copied().find(|b| *b == v.name).unwrap_or("u");
+                        let b = builtins.iter().copied().find(|b| *b == v.name).unwrap_or("u");
                         (2u8, b).hash(&mut hasher);
                         Var::Builtin(b)
                     }
@@ -1223,7 +1224,10 @@ impl Engine {
         let options = d.param(key)?.enum_options().len();
         // Nodes that need more than parameters (a file, a baked gradient, variables per
         // pixel) have no choices worth a picture.
-        let plain = d.has_image() && !d.is_pixel_expression() && ![NodeKind::BITMAP, NodeKind::GRADIENT_MAP, NodeKind::CURVE].contains(&kind);
+        // (An FX-Map as it is added reads nothing but its built-ins.)
+        let plain = d.has_image()
+            && (!d.is_pixel_expression() || kind == NodeKind::FX_MAP)
+            && ![NodeKind::BITMAP, NodeKind::GRADIENT_MAP, NodeKind::CURVE].contains(&kind);
         if options == 0 || !plain {
             return None;
         }

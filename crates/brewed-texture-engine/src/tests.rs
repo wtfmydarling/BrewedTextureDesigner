@@ -2304,8 +2304,23 @@ fn edge_values(pd: &brewed_texture_core::nodes::ParamDef) -> Vec<ParamValue> {
             ParamValue::Text(std::env::temp_dir().display().to_string()),
             ParamValue::Text(file!().into()),
         ]),
-        ParamKind::Expression { pixel, .. } => {
-            let texts: &[&str] = if pixel {
+        ParamKind::Expression { language, .. } => {
+            use brewed_texture_core::expr::Language;
+            let texts: &[&str] = if language == Language::Splats {
+                &[
+                    "size = 0.1",
+                    "x = 1/0",
+                    "size = sqrt(-1)",
+                    "size = 1e30",
+                    "size = 100, 0.001",
+                    "size = -1",
+                    "value = log(0); angle = 1e30",
+                    "color = 1/0, 0, 0",
+                    "image = 1/0; draw = rand(1) < 0.5",
+                    "x = ",
+                    "size = a",
+                ]
+            } else if language == Language::Pixel {
                 &[
                     "u",
                     "0",
@@ -2897,4 +2912,326 @@ fn the_deepest_pixel_math_is_a_shader() {
         assert!(close(got, want, 1e-2 * want.abs().max(1.0)), "{}…: {got}, not {want}", &expression[..24]);
     }
     assert!(e.gpu.take_errors().is_empty());
+}
+
+// ------------------------------------------------------------------ FX-Map
+
+const SQUARE: u32 = 1;
+const PATTERN_IMAGE: u32 = brewed_texture_core::nodes::TILE_PATTERN_IMAGE;
+const MAX: u32 = 0;
+const ADD: u32 = 1;
+const STACK: u32 = 2;
+const SUBTRACT: u32 = 3;
+const MIN: u32 = 4;
+const MULTIPLY: u32 = 5;
+
+/// An FX-Map running `program`, `count` splats a cell at the depths `from` to `depth`, each a
+/// square blending by `blend`.
+fn fx_map(g: &mut Graph, program: &str, count: i32, (from, depth): (i32, i32), blend: u32) -> NodeId {
+    let fx = g.add_node(NodeKind::FX_MAP, [0.0, 0.0]);
+    set(g, fx, "program", ParamValue::Text(program.into()));
+    set(g, fx, "count", ParamValue::Int(count));
+    set(g, fx, "from_depth", ParamValue::Int(from));
+    set(g, fx, "depth", ParamValue::Int(depth));
+    set(g, fx, "pattern", ParamValue::Enum(SQUARE));
+    set(g, fx, "blend", ParamValue::Enum(blend));
+    fx
+}
+
+/// A grayscale Uniform Color of `v`.
+fn gray_color(g: &mut Graph, v: f32) -> NodeId {
+    let c = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    set(g, c, "color", ParamValue::Color([v, v, v, 1.0]));
+    set(g, c, "output", ParamValue::Enum(1));
+    c
+}
+
+/// Splats go where the program says, as big and as turned as it says; at depth 2 one in each of
+/// the 4 × 4 cells.
+#[test]
+fn fx_map_draws_where_its_program_says() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    // A quarter of the image wide (64 px), its middle a quarter across and halfway down.
+    let fx = fx_map(&mut g, "x = 0.25; y = 0.5; size = 0.25", 1, (0, 0), MAX);
+    let px = eval_read(&mut e, &g, fx);
+    for (x, y, v) in [(64, 128, 1.0), (36, 100, 1.0), (91, 155, 1.0), (100, 128, 0.0), (64, 164, 0.0), (27, 128, 0.0), (192, 128, 0.0)] {
+        assert!(close(pixel(&px, x, y)[0], v, 1e-3), "({x}, {y}): {:?}", pixel(&px, x, y));
+    }
+    assert_eq!(e.image(fx).unwrap().format(), wgpu::TextureFormat::R16Float, "a grayscale image");
+    // Turned by 45 degrees: a diamond reaching 45 px along the axes, not the corners.
+    set(&mut g, fx, "program", ParamValue::Text("x = 0.25; y = 0.5; size = 0.25; angle = 45".into()));
+    let px = eval_read(&mut e, &g, fx);
+    assert!(close(pixel(&px, 64 + 40, 128)[0], 1.0, 1e-3));
+    assert!(close(pixel(&px, 64 + 28, 128 + 28)[0], 0.0, 1e-3));
+    // Width and height of their own.
+    set(&mut g, fx, "program", ParamValue::Text("x = 0.25; y = 0.5; size = 0.25, 0.125".into()));
+    let px = eval_read(&mut e, &g, fx);
+    assert!(close(pixel(&px, 64 + 28, 128)[0], 1.0, 1e-3));
+    assert!(close(pixel(&px, 64, 128 + 20)[0], 0.0, 1e-3));
+    // In the middle of each of 16 cells, half as big as a cell.
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.5".into()));
+    set(&mut g, fx, "depth", ParamValue::Int(2));
+    set(&mut g, fx, "from_depth", ParamValue::Int(2));
+    let px = eval_read(&mut e, &g, fx);
+    for cell in 0..4 {
+        let c = 32 + 64 * cell;
+        assert!(close(pixel(&px, c, 32 + 64 * ((cell + 1) % 4))[0], 1.0, 1e-3), "cell {cell}");
+        assert!(close(pixel(&px, 64 * cell + 4, 64 * cell + 4)[0], 0.0, 1e-3), "the corner of cell {cell}");
+    }
+    // What the program reads of each: here, a brighter splat a row further down.
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.5; value = (row + 1) / cells".into()));
+    let px = eval_read(&mut e, &g, fx);
+    for row in 0..4 {
+        assert!(close(pixel(&px, 96, 32 + 64 * row)[0], (row + 1) as f32 / 4.0, 1e-3), "row {row}");
+    }
+    // The depths from From Depth to Depth, the finer over the coarser.
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.5; value = (depth + 1) / 4".into()));
+    set(&mut g, fx, "from_depth", ParamValue::Int(0));
+    set(&mut g, fx, "blend", ParamValue::Enum(STACK));
+    let px = eval_read(&mut e, &g, fx);
+    assert!(close(pixel(&px, 32, 32)[0], 0.75, 1e-3), "depth 2 over the rest: {:?}", pixel(&px, 32, 32));
+    assert!(close(pixel(&px, 64 + 4, 64 + 4)[0], 0.5, 1e-3), "depth 1 where depth 2 is not");
+    assert!(close(pixel(&px, 128, 128)[0], 0.25, 1e-3), "depth 0 alone in the middle");
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+/// A splat over an edge the image tiles on comes back on the other side; where it does not
+/// tile, it ends at the edge. The FX-Map as it is added tiles.
+#[test]
+fn fx_map_splats_wrap_where_the_image_tiles() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let fx = fx_map(&mut g, "x = 0; y = 0.5; size = 0.25", 1, (0, 0), MAX);
+    let px = eval_read(&mut e, &g, fx);
+    assert!(close(pixel(&px, 4, 128)[0], 1.0, 1e-3));
+    assert!(close(pixel(&px, 250, 128)[0], 1.0, 1e-3), "across the edge");
+    assert!(close(pixel(&px, 250, 250)[0], 0.0, 1e-3));
+    // At a corner: in all four.
+    set(&mut g, fx, "program", ParamValue::Text("x = 1; y = 1; size = 0.25".into()));
+    let px = eval_read(&mut e, &g, fx);
+    for (x, y) in [(4, 4), (250, 4), (4, 250), (250, 250)] {
+        assert!(close(pixel(&px, x, y)[0], 1.0, 1e-3), "({x}, {y})");
+    }
+    set(&mut g, fx, "tiling", ParamValue::Enum(0));
+    let px = eval_read(&mut e, &g, fx);
+    assert!(close(pixel(&px, 250, 250)[0], 1.0, 1e-3));
+    assert!(close(pixel(&px, 4, 4)[0], 0.0, 1e-3), "no tiling: no copy");
+    // As it is added.
+    let fx = g.add_node(NodeKind::FX_MAP, [0.0, 0.0]);
+    let px = eval_read(&mut e, &g, fx);
+    let (across, inside) = seams(&px, RES);
+    assert!(across <= inside * 1.25 + 1e-3, "{across} across the edges, at most {inside} anywhere else");
+    assert!(mean(&px) > 0.05, "it draws: {}", mean(&px));
+    // The same splats every time; others with another seed.
+    assert_eq!(eval_read(&mut e, &g, fx), px);
+    set(&mut g, fx, "seed", ParamValue::Int(7));
+    assert_ne!(eval_read(&mut e, &g, fx), px);
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+/// How a splat combines with what is under it: the brighter wins, they add up, the later lies
+/// over the earlier, it takes itself away, the darker wins, it multiplies.
+#[test]
+fn fx_map_blends_as_it_is_told() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let value_at_middle = |e: &mut Engine, g: &Graph, fx: NodeId| {
+        let px = eval_read(e, g, fx);
+        (pixel(&px, 128, 128)[0], pixel(&px, 10, 10)[0])
+    };
+    // Two splats, the second darker.
+    let program = "size = 0.25; value = 0.75 - 0.5 * i";
+    let fx = fx_map(&mut g, program, 2, (0, 0), MAX);
+    assert_eq!(value_at_middle(&mut e, &g, fx), (0.75, 0.0));
+    set(&mut g, fx, "blend", ParamValue::Enum(STACK));
+    assert_eq!(value_at_middle(&mut e, &g, fx), (0.25, 0.0));
+    set(&mut g, fx, "blend", ParamValue::Enum(ADD));
+    assert_eq!(value_at_middle(&mut e, &g, fx), (1.0, 0.0));
+    // Over a background.
+    let background = gray_color(&mut g, 0.5);
+    g.connect(background, "o:output", fx, "i:background").unwrap();
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.25; value = 0.25".into()));
+    set(&mut g, fx, "count", ParamValue::Int(1));
+    assert_eq!(value_at_middle(&mut e, &g, fx), (0.75, 0.5));
+    set(&mut g, fx, "blend", ParamValue::Enum(SUBTRACT));
+    assert_eq!(value_at_middle(&mut e, &g, fx), (0.25, 0.5));
+    set(&mut g, fx, "blend", ParamValue::Enum(MIN));
+    assert_eq!(value_at_middle(&mut e, &g, fx), (0.25, 0.5));
+    set(&mut g, fx, "blend", ParamValue::Enum(MULTIPLY));
+    assert_eq!(value_at_middle(&mut e, &g, fx), (0.125, 0.5));
+    set(&mut g, fx, "blend", ParamValue::Enum(MAX));
+    assert_eq!(value_at_middle(&mut e, &g, fx), (0.5, 0.5));
+    // Opacity: half of it over what is there.
+    set(&mut g, fx, "blend", ParamValue::Enum(STACK));
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.25; value = 1; opacity = 0.5".into()));
+    assert_eq!(value_at_middle(&mut e, &g, fx), (0.75, 0.5));
+    // Left out.
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.25; value = 1; draw = 0".into()));
+    assert_eq!(value_at_middle(&mut e, &g, fx), (0.5, 0.5));
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+/// Colors make a color image (over opaque black); so do patterns in color, drawn as they
+/// are; a grayscale pattern covers as much as it is bright.
+#[test]
+fn fx_map_colors_and_patterns() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let fx = fx_map(&mut g, "size = 0.25; color = 1, 0.5, 0", 1, (0, 0), MAX);
+    let px = eval_read(&mut e, &g, fx);
+    assert_eq!(pixel(&px, 128, 128), [1.0, 0.5, 0.0, 1.0]);
+    assert_eq!(pixel(&px, 10, 10), [0.0, 0.0, 0.0, 1.0]);
+    // A grayscale pattern: as much as it is bright.
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.25".into()));
+    set(&mut g, fx, "pattern", ParamValue::Enum(PATTERN_IMAGE));
+    let pattern = gray_color(&mut g, 0.8);
+    g.connect(pattern, "o:output", fx, "i:pattern_1").unwrap();
+    let px = eval_read(&mut e, &g, fx);
+    assert!(close(pixel(&px, 128, 128)[0], 0.8, 1e-3), "{:?}", pixel(&px, 128, 128));
+    assert!(close(pixel(&px, 128 + 36, 128)[0], 0.0, 1e-3));
+    // In color, as it is; the second pattern for image = 2, none where nothing arrives.
+    let colored = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    set(&mut g, colored, "color", ParamValue::Color([0.2, 0.4, 0.6, 1.0]));
+    g.connect(colored, "o:output", fx, "i:pattern_2").unwrap();
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.25; image = 2".into()));
+    let px = eval_read(&mut e, &g, fx);
+    let c = pixel(&px, 128, 128);
+    assert!(close(c[0], 0.2, 2e-3) && close(c[1], 0.4, 2e-3) && close(c[2], 0.6, 2e-3), "{c:?}");
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.25; image = 3".into()));
+    let px = eval_read(&mut e, &g, fx);
+    assert_eq!(pixel(&px, 128, 128), [0.0, 0.0, 0.0, 1.0]);
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+/// The program reads images connected to its names (at the middle of the cell, or anywhere
+/// with sample) and the input values of the graph it names.
+#[test]
+fn fx_map_reads_images_and_values() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let fx = fx_map(&mut g, "size = 0.25; value = m", 1, (0, 0), MAX);
+    let m = gray_color(&mut g, 0.6);
+    let socket = brewed_texture_core::graph::var_socket_key("m");
+    g.connect(m, "o:output", fx, &socket).unwrap();
+    let px = eval_read(&mut e, &g, fx);
+    assert!(close(pixel(&px, 128, 128)[0], 0.6, 1e-3), "{:?}", pixel(&px, 128, 128));
+    // Anywhere: u of Pixel Math, three quarters across.
+    let across = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
+    set(&mut g, across, "expression", ParamValue::Text("u".into()));
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.25; value = sample(m, 0.75, 0.5)".into()));
+    g.connect(across, "o:output", fx, &socket).unwrap();
+    let px = eval_read(&mut e, &g, fx);
+    assert!(close(pixel(&px, 128, 128)[0], 0.75, 2e-3), "{:?}", pixel(&px, 128, 128));
+    // An input value of the graph, by its name.
+    let input = g.add_node(NodeKind::FLOAT_INPUT, [0.0, 0.0]);
+    g.bind_variable(input, "k").unwrap();
+    g.variable_mut("k").unwrap().value = Value::Float(0.7);
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.25; value = k".into()));
+    let px = eval_read(&mut e, &g, fx);
+    assert!(close(pixel(&px, 128, 128)[0], 0.7, 1e-3), "{:?}", pixel(&px, 128, 128));
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+/// In a graph of floats of 32 bits (which cannot be blended on every device) it draws the
+/// same; a wrong program and too many splats say what is wrong.
+#[test]
+fn fx_map_in_full_precision_and_errors() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    g.precision = brewed_texture_core::Precision::Full;
+    let fx = fx_map(&mut g, "x = 0.25; y = 0.5; size = 0.25; value = 0.3", 1, (0, 0), MAX);
+    let px = eval_read(&mut e, &g, fx);
+    assert_eq!(e.image(fx).unwrap().format(), wgpu::TextureFormat::R32Float);
+    assert!(close(pixel(&px, 64, 128)[0], 0.3, 1e-3));
+    assert!(close(pixel(&px, 192, 128)[0], 0.0, 1e-3));
+    set(&mut g, fx, "program", ParamValue::Text("x = ".into()));
+    let ev = evaluate_blocking(&mut e, &g);
+    let error = ev.node(fx).and_then(|n| n.error()).map(str::to_string).or_else(|| e.state(fx).unwrap().error.clone());
+    assert!(error.as_deref().is_some_and(|m| m.contains("program is incorrect")), "{error:?}");
+    set(&mut g, fx, "program", ParamValue::Text("size = 0.1".into()));
+    set(&mut g, fx, "count", ParamValue::Int(4096));
+    set(&mut g, fx, "depth", ParamValue::Int(12));
+    evaluate_blocking(&mut e, &g);
+    let error = e.state(fx).unwrap().error.clone();
+    assert!(error.as_deref().is_some_and(|m| m.contains("too many")), "{error:?}");
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+/// How long an FX-Map takes (prints; for tuning): splats of every size, a few and many.
+#[test]
+#[ignore = "a measurement"]
+fn fx_map_costs() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    g.resolution = [2048, 2048];
+    let fx = g.add_node(NodeKind::FX_MAP, [0.0, 0.0]);
+    let start = std::time::Instant::now();
+    evaluate_blocking(&mut e, &g);
+    println!("the first, its program built: {:7.2} ms", start.elapsed().as_secs_f64() * 1000.0);
+    for (count, from, depth) in [(64, 0, 0), (1000, 0, 0), (1, 0, 8), (16, 6, 6), (1, 0, 10), (4, 10, 10)] {
+        set(&mut g, fx, "count", ParamValue::Int(count));
+        set(&mut g, fx, "from_depth", ParamValue::Int(from));
+        set(&mut g, fx, "depth", ParamValue::Int(depth));
+        evaluate_blocking(&mut e, &g);
+        let runs = 5;
+        let start = std::time::Instant::now();
+        for seed in 1..=runs {
+            set(&mut g, fx, "seed", ParamValue::Int(seed));
+            evaluate_blocking(&mut e, &g);
+        }
+        let splats: u64 = (from..=depth).map(|d| (count as u64) << (2 * d)).sum();
+        println!("{splats:>8} splats ({count} a cell, depths {from} to {depth}): {:7.2} ms", start.elapsed().as_secs_f64() * 1000.0 / runs as f64);
+    }
+}
+
+/// What FX-Maps make of a few programs, as pictures (`BREWED_UI_SNAPSHOTS=<folder>`, writes
+/// `fx_map_<name>.png`): scattered discs, bricks, clouds, confetti, a map of sizes.
+#[test]
+#[ignore = "a picture to look at"]
+fn fx_maps_as_pictures() {
+    let Some(mut e) = engine() else { return };
+    let Some(dir) = std::env::var_os("BREWED_UI_SNAPSHOTS") else { return };
+    const SIZE: u32 = 512;
+    // Name, program, count, depths, pattern, blend, background.
+    type Look = (&'static str, &'static str, i32, (i32, i32), u32, u32, Option<f32>);
+    let looks: &[Look] = &[
+        ("as_added", brewed_texture_core::nodes::DEFAULT_FX_MAP_PROGRAM, 64, (0, 0), 0, MAX, None),
+        (
+            "bricks",
+            "# Two bricks a cell, the lower row half a brick along.\ny = 0.25 + 0.5 * i\nx = 0.5 * i\nsize = 0.94, 0.44\nvalue = 0.45 + 0.55 * rand(1)",
+            2,
+            (3, 3),
+            2,
+            MAX,
+            None,
+        ),
+        ("clouds", "size = 1.4\nvalue = (rand(1) - 0.5) * 0.6^depth", 1, (0, 8), 12, ADD, Some(0.5)),
+        (
+            "confetti",
+            "x = rand(1); y = rand(2)\nsize = 0.02 + 0.03 * rand(3), 0.01 + 0.01 * rand(4)\nangle = 360 * rand(5)\ncolor = rand(6), rand(7), rand(8)",
+            600,
+            (0, 0),
+            1,
+            STACK,
+            None,
+        ),
+        ("dots", "size = 0.9 * rand(1)^0.5\nvalue = 0.3 + 0.7 * rand(2)\ndraw = rand(3) < 0.8", 1, (5, 5), 0, MAX, None),
+    ];
+    for (name, program, count, depths, pattern, blend, background) in looks {
+        let mut g = graph();
+        g.resolution = [SIZE, SIZE];
+        let fx = fx_map(&mut g, program, *count, *depths, *blend);
+        set(&mut g, fx, "pattern", ParamValue::Enum(*pattern));
+        if let Some(v) = background {
+            let b = gray_color(&mut g, *v);
+            g.connect(b, "o:output", fx, "i:background").unwrap();
+        }
+        let out = eval_read(&mut e, &g, fx);
+        let bytes: Vec<u8> = out.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+        let gray = e.image(fx).unwrap().is_gray();
+        let rgba: Vec<u8> = bytes.chunks(4).flat_map(|p| if gray { [p[0], p[0], p[0], 255] } else { [p[0], p[1], p[2], 255] }).collect();
+        let file = std::path::Path::new(&dir).join(format!("fx_map_{name}.png"));
+        image::RgbaImage::from_raw(SIZE, SIZE, rgba).unwrap().save(file).unwrap();
+    }
 }

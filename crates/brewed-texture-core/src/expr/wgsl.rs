@@ -34,6 +34,16 @@ fn fx_hash(x: f32) -> f32 {
     let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
     return f32((word >> 22u) ^ word) / 4294967296.0;
 }
+fn fx_pcg(v: u32) -> u32 {
+    let state = v * 747796405u + 2891336453u;
+    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+// Whose random numbers `rand(k)` gives: the splat's, the pixel's (set before they are read).
+var<private> fx_seed: u32;
+fn fx_rand(k: f32) -> f32 {
+    return f32(fx_pcg(fx_seed ^ fx_pcg(bitcast<u32>(k))) >> 8u) / 16777216.0;
+}
 "#;
 
 fn literal(v: f64) -> String {
@@ -66,6 +76,17 @@ pub fn to_wgsl_sampling(program: &Program, var: &dyn Fn(usize) -> String, sample
 pub fn components_wgsl(program: &Program, var: &dyn Fn(usize) -> String, sample: &dyn Fn(usize, &str, &str) -> String) -> Vec<String> {
     let env = Env { var, sample };
     std::iter::once(&program.root).chain(&program.more).map(|node| emit(node, &env)).collect()
+}
+
+/// Each statement of a script: the local it sets, and the WGSL of its value or values (`var`
+/// gives the WGSL of variable `k`, an input or a local: see [`super::script::Script`]).
+pub fn statements_wgsl(
+    script: &super::script::Script,
+    var: &dyn Fn(usize) -> String,
+    sample: &dyn Fn(usize, &str, &str) -> String,
+) -> Vec<(usize, Vec<String>)> {
+    let env = Env { var, sample };
+    script.statements.iter().map(|s| (s.local, s.values.iter().map(|node| emit(node, &env)).collect())).collect()
 }
 
 struct Env<'a> {
@@ -171,6 +192,7 @@ fn emit(node: &Node, env: &Env) -> String {
                 Func::Radians => format!("radians({x})"),
                 Func::If => format!("select({z}, {y}, {x} != 0.0)"),
                 Func::Hash => format!("fx_hash({x})"),
+                Func::Rand => format!("fx_rand({x})"),
                 Func::Sample => x,
             }
         }

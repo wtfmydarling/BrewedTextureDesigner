@@ -47,6 +47,7 @@ impl Highlight {
             Highlight::Token(TokenClass::Variable) => style::rgb(156, 220, 254),
             Highlight::Token(TokenClass::Operator) => style::rgb(212, 212, 212),
             Highlight::Token(TokenClass::Paren) => style::rgb(200, 160, 220),
+            Highlight::Token(TokenClass::Comment) => style::rgb(128, 128, 128),
             Highlight::Token(TokenClass::Error) | Highlight::Error => style::rgb(255, 96, 86),
         }
     }

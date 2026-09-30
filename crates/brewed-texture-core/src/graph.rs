@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::instance::{Instance, InstanceParam, Interface};
-use crate::nodes::{ImageKind, NodeDef, NodeKind, PIXEL_MATH_BUILTINS, ParamDef, ParamKind, Slot, TILING_PARAM};
+use crate::nodes::{FX_MAP_BUILTINS, ImageKind, NodeDef, NodeKind, PIXEL_MATH_BUILTINS, ParamDef, ParamKind, Slot, TILING_PARAM};
 use crate::types::{DataType, ParamValue, Tiling, Value, can_connect};
 use crate::{Curve, Gradient};
 
@@ -446,17 +446,13 @@ impl Node {
         self.def().expression_param().map_or("", |p| self.text(p.key))
     }
 
-    /// Free variables of the Math / Pixel Math expression (stable while the user types:
-    /// see [`crate::expr::variables_lenient`]). Pixel Math built-ins are not listed.
+    /// Free variables of the Math / Pixel Math expression or the FX-Map program (stable while
+    /// the user types: see [`crate::expr::Language::inputs_lenient`]). Built-ins are not listed.
     pub fn expression_vars(&self) -> Vec<String> {
-        if !self.is_expression_node() {
-            return Vec::new();
+        match self.def().expression_language() {
+            Some(language) => language.inputs_lenient(self.expression()),
+            None => Vec::new(),
         }
-        let mut vars = crate::expr::variables_lenient(self.expression());
-        if self.def().is_pixel_expression() {
-            vars.retain(|v| !PIXEL_MATH_BUILTINS.contains(&v.as_str()));
-        }
-        vars
     }
 
     /// Is the parameter currently relevant (see [`ParamDef::visible_if`])?
@@ -860,7 +856,7 @@ pub fn sanitize_identifier(text: &str) -> String {
     if out.starts_with(|c: char| c.is_ascii_digit()) {
         out.insert(0, '_');
     }
-    if crate::expr::builtins::is_builtin(&out) || PIXEL_MATH_BUILTINS.contains(&out.as_str()) {
+    if crate::expr::builtins::is_builtin(&out) || PIXEL_MATH_BUILTINS.contains(&out.as_str()) || FX_MAP_BUILTINS.contains(&out.as_str()) {
         out.push('_');
     }
     out

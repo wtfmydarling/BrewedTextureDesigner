@@ -22,9 +22,11 @@ use crate::types::{DataType, ParamValue, Tiling};
 
 pub use adjustments::CURVE_CHANNELS;
 pub use effects::BEVEL_PROFILES;
-pub use filters::{BLEND_MODES, DISTANCE_MODES, FLOOD_FILL_OUTPUTS, PIXEL_MATH_BUILTINS};
+pub use filters::{BLEND_MODES, DISTANCE_MODES, FLOOD_FILL_OUTPUTS, PIXEL_MATH_BUILTINS, READ_CHANNELS};
 pub use generators::{
     SVG_FITS, SVG_OUTPUTS, TEXT_ALIGNS,
+    DEFAULT_FX_MAP_PROGRAM, FX_MAP_BLEND_MIN, FX_MAP_BLEND_MULTIPLY, FX_MAP_BLENDS, FX_MAP_BUILTINS, FX_MAP_OUTPUTS,
+    FX_MAP_RULES, FX_MAP_STARTS, MAX_SPLATS,
     NOISE_CELLS, NOISE_CRACKS, NOISE_DIRECTIONAL_SCRATCHES, NOISE_FIBERS, NOISE_SCRATCHES, NOISE_TYPES, NOISE_VEINS,
     NOISE_WEAVE, NOISE_WHITE, NOISE_WOOD, WEAVE_REPEATS, WEAVES,
     SHAPE_POLYGON, SHAPE_ROUNDED, SHAPE_STAR, SHAPES, TILE_PATTERN_IMAGE, TILE_SAMPLER_COLORS, TILE_SAMPLER_OVERLAPS,
@@ -205,11 +207,11 @@ pub enum ParamKind {
     Image {
         kind: ImageKind,
     },
-    /// Source of a Math (`pixel: false`) or Pixel Math (`pixel: true`) expression. Its free
-    /// variables become input sockets of the node.
+    /// Source of an expression: of a Math, a Pixel Math or an FX-Map (see
+    /// [`crate::expr::Language`]). Its free variables become input sockets of the node.
     Expression {
         default: &'static str,
-        pixel: bool,
+        language: crate::expr::Language,
     },
     Gradient {
         default: &'static [(f32, [f32; 4])],
@@ -526,7 +528,13 @@ pub(crate) const fn file(key: &'static str, label: &'static str, extensions: &'s
     ParamDef::new(key, label, ParamKind::File { extensions })
 }
 pub(crate) const fn expression(key: &'static str, label: &'static str, default: &'static str, pixel: bool) -> ParamDef<'static> {
-    ParamDef::new(key, label, ParamKind::Expression { default, pixel })
+    let language = if pixel { crate::expr::Language::Pixel } else { crate::expr::Language::Math };
+    ParamDef::new(key, label, ParamKind::Expression { default, language })
+}
+/// The program of an FX-Map: a script of the values of each splat (see
+/// [`crate::expr::script`]).
+pub(crate) const fn script(key: &'static str, label: &'static str, default: &'static str) -> ParamDef<'static> {
+    ParamDef::new(key, label, ParamKind::Expression { default, language: crate::expr::Language::Splats })
 }
 pub(crate) const fn gradient(key: &'static str, label: &'static str, default: &'static [(f32, [f32; 4])]) -> ParamDef<'static> {
     ParamDef::new(key, label, ParamKind::Gradient { default })
@@ -570,6 +578,15 @@ pub fn image_kind(kind: NodeKind, params: &crate::eval::Params, inputs: &[Option
         // One value is gray; a list of them, the channels of a color image.
         let values = crate::expr::compile_cached(params.text("expression")).as_ref().as_ref().map_or(1, |p| p.components());
         return if values > 1 { ImageKind::Color } else { ImageKind::Gray };
+    }
+    if kind == NodeKind::FX_MAP {
+        // In color where the program gives the splats colors, where the background is in color,
+        // or where it draws images, one of which is.
+        let rules = &generators::FX_MAP_RULES;
+        let colors = matches!(&*crate::expr::script::compile_script_cached(params.text("program"), rules), Ok(s) if s.sets("color"));
+        let background = inputs.first() == Some(&Some(ImageKind::Color));
+        let images = params.u("pattern") == TILE_PATTERN_IMAGE && inputs.iter().skip(1).take(4).any(|k| *k == Some(ImageKind::Color));
+        return if colors || background || images { ImageKind::Color } else { ImageKind::Gray };
     }
     if kind == NodeKind::TILE_SAMPLER {
         // Tiles in colors of their own, or of the Color Map, are in color; so are tiles of
@@ -666,14 +683,23 @@ impl NodeDef {
         !self.has_image()
     }
 
-    /// The expression parameter of Math / Pixel Math nodes.
+    /// The expression parameter of Math / Pixel Math nodes (the program of an FX-Map).
     pub fn expression_param(&self) -> Option<&'static ParamDef<'static>> {
         self.params.iter().find(|p| matches!(p.kind, ParamKind::Expression { .. }))
     }
 
-    /// True for Pixel Math: the expression runs per pixel and its variables are images.
+    /// The language of the node's expression, if it has one.
+    pub fn expression_language(&self) -> Option<crate::expr::Language> {
+        match self.expression_param()?.kind {
+            ParamKind::Expression { language, .. } => Some(language),
+            _ => None,
+        }
+    }
+
+    /// True for Pixel Math and FX-Map: the expression runs on the GPU, per pixel or per splat,
+    /// and its variables are images.
     pub fn is_pixel_expression(&self) -> bool {
-        matches!(self.expression_param().map(|p| p.kind), Some(ParamKind::Expression { pixel: true, .. }))
+        self.expression_language().is_some_and(|l| l != crate::expr::Language::Math)
     }
 
     /// The kind of image the node makes from the kinds of the images arriving at its fixed
@@ -780,6 +806,7 @@ impl NodeKind {
     pub const SHAPE: NodeKind = NodeKind(&generators::SHAPE);
     pub const TILE_GENERATOR: NodeKind = NodeKind(&generators::TILE_GENERATOR);
     pub const TILE_SAMPLER: NodeKind = NodeKind(&generators::TILE_SAMPLER);
+    pub const FX_MAP: NodeKind = NodeKind(&generators::FX_MAP);
     pub const GRADIENT: NodeKind = NodeKind(&generators::GRADIENT);
     pub const NOISE: NodeKind = NodeKind(&generators::NOISE);
     pub const BITMAP: NodeKind = NodeKind(&generators::BITMAP);
@@ -842,6 +869,7 @@ impl NodeKind {
         NodeKind::SHAPE,
         NodeKind::TILE_GENERATOR,
         NodeKind::TILE_SAMPLER,
+        NodeKind::FX_MAP,
         NodeKind::GRADIENT,
         NodeKind::NOISE,
         NodeKind::BITMAP,

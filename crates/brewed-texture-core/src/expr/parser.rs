@@ -13,7 +13,12 @@
 //! primary := NUMBER | IDENT | IDENT '(' args ')' | '(' expr ')'
 //! ```
 //! Implicit multiplication is accepted after a number or a closing parenthesis:
-//! `2x`, `3(a + b)`, `(a + 1)(a - 1)`.
+//! `2x`, `3(a + b)`, `(a + 1)(a - 1)`; but not of a name given a value, which begins the next
+//! statement of a script (see [`super::script`]):
+//! ```text
+//! script    := ( ';' | statement )* EOF
+//! statement := IDENT '=' expr ( ',' expr )*
+//! ```
 
 use super::builtins::{self, Func};
 use super::lexer::{Token, TokenKind};
@@ -68,13 +73,37 @@ pub struct Parser<'a> {
     /// How deep the value read last is (see [`MAX_TREE`]).
     tree: usize,
     pub vars: Vec<String>,
+    /// Where each of [`Parser::vars`] is first read: the statement of a script (0 in an
+    /// expression) and the place.
+    pub first_read: Vec<(usize, Span)>,
+    /// The statement of a script being read.
+    statement: usize,
+}
+
+/// A `name = value` of a script (see [`Parser::parse_script`]).
+pub struct Assignment {
+    pub name: String,
+    pub name_span: Span,
+    pub values: Vec<Node>,
+    /// From the name to the end of the value.
+    pub span: Span,
 }
 
 type PResult = Result<Node, ExprError>;
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Token]) -> Self {
-        Self { tokens, pos: 0, depth: 0, tree: 0, vars: Vec::new() }
+        Self { tokens, pos: 0, depth: 0, tree: 0, vars: Vec::new(), first_read: Vec::new(), statement: 0 }
+    }
+
+    /// The token after the next one.
+    fn peek2(&self) -> &Token {
+        &self.tokens[(self.pos + 1).min(self.tokens.len() - 1)]
+    }
+
+    /// Whether a statement of a script begins here: a name given a value.
+    fn at_statement_start(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::Ident(_)) && matches!(self.peek2().kind, TokenKind::Assign)
     }
 
     fn peek(&self) -> &Token {
@@ -111,6 +140,7 @@ impl<'a> Parser<'a> {
         match &tok.kind {
             TokenKind::Error(msg) => self.error_at(tok, msg.clone()),
             TokenKind::Eof => self.error_at(tok, "Expression is incomplete: expected a value"),
+            TokenKind::Semicolon => self.error_at(tok, "Unexpected ';': expected a value"),
             TokenKind::RParen => self.error_at(tok, "Unexpected ')': expected a value"),
             other => self.error_at(tok, format!("Unexpected {}: expected a value", other.describe())),
         }
@@ -148,9 +178,67 @@ impl<'a> Parser<'a> {
             let tok = self.peek().clone();
             return Err(self.error_at(&tok, "Expression is empty"));
         }
+        let list = self.values()?;
+        let tok = self.peek().clone();
+        match &tok.kind {
+            TokenKind::Eof => Ok(list),
+            TokenKind::Assign => Err(self.error_at(&tok, "Unexpected '=' (use '==' to compare values)")),
+            TokenKind::Semicolon => Err(self.error_at(&tok, "Unexpected ';': an expression is one value, or a list of them")),
+            _ => Err(self.leftover(&tok)),
+        }
+    }
+
+    /// Parse a script: its statements, in order (see [`super::script`]).
+    pub fn parse_script(&mut self) -> Result<Vec<Assignment>, ExprError> {
+        let mut statements = Vec::new();
+        loop {
+            while self.eat(&TokenKind::Semicolon) {}
+            if matches!(self.peek().kind, TokenKind::Eof) {
+                return Ok(statements);
+            }
+            let tok = self.peek().clone();
+            let TokenKind::Ident(name) = &tok.kind else {
+                return Err(self.error_at(&tok, format!("Expected a name given a value (name = value), found {}", tok.kind.describe())));
+            };
+            if !matches!(self.peek2().kind, TokenKind::Assign) {
+                return Err(self.error_at(&tok, format!("Expected '=' after '{name}': each statement is name = value")));
+            }
+            self.advance();
+            self.advance();
+            self.statement = statements.len();
+            if matches!(self.peek().kind, TokenKind::Eof | TokenKind::Semicolon) {
+                let t = self.peek().clone();
+                return Err(self.error_at(&t, format!("'{name} =' needs a value")));
+            }
+            let values = self.values()?;
+            let end = self.prev().map_or(tok.span.end, |t| t.span.end);
+            let next = self.peek().clone();
+            match &next.kind {
+                TokenKind::Eof | TokenKind::Semicolon => {}
+                _ if self.at_statement_start() => {}
+                _ => return Err(self.leftover(&next)),
+            }
+            statements.push(Assignment { name: name.clone(), name_span: tok.span, values, span: Span::new(tok.span.start, end) });
+        }
+    }
+
+    /// What is wrong with `tok`, found after a whole value.
+    fn leftover(&self, tok: &Token) -> ExprError {
+        match &tok.kind {
+            TokenKind::RParen => self.error_at(tok, "Unmatched ')'"),
+            TokenKind::Error(msg) => self.error_at(tok, msg.clone()),
+            TokenKind::Number(_) | TokenKind::Ident(_) | TokenKind::LParen => {
+                self.error_at(tok, format!("Unexpected {}: missing operator before it?", tok.kind.describe()))
+            }
+            other => self.error_at(tok, format!("Unexpected {}", other.describe())),
+        }
+    }
+
+    /// One value, or a list of up to four separated by commas.
+    fn values(&mut self) -> Result<Vec<Node>, ExprError> {
         let mut list = vec![self.expr()?];
         while self.eat(&TokenKind::Comma) {
-            if matches!(self.peek().kind, TokenKind::Eof | TokenKind::Comma) {
+            if matches!(self.peek().kind, TokenKind::Eof | TokenKind::Comma | TokenKind::Semicolon) || self.at_statement_start() {
                 let tok = self.peek().clone();
                 return Err(self.error_at(&tok, "Missing value after ','"));
             }
@@ -161,16 +249,7 @@ impl<'a> Parser<'a> {
                 return Err(ExprError { message: "At most four values: red, green, blue and alpha".into(), span: Span::new(start, end) });
             }
         }
-        let tok = self.peek().clone();
-        match &tok.kind {
-            TokenKind::Eof => Ok(list),
-            TokenKind::RParen => Err(self.error_at(&tok, "Unmatched ')'")),
-            TokenKind::Error(msg) => Err(self.error_at(&tok, msg.clone())),
-            TokenKind::Number(_) | TokenKind::Ident(_) | TokenKind::LParen => {
-                Err(self.error_at(&tok, format!("Unexpected {}: missing operator before it?", tok.kind.describe())))
-            }
-            other => Err(self.error_at(&tok, format!("Unexpected {}", other.describe()))),
-        }
+        Ok(list)
     }
 
     fn expr(&mut self) -> PResult {
@@ -258,7 +337,7 @@ impl<'a> Parser<'a> {
     fn implicit_product_follows(&self) -> bool {
         let prev_ok = matches!(self.prev().map(|t| &t.kind), Some(TokenKind::Number(_) | TokenKind::RParen));
         let next_ok = matches!(self.peek().kind, TokenKind::Ident(_) | TokenKind::LParen);
-        prev_ok && next_ok
+        prev_ok && next_ok && !self.at_statement_start()
     }
 
     fn mul(&mut self) -> PResult {
@@ -352,6 +431,9 @@ impl<'a> Parser<'a> {
                 }
                 Ok(inner)
             }
+            TokenKind::Ident(name) if self.at_statement_start() => {
+                Err(self.error_at(&tok, format!("Expected a value, found '{name} =', which begins the next statement")))
+            }
             TokenKind::Ident(name) => {
                 self.advance();
                 if matches!(self.peek().kind, TokenKind::LParen) {
@@ -367,6 +449,7 @@ impl<'a> Parser<'a> {
                         Some(i) => i,
                         None => {
                             self.vars.push(name.clone());
+                            self.first_read.push((self.statement, tok.span));
                             self.vars.len() - 1
                         }
                     };

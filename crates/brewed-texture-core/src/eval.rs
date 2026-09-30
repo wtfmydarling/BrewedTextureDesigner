@@ -11,7 +11,7 @@ use crate::curve::Curve;
 use crate::expr;
 use crate::gradient::Gradient;
 use crate::graph::{Graph, Node, NodeId, param_socket_key, var_socket_key};
-use crate::nodes::{NodeKind, PIXEL_MATH_BUILTINS, ParamKind, Role};
+use crate::nodes::{NodeKind, ParamKind, Role};
 use crate::types::{DataType, ParamValue, Value};
 
 /// Effective parameter values of a node: stored values with driven overrides.
@@ -324,18 +324,18 @@ fn evaluate_value(graph: &Graph, node: &Node, results: &Evaluation, e: &mut Node
     }
 }
 
-/// Classify the variables of a Pixel Math expression.
+/// Classify the variables of a Pixel Math expression or an FX-Map program.
 fn pixel_vars(graph: &Graph, node: &Node, results: &Evaluation, e: &mut NodeEval) {
-    let compiled = expr::compile_cached(node.expression());
-    let names = match &*compiled {
-        Ok(p) => p.vars.clone(),
-        Err(err) => {
-            e.errors.push(format!("The expression is incorrect: {}", err.message));
+    let language = node.def().expression_language().unwrap_or(expr::Language::Pixel);
+    let names = match language.reads(node.expression()) {
+        Ok(vars) => vars,
+        Err(message) => {
+            e.errors.push(message);
             node.expression_vars()
         }
     };
     for name in names {
-        if PIXEL_MATH_BUILTINS.contains(&name.as_str()) {
+        if language.builtins().contains(&name.as_str()) {
             e.vars.push(VarInfo { name, value: 0.0, source: VarSource::Builtin });
             continue;
         }

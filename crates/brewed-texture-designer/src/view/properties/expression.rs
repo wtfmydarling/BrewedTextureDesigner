@@ -1,5 +1,6 @@
-//! Expression section of Math and Pixel Math nodes: highlighted editor, errors,
-//! variables, a plot of the function and a reference of functions and constants.
+//! Expression section of Math and Pixel Math nodes (the program of an FX-Map): highlighted
+//! editor, errors, variables, a plot of the function and a reference of functions and
+//! constants.
 
 use iced::alignment::Vertical;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
@@ -7,9 +8,9 @@ use iced::widget::text::{Alignment as TextAlign, LineHeight, Shaping};
 use iced::widget::{button, column, container, pick_list, row, text, text_editor};
 use iced::{Alignment, Element, Length, Pixels, Point, Rectangle, mouse};
 use brewed_texture_core::eval::VarSource;
-use brewed_texture_core::expr::{self, builtins};
+use brewed_texture_core::expr::{self, Language, builtins};
 use brewed_texture_core::graph::Node;
-use brewed_texture_core::nodes::PIXEL_MATH_BUILTINS;
+use brewed_texture_core::nodes::{FX_MAP_BUILTINS, FX_MAP_OUTPUTS, PIXEL_MATH_BUILTINS};
 use brewed_texture_core::{Edit, NodeKind, Value};
 
 use crate::app::{App, Message};
@@ -27,9 +28,10 @@ pub fn editor_id() -> iced::widget::Id {
 pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
     let id = node.id;
     let source = node.expression();
-    let compiled = expr::compile_cached(source);
-    let error = compiled.as_ref().as_ref().err();
-    let settings = Settings::for_error(source, error.map(|e| e.span));
+    let language = node.def().expression_language().unwrap_or(Language::Math);
+    let script = language == Language::Splats;
+    let error = language.error(source);
+    let settings = Settings::for_error(source, error.as_ref().map(|e| e.span));
 
     let editor: Element<'a, Message> = match &app.ui.expression {
         // A finite maximum height matters: inside the scrollable panel the editor would
@@ -42,7 +44,7 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
             .size(14)
             .padding(8)
             .min_height(38)
-            .max_height(200)
+            .max_height(if script { 360.0 } else { 200.0 })
             .style(style::text_editor)
             .into(),
         _ => container(text(source).font(style::mono()).size(14)).padding(8).style(style::field_box).into(),
@@ -50,16 +52,19 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
 
     // The status line under the editor always exists, so the editor keeps its place in
     // the widget tree (and its focus) when errors come and go while typing.
-    let status: Element<'a, Message> = match error {
+    let status: Element<'a, Message> = match &error {
+        Some(e) if script => text(format!("The program is incorrect: {}", e.message)).size(style::SMALL).color(style::ERROR).into(),
         Some(e) => text(format!("The expression is incorrect: {}", e.message)).size(style::SMALL).color(style::ERROR).into(),
         None if node.kind == NodeKind::MATH => match app.eval.value(id) {
             Some(v) => text(format!("= {}", v.display())).size(15).font(style::mono()).color(style::TEXT).into(),
             None => text("").size(style::SMALL).into(),
         },
+        None if script => text("Run for every splat on the GPU").size(style::SMALL).color(style::TEXT_FAINT).into(),
         None => text("Evaluated for every pixel on the GPU").size(style::SMALL).color(style::TEXT_FAINT).into(),
     };
 
-    let mut col = column![section("Expression"), editor, container(status).height(Length::Fixed(22.0)).align_y(Vertical::Center)].spacing(6);
+    let title = section(if script { "Program" } else { "Expression" });
+    let mut col = column![title, editor, container(status).height(Length::Fixed(22.0)).align_y(Vertical::Center)].spacing(6);
 
     // Variables.
     let vars = app.eval.node(id).map(|e| e.vars.clone()).unwrap_or_default();
@@ -96,7 +101,9 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                 ]
                 .spacing(8)
                 .into(),
-                VarSource::Builtin => text("per pixel (built in)").size(style::SMALL).color(style::TEXT_FAINT).into(),
+                VarSource::Builtin => {
+                    text(if script { "per splat (built in)" } else { "per pixel (built in)" }).size(style::SMALL).color(style::TEXT_FAINT).into()
+                }
                 VarSource::Image(from) => {
                     let title = app.graph().node(*from).map(crate::view::graph::node_title).unwrap_or_default();
                     super::source_link(*from, format!("image ← {title}"))
@@ -107,6 +114,7 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
     }
 
     // Plot of a Math expression over one variable.
+    let compiled = expr::compile_cached(source);
     if node.kind == NodeKind::MATH
         && let Ok(program) = &*compiled
         && !program.vars.is_empty()
@@ -161,6 +169,33 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
             list = list.push(text(format!("Per-pixel built-ins: {}", PIXEL_MATH_BUILTINS.join(", "))).size(style::SMALL));
             list = list.push(
                 text("u, v: 0..1 image coordinates · px, py: pixel coordinates · width, height: image size")
+                    .size(style::SMALL)
+                    .color(style::TEXT_DIM),
+            );
+        }
+        if script {
+            let outputs: Vec<&str> = FX_MAP_OUTPUTS.iter().map(|(o, ..)| *o).collect();
+            list = list.push(text(format!("A splat is: {}", outputs.join(", "))).size(style::SMALL));
+            list = list.push(
+                text(
+                    "x, y: where in its cell, 0..1 (0.5) · size: a share of the cell, or width, height (1) · angle: \
+                     degrees (0) · value (1) · color: r, g, b[, a] · opacity (1) · draw: 0 leaves it out (1) · image: \
+                     pattern input 1..4 (1)",
+                )
+                .size(style::SMALL)
+                .color(style::TEXT_DIM),
+            );
+            list = list.push(text(format!("Per-splat built-ins: {}", FX_MAP_BUILTINS.join(", "))).size(style::SMALL));
+            list = list.push(
+                text(
+                    "i: its number in the cell, from 0 · count · depth · cells: across at the depth · col, row: its cell · \
+                     u, v: the middle of its cell, 0..1 · seed · width, height: image size",
+                )
+                .size(style::SMALL)
+                .color(style::TEXT_DIM),
+            );
+            list = list.push(
+                text("One name = value after another (a line each, or ; between them); what is set is read after it; # comments")
                     .size(style::SMALL)
                     .color(style::TEXT_DIM),
             );

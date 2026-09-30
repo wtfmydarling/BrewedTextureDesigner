@@ -323,6 +323,34 @@ fn layout_entries(inputs: usize, filtered: bool, uint: bool) -> Vec<wgpu::BindGr
     entries
 }
 
+/// How a splat of an FX-Map blends with what is under it, by its Blending (see
+/// [`brewed_texture_core::nodes::FX_MAP_BLENDS`]): Max, Add, Stack, Subtract, Min or Multiply.
+/// What a splat gives is premultiplied by how much it covers (see fx_map.rs); its alpha lies
+/// over what is under it, but for Multiply, which keeps what is there.
+fn splat_blend(mode: u32) -> wgpu::BlendState {
+    use wgpu::{BlendComponent, BlendFactor as F, BlendOperation as O};
+    let with = |src_factor, dst_factor, operation| BlendComponent { src_factor, dst_factor, operation };
+    let over = with(F::One, F::OneMinusSrcAlpha, O::Add);
+    let (color, alpha) = match mode {
+        1 => (with(F::One, F::One, O::Add), over),
+        2 => (over, over),
+        3 => (with(F::One, F::One, O::ReverseSubtract), over),
+        4 => (with(F::One, F::One, O::Min), over),
+        5 => (with(F::Zero, F::Src, O::Add), with(F::Zero, F::One, O::Add)),
+        _ => (with(F::One, F::One, O::Max), over),
+    };
+    wgpu::BlendState { color, alpha }
+}
+
+/// A pipeline that draws the splats of an FX-Map: quads the vertex entry `splat_vertex` places
+/// (running the program), the fragment entry `splat_fragment` fills, blended with what is
+/// under them (see fx_map.rs).
+pub struct SplatKernel {
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    inputs: usize,
+}
+
 /// The pipeline of a kernel: WGSL `source`, whose fragment entry `entry` draws `output` from
 /// what `layout` binds, making the kind of image `kind`.
 fn kernel_pipeline(
@@ -488,8 +516,12 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
     pub adapter_info: String,
     kernels: RefCell<HashMap<KernelKey, Result<Rc<Kernel>, String>>>,
+    /// Those of FX-Maps, by their source, the format they draw and how they blend.
+    splat_kernels: RefCell<HashMap<KernelKey, Result<Rc<SplatKernel>, String>>>,
     /// By the number of inputs, whether they are filtered, and whether they are integers.
     layouts: RefCell<HashMap<(usize, bool, bool), wgpu::BindGroupLayout>>,
+    /// Those of the splat kernels, by the number of inputs.
+    splat_layouts: RefCell<HashMap<usize, wgpu::BindGroupLayout>>,
     /// Trilinear samplers for the kernels that filter their inputs, by tiling: bit 0
     /// repeats horizontally, bit 1 vertically; the other axes clamp.
     samplers: [wgpu::Sampler; 4],
@@ -549,7 +581,9 @@ impl Gpu {
             queue,
             adapter_info,
             kernels: RefCell::default(),
+            splat_kernels: RefCell::default(),
             layouts: RefCell::default(),
+            splat_layouts: RefCell::default(),
             samplers,
             pool: RefCell::default(),
             uniforms: RefCell::default(),
@@ -685,18 +719,29 @@ impl Gpu {
 
     /// Record clearing `image` (its top level) to transparent black, whatever its format.
     pub fn encode_clear(&self, encoder: &mut wgpu::CommandEncoder, image: &GpuImage) {
+        self.encode_fill(encoder, image, wgpu::Color::TRANSPARENT);
+    }
+
+    /// Record filling `image` (its top level) with `color` (its channels, in its format).
+    pub fn encode_fill(&self, encoder: &mut wgpu::CommandEncoder, image: &GpuImage, color: wgpu::Color) {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &image.view,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(color), store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+    }
+
+    /// Whether what is drawn into images of `format` can be blended with what they hold:
+    /// floats of 32 bits cannot on every device (it takes a feature WebGPU does not promise).
+    pub fn blendable(&self, format: wgpu::TextureFormat) -> bool {
+        format.guaranteed_format_features(self.device.features()).flags.contains(wgpu::TextureFormatFeatureFlags::BLENDABLE)
     }
 
     /// A one-row lookup table (e.g. a baked gradient).
@@ -914,8 +959,46 @@ impl Gpu {
     }
 
     /// Which of `inputs` are grayscale, as the bits a kernel is built with.
-    fn gray_inputs(inputs: &[&GpuImage]) -> u8 {
+    fn gray_inputs(inputs: &[&GpuImage]) -> u32 {
         inputs.iter().enumerate().filter(|(_, img)| img.is_gray()).fold(0, |bits, (i, _)| bits | (1 << i))
+    }
+
+    /// The bindings of a draw into `output`: `params`, `inputs`, the sampler for `tiling` of a
+    /// kernel that filters, and the size of the image drawn with which inputs are grayscale.
+    fn bind_group(
+        &self,
+        layout: &wgpu::BindGroupLayout,
+        params: &[u8],
+        inputs: &[&GpuImage],
+        output: &GpuImage,
+        sampler: Option<u32>,
+    ) -> wgpu::BindGroup {
+        // The parameters, then the size of the image drawn, where a binding may start.
+        let target = u64::from(self.device.limits().min_uniform_buffer_offset_alignment);
+        let params_size = (params.len().div_ceil(16).max(1) * 16) as u64;
+        let target_at = params_size.div_ceil(target) * target;
+        let mut contents = params.to_vec();
+        contents.resize(target_at as usize, 0);
+        let [w, h] = output.level_size();
+        contents.extend_from_slice(bytemuck::bytes_of(&[w, h, Self::gray_inputs(inputs), 0]));
+        let (buffer, at) = self.uniform_slot(&contents);
+        let range = |offset: u64, size: u64| {
+            let size = wgpu::BufferSize::new(size);
+            wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buffer, offset: at + offset, size })
+        };
+        let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: range(0, params_size) }];
+        for (i, img) in inputs.iter().enumerate() {
+            let resource = wgpu::BindingResource::TextureView(&img.view);
+            entries.push(wgpu::BindGroupEntry { binding: 1 + i as u32, resource });
+        }
+        if let Some(tiling) = sampler {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 1 + inputs.len() as u32,
+                resource: wgpu::BindingResource::Sampler(&self.samplers[(tiling & 3) as usize]),
+            });
+        }
+        entries.push(wgpu::BindGroupEntry { binding: TARGET_BINDING, resource: range(target_at, 16) });
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout, entries: &entries })
     }
 
     /// Record drawing all of `output` (one level of it) with `kernel`; a kernel that filters
@@ -930,36 +1013,8 @@ impl Gpu {
         tiling: u32,
     ) {
         debug_assert_eq!(inputs.len(), kernel.inputs, "kernel input count mismatch");
-        // The parameters, then the size of the image drawn, where a binding may start.
-        let target = u64::from(self.device.limits().min_uniform_buffer_offset_alignment);
-        let params_size = (params.len().div_ceil(16).max(1) * 16) as u64;
-        let target_at = params_size.div_ceil(target) * target;
-        let mut contents = params.to_vec();
-        contents.resize(target_at as usize, 0);
+        let bind_group = self.bind_group(&kernel.layout, params, inputs, output, kernel.filtered.then_some(tiling));
         let [w, h] = output.level_size();
-        contents.extend_from_slice(bytemuck::bytes_of(&[w, h, u32::from(Self::gray_inputs(inputs)), 0]));
-        let (buffer, at) = self.uniform_slot(&contents);
-        let range = |offset: u64, size: u64| {
-            let size = wgpu::BufferSize::new(size);
-            wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buffer, offset: at + offset, size })
-        };
-        let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: range(0, params_size) }];
-        for (i, img) in inputs.iter().enumerate() {
-            let resource = wgpu::BindingResource::TextureView(&img.view);
-            entries.push(wgpu::BindGroupEntry { binding: 1 + i as u32, resource });
-        }
-        if kernel.filtered {
-            entries.push(wgpu::BindGroupEntry {
-                binding: 1 + inputs.len() as u32,
-                resource: wgpu::BindingResource::Sampler(&self.samplers[(tiling & 3) as usize]),
-            });
-        }
-        entries.push(wgpu::BindGroupEntry { binding: TARGET_BINDING, resource: range(target_at, 16) });
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &kernel.layout,
-            entries: &entries,
-        });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -987,13 +1042,18 @@ impl Gpu {
             pass.draw(0..3, 0..1);
         }
         drop(pass);
+        self.drew(encoder, u64::from(w) * u64::from(h));
+    }
+
+    /// A draw of about `pixels` pixels was recorded into `encoder`.
+    fn drew(&self, encoder: &mut wgpu::CommandEncoder, pixels: u64) {
         // Much work is submitted in parts, each once the part before is done. Other work (the
         // window's frames) waits for two parts at most, not for all of it; and a list of
         // commands stays short: a D3D12 command allocator keeps the memory of the longest list
         // it ever held, and wgpu keeps its allocators to use them again (all of a large graph
         // at once kept about a megabyte of system memory a node).
-        let (draws, pixels) = self.recorded.get();
-        let recorded = (draws + 1, pixels + u64::from(w) * u64::from(h));
+        let (draws, before) = self.recorded.get();
+        let recorded = (draws + 1, before + pixels);
         if recorded.0 < PART_DRAWS && recorded.1 < PART_PIXELS {
             self.recorded.set(recorded);
             return;
@@ -1002,6 +1062,114 @@ impl Gpu {
         let submitted = self.submit(part);
         if let Some(before) = self.part.replace(Some(submitted)) {
             let _ = self.device.poll(wgpu::PollType::Wait { submission_index: Some(before), timeout: None });
+        }
+    }
+
+    fn splat_layout(&self, inputs: usize) -> wgpu::BindGroupLayout {
+        if let Some(l) = self.splat_layouts.borrow().get(&inputs) {
+            return l.clone();
+        }
+        // A kernel's bindings, which the vertex entry reads too: it runs the program.
+        let mut entries = layout_entries(inputs, false, false);
+        for entry in &mut entries {
+            entry.visibility = wgpu::ShaderStages::VERTEX_FRAGMENT;
+        }
+        let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(&format!("layout_{inputs}_splats")),
+            entries: &entries,
+        });
+        self.splat_layouts.borrow_mut().insert(inputs, layout.clone());
+        layout
+    }
+
+    /// A kernel drawing the splats of an FX-Map with the WGSL `source` into images of `output`,
+    /// blending them as its Blending `blend` says; built once for each, and kept.
+    pub fn splat_kernel(&self, source: &str, inputs: usize, output: wgpu::TextureFormat, blend: u32) -> Result<Rc<SplatKernel>, String> {
+        let key = (format!("splats:{inputs}:{source}"), output, blend);
+        if let Some(k) = self.splat_kernels.borrow().get(&key) {
+            return k.clone();
+        }
+        const LABEL: &str = "fx_map";
+        let layout = self.splat_layout(inputs);
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(LABEL), source: wgpu::ShaderSource::Wgsl(source.into()) });
+        let pipeline_layout =
+            self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(LABEL), bind_group_layouts: &[&layout], push_constant_ranges: &[] });
+        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(LABEL),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("splat_vertex"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("splat_fragment"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: output, blend: Some(splat_blend(blend)), write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            // A quad a splat: its four corners.
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let mut result = Ok(Rc::new(SplatKernel { pipeline, layout, inputs }));
+        if let Some(err) = pollster::block_on(self.device.pop_error_scope()) {
+            // (What went wrong meanwhile in the window is the window's: see `build_kernel`.)
+            if is_about(&err, LABEL) {
+                log::error!("an FX-Map failed to compile: {err}");
+                result = Err(format!("Shader error in the FX-Map: {err}"));
+            } else {
+                record(&self.errors, &err);
+            }
+        }
+        let mut cache = self.splat_kernels.borrow_mut();
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert(key, result.clone());
+        result
+    }
+
+    /// Record drawing splats with `kernel` over what `output` holds (one level of it): the
+    /// instances of each of `batches` in a draw of their own, each with about how many pixels
+    /// it covers, for how much is recorded before it is submitted (see [`Gpu::draw`]).
+    pub fn draw_splats(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        kernel: &SplatKernel,
+        params: &[u8],
+        inputs: &[&GpuImage],
+        output: &GpuImage,
+        batches: &[(std::ops::Range<u32>, u64)],
+    ) {
+        debug_assert_eq!(inputs.len(), kernel.inputs, "kernel input count mismatch");
+        for (instances, pixels) in batches {
+            // The parameters for each draw: once a part of the work is submitted, the next uses
+            // the buffers of its parameters again.
+            let bind_group = self.bind_group(&kernel.layout, params, inputs, output, None);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("fx_map"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &output.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    // Over what is there.
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&kernel.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..4, instances.clone());
+            drop(pass);
+            self.drew(encoder, *pixels);
         }
     }
 

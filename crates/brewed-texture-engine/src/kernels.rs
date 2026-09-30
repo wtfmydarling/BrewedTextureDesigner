@@ -54,6 +54,7 @@ pub fn reads_at_every_scale(kind: NodeKind) -> Option<(std::ops::Range<usize>, b
         "non_uniform_blur" => Some((0..1, false)),
         // The patterns.
         "tile_sampler" => Some((0..4, false)),
+        "fx_map" => Some((1..5, false)),
         _ => None,
     }
 }
@@ -61,7 +62,7 @@ pub fn reads_at_every_scale(kind: NodeKind) -> Option<(std::ops::Range<usize>, b
 /// `image` with its mips, for a kernel that reads it at every scale in the precision it has: as
 /// it is when it has them (or is one pixel), else a copy that has them, which the kernel
 /// recycles.
-fn with_mips(cx: &mut ExecCtx, image: &GpuImage) -> Result<Option<GpuImage>, String> {
+pub(crate) fn with_mips(cx: &mut ExecCtx, image: &GpuImage) -> Result<Option<GpuImage>, String> {
     let [w, h] = image.size();
     if image.texture.mip_level_count() > 1 || w.max(h) == 1 {
         return Ok(None);
@@ -84,6 +85,7 @@ pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
         "shape" => shape,
         "tile_generator" => tile_generator,
         "tile_sampler" => tile_sampler,
+        "fx_map" => crate::fx_map::fx_map,
         "gradient" => gradient,
         "noise" => noise,
         // The picture is drawn at the texture's size (see `crate::vector`): copied as is.
@@ -497,11 +499,11 @@ fn bytes<T: Pod>(v: &T) -> &[u8] {
     bytemuck::bytes_of(v)
 }
 
-fn input<'b>(inputs: &'b [Option<GpuImage>], index: usize, fallback: &'b GpuImage) -> &'b GpuImage {
+pub(crate) fn input<'b>(inputs: &'b [Option<GpuImage>], index: usize, fallback: &'b GpuImage) -> &'b GpuImage {
     inputs.get(index).and_then(|i| i.as_ref()).unwrap_or(fallback)
 }
 
-fn connected(inputs: &[Option<GpuImage>], index: usize) -> bool {
+pub(crate) fn connected(inputs: &[Option<GpuImage>], index: usize) -> bool {
     inputs.get(index).is_some_and(|i| i.is_some())
 }
 

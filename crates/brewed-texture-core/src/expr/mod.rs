@@ -7,6 +7,7 @@
 pub mod builtins;
 pub mod lexer;
 pub mod parser;
+pub mod script;
 pub mod wgsl;
 
 use std::cell::RefCell;
@@ -66,6 +67,70 @@ impl Program {
     /// How many values the expression gives: one, or a list of up to four.
     pub fn components(&self) -> usize {
         1 + self.more.len()
+    }
+}
+
+/// What an expression of a node is: one value made of values (Math), a value of each pixel
+/// (Pixel Math), or a script of the values of each splat (FX-Map).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Language {
+    Math,
+    Pixel,
+    Splats,
+}
+
+impl Language {
+    /// The names the language gives an expression to read.
+    pub fn builtins(self) -> &'static [&'static str] {
+        match self {
+            Language::Math => &[],
+            Language::Pixel => crate::nodes::PIXEL_MATH_BUILTINS,
+            Language::Splats => crate::nodes::FX_MAP_BUILTINS,
+        }
+    }
+
+    /// The rules of its scripts, for a language of scripts.
+    pub fn script_rules(self) -> Option<&'static script::ScriptRules> {
+        match self {
+            Language::Splats => Some(&crate::nodes::FX_MAP_RULES),
+            _ => None,
+        }
+    }
+
+    /// What `src` reads, built-ins too, in the order it first reads them; or why it cannot be
+    /// read.
+    pub fn reads(self, src: &str) -> Result<Vec<String>, String> {
+        match self.script_rules() {
+            Some(rules) => match &*script::compile_script_cached(src, rules) {
+                Ok(s) => Ok(s.vars.clone()),
+                Err(e) => Err(format!("The program is incorrect: {}", e.message)),
+            },
+            None => match &*compile_cached(src) {
+                Ok(p) => Ok(p.vars.clone()),
+                Err(e) => Err(format!("The expression is incorrect: {}", e.message)),
+            },
+        }
+    }
+
+    /// The inputs of `src`: what it reads that is not built in, stable while it is being
+    /// typed (see [`variables_lenient`] and [`script::script_vars_lenient`]).
+    pub fn inputs_lenient(self, src: &str) -> Vec<String> {
+        match self.script_rules() {
+            Some(rules) => script::script_vars_lenient(src, rules),
+            None => {
+                let mut vars = variables_lenient(src);
+                vars.retain(|v| !self.builtins().contains(&v.as_str()));
+                vars
+            }
+        }
+    }
+
+    /// Where `src` is wrong, if it is.
+    pub fn error(self, src: &str) -> Option<ExprError> {
+        match self.script_rules() {
+            Some(rules) => script::compile_script_cached(src, rules).as_ref().as_ref().err().cloned(),
+            None => compile_cached(src).as_ref().as_ref().err().cloned(),
+        }
     }
 }
 
@@ -136,12 +201,21 @@ pub enum TokenClass {
     Variable,
     Operator,
     Paren,
+    Comment,
     Error,
 }
 
 pub fn highlight(src: &str) -> Vec<(Span, TokenClass)> {
     let tokens = lexer::tokenize(src);
     let mut out = Vec::with_capacity(tokens.len());
+    // Comments are no tokens: `#` to the end of its line (no word of the language has a `#`).
+    let mut comments = Vec::new();
+    let mut at = 0;
+    while let Some(start) = src[at..].find('#').map(|i| at + i) {
+        let end = src[start..].find('\n').map_or(src.len(), |i| start + i);
+        comments.push((Span::new(start, end), TokenClass::Comment));
+        at = end;
+    }
     for (i, t) in tokens.iter().enumerate() {
         let class = match &t.kind {
             TokenKind::Eof => continue,
@@ -163,6 +237,10 @@ pub fn highlight(src: &str) -> Vec<(Span, TokenClass)> {
             _ => TokenClass::Operator,
         };
         out.push((t.span, class));
+    }
+    if !comments.is_empty() {
+        out.extend(comments);
+        out.sort_by_key(|(span, _)| span.start);
     }
     out
 }
@@ -195,36 +273,42 @@ pub(crate) fn apply_binary(op: BinOp, a: f64, b: f64) -> f64 {
 }
 
 fn eval_node(node: &Node, vars: &[f64]) -> f64 {
+    eval_with(node, vars, &|k| builtins::call(builtins::Func::Rand, &[k]))
+}
+
+/// The value of `node`, `rand(k)` being `rand`'s.
+pub(crate) fn eval_with(node: &Node, vars: &[f64], rand: &dyn Fn(f64) -> f64) -> f64 {
     match node {
         Node::Num(v) => *v,
         Node::Var(i) => vars.get(*i).copied().unwrap_or(0.0),
-        Node::Unary(UnOp::Neg, a) => -eval_node(a, vars),
-        Node::Unary(UnOp::Not, a) => bool_f(!truthy(eval_node(a, vars))),
-        Node::Binary(op, a, b) => apply_binary(*op, eval_node(a, vars), eval_node(b, vars)),
+        Node::Unary(UnOp::Neg, a) => -eval_with(a, vars, rand),
+        Node::Unary(UnOp::Not, a) => bool_f(!truthy(eval_with(a, vars, rand))),
+        Node::Binary(op, a, b) => apply_binary(*op, eval_with(a, vars, rand), eval_with(b, vars, rand)),
+        Node::Call(builtins::Func::Rand, args) => rand(args.first().map_or(0.0, |k| eval_with(k, vars, rand))),
         Node::Call(func, args) => {
             let mut values = [0.0f64; 8];
             if args.len() <= values.len() {
                 for (slot, arg) in values.iter_mut().zip(args) {
-                    *slot = eval_node(arg, vars);
+                    *slot = eval_with(arg, vars, rand);
                 }
                 builtins::call(*func, &values[..args.len()])
             } else {
-                let values: Vec<f64> = args.iter().map(|a| eval_node(a, vars)).collect();
+                let values: Vec<f64> = args.iter().map(|a| eval_with(a, vars, rand)).collect();
                 builtins::call(*func, &values)
             }
         }
         Node::Cond(c, a, b) => {
-            if truthy(eval_node(c, vars)) {
-                eval_node(a, vars)
+            if truthy(eval_with(c, vars, rand)) {
+                eval_with(a, vars, rand)
             } else {
-                eval_node(b, vars)
+                eval_with(b, vars, rand)
             }
         }
     }
 }
 
 /// Constant folding: collapse every variable-free subtree into a number.
-fn fold(node: Node) -> Node {
+pub(crate) fn fold(node: Node) -> Node {
     match node {
         Node::Unary(op, a) => {
             let a = fold(*a);
@@ -242,7 +326,8 @@ fn fold(node: Node) -> Node {
         }
         Node::Call(func, args) => {
             let args: Vec<Node> = args.into_iter().map(fold).collect();
-            if func != builtins::Func::Hash && args.iter().all(|a| matches!(a, Node::Num(_))) {
+            let random = matches!(func, builtins::Func::Hash | builtins::Func::Rand);
+            if !random && args.iter().all(|a| matches!(a, Node::Num(_))) {
                 let values: Vec<f64> = args.iter().map(|a| if let Node::Num(v) = a { *v } else { 0.0 }).collect();
                 Node::Num(builtins::call(func, &values))
             } else {

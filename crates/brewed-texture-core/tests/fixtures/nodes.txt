@@ -247,6 +247,63 @@ tile_sampler p:blend_mode = max
 tile_sampler p:blend_mode = add
 tile_sampler p:blend_mode = stack
 tile_sampler p:seed int
+fx_map
+fx_map i:background image
+fx_map i:pattern_1 image
+fx_map i:pattern_2 image
+fx_map i:pattern_3 image
+fx_map i:pattern_4 image
+fx_map o:output image
+fx_map p:tiling choice
+fx_map p:tiling = none
+fx_map p:tiling = horizontal
+fx_map p:tiling = vertical
+fx_map p:tiling = both
+fx_map p:precision choice
+fx_map p:precision = graph
+fx_map p:precision = unorm8
+fx_map p:precision = float16
+fx_map p:precision = float32
+fx_map p:program text
+fx_map p:count int
+fx_map p:depth int
+fx_map p:from_depth int
+fx_map p:pattern choice
+fx_map p:pattern = disc
+fx_map p:pattern = square
+fx_map p:pattern = rounded_square
+fx_map p:pattern = polygon
+fx_map p:pattern = star
+fx_map p:pattern = ring
+fx_map p:pattern = cross
+fx_map p:pattern = capsule
+fx_map p:pattern = paraboloid
+fx_map p:pattern = cone
+fx_map p:pattern = pyramid
+fx_map p:pattern = bell
+fx_map p:pattern = gaussian
+fx_map p:pattern = waves
+fx_map p:pattern = image
+fx_map p:softness float
+fx_map p:sides int
+fx_map p:inner_radius float
+fx_map p:thickness float
+fx_map p:corner_radius float
+fx_map p:blend choice
+fx_map p:blend = max
+fx_map p:blend = add
+fx_map p:blend = stack
+fx_map p:blend = subtract
+fx_map p:blend = min
+fx_map p:blend = multiply
+fx_map p:seed int
+fx_map p:channel choice
+fx_map p:channel = luminance
+fx_map p:channel = red
+fx_map p:channel = green
+fx_map p:channel = blue
+fx_map p:channel = alpha
+fx_map p:auto_bind bool
 gradient
 gradient o:output image
 gradient p:tiling choice
