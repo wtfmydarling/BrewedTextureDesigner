@@ -99,7 +99,7 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
         ],
         ContextTarget::Package(key) => {
             let key = *key;
-            let mut items = vec![item("New Graph", "", Some(Message::Explorer(ExplorerMessage::NewGraph(key))))];
+            let mut items = vec![item("New Graph…", "", Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(Some(key)))))];
             items.extend(file_items(app, key));
             items.extend([
                 item("Collect Files", "", Some(Message::Explorer(ExplorerMessage::CollectFiles(key)))),
@@ -120,7 +120,7 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
                 item("Rename", "", Some(Message::Explorer(ExplorerMessage::StartRename(key, graph)))),
                 item("Duplicate", "", Some(Message::Explorer(ExplorerMessage::DuplicateGraph(key, graph)))),
                 separator(),
-                item("New Graph", "", Some(Message::Explorer(ExplorerMessage::NewGraph(key)))),
+                item("New Graph…", "", Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(Some(key))))),
                 separator(),
                 item("Delete", "", many.then_some(Message::Explorer(ExplorerMessage::DeleteGraph(key, graph)))),
             ]

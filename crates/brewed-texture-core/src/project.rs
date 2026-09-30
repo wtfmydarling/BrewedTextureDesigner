@@ -49,6 +49,11 @@ const MANIFEST: &str = "package.json";
 const EDITOR: &str = "editor.json";
 /// A snapshot's (see [`crate::recovery`]): what it says of its package.
 const RECOVERY: &str = "recovery.json";
+/// A picture of the package, for lists of packages (the Home screen's): of the first output of
+/// the graph that was being edited, as it was when the package was saved.
+const PICTURE: &str = "thumbnail.png";
+/// The largest picture read: a larger one is no picture for a list.
+const MAX_PICTURE: u64 = 4 << 20;
 const GRAPHS: &str = "graphs/";
 const FILES: &str = "files/";
 
@@ -163,6 +168,8 @@ pub struct Loaded {
     pub notes: Vec<String>,
     /// What a snapshot of unsaved changes says of its package (see [`save_snapshot`]).
     pub unsaved: Option<Unsaved>,
+    /// Its picture, a PNG (see [`save_with_picture`]).
+    pub picture: Option<Vec<u8>>,
 }
 
 impl Loaded {
@@ -183,7 +190,27 @@ enum Held {
 /// Save `package` as the file at `path`: whatever stops the program, the system or the power
 /// meanwhile, the file is the one before or this one, whole (see [`crate::files::replace`]).
 pub fn save(path: &Path, package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId) -> Result<(), String> {
-    write_file(path, package, views, open, path.parent(), Held::In, None)
+    save_with_picture(path, package, views, open, None)
+}
+
+/// [`save`], with a picture of the package (a PNG), which lists of packages show.
+pub fn save_with_picture(
+    path: &Path,
+    package: &Package,
+    views: &HashMap<GraphId, ViewState>,
+    open: GraphId,
+    picture: Option<&[u8]>,
+) -> Result<(), String> {
+    write_file(path, package, views, open, path.parent(), Held::In, None, picture)
+}
+
+/// The picture of the package file at `path`, if it has one (see [`save_with_picture`]): read
+/// without the rest of the package.
+pub fn read_picture(path: &Path) -> Option<Vec<u8>> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = Archive::new(BufReader::new(file)).ok()?;
+    archive.entry(MANIFEST)?;
+    archive.read(PICTURE, MAX_PICTURE).ok()
 }
 
 /// Save a snapshot of `package`, which has unsaved changes (see [`crate::recovery`]), as the
@@ -196,14 +223,15 @@ pub fn save_snapshot(
     open: GraphId,
     unsaved: &Unsaved,
 ) -> Result<(), String> {
-    write_file(path, package, views, open, None, Held::Apart, Some(unsaved))
+    write_file(path, package, views, open, None, Held::Apart, Some(unsaved), None)
 }
 
 /// The file of `package`, which is (or will be) in `dir`: paths relative to `dir`.
 pub fn to_bytes(package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId, dir: Option<&Path>) -> Result<Vec<u8>, String> {
-    write(Vec::new(), package, views, open, dir, Held::In, None)
+    write(Vec::new(), package, views, open, dir, Held::In, None, None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_file(
     path: &Path,
     package: &Package,
@@ -212,10 +240,11 @@ fn write_file(
     dir: Option<&Path>,
     held: Held,
     unsaved: Option<&Unsaved>,
+    picture: Option<&[u8]>,
 ) -> Result<(), String> {
     crate::files::replace(path, |beside| -> Result<(), String> {
         let file = std::fs::File::create(beside).map_err(|e| e.to_string())?;
-        let out = write(BufWriter::new(file), package, views, open, dir, held, unsaved)?;
+        let out = write(BufWriter::new(file), package, views, open, dir, held, unsaved, picture)?;
         out.into_inner().map(drop).map_err(|e| e.error().to_string())
     })
 }
@@ -228,6 +257,7 @@ fn json<T: Serialize + for<'de> Deserialize<'de>>(value: &T, what: &str) -> Resu
     Ok(bytes)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write<W: Write>(
     out: W,
     package: &Package,
@@ -236,6 +266,7 @@ fn write<W: Write>(
     dir: Option<&Path>,
     held: Held,
     unsaved: Option<&Unsaved>,
+    picture: Option<&[u8]>,
 ) -> Result<W, String> {
     let mut package = package.clone();
     if let Some(dir) = dir {
@@ -279,6 +310,10 @@ fn write<W: Write>(
     ];
     if let Some(unsaved) = unsaved {
         parts.push((RECOVERY, Part::Bytes(Cow::Owned(json(unsaved, "The snapshot")?), Method::Deflated)));
+    }
+    // (A PNG is compressed already.)
+    if let Some(picture) = picture {
+        parts.push((PICTURE, Part::Bytes(Cow::Borrowed(picture), Method::Stored)));
     }
     parts.extend(package.graphs.iter().zip(&graph_entries).map(|(g, entry)| (entry.as_str(), Part::Graph(g))));
     if held == Held::In {
@@ -478,7 +513,7 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
     }
     // What other programs put in the package, as it is; not the folders some tools list (their
     // entries' names make them), nor what no entry may be named (it could not be written back).
-    let ours = |name: &str| [MIMETYPE, MANIFEST, EDITOR, RECOVERY].contains(&name) || name.starts_with(GRAPHS) || name.starts_with(FILES);
+    let ours = |name: &str| [MIMETYPE, MANIFEST, EDITOR, RECOVERY, PICTURE].contains(&name) || name.starts_with(GRAPHS) || name.starts_with(FILES);
     let others: Vec<String> =
         archive.entries().iter().map(|e| e.name.clone()).filter(|n| !ours(n) && !(n.ends_with('/') && archive::is_entry_name(n.trim_end_matches('/')))).collect();
     let mut kept = 0;
@@ -496,6 +531,7 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
             Err(e) => notes.push(format!("Not kept: {e}")),
         }
     }
+    let picture = if archive.entry(PICTURE).is_some() { archive.read(PICTURE, MAX_PICTURE).ok() } else { None };
     let editor: Option<Editor> = match archive.entry(EDITOR) {
         Some(_) => archive.read(EDITOR, MAX_JSON).ok().and_then(|b| serde_json::from_slice(&b).ok()),
         None => None,
@@ -524,7 +560,7 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
             open = editor.open;
         }
     }
-    Ok(Loaded { package, views, open, notes, unsaved })
+    Ok(Loaded { package, views, open, notes, unsaved, picture })
 }
 
 /// The entries of a package file as the format names them, for what checks it (tests).

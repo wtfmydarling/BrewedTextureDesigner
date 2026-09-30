@@ -9,6 +9,7 @@ pub mod editors;
 pub mod explorer;
 pub mod frames;
 pub mod graph;
+pub mod home;
 pub mod inputs;
 pub mod library;
 pub mod models;
@@ -50,11 +51,15 @@ pub fn root(app: &App) -> Element<'_, Message> {
         hovered_split: pane_grid::Line { color: style::ACCENT_DIM, width: 2.0 },
     });
 
-    let window = column![
-        toolbar::menu_bar(app),
-        container(grid).height(Length::Fill).style(style::window_bar),
-        toolbar::status_bar(app),
-    ];
+    // The Home screen, in place of the editor while it is shown (the editor is behind it).
+    let window = match app.ui.home {
+        Some(page) => column![toolbar::menu_bar(app), container(home::view(app, page)).height(Length::Fill).style(style::window_bar)],
+        None => column![
+            toolbar::menu_bar(app),
+            container(grid).height(Length::Fill).style(style::window_bar),
+            toolbar::status_bar(app),
+        ],
+    };
     let mut layers: Vec<Element<'_, Message>> = vec![window.into()];
     if let Some(ctx) = &app.ui.context {
         layers.push(context_menu::view(app, ctx));

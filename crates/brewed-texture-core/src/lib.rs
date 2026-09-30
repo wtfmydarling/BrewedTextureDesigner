@@ -29,6 +29,7 @@ pub mod nodes;
 pub mod package;
 pub mod project;
 pub mod recovery;
+pub mod templates;
 pub mod types;
 
 pub use document::Document;

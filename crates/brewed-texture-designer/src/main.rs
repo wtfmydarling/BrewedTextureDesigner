@@ -222,6 +222,9 @@ fn main() -> iced::Result {
         std::process::exit(render_package(job));
     }
 
+    // Given no package to open, the program starts on the Home screen (not for screenshots and
+    // the autopilot, which start on the demo).
+    options.home = as_it_was && options.open.is_empty();
     if as_it_was {
         options.workspace = Some(workspace::Workspace::load());
         // Unsaved work, kept to be recovered after a crash, beside the settings (not in the

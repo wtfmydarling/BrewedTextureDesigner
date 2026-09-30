@@ -335,6 +335,111 @@ fn library_folders_offer_their_graphs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Given no package to open, the program starts on the Home screen, with nothing being edited;
+/// New Package… makes one from a template in its place (and the Home screen gives way to the
+/// editor); Home comes back, and Escape goes back to what is edited; Learn opens examples beside
+/// it.
+#[test]
+fn the_program_starts_on_the_home_screen() {
+    use crate::app::home::{HomeMessage, HomePage, NewGraphMessage};
+    use brewed_texture_core::templates::{Example, Template};
+    let opts = StartupOptions { home: true, ..StartupOptions::default() };
+    let mut w = match Harness::started(Box::new(view::root), Size::new(1400.0, 900.0), opts) {
+        Some(h) => h,
+        None => return,
+    };
+    w.input(&[]);
+    assert_eq!(w.app.ui.home, Some(HomePage::Home));
+    assert!(w.app.blank(), "nothing is being edited");
+    for said in ["Welcome to Brewed Texture Designer", "New Package…", "Open…", "RECENT", "Learn", "RESOURCES"] {
+        assert!(!texts(&mut w, said).is_empty(), "{said}");
+    }
+    w.snapshot("home");
+    // Keys of the editor do nothing to what is behind it.
+    let nodes = w.app.graph().nodes.len();
+    w.send(Message::Paste);
+    w.send(Message::Home(HomeMessage::Show(HomePage::Home)));
+    assert_eq!(w.app.graph().nodes.len(), nodes);
+
+    // A package made from a template, in place of the blank one.
+    w.send(Message::NewGraph(NewGraphMessage::Open(None)));
+    w.input(&[]);
+    for said in ["New Package", "PBR (Metallic/Roughness)", "Empty", "Create"] {
+        assert!(!texts(&mut w, said).is_empty(), "{said}");
+    }
+    w.snapshot("new_package");
+    w.send(Message::NewGraph(NewGraphMessage::Name("Rusty Metal".into())));
+    w.send(Message::NewGraph(NewGraphMessage::Template(Template::Pbr)));
+    w.send(Message::NewGraph(NewGraphMessage::Size(512)));
+    w.send(Message::NewGraph(NewGraphMessage::Create));
+    assert_eq!(w.app.ui.home, None, "in the editor");
+    assert_eq!(w.app.packages().len(), 1, "in place of the blank one");
+    assert_eq!(w.app.doc.entry().name, "Rusty Metal");
+    assert_eq!(w.app.graph().resolution, [512, 512]);
+    let outputs: Vec<String> = w.app.graph().nodes_of(NodeKind::OUTPUT).map(|n| n.text("name").to_string()).collect();
+    assert_eq!(outputs, Template::Pbr.outputs());
+
+    // Home again, and back with Escape.
+    w.send(Message::Home(HomeMessage::Show(HomePage::Home)));
+    assert!(!texts(&mut w, "Back to Untitled").is_empty());
+    press(&mut w, keyboard::key::Named::Escape);
+    assert_eq!(w.app.ui.home, None);
+    // An example of Learn: in place of a package not changed yet (as any package opened),
+    // beside one changed.
+    w.send(Message::Edit(Edit::SetResolution([1024, 1024])));
+    w.send(Message::Home(HomeMessage::Show(HomePage::Learn)));
+    w.input(&[]);
+    assert!(!texts(&mut w, "FX-Map programs").is_empty());
+    w.snapshot("learn");
+    w.send(Message::Home(HomeMessage::Example(Example::FxMaps)));
+    assert_eq!(w.app.packages().len(), 2);
+    assert_eq!(w.app.doc.package().graphs.len(), 5);
+    assert_eq!(w.app.ui.home, None);
+}
+
+/// The packages opened last are on the Home screen, with the pictures their files have; one
+/// opens there. A package saved has the thumbnail of its first output for a picture.
+#[test]
+fn packages_opened_last_have_their_pictures() {
+    use crate::app::home::{HomeMessage, HomePage};
+    use brewed_texture_core::project;
+    let dir = std::env::temp_dir().join(format!("brewed-home-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let walls = dir.join("walls.brewtex");
+
+    // Saved from the demo: its picture, the thumbnail of its first output.
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    fake_thumbnails(&mut w.app);
+    let demo = w.app.here();
+    w.send(Message::Asked(demo, Box::new(Message::SavePicked(Some(walls.clone())))));
+    let png = project::read_picture(&walls).expect("a picture");
+    let picture = image::load_from_memory(&png).unwrap();
+    assert_eq!((picture.width(), picture.height()), (64, 64));
+    let (package, ..) = (project::load(&walls).unwrap().package, ());
+    assert_eq!(package.graphs[0].name, brewed_texture_core::demo::NAME, "the package as it was");
+
+    // On the Home screen, opened last, with its picture; and a file gone, said so.
+    let opts = StartupOptions { home: true, ..StartupOptions::default() };
+    let mut h = match Harness::started(Box::new(view::root), Size::new(1400.0, 900.0), opts) {
+        Some(h) => h,
+        None => return,
+    };
+    h.app.ui.recent = vec![walls.display().to_string(), dir.join("gone.brewtex").display().to_string()];
+    h.send(Message::Home(HomeMessage::Show(HomePage::Home)));
+    let recent = h.app.ui.home_recent.clone();
+    assert_eq!(recent.len(), 2);
+    assert!(recent[0].there && recent[0].picture.is_some() && recent[0].name == "walls");
+    assert!(!recent[1].there && recent[1].picture.is_none());
+    h.input(&[]);
+    assert!(!texts(&mut h, "walls").is_empty() && !texts(&mut h, "Not found where it was").is_empty());
+    h.snapshot("home_recent");
+    h.send(Message::Home(HomeMessage::Open(walls.display().to_string())));
+    assert_eq!(h.app.ui.home, None);
+    assert_eq!(h.app.packages().len(), 1, "in place of the blank one");
+    assert_eq!(h.app.doc.path().map(|p| p.to_path_buf()), Some(walls.clone()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Pressing a library item, moving onto the graph and releasing adds the node there.
 #[test]
 fn library_items_can_be_dropped_on_the_graph() {

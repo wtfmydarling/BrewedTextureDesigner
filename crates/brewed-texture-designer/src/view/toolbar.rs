@@ -65,8 +65,10 @@ fn menu<'a>(app: &'a App, id: MenuId, title: &'a str, items: Vec<Element<'a, Mes
 fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
     let key = app.doc_key;
     let mut items = vec![
-        item("New Package", app.key_of(Command::New), Some(Message::New)),
-        item("New Graph", "", Some(Message::Explorer(ExplorerMessage::NewGraph(key)))),
+        item("Home Screen", "", Some(Message::Home(crate::app::home::HomeMessage::Show(crate::app::home::HomePage::Home)))),
+        separator(),
+        item("New Package…", app.key_of(Command::New), Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(None)))),
+        item("New Graph…", "", Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(Some(key))))),
         item("Open Package…", app.key_of(Command::Open), Some(Message::Open)),
     ];
     // The packages opened or saved last (as many as the settings say): each by its name, and
@@ -185,10 +187,17 @@ fn help_menu(app: &App) -> Vec<Element<'_, Message>> {
 pub fn menu_bar(app: &App) -> Element<'_, Message> {
     let logo = image(crate::brand::logo()).width(Length::Fixed(16.0)).height(Length::Fixed(16.0));
     let dirty = if app.doc.is_dirty() { "  •" } else { "" };
-    let document = text(format!("{} — {}{dirty}", app.doc.title(), app.doc.entry().name)).size(style::SMALL).color(style::TEXT_DIM);
+    // (Not while the Home screen is shown: nothing of it is edited there.)
+    let document = match app.ui.home {
+        Some(_) => text(""),
+        None => text(format!("{} — {}{dirty}", app.doc.title(), app.doc.entry().name)).size(style::SMALL).color(style::TEXT_DIM),
+    };
+    // The logo goes to the Home screen, as Adobe's does.
+    let home = crate::app::home::HomeMessage::Show(crate::app::home::HomePage::Home);
+    let logo = tip(button(logo).padding([4, 6]).style(style::flat_button).on_press(Message::Home(home)), "Home Screen", tooltip::Position::Bottom);
     container(
         row![
-            container(logo).padding([0, 6]),
+            logo,
             menu(app, MenuId::File, "File", file_menu(app)),
             menu(app, MenuId::Edit, "Edit", edit_menu(app)),
             menu(app, MenuId::View, "View", view_menu(app)),

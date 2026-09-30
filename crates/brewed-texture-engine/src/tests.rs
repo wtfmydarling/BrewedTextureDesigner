@@ -3291,3 +3291,33 @@ fn fx_map_programs_hold_vectors() {
     assert_eq!(pixel(&px, 192, 128), [0.0, 0.0, 0.0, 1.0]);
     assert!(e.gpu.take_errors().is_empty());
 }
+
+/// What the Home screen's Learn opens, and the templates of new graphs, are computed with no
+/// error, and their outputs are not flat.
+#[test]
+fn examples_and_templates_are_computed() {
+    use brewed_texture_core::templates::{Example, Template};
+    let Some(mut e) = engine() else { return };
+    let mut graphs = vec![("PBR".to_string(), Template::Pbr.graph(256, brewed_texture_core::Precision::Half))];
+    for example in [Example::FxMaps, Example::PixelMath] {
+        let (package, _) = example.package();
+        graphs.extend(package.graphs.iter().map(|g| (g.name.clone(), Graph::clone(&g.graph))));
+    }
+    for (name, mut g) in graphs {
+        g.resolution = [256, 256];
+        let ev = evaluate_blocking(&mut e, &g);
+        for n in &g.nodes {
+            assert!(ev.node(n.id).and_then(|n| n.error()).is_none(), "{name}: {}", n.def().name);
+            assert!(e.state(n.id).is_none_or(|s| s.error.is_none()), "{name}: {} {:?}", n.def().name, e.state(n.id).and_then(|s| s.error.clone()));
+        }
+        if name != "PBR" {
+            for out in g.nodes_of(NodeKind::OUTPUT) {
+                let px = e.read_image(out.id).expect("an image").2;
+                let m = mean(&px);
+                let spread = (px.iter().step_by(4).map(|v| (*v as f64 - m).powi(2)).sum::<f64>() / (px.len() / 4) as f64).sqrt();
+                assert!(spread > 0.01, "{name}: {} is flat", out.text("name"));
+            }
+        }
+    }
+    assert!(e.gpu.take_errors().is_empty());
+}

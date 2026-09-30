@@ -393,6 +393,23 @@ pub fn segment(chosen: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::S
 }
 
 /// A row of a list or menu: full width, highlighted when hovered or selected.
+/// A tile to click (a package on the Home screen): raised, outlined lighter while hovered.
+pub fn tile_button(_: &Theme, status: button_w::Status) -> button_w::Style {
+    let (background, line) = match status {
+        button_w::Status::Hovered => (RAISED, BORDER_LIGHT),
+        button_w::Status::Pressed => (HOVER, BORDER_LIGHT),
+        _ => (HEADER, LINE),
+    };
+    let text = if status == button_w::Status::Disabled { TEXT_FAINT } else { TEXT };
+    button_w::Style {
+        background: Some(Background::Color(background)),
+        text_color: text,
+        border: Border { color: line, width: 1.0, radius: 4.0.into() },
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
 pub fn row_button(selected: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
     move |_, status| {
         let bg = match (selected, status) {

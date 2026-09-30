@@ -204,7 +204,7 @@ impl App {
         if key == self.doc_key { Some(&self.doc) } else { self.shelf.iter().find(|p| p.key == key).map(|p| &p.doc) }
     }
 
-    fn package_doc_mut(&mut self, key: u64) -> Option<&mut Document> {
+    pub(super) fn package_doc_mut(&mut self, key: u64) -> Option<&mut Document> {
         if key == self.doc_key {
             Some(&mut self.doc)
         } else {
@@ -390,6 +390,13 @@ impl App {
         self.take_dependencies(deps);
         let notes = loaded.notes.clone();
         let path = Some(PathBuf::from(&file));
+        if let Some(picture) = &loaded.picture {
+            self.pictures.insert(file.clone(), Arc::new(picture.clone()));
+        }
+        // Opened: in place of a package that is blank (as the program starts on Home), and in
+        // the editor.
+        let replace = replace || self.blank();
+        self.ui.home = None;
         if replace {
             // Open elsewhere in the Explorer already: that one goes, this one takes its place.
             if let Some(open) = self.open_key(&file).filter(|k| *k != self.doc_key) {
@@ -448,11 +455,13 @@ impl App {
         let Some(doc) = self.package_doc(key) else { return Task::none() };
         let (package, current) = (doc.package().clone(), doc.current());
         let views = self.views_of(key);
+        // (Its picture, for the Home screen.)
+        let picture = self.picture_for(key, &path.display().to_string());
         self.set_status(format!("Saving {}…", path.display()), false);
         let (written, to) = (package.clone(), path.clone());
         self.ui.saving.insert(key, Saving { path: path.display().to_string(), package, then, again: None, open: None });
         self.in_background(
-            move || project::save(&to, &written, &views, current),
+            move || project::save_with_picture(&to, &written, &views, current, picture.as_ref().map(|p| p.as_slice())),
             move |done| Message::Saved(key, path.clone(), done.unwrap_or_else(|| Err("The package was not saved: what wrote it stopped".into()))),
         )
     }
@@ -513,6 +522,7 @@ impl App {
     }
 
     /// A new, empty package in the Explorer.
+    #[cfg(any(test, feature = "dev-tools"))]
     pub(super) fn new_package(&mut self) {
         let package = Package::new("Graph", self.new_graph());
         let open = package.first();
@@ -521,10 +531,7 @@ impl App {
 
     /// The demo, as a package of its own in the Explorer.
     pub(super) fn open_demo(&mut self) {
-        let (package, preview) = brewed_texture_core::demo::package();
-        let open = package.first();
-        let views = [(open, ViewState { preview, ..ViewState::default() })].into_iter().collect();
-        self.add_package(package, None, views, open);
+        let _ = self.home_message(super::home::HomeMessage::Example(brewed_texture_core::templates::Example::BrickWall));
     }
 
     /// Close the package open as `key` (its unsaved changes go). The last one leaves an empty
@@ -1092,6 +1099,7 @@ impl App {
                 self.close_popups();
                 self.activate(key, Some(graph));
             }
+            #[cfg(test)]
             ExplorerMessage::NewGraph(key) => {
                 self.close_popups();
                 let graph = self.new_graph();

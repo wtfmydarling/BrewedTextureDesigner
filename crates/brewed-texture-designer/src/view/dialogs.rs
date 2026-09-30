@@ -89,6 +89,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
         Dialog::Missing(missing) => missing_files(app, missing),
         Dialog::Recover => recover(app),
         Dialog::Settings(settings) => crate::view::settings::view(app, settings),
+        Dialog::NewGraph(dialog) => new_graph(app, dialog),
         Dialog::Shortcuts => {
             let line = |keys: String, what: String| {
                 row![
@@ -160,6 +161,71 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             modal(dialog_box(body, 440.0), Some(Message::Dialog(None)))
         }
     }
+}
+
+/// The dialog of a new package, or of a new graph of one: its name, its template, the size and
+/// precision of its images.
+fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> Element<'a, Message> {
+    use brewed_texture_core::Precision;
+    use brewed_texture_core::templates::Template;
+    use crate::app::home::NewGraphMessage as N;
+    let say = Message::NewGraph;
+    let into = dialog.into.and_then(|key| app.package_doc(key)).map(|d| d.title());
+    let title = match &into {
+        Some(package) => format!("New Graph in {package}"),
+        None => "New Package".to_string(),
+    };
+    let label = |t: &'static str| text(t).size(style::TEXT_SIZE).color(style::TEXT_DIM).width(Length::Fixed(110.0));
+    let name = iced::widget::text_input("Graph", &dialog.name)
+        .id(new_graph_name_id())
+        .on_input(|n| Message::NewGraph(N::Name(n)))
+        .on_submit(say(N::Create))
+        .size(style::TEXT_SIZE)
+        .padding([5, 8])
+        .style(style::text_input);
+    let mut templates = column![].spacing(4);
+    for template in Template::ALL {
+        let chosen = template == dialog.template;
+        let outputs = template.outputs();
+        let mut about = column![text(template.name()).size(style::TEXT_SIZE).font(style::bold()), text(template.about()).size(style::SMALL).color(style::TEXT_DIM)].spacing(3);
+        if !outputs.is_empty() {
+            about = about.push(text(format!("Outputs: {}", outputs.join(", "))).size(style::SMALL).color(style::TEXT_FAINT));
+        }
+        templates = templates.push(
+            button(about).width(Length::Fill).padding([8, 10]).style(style::option_button(chosen, false)).on_press(say(N::Template(template))),
+        );
+    }
+    let sizes = iced::widget::pick_list(crate::view::toolbar::RESOLUTIONS, Some(dialog.size), |s| Message::NewGraph(N::Size(s)))
+        .text_size(style::TEXT_SIZE)
+        .padding([4, 8])
+        .style(style::pick_list);
+    let mut precisions = row![].spacing(0);
+    for (precision, name) in [(Precision::Bits8, "8 bits"), (Precision::Half, "16 bits float"), (Precision::Full, "32 bits float")] {
+        precisions = precisions.push(
+            button(text(name).size(style::TEXT_SIZE)).padding([5, 10]).style(style::segment(precision == dialog.precision)).on_press(say(N::Precision(precision))),
+        );
+    }
+    let body = column![
+        text(title).size(18).font(style::bold()),
+        row![label("Name"), name].align_y(Alignment::Center),
+        row![label("Template"), templates].align_y(Alignment::Start),
+        row![label("Size"), sizes, text("px").size(style::SMALL).color(style::TEXT_FAINT)].spacing(6).align_y(Alignment::Center),
+        row![label("Precision"), container(precisions).style(style::segments)].align_y(Alignment::Center),
+        row![
+            space().width(Length::Fill),
+            button(text("Cancel").size(style::TEXT_SIZE)).padding([6, 14]).style(style::flat_button).on_press(Message::Dialog(None)),
+            button(text("Create").size(style::TEXT_SIZE)).padding([6, 18]).style(style::primary_button).on_press(say(N::Create)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(14);
+    modal(dialog_box(body, 560.0), None)
+}
+
+/// Id of the name field of the New Package dialog (it takes the keyboard as it opens).
+pub fn new_graph_name_id() -> iced::widget::Id {
+    iced::widget::Id::new("brewed-new-graph-name")
 }
 
 /// How long `seconds` is, in words: "3 minutes".

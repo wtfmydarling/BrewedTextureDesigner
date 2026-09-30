@@ -21,6 +21,7 @@ walls.brewtex                          a ZIP archive
 ├── mimetype                           application/vnd.brewed-texture.package+zip (first, stored)
 ├── package.json                       the manifest: the graphs, the files and their names
 ├── editor.json                        which graph was open, where each view was
+├── thumbnail.png                      a picture of the package, for lists of packages
 ├── graphs/1.json                      a graph each, by its id
 ├── graphs/4.json
 ├── files/9f86d081…0f00a08.png         a file the package holds, by its SHA-256
@@ -268,13 +269,20 @@ How the editor showed the package (optional: a package without it opens at its f
 `open` is the graph being edited; each view is where a graph's view was (`pan`, `zoom`) and the
 node its 2D view showed (`preview`), each optional.
 
+## `thumbnail.png`
+
+A picture of the package, a PNG (optional): what lists of packages show of it, the Home screen's.
+Brewed Texture Designer writes the thumbnail of the first Output of the graph being edited (else
+of the node its 2D view shows) when it saves the package, and the one the file had when it saves
+a package it opened without editing it. A reader shows it, and never needs it.
+
 ## Growing the format
 
 - A reader **passes over** what it does not know: a field, an entry, a parameter of a node that
   its version of the node does not have.
 - `extras` objects (of the package, a file, a graph, a node) hold what other programs keep: a
   program that does not know them writes them back as they were. So are the entries of the
-  archive outside `mimetype`, `package.json`, `editor.json`, `recovery.json`, `graphs/` and
+  archive outside `mimetype`, `package.json`, `editor.json`, `recovery.json`, `thumbnail.png`, `graphs/` and
   `files/`: Brewed Texture Designer writes them back as they were (not the folders some tools
   list, which the names of their entries make).
 - An **extension** is named in `extensions_used`, and in `extensions_required` if a reader that

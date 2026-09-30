@@ -9,6 +9,7 @@
 pub(crate) mod autosave;
 #[cfg(any(test, feature = "dev-tools"))]
 pub(crate) mod dev;
+pub(crate) mod home;
 pub(crate) mod library;
 pub(crate) mod packages;
 pub(crate) mod settings_dialog;
@@ -59,6 +60,9 @@ pub struct StartupOptions {
     /// The graphics API is the settings' choice, given in the environment (see
     /// [`settings::choose_graphics`]).
     pub graphics_from_settings: bool,
+    /// Start on the Home screen (see [`home`]), with nothing being edited: as the program
+    /// starts when it is not given packages to open.
+    pub home: bool,
     /// What the tools for developing the program are asked for (see [`dev`]).
     #[cfg(any(test, feature = "dev-tools"))]
     pub dev: dev::DevOptions,
@@ -230,6 +234,8 @@ pub enum Dialog {
     About,
     Shortcuts,
     Settings(Box<SettingsDialog>),
+    /// A new package, or a new graph of one, from a template (see [`home`]).
+    NewGraph(home::NewGraphDialog),
     /// Files a package names that are not there (see [`MissingFiles`]).
     Missing(MissingFiles),
 }
@@ -321,6 +327,12 @@ pub struct Ui {
     pub library_collapsed: HashSet<Category>,
     /// The categories of the library folders' graphs folded in the Library.
     pub library_folded: HashSet<String>,
+    /// The page of the Home screen shown in place of the editor, if it is shown.
+    pub home: Option<home::HomePage>,
+    /// The packages opened last, as the Home screen shows them.
+    pub home_recent: Vec<home::Recent>,
+    /// The template a new graph was made from last (the next one is offered it).
+    pub last_template: brewed_texture_core::templates::Template,
     pub menu: Option<MenuId>,
     pub context: Option<ContextMenu>,
     pub add_menu: Option<AddMenu>,
@@ -497,6 +509,9 @@ pub struct App {
     host: eyedropper::Host,
     /// The graphs of the library folders (see [`library`]).
     pub library: library::Library,
+    /// The pictures of package files, as PNG, by path: what their files had, or were saved with
+    /// (see [`home`]).
+    pictures: HashMap<String, Arc<Vec<u8>>>,
     /// The tools for developing the program: screenshots, the autopilot (see [`dev`]).
     #[cfg(any(test, feature = "dev-tools"))]
     dev: dev::Dev,
@@ -607,6 +622,9 @@ pub enum ExplorerMessage {
     /// Show or hide what a package, or a folder of it, holds.
     Toggle(Fold),
     OpenGraph(u64, GraphId),
+    /// A new, empty graph in a package, at once (the tests'; File → New Graph… asks, see
+    /// [`home`]).
+    #[cfg(test)]
     NewGraph(u64),
     DuplicateGraph(u64, GraphId),
     DeleteGraph(u64, GraphId),
@@ -690,6 +708,9 @@ pub enum Message {
     Undo,
     Redo,
     // files
+    /// A new, empty package beside the others, at once (the tests' and the autopilot's: File →
+    /// New Package… asks what it is to be, see [`home`]).
+    #[cfg(any(test, feature = "dev-tools"))]
     New,
     Open,
     OpenPicked(Option<PathBuf>),
@@ -764,6 +785,10 @@ pub enum Message {
     LibraryLooked(Option<Arc<HashMap<String, library::Looked>>>),
     /// The package of a graph of the Library dropped on the graph was read.
     LibraryRead { package: String, graph: GraphId, name: String, pos: [f32; 2], result: Result<Arc<packages::Opened>, String> },
+    /// The Home screen (see [`home`]).
+    Home(home::HomeMessage),
+    /// The dialog of a new package or graph.
+    NewGraph(home::NewGraphMessage),
     PanelPress(DragPayload),
     PanelAdd(DragPayload),
     // properties
@@ -917,7 +942,15 @@ pub(crate) fn splits_of(panes: &pane_grid::State<Pane>) -> Vec<f32> {
 
 impl App {
     pub fn boot(opts: StartupOptions) -> (App, Task<Message>) {
-        let (package, preview_node) = brewed_texture_core::demo::package();
+        // Starting on the Home screen, nothing is being edited: a blank package, which gives way
+        // to what is made or opened there. Else the demo.
+        let (package, preview_node) = if opts.home {
+            let settings = opts.settings.settings();
+            let size = settings.graph_size;
+            (Package::new("Graph", Graph { resolution: [size, size], precision: settings.graph_precision, ..Graph::default() }), None)
+        } else {
+            brewed_texture_core::demo::package()
+        };
         let eval = Arc::new(eval::evaluate(&package.graphs[0].graph));
         let mut doc = Document::new(package, None);
         doc.set_undo_steps(opts.settings.settings().undo_steps as usize);
@@ -964,6 +997,9 @@ impl App {
                 library_search: String::new(),
                 library_collapsed: HashSet::new(),
                 library_folded: HashSet::new(),
+                home: opts.home.then_some(home::HomePage::Home),
+                home_recent: Vec::new(),
+                last_template: brewed_texture_core::templates::Template::Pbr,
                 menu: None,
                 context: None,
                 add_menu: None,
@@ -1015,11 +1051,15 @@ impl App {
             started: Instant::now(),
             host: eyedropper::Host::default(),
             library: library::Library::default(),
+            pictures: HashMap::new(),
             #[cfg(any(test, feature = "dev-tools"))]
             dev: dev::Dev::new(&opts.dev),
         };
         let mut opened: Vec<Task<Message>> = opts.open.iter().map(|path| app.open_file(path.clone(), false)).collect();
         opened.push(app.look_at_library());
+        if opts.home {
+            opened.push(app.home_message(home::HomeMessage::Show(home::HomePage::Home)));
+        }
         if let Some(root) = &opts.recovery {
             app.start_autosave(root);
         }
@@ -1982,6 +2022,7 @@ impl App {
                 self.stepped_from(graph, view);
             }
             // A new package, another one or the demo come to the Explorer: nothing is discarded.
+            #[cfg(any(test, feature = "dev-tools"))]
             Message::New => {
                 self.close_popups();
                 self.new_package();
@@ -2266,6 +2307,8 @@ impl App {
                 }
             }
             Message::LookAtLibrary => return self.look_at_library(),
+            Message::Home(message) => return self.home_message(message),
+            Message::NewGraph(message) => return self.new_graph_message(message),
             Message::LibraryLooked(found) => return self.library_looked(found),
             Message::LibraryRead { package, graph, name, pos, result } => self.library_read(package, graph, name, pos, result),
             Message::LibraryToggle(c) => {
@@ -2633,6 +2676,11 @@ impl App {
             self.close_popups();
             return self.open_file(path, false);
         }
+        // (The Home screen opens packages, and takes nothing else.)
+        if self.ui.home.is_some() {
+            self.set_status(format!("Drop a package here: '{}' is not one", path.display()), true);
+            return Task::none();
+        }
         let path = packages::clean(&path);
         // An image, vector graphics or a font: the node that reads it (and the package lists it).
         if let Some(kind) = ResourceKind::of_path(&path) {
@@ -2689,6 +2737,9 @@ impl App {
                 self.ui.renaming_file = None;
             } else if self.ui.color_picker.is_some() {
                 self.ui.color_picker = None;
+            } else if self.ui.home.is_some() && !self.blank() {
+                // Back to what is being edited.
+                self.ui.home = None;
             }
             return Task::none();
         }
@@ -2745,8 +2796,12 @@ impl App {
 
     /// Do what a command of the keyboard does.
     fn command(&mut self, command: Command) -> Task<Message> {
+        // The Home screen shown: nothing of the editor behind it is done.
+        if self.ui.home.is_some() && !matches!(command, Command::New | Command::Open | Command::Settings | Command::Help) {
+            return Task::none();
+        }
         let message = match command {
-            Command::New => Message::New,
+            Command::New => Message::NewGraph(home::NewGraphMessage::Open(None)),
             Command::Open => Message::Open,
             Command::Save => Message::Save,
             Command::SaveAs => Message::SaveAs,
