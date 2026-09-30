@@ -1,8 +1,15 @@
-//! Scalar expression language for the Math nodes.
+//! The expression language of the Math, Pixel Math and FX-Map nodes.
 //!
-//! `compile("(1+x)*sin(myVar)-2.4/cos(myVar2)")` produces a [`Program`] whose
-//! free identifiers (`x`, `myVar`, `myVar2`) become node inputs. Invalid input never
-//! panics: it yields an [`ExprError`] with a message and the offending byte span.
+//! `compile("(1+x)*sin(myVar)-2.4/cos(myVar2)")` produces a [`Program`] whose free identifiers
+//! (`x`, `myVar`, `myVar2`) become node inputs. A value is a number or a vector of two to four
+//! components (`vec3(r, g, b)`, `img.rgb`), and a program may give names values before its
+//! value, one statement after another (see [`script`]):
+//! ```text
+//! n = normal.rgb * 2 - 1
+//! saturate(dot(n, normalize(vec3(1, 1, 1))))
+//! ```
+//! Invalid input never panics: it yields an [`ExprError`] with a message and the offending byte
+//! span.
 
 pub mod builtins;
 pub mod lexer;
@@ -14,6 +21,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use builtins::Func;
 use lexer::TokenKind;
 use parser::{BinOp, Node, UnOp};
 
@@ -42,31 +50,85 @@ impl std::fmt::Display for ExprError {
     }
 }
 
-/// A successfully parsed and constant-folded expression.
+/// A value: a number, or a vector of two to four components.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Vector {
+    pub len: u8,
+    pub c: [f64; 4],
+}
+
+impl Vector {
+    pub const fn number(v: f64) -> Vector {
+        Vector { len: 1, c: [v, 0.0, 0.0, 0.0] }
+    }
+
+    fn of(c: &[f64]) -> Vector {
+        let mut v = Vector { len: c.len().clamp(1, 4) as u8, c: [0.0; 4] };
+        v.c[..c.len().min(4)].copy_from_slice(&c[..c.len().min(4)]);
+        v
+    }
+
+    /// Component `i`: a number is the same in every one.
+    pub fn at(&self, i: usize) -> f64 {
+        if self.len == 1 { self.c[0] } else { self.c[i.min(3)] }
+    }
+
+    /// Its components, in order.
+    pub fn components(&self) -> &[f64] {
+        &self.c[..usize::from(self.len)]
+    }
+}
+
+/// A successfully parsed and constant-folded program: the statements that give names values,
+/// then its value.
 #[derive(Clone, Debug)]
 pub struct Program {
+    /// The statements before the value, in order.
+    pub statements: Vec<script::Statement>,
     /// The value (the first of a list).
     pub root: Node,
     /// The values after the first of a list (`r, g, b, a` in Pixel Math): up to three.
     pub more: Vec<Node>,
-    /// Free variables in order of first appearance.
+    /// How many components each value of the list has, `root`'s first.
+    pub dims: Vec<u8>,
+    /// Free variables in order of first appearance: variables `0..vars.len()` of its
+    /// expressions.
     pub vars: Vec<String>,
+    /// The names its statements give values, in the order they first do: the variables after
+    /// [`Program::vars`].
+    pub locals: Vec<String>,
+    /// How many components each of [`Program::locals`] has.
+    pub local_dims: Vec<u8>,
 }
 
 impl Program {
-    /// Evaluate with one value per entry of [`Program::vars`] (missing values are 0).
+    /// Evaluate with one value per entry of [`Program::vars`] (missing values are 0): the first
+    /// component of its value.
     pub fn eval(&self, vars: &[f64]) -> f64 {
-        eval_node(&self.root, vars)
+        self.eval_all(vars)[0]
+    }
+
+    /// Every component of its value, in order.
+    pub fn eval_all(&self, vars: &[f64]) -> Vec<f64> {
+        let rand = |k| builtins::call(Func::Rand, &[k]);
+        let inputs: Vec<Vector> = (0..self.vars.len()).map(|i| Vector::number(vars.get(i).copied().unwrap_or(0.0))).collect();
+        let (slots, _) = script::run(&self.statements, &inputs, &self.local_dims, &[], &rand);
+        std::iter::once(&self.root).chain(&self.more).flat_map(|n| eval_with(n, &slots, &rand).components().to_vec()).collect()
     }
 
     /// True when the expression does not depend on any variable.
     pub fn is_constant(&self) -> bool {
-        matches!(self.root, Node::Num(_)) && self.more.iter().all(|n| matches!(n, Node::Num(_)))
+        self.statements.is_empty() && matches!(self.root, Node::Num(_)) && self.more.iter().all(|n| matches!(n, Node::Num(_)))
     }
 
-    /// How many values the expression gives: one, or a list of up to four.
+    /// How many values the expression gives: the components of its value, one, or up to four.
     pub fn components(&self) -> usize {
-        1 + self.more.len()
+        self.dims.iter().map(|d| usize::from(*d)).sum()
+    }
+
+    /// How many components variable `i` of its expressions has: an input one.
+    pub fn var_dim(&self, i: usize) -> u8 {
+        i.checked_sub(self.vars.len()).and_then(|l| self.local_dims.get(l)).copied().unwrap_or(1)
     }
 }
 
@@ -135,17 +197,28 @@ impl Language {
 }
 
 pub fn compile(src: &str) -> Result<Program, ExprError> {
-    if src.len() > 4096 {
+    if src.len() > script::MAX_SCRIPT {
         return Err(ExprError {
-            message: "Expression is too long (max 4096 characters)".into(),
+            message: format!("Expression is too long (max {} characters)", script::MAX_SCRIPT),
             span: Span::new(0, src.len()),
         });
     }
     let tokens = lexer::tokenize(src);
     let mut parser = parser::Parser::new(&tokens);
-    let mut list = parser.parse_list()?.into_iter().map(fold);
-    let root = list.next().expect("a list has a value");
-    Ok(Program { root, more: list.collect(), vars: parser.vars })
+    let (assignments, list) = parser.parse_program(true, &[])?;
+    let linked = script::link(assignments, list, &parser, &script::ScriptRules::NONE)?;
+    let mut values = linked.value.into_iter();
+    let (root, dim) = values.next().expect("a program of an expression has a value");
+    let (more, more_dims): (Vec<Node>, Vec<u8>) = values.unzip();
+    Ok(Program {
+        statements: linked.statements,
+        root,
+        more,
+        dims: std::iter::once(dim).chain(more_dims).collect(),
+        vars: linked.vars,
+        locals: linked.locals,
+        local_dims: linked.local_dims,
+    })
 }
 
 pub type Compiled = Arc<Result<Program, ExprError>>;
@@ -170,25 +243,40 @@ pub fn compile_cached(src: &str) -> Compiled {
     })
 }
 
+/// The words of `src` that are read, not called, not set and not channels taken of a value,
+/// in order: the variables of a program that does not read (see [`variables_lenient`]).
+pub(crate) fn words_read(src: &str, own: &dyn Fn(&str) -> bool) -> Vec<String> {
+    let tokens = lexer::tokenize(src);
+    let set: Vec<&str> = tokens
+        .windows(2)
+        .filter_map(|w| match (&w[0].kind, &w[1].kind) {
+            (TokenKind::Ident(name), TokenKind::Assign) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut vars: Vec<String> = Vec::new();
+    for (i, t) in tokens.iter().enumerate() {
+        if let TokenKind::Ident(name) = &t.kind {
+            let next = tokens.get(i + 1).map(|t| &t.kind);
+            let called = matches!(next, Some(TokenKind::LParen));
+            let setting = matches!(next, Some(TokenKind::Assign));
+            let channels = i > 0 && tokens[i - 1].kind == TokenKind::Dot;
+            if !called && !setting && !channels && !builtins::is_builtin(name) && !own(name) && !set.contains(&name.as_str()) && !vars.contains(name)
+            {
+                vars.push(name.clone());
+            }
+        }
+    }
+    vars
+}
+
 /// Variables of an expression. When the expression does not parse (e.g. while the user
 /// is still typing) the identifiers are recovered from the token stream so that node
 /// sockets stay stable instead of flickering away.
 pub fn variables_lenient(src: &str) -> Vec<String> {
     match &*compile_cached(src) {
         Ok(p) => p.vars.clone(),
-        Err(_) => {
-            let tokens = lexer::tokenize(src);
-            let mut vars: Vec<String> = Vec::new();
-            for (i, t) in tokens.iter().enumerate() {
-                if let TokenKind::Ident(name) = &t.kind {
-                    let is_call = matches!(tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::LParen));
-                    if !is_call && !builtins::is_builtin(name) && !vars.contains(name) {
-                        vars.push(name.clone());
-                    }
-                }
-            }
-            vars
-        }
+        Err(_) => words_read(src, &|_| false),
     }
 }
 
@@ -220,6 +308,8 @@ pub fn highlight(src: &str) -> Vec<(Span, TokenClass)> {
         let class = match &t.kind {
             TokenKind::Eof => continue,
             TokenKind::Number(_) => TokenClass::Number,
+            // The channels taken of a value.
+            TokenKind::Ident(_) if i > 0 && tokens[i - 1].kind == TokenKind::Dot => TokenClass::Operator,
             TokenKind::Ident(name) => {
                 let is_call = matches!(tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::LParen));
                 if is_call {
@@ -272,83 +362,142 @@ pub(crate) fn apply_binary(op: BinOp, a: f64, b: f64) -> f64 {
     }
 }
 
-fn eval_node(node: &Node, vars: &[f64]) -> f64 {
-    eval_with(node, vars, &|k| builtins::call(builtins::Func::Rand, &[k]))
+/// Of each component: `f` of the components at the same place of `args` (a number is the same
+/// at every place), as many as the longest has.
+fn each(args: &[Vector], f: impl Fn(&[f64]) -> f64) -> Vector {
+    let len = args.iter().map(|a| a.len).max().unwrap_or(1);
+    let mut out = Vector { len, c: [0.0; 4] };
+    let mut values = [0.0f64; 8];
+    for k in 0..usize::from(len) {
+        if args.len() <= values.len() {
+            for (slot, a) in values.iter_mut().zip(args) {
+                *slot = a.at(k);
+            }
+            out.c[k] = f(&values[..args.len()]);
+        } else {
+            let values: Vec<f64> = args.iter().map(|a| a.at(k)).collect();
+            out.c[k] = f(&values);
+        }
+    }
+    out
 }
 
-/// The value of `node`, `rand(k)` being `rand`'s.
-pub(crate) fn eval_with(node: &Node, vars: &[f64], rand: &dyn Fn(f64) -> f64) -> f64 {
+/// The value of `node`: `vars` those of its variables, `rand(k)` being `rand`'s.
+pub(crate) fn eval_with(node: &Node, vars: &[Vector], rand: &dyn Fn(f64) -> f64) -> Vector {
     match node {
-        Node::Num(v) => *v,
-        Node::Var(i) => vars.get(*i).copied().unwrap_or(0.0),
-        Node::Unary(UnOp::Neg, a) => -eval_with(a, vars, rand),
-        Node::Unary(UnOp::Not, a) => bool_f(!truthy(eval_with(a, vars, rand))),
-        Node::Binary(op, a, b) => apply_binary(*op, eval_with(a, vars, rand), eval_with(b, vars, rand)),
-        Node::Call(builtins::Func::Rand, args) => rand(args.first().map_or(0.0, |k| eval_with(k, vars, rand))),
-        Node::Call(func, args) => {
-            let mut values = [0.0f64; 8];
-            if args.len() <= values.len() {
-                for (slot, arg) in values.iter_mut().zip(args) {
-                    *slot = eval_with(arg, vars, rand);
-                }
-                builtins::call(*func, &values[..args.len()])
+        Node::Num(v) => Vector::number(*v),
+        Node::Var(i) => vars.get(*i).copied().unwrap_or(Vector::number(0.0)),
+        Node::Unary(UnOp::Neg, a) => each(&[eval_with(a, vars, rand)], |x| -x[0]),
+        Node::Unary(UnOp::Not, a) => Vector::number(bool_f(!truthy(eval_with(a, vars, rand).c[0]))),
+        Node::Binary(op, a, b) => {
+            let (a, b) = (eval_with(a, vars, rand), eval_with(b, vars, rand));
+            if op.is_logical() {
+                Vector::number(apply_binary(*op, a.c[0], b.c[0]))
             } else {
-                let values: Vec<f64> = args.iter().map(|a| eval_with(a, vars, rand)).collect();
-                builtins::call(*func, &values)
+                each(&[a, b], |x| apply_binary(*op, x[0], x[1]))
             }
         }
+        Node::Call(Func::Rand, args) => Vector::number(rand(args.first().map_or(0.0, |k| eval_with(k, vars, rand).c[0]))),
+        // What an image input is at (x, y): the variable's value (only an image differs).
+        Node::Call(Func::Sample, args) => args.first().map_or(Vector::number(0.0), |v| eval_with(v, vars, rand)),
+        Node::Call(func, args) => {
+            let values: Vec<Vector> = args.iter().map(|a| eval_with(a, vars, rand)).collect();
+            call_vectors(*func, &values)
+        }
         Node::Cond(c, a, b) => {
-            if truthy(eval_with(c, vars, rand)) {
-                eval_with(a, vars, rand)
-            } else {
-                eval_with(b, vars, rand)
-            }
+            let (a, b) = (eval_with(a, vars, rand), eval_with(b, vars, rand));
+            let chosen = if truthy(eval_with(c, vars, rand).c[0]) { a } else { b };
+            // As many components as the wider of the two.
+            each(&[chosen, Vector { len: a.len.max(b.len), c: [0.0; 4] }], |x| x[0])
+        }
+        Node::Swizzle(base, places) => {
+            let v = eval_with(base, vars, rand);
+            // A number's channels: the same in red, green and blue, and opaque.
+            let channels = if v.len == 1 { [v.c[0], v.c[0], v.c[0], 1.0] } else { v.c };
+            let picked: Vec<f64> = places.iter().map(|p| channels[usize::from(*p).min(3)]).collect();
+            Vector::of(&picked)
         }
     }
 }
 
-/// Constant folding: collapse every variable-free subtree into a number.
+/// `func` of values that may be vectors.
+fn call_vectors(func: Func, args: &[Vector]) -> Vector {
+    let a = args.first().copied().unwrap_or(Vector::number(0.0));
+    let b = args.get(1).copied().unwrap_or(Vector::number(0.0));
+    let dot = |a: &Vector, b: &Vector| (0..usize::from(a.len.max(b.len))).map(|k| a.at(k) * b.at(k)).sum::<f64>();
+    match func {
+        Func::Vec2 | Func::Vec3 | Func::Vec4 => {
+            let n = match func {
+                Func::Vec2 => 2,
+                Func::Vec3 => 3,
+                _ => 4,
+            };
+            if args.len() == 1 && a.len == 1 {
+                return Vector::of(&vec![a.c[0]; n]);
+            }
+            let all: Vec<f64> = args.iter().flat_map(|v| v.components().to_vec()).collect();
+            Vector::of(&all[..all.len().min(n)])
+        }
+        Func::Dot => Vector::number(dot(&a, &b)),
+        Func::Length => Vector::number(dot(&a, &a).sqrt()),
+        Func::Distance => {
+            let d = each(&[a, b], |x| x[0] - x[1]);
+            Vector::number(dot(&d, &d).sqrt())
+        }
+        Func::Normalize if a.len == 1 => Vector::number(builtins::call(Func::Sign, &[a.c[0]])),
+        Func::Normalize => {
+            let l = dot(&a, &a).sqrt();
+            each(&[a], |x| x[0] / l)
+        }
+        Func::Cross => Vector::of(&[
+            a.at(1) * b.at(2) - a.at(2) * b.at(1),
+            a.at(2) * b.at(0) - a.at(0) * b.at(2),
+            a.at(0) * b.at(1) - a.at(1) * b.at(0),
+        ]),
+        // Of numbers only.
+        Func::Hash | Func::Hypot | Func::Rand | Func::Sample => {
+            let values: Vec<f64> = args.iter().map(|v| v.c[0]).collect();
+            Vector::number(builtins::call(func, &values))
+        }
+        Func::If => {
+            let chosen = if truthy(a.c[0]) { args[1] } else { args[2] };
+            each(&[chosen, Vector { len: args[1].len.max(args[2].len), c: [0.0; 4] }], |x| x[0])
+        }
+        // Of each component.
+        _ => each(args, |values| builtins::call(func, values)),
+    }
+}
+
+/// Constant folding: collapse every variable-free subtree that is a number into one.
 pub(crate) fn fold(node: Node) -> Node {
-    match node {
-        Node::Unary(op, a) => {
-            let a = fold(*a);
-            match a {
-                Node::Num(v) => Node::Num(eval_node(&Node::Unary(op, Box::new(Node::Num(v))), &[])),
-                a => Node::Unary(op, Box::new(a)),
-            }
-        }
-        Node::Binary(op, a, b) => {
-            let (a, b) = (fold(*a), fold(*b));
-            match (&a, &b) {
-                (Node::Num(x), Node::Num(y)) => Node::Num(apply_binary(op, *x, *y)),
-                _ => Node::Binary(op, Box::new(a), Box::new(b)),
-            }
-        }
-        Node::Call(func, args) => {
-            let args: Vec<Node> = args.into_iter().map(fold).collect();
-            let random = matches!(func, builtins::Func::Hash | builtins::Func::Rand);
-            if !random && args.iter().all(|a| matches!(a, Node::Num(_))) {
-                let values: Vec<f64> = args.iter().map(|a| if let Node::Num(v) = a { *v } else { 0.0 }).collect();
-                Node::Num(builtins::call(func, &values))
-            } else {
-                Node::Call(func, args)
-            }
-        }
+    let constant = |n: &Node| matches!(n, Node::Num(_));
+    let folded = match node {
+        Node::Unary(op, a) => Node::Unary(op, Box::new(fold(*a))),
+        Node::Binary(op, a, b) => Node::Binary(op, Box::new(fold(*a)), Box::new(fold(*b))),
+        Node::Call(func, args) => Node::Call(func, args.into_iter().map(fold).collect()),
         Node::Cond(c, a, b) => {
             let (c, a, b) = (fold(*c), fold(*a), fold(*b));
-            match c {
-                Node::Num(v) => {
-                    if truthy(v) {
-                        a
-                    } else {
-                        b
-                    }
-                }
-                c => Node::Cond(Box::new(c), Box::new(a), Box::new(b)),
+            // Only numbers are chosen ahead: a branch as long as the other keeps its length.
+            match (&c, &a, &b) {
+                (Node::Num(v), Node::Num(x), Node::Num(y)) => return Node::Num(if truthy(*v) { *x } else { *y }),
+                _ => Node::Cond(Box::new(c), Box::new(a), Box::new(b)),
             }
         }
-        other => other,
+        Node::Swizzle(base, places) => Node::Swizzle(Box::new(fold(*base)), places),
+        other => return other,
+    };
+    let all_constant = match &folded {
+        Node::Unary(_, a) => constant(a),
+        Node::Binary(_, a, b) => constant(a) && constant(b),
+        Node::Call(func, args) => !matches!(func, Func::Hash | Func::Rand) && args.iter().all(constant),
+        Node::Swizzle(base, _) => constant(base),
+        _ => false,
+    };
+    if !all_constant {
+        return folded;
     }
+    let value = eval_with(&folded, &[], &|k| builtins::call(Func::Rand, &[k]));
+    if value.len == 1 { Node::Num(value.c[0]) } else { folded }
 }
 
 #[cfg(test)]
@@ -573,9 +722,97 @@ mod tests {
         assert!(err("a, b, c, d, e").message.contains("At most four"));
         assert!(err("a,").message.contains("Missing value"));
         assert!(err("a,, b").message.contains("Missing value"));
-        let code = wgsl::components_wgsl(&p, &|i| format!("V{i}"), &|i, _, _| format!("S{i}"));
+        let (_, code) = wgsl::program_wgsl(&p, &env(&p), &|k| format!("L{k}"));
         assert_eq!(code.len(), 3);
         assert_eq!(code[2], "f32(0.5)");
+    }
+
+    /// How the WGSL of the tests reads what it reads.
+    fn env(p: &Program) -> wgsl::Env<'_> {
+        let inputs = p.vars.len();
+        wgsl::Env {
+            var: Box::leak(Box::new(move |i: usize| if i < inputs { format!("V{i}") } else { format!("L{}", i - inputs) })),
+            dim: Box::leak(Box::new(|i: usize| p.var_dim(i))),
+            texel: Box::leak(Box::new(|i: usize| format!("T{i}"))),
+            sample: Box::leak(Box::new(|i: usize, x: &str, y: &str| format!("S{i}[{x}|{y}]"))),
+            sample_texel: Box::leak(Box::new(|i: usize, x: &str, y: &str| format!("ST{i}[{x}|{y}]"))),
+        }
+    }
+
+    fn eval_all(src: &str, vars: &[(&str, f64)]) -> Vec<f64> {
+        let p = compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let values: Vec<f64> =
+            p.vars.iter().map(|name| vars.iter().find(|(n, _)| n == name).map_or(0.0, |(_, v)| *v)).collect();
+        p.eval_all(&values)
+    }
+
+    /// Vectors of two to four components: made of numbers and vectors, their components taken
+    /// in any order, and worked on component by component, a number going with a vector as a
+    /// vector of it.
+    #[test]
+    fn vectors() {
+        assert_eq!(eval_all("vec3(1, 2, 3)", &[]), [1.0, 2.0, 3.0]);
+        assert_eq!(eval_all("vec3(0.5)", &[]), [0.5, 0.5, 0.5]);
+        assert_eq!(eval_all("vec4(vec2(1, 2), 3, 4).wzyx", &[]), [4.0, 3.0, 2.0, 1.0]);
+        assert_eq!(eval_all("vec3(1, 2, 3) * 2 + 1", &[]), [3.0, 5.0, 7.0]);
+        assert_eq!(eval_all("vec2(1, 4) / vec2(2, 8)", &[]), [0.5, 0.5]);
+        assert_eq!(eval_all("min(vec3(1, 5, 3), 2)", &[]), [1.0, 2.0, 2.0]);
+        assert_eq!(eval_all("clamp(vec2(-1, 2), 0, 1)", &[]), [0.0, 1.0]);
+        assert_eq!(eval_all("dot(vec3(1, 2, 3), vec3(4, 5, 6))", &[]), [32.0]);
+        assert_eq!(eval_all("length(vec2(3, 4))", &[]), [5.0]);
+        assert_eq!(eval_all("distance(vec2(1, 1), vec2(4, 5))", &[]), [5.0]);
+        assert_eq!(eval_all("normalize(vec2(0, 2))", &[]), [0.0, 1.0]);
+        assert_eq!(eval_all("cross(vec3(1, 0, 0), vec3(0, 1, 0))", &[]), [0.0, 0.0, 1.0]);
+        assert_eq!(eval_all("vec3(1, 2, 3).zx", &[]), [3.0, 1.0]);
+        assert_eq!(eval_all("x > 0 ? vec2(1, 2) : 0", &[("x", 1.0)]), [1.0, 2.0]);
+        assert_eq!(eval_all("x > 0 ? vec2(1, 2) : 0", &[("x", -1.0)]), [0.0, 0.0]);
+        // A value read from outside is the same in red, green and blue, and opaque.
+        assert_eq!(eval_all("k.rgba", &[("k", 0.25)]), [0.25, 0.25, 0.25, 1.0]);
+        // A list of vectors and numbers: four components at most in all.
+        let p = compile("vec2(u, v), 0.5").unwrap();
+        assert_eq!((p.components(), p.dims.clone()), (3, vec![2, 1]));
+        assert_eq!(compile("img.rgb").unwrap().components(), 3);
+        assert!(err("vec3(1, 2, 3), 4, 5").message.contains("At most four"));
+        assert!(err("vec2(1, 2) + vec3(1, 2, 3)").message.contains("a vec2 and a vec3 do not go together"));
+        assert!(err("vec2(1, 2) < 1").message.contains("takes numbers"));
+        assert!(err("vec3(1, 2)").message.contains("takes 3 components"));
+        assert!(err("cross(vec2(1, 2), vec2(3, 4))").message.contains("vec3"));
+        assert!(err("vec2(1, 2).z").message.contains("has no 'z'"));
+        assert!(err("v.xq").message.contains("channels are"));
+        assert!(err("hash(vec2(1, 2))").message.contains("takes numbers"));
+        assert!(err("vec2(1, 2) ? 1 : 2").message.contains("condition"));
+    }
+
+    /// An expression may give names values before its value; each is read after it, and stays
+    /// what it first was.
+    #[test]
+    fn names_given_values_before_the_value() {
+        assert_eq!(eval_all("a = 2; a * 3", &[]), [6.0]);
+        assert_eq!(eval_all("n = vec3(0, 3, 4)\nl = length(n)\nn / l", &[]), [0.0, 0.6, 0.8]);
+        assert_eq!(eval_all("a = x; a = a + 1; a", &[("x", 1.0)]), [2.0]);
+        let p = compile("n = img.rgb * 2 - 1\ndot(n, normalize(vec3(1, 1, 1)))").unwrap();
+        assert_eq!((p.vars.clone(), p.locals.clone(), p.local_dims.clone()), (vec!["img".to_string()], vec!["n".to_string()], vec![3]));
+        assert!(err("a = 1").message.contains("value of the expression after the statements"));
+        assert!(err("a = b; b = 1; a").message.contains("'b' is read before"));
+        assert!(err("a = 1; a = vec2(1, 2); a").message.contains("'a' is a number: it cannot become a vec2"));
+        assert!(err("a = 1, 2; a").message.contains("'a' takes one value"));
+        assert!(err("p = 1; sample(p, 0, 0)").message.contains("name of an image input"));
+        // The statements come first.
+        assert!(err("1; a = 2").message.contains("comes last"));
+        // Not an assignment: a comparison was meant.
+        assert!(err("a = 1 = 2").message.contains("=="));
+    }
+
+    /// The WGSL of vectors: a number widened where it goes with one, the channels of an image
+    /// read where they are taken, the statements before the value.
+    #[test]
+    fn vectors_as_wgsl() {
+        let p = compile("n = img.rgb * 2 - 1\nm = mod(n, 0.5)\nm.xy, sample(img, u, v).a").unwrap();
+        let (body, values) = wgsl::program_wgsl(&p, &env(&p), &|k| format!("L{k}"));
+        assert!(body.contains("var L0: vec3<f32> = vec3<f32>(0.0);"), "{body}");
+        assert!(body.contains("L0 = (((T0).xyz * f32(2.0)) - f32(1.0));"), "{body}");
+        assert!(body.contains("fx_mod3((L0), vec3<f32>(f32(0.5)))"), "{body}");
+        assert_eq!(values, ["fx_value0.x", "fx_value0.y", "(ST0[(V1)|(V2)]).w"]);
     }
 
     /// `sample(image, x, y)` reads an image input anywhere (in Pixel Math); what it reads is

@@ -196,9 +196,10 @@ pub static PIXEL_MATH: NodeDef = NodeDef {
     name: "Pixel Math",
     category: Category::Filters,
     description: "Evaluates an expression for every pixel on the GPU. Unknown words become image inputs, which \
-                  sample(image, x, y) reads anywhere (x and y from 0 to 1, like u and v); u, v, px, py, width and \
-                  height are built in. One value makes a grayscale image; two to four separated by commas (red, \
-                  green, blue, alpha) a color one.",
+                  sample(image, x, y) reads anywhere (x and y from 0 to 1, like u and v) and image.rgb reads the \
+                  channels of; u, v, px, py, width and height are built in, vec2, vec3 and vec4 make vectors, and \
+                  lines of name = value before the value give names values. One value makes a grayscale image; \
+                  two to four (red, green, blue, alpha), or a vector, a color one.",
     keywords: "expression formula shader per pixel custom processor color",
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,

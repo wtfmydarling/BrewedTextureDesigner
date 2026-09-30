@@ -1,4 +1,5 @@
-//! Scripts: values given names in order, one `name = value` after another (FX-Map's program).
+//! Scripts: values given names in order, one `name = value` after another (FX-Map's program,
+//! and the statements before the value of an expression).
 //!
 //! ```text
 //! # Where each splat goes, and how big it is.
@@ -12,20 +13,21 @@
 //! nor lines of their own (`;` may separate them all the same), and `#` begins a comment to
 //! the end of its line. A value is an expression of the language, or a list of them for the
 //! names that take lists. What the script sets is its own from there on: a later value reads
-//! it. What it reads and never sets is its inputs (and the built-ins of the language); a
-//! name read before the script sets it is an error, but for its outputs, which are there
-//! from the start, with values of their own.
+//! it, and it stays a number, or a vector of as many components, as it first was. What it
+//! reads and never sets is its inputs (and the built-ins of the language); a name read before
+//! the script sets it is an error, but for its outputs, which are there from the start, with
+//! values of their own (a list read as its first value).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::builtins::{self, Func};
-use super::lexer::{self, TokenKind};
-use super::parser::{Node, Parser};
-use super::{ExprError, Span, eval_with, fold};
+use super::lexer;
+use super::parser::{Assignment, Node, Parser};
+use super::{ExprError, Span, Vector, eval_with, fold};
 
-/// The longest script read (an expression is at most 4096 characters).
+/// The longest script, or expression, read.
 pub const MAX_SCRIPT: usize = 16384;
 
 /// What a language of scripts gives a script and takes from it.
@@ -38,6 +40,11 @@ pub struct ScriptRules {
     pub outputs: &'static [(&'static str, usize, usize)],
 }
 
+impl ScriptRules {
+    /// Of the statements before the value of an expression: nothing given, nothing made.
+    pub const NONE: ScriptRules = ScriptRules { builtins: &[], outputs: &[] };
+}
+
 /// One `name = value` of a script.
 #[derive(Clone, Debug)]
 pub struct Statement {
@@ -45,6 +52,8 @@ pub struct Statement {
     pub local: usize,
     /// Its value, or the values of a list.
     pub values: Vec<Node>,
+    /// How many components each of `values` has.
+    pub dims: Vec<u8>,
     /// Where the name it sets is in the source.
     pub span: Span,
 }
@@ -60,6 +69,8 @@ pub struct Script {
     /// What it sets: the outputs of its language (all of them, in their order), then its own
     /// names, in the order it first sets them.
     pub locals: Vec<String>,
+    /// How many components each local has when it is read (an output: a number).
+    pub local_dims: Vec<u8>,
     /// Which locals it sets.
     pub set: Vec<bool>,
     /// Its own names (not outputs) that it sets and never reads: most likely a misspelled
@@ -78,45 +89,65 @@ impl Script {
         self.output(name).is_some_and(|l| self.set[l])
     }
 
+    /// How many components variable `i` of its expressions has: an input one.
+    pub fn var_dim(&self, i: usize) -> u8 {
+        i.checked_sub(self.vars.len()).and_then(|l| self.local_dims.get(l)).copied().unwrap_or(1)
+    }
+
     /// Run the script: `vars` the values of its [`Script::vars`], `start` those of its outputs
-    /// before it sets them, `rand` what `rand(k)` gives. The values of every local: its list,
-    /// or its one value (a local it never sets, its start or none).
+    /// before it sets them, `rand` what `rand(k)` gives. The components of every local: of its
+    /// list, or of its one value (a local it never sets, its start or none).
     pub fn run(&self, vars: &[f64], start: &[Vec<f64>], rand: &dyn Fn(f64) -> f64) -> Vec<Vec<f64>> {
-        let mut values: Vec<Vec<f64>> = (0..self.locals.len()).map(|l| start.get(l).cloned().unwrap_or_default()).collect();
-        let mut slots: Vec<f64> = vars.to_vec();
-        slots.resize(self.vars.len(), 0.0);
-        slots.extend(values.iter().map(|v| v.first().copied().unwrap_or(0.0)));
-        for s in &self.statements {
-            let list: Vec<f64> = s.values.iter().map(|n| eval_with(n, &slots, rand)).collect();
-            slots[self.vars.len() + s.local] = list[0];
-            values[s.local] = list;
-        }
-        values
+        let inputs: Vec<Vector> = (0..self.vars.len()).map(|i| Vector::number(vars.get(i).copied().unwrap_or(0.0))).collect();
+        run(&self.statements, &inputs, &self.local_dims, start, rand).1
     }
 }
 
-/// Read a script of the language `rules` speaks.
-pub fn compile_script(src: &str, rules: &ScriptRules) -> Result<Script, ExprError> {
-    if src.len() > MAX_SCRIPT {
-        return Err(ExprError {
-            message: format!("The program is too long (at most {MAX_SCRIPT} characters)"),
-            span: Span::new(0, src.len()),
-        });
+/// Run `statements` of variables `inputs` then locals of `local_dims`, those there from the
+/// start being `start`: every variable after them (a local its value, read as its first
+/// component where it is a list), and the components of every local.
+pub(crate) fn run(
+    statements: &[Statement],
+    inputs: &[Vector],
+    local_dims: &[u8],
+    start: &[Vec<f64>],
+    rand: &dyn Fn(f64) -> f64,
+) -> (Vec<Vector>, Vec<Vec<f64>>) {
+    let mut values: Vec<Vec<f64>> = (0..local_dims.len()).map(|l| start.get(l).cloned().unwrap_or_default()).collect();
+    let mut slots: Vec<Vector> = inputs.to_vec();
+    slots.extend(values.iter().zip(local_dims).map(|(v, d)| {
+        let first = v.first().copied().unwrap_or(0.0);
+        if *d == 1 { Vector::number(first) } else { Vector { len: *d, c: [0.0; 4] } }
+    }));
+    for s in statements {
+        let list: Vec<Vector> = s.values.iter().map(|n| eval_with(n, &slots, rand)).collect();
+        let components: Vec<f64> = list.iter().flat_map(|v| v.components().to_vec()).collect();
+        let slot = inputs.len() + s.local;
+        slots[slot] = if local_dims.get(s.local) == Some(&1) { Vector::number(components[0]) } else { list[0] };
+        values[s.local] = components;
     }
-    let tokens = lexer::tokenize(src);
-    let mut parser = Parser::new(&tokens);
-    let assignments = parser.parse_script()?;
-    let names = parser.vars.clone();
-    let first_read = parser.first_read.clone();
+    (slots, values)
+}
 
+/// What linking the statements of a program to its names makes (see [`link`]).
+pub(crate) struct Linked {
+    pub statements: Vec<Statement>,
+    /// The value after the statements, its variables where the program keeps them.
+    pub value: Vec<(Node, u8)>,
+    pub vars: Vec<String>,
+    pub locals: Vec<String>,
+    pub local_dims: Vec<u8>,
+    pub set: Vec<bool>,
+    pub unread: Vec<String>,
+}
+
+/// The statements `assignments` and the value `value` the parser `parser` read, each name they
+/// read an input or a local, as `rules` say; checked.
+pub(crate) fn link(assignments: Vec<Assignment>, value: Vec<(Node, u8)>, parser: &Parser<'_>, rules: &ScriptRules) -> Result<Linked, ExprError> {
+    let names = &parser.vars;
+    let first_read = &parser.first_read;
     let mut locals: Vec<String> = rules.outputs.iter().map(|(name, ..)| name.to_string()).collect();
     let mut set = vec![false; locals.len()];
-    // The local each name read is, if it is one: for each name the parser met, where it
-    // became one (the statement setting it first), if ever.
-    let mut local_of: HashMap<&str, usize> = HashMap::new();
-    for (i, name) in locals.iter().enumerate() {
-        local_of.insert(name.as_str(), i);
-    }
     let mut set_at: HashMap<String, usize> = HashMap::new();
     for (k, a) in assignments.iter().enumerate() {
         if let Some(message) = refused_name(&a.name, rules) {
@@ -157,33 +188,75 @@ pub fn compile_script(src: &str, rules: &ScriptRules) -> Result<Script, ExprErro
     };
     let map: Vec<usize> = names.iter().map(|n| slot(n)).collect();
 
+    // How many components each local has when it is read: an output is read as a number, a
+    // name of the program's own as what it is (the parser saw to it that it stays so).
+    let mut local_dims = vec![1u8; locals.len()];
+    for a in &assignments {
+        let l = local_index(&a.name, &locals).expect("a local");
+        if l >= rules.outputs.len() && a.values.len() == 1 {
+            local_dims[l] = a.values[0].1;
+        }
+    }
+
     let mut read = vec![false; locals.len()];
     let mut statements = Vec::with_capacity(assignments.len());
     for a in assignments {
         let local = local_index(&a.name, &locals).expect("a local");
-        let (least, most) = rules.outputs.iter().find(|(o, ..)| *o == a.name).map_or((1, 1), |(_, l, m)| (*l, *m));
-        let n = a.values.len();
+        let output = rules.outputs.iter().find(|(o, ..)| *o == a.name);
+        let (least, most) = output.map_or((1, 1), |(_, l, m)| (*l, *m));
+        // An output takes a list: of values, or of the components of vectors. A name of the
+        // program's own takes one value, a number or a vector.
+        let n = if output.is_some() { a.values.iter().map(|(_, d)| usize::from(*d)).sum() } else { a.values.len() };
         if n < least || n > most {
             let takes = match (least, most) {
                 (1, 1) => "one value".to_string(),
                 (l, m) if l == m => format!("{l} values"),
                 (l, m) => format!("{l} to {m} values"),
             };
-            let what = if rules.outputs.iter().any(|(o, ..)| *o == a.name) {
+            let what = if output.is_some() {
                 String::new()
             } else {
                 let lists: Vec<&str> = rules.outputs.iter().filter(|(_, _, m)| *m > 1).map(|(o, ..)| *o).collect();
-                format!(" (lists are for {})", lists.join(" and "))
+                if lists.is_empty() {
+                    " (a vector holds more: vec2, vec3, vec4)".to_string()
+                } else {
+                    format!(" (lists are for {}; a vector holds more: vec2, vec3, vec4)", lists.join(" and "))
+                }
             };
             return Err(ExprError { message: format!("'{}' takes {takes}{what}", a.name), span: a.span });
         }
-        let values: Vec<Node> = a.values.into_iter().map(|v| fold(remap(v, &map, &mut read, vars.len()))).collect();
+        let (values, dims): (Vec<Node>, Vec<u8>) =
+            a.values.into_iter().map(|(v, d)| (fold(remap(v, &map, &mut read, vars.len())), d)).unzip();
         set[local] = true;
-        statements.push(Statement { local, values, span: a.name_span });
+        statements.push(Statement { local, values, dims, span: a.name_span });
     }
+    let value = value.into_iter().map(|(v, d)| (fold(remap(v, &map, &mut read, vars.len())), d)).collect();
     let outputs = rules.outputs.len();
     let unread = (outputs..locals.len()).filter(|&l| !read[l]).map(|l| locals[l].clone()).collect();
-    Ok(Script { statements, vars, locals, set, unread })
+    Ok(Linked { statements, value, vars, locals, local_dims, set, unread })
+}
+
+/// Read a script of the language `rules` speaks.
+pub fn compile_script(src: &str, rules: &ScriptRules) -> Result<Script, ExprError> {
+    if src.len() > MAX_SCRIPT {
+        return Err(ExprError {
+            message: format!("The program is too long (at most {MAX_SCRIPT} characters)"),
+            span: Span::new(0, src.len()),
+        });
+    }
+    let tokens = lexer::tokenize(src);
+    let outputs: Vec<&str> = rules.outputs.iter().map(|(o, ..)| *o).collect();
+    let mut parser = Parser::new(&tokens);
+    let (assignments, _) = parser.parse_program(false, &outputs)?;
+    let linked = link(assignments, Vec::new(), &parser, rules)?;
+    Ok(Script {
+        statements: linked.statements,
+        vars: linked.vars,
+        locals: linked.locals,
+        local_dims: linked.local_dims,
+        set: linked.set,
+        unread: linked.unread,
+    })
 }
 
 /// Why `name` cannot be set, if it cannot: a function, a constant, or a built-in.
@@ -220,6 +293,7 @@ fn remap(node: Node, map: &[usize], read: &mut [bool], inputs: usize) -> Node {
             let a = remap(*a, map, read, inputs);
             Node::Cond(Box::new(c), Box::new(a), Box::new(remap(*b, map, read, inputs)))
         }
+        Node::Swizzle(base, places) => Node::Swizzle(Box::new(remap(*base, map, read, inputs)), places),
         n @ Node::Num(_) => n,
     }
 }
@@ -254,28 +328,7 @@ pub fn script_vars_lenient(src: &str, rules: &'static ScriptRules) -> Vec<String
     let own = |name: &str| rules.builtins.contains(&name) || rules.outputs.iter().any(|(o, ..)| *o == name);
     match &*compile_script_cached(src, rules) {
         Ok(s) => s.vars.iter().filter(|v| !own(v)).cloned().collect(),
-        Err(_) => {
-            let tokens = lexer::tokenize(src);
-            let set: Vec<&str> = tokens
-                .windows(2)
-                .filter_map(|w| match (&w[0].kind, &w[1].kind) {
-                    (TokenKind::Ident(name), TokenKind::Assign) => Some(name.as_str()),
-                    _ => None,
-                })
-                .collect();
-            let mut vars: Vec<String> = Vec::new();
-            for (i, t) in tokens.iter().enumerate() {
-                if let TokenKind::Ident(name) = &t.kind {
-                    let next = tokens.get(i + 1).map(|t| &t.kind);
-                    let called = matches!(next, Some(TokenKind::LParen));
-                    let setting = matches!(next, Some(TokenKind::Assign));
-                    if !called && !setting && !builtins::is_builtin(name) && !own(name) && !set.contains(&name.as_str()) && !vars.contains(name) {
-                        vars.push(name.clone());
-                    }
-                }
-            }
-            vars
-        }
+        Err(_) => super::words_read(src, &own),
     }
 }
 
@@ -291,7 +344,7 @@ pub fn calls_rand(node: &Node) -> bool {
     match node {
         Node::Call(Func::Rand, _) => true,
         Node::Call(_, args) => args.iter().any(calls_rand),
-        Node::Unary(_, a) => calls_rand(a),
+        Node::Unary(_, a) | Node::Swizzle(a, _) => calls_rand(a),
         Node::Binary(_, a, b) => calls_rand(a) || calls_rand(b),
         Node::Cond(c, a, b) => calls_rand(c) || calls_rand(a) || calls_rand(b),
         Node::Num(_) | Node::Var(_) => false,
@@ -370,6 +423,12 @@ mod tests {
         assert!(error("size = 1, 2, 3").message.contains("1 to 2 values"));
         assert!(error("x = 1, 2").message.contains("'x' takes one value"));
         assert!(error("k = 1, 2").message.contains("lists are for size and color"));
+        // An output of a vector takes its components.
+        assert_eq!(run("size = vec2(0.2, 0.1)", &[])[1], vec![0.2, 0.1]);
+        assert_eq!(run("color = vec3(1, 0.5, 0)", &[])[2], vec![1.0, 0.5, 0.0]);
+        assert!(error("size = vec3(1, 2, 3)").message.contains("1 to 2 values"));
+        // A name of the program's own holds a vector.
+        assert_eq!(run("p = vec2(0.25, 0.75); x = p.y; size = p", &[])[..2], [vec![0.75], vec![0.25, 0.75]]);
         // A list is read as its first value.
         assert_eq!(run("size = 0.3, 0.7; x = size", &[])[0], vec![0.3]);
     }

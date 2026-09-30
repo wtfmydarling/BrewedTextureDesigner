@@ -300,7 +300,7 @@ fn evaluate_value(graph: &Graph, node: &Node, results: &Evaluation, e: &mut Node
                         e.vars.push(VarInfo { name: name.clone(), value: v, source });
                     }
                     if program.components() > 1 {
-                        e.errors.push("A list of values makes a color in Pixel Math: Math gives one value".into());
+                        e.errors.push("Math gives one number: a vector, or a list of values, makes a color in Pixel Math".into());
                         return None;
                     }
                     Some(Value::Float(program.eval(&args) as f32))
@@ -400,7 +400,7 @@ mod tests {
         // A list of values is a color of Pixel Math: Math says it gives one.
         set(&mut g, m, "expression", ParamValue::Text("x, 2".into()));
         let ev = evaluate(&g);
-        assert!(ev.node(m).unwrap().error().unwrap().contains("Math gives one value"));
+        assert!(ev.node(m).unwrap().error().unwrap().contains("Math gives one number"));
         // Pixel Math: gray for one value, color for a list.
         let pm = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
         let kind = |g: &Graph| crate::nodes::image_kind(NodeKind::PIXEL_MATH, &stored_params(g.node(pm).unwrap()), &[]);

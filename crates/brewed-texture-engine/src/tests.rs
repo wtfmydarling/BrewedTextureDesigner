@@ -3235,3 +3235,59 @@ fn fx_maps_as_pictures() {
         image::RgbaImage::from_raw(SIZE, SIZE, rgba).unwrap().save(file).unwrap();
     }
 }
+
+/// Pixel Math with vectors: the channels of an image (`img.rgb`), vectors made and worked on
+/// component by component, a value given a name before it is read, and random numbers of each
+/// pixel.
+#[test]
+fn pixel_math_with_vectors_and_names() {
+    use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT};
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let pm = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
+    let colored = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    set(&mut g, colored, "color", ParamValue::Color([0.2, 0.4, 0.6, 1.0]));
+    set(&mut g, pm, "expression", ParamValue::Text("img.bgr * 0.5".into()));
+    g.connect(colored, "o:output", pm, &brewed_texture_core::graph::var_socket_key("img")).unwrap();
+    let px = eval_read(&mut e, &g, pm);
+    assert_eq!(e.image(pm).unwrap().format(), COLOR_FORMAT);
+    let p = pixel(&px, 50, 60);
+    assert!(close(p[0], 0.3, 1e-3) && close(p[1], 0.2, 1e-3) && close(p[2], 0.1, 1e-3) && p[3] == 1.0, "{p:?}");
+    // A channel read anywhere.
+    set(&mut g, pm, "expression", ParamValue::Text("sample(img, 0.5, 0.5).g".into()));
+    let p = pixel(&eval_read(&mut e, &g, pm), 3, 3);
+    assert!(close(p[0], 0.4, 1e-3), "{p:?}");
+    assert_eq!(e.image(pm).unwrap().format(), GRAY_FORMAT);
+    // A name given a vector, then the value: the normal of a dome, how much it faces up.
+    set(&mut g, pm, "expression", ParamValue::Text("n = vec3(u - 0.5, v - 0.5, 0.5)\n# how much it faces up\nnormalize(n).z".into()));
+    let px = eval_read(&mut e, &g, pm);
+    let at = |x: u32, y: u32| {
+        let (u, v) = ((x as f32 + 0.5) / RES as f32 - 0.5, (y as f32 + 0.5) / RES as f32 - 0.5);
+        0.5 / (u * u + v * v + 0.25).sqrt()
+    };
+    for (x, y) in [(128, 128), (0, 0), (40, 200)] {
+        assert!(close(pixel(&px, x, y)[0], at(x, y), 2e-3), "({x}, {y}): {} not {}", pixel(&px, x, y)[0], at(x, y));
+    }
+    // A list of a vector and a number: red and green from the vector, blue.
+    set(&mut g, pm, "expression", ParamValue::Text("vec2(0.25, 0.5), 0.75".into()));
+    assert_eq!(pixel(&eval_read(&mut e, &g, pm), 7, 7), [0.25, 0.5, 0.75, 1.0]);
+    // Random numbers of each pixel: the same every time, spread from 0 to 1.
+    set(&mut g, pm, "expression", ParamValue::Text("rand(1)".into()));
+    let noise = eval_read(&mut e, &g, pm);
+    assert_eq!(eval_read(&mut e, &g, pm), noise);
+    assert!((mean(&noise) - 0.5).abs() < 0.02, "{}", mean(&noise));
+    assert_ne!(pixel(&noise, 1, 1), pixel(&noise, 2, 1));
+    assert!(e.gpu.take_errors().is_empty());
+}
+
+/// An FX-Map program holds vectors: of its own names, and as the values of its lists.
+#[test]
+fn fx_map_programs_hold_vectors() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let fx = fx_map(&mut g, "p = vec2(0.25, 0.5)\nx = p.x; y = p.y\nsize = vec2(0.25, 0.25)\ncolor = vec3(1, 0.5, 0)", 1, (0, 0), MAX);
+    let px = eval_read(&mut e, &g, fx);
+    assert_eq!(pixel(&px, 64, 128), [1.0, 0.5, 0.0, 1.0]);
+    assert_eq!(pixel(&px, 192, 128), [0.0, 0.0, 0.0, 1.0]);
+    assert!(e.gpu.take_errors().is_empty());
+}

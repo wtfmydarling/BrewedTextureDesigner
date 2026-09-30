@@ -224,8 +224,8 @@ fn splat_fragment(s: Splat) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// How many values each local of `script` has in the shader: an output as many as it takes at
-/// most, a name of the program's own one.
+/// How many variables of the shader each local of `script` is: an output a number for each of
+/// the values it takes at most; a name of the program's own one, a number or a vector.
 fn widths(script: &Script) -> Vec<usize> {
     (0..script.locals.len()).map(|l| FX_MAP_OUTPUTS.get(l).map_or(1, |(_, _, most)| *most)).collect()
 }
@@ -322,38 +322,67 @@ pub fn fx_map(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         }
     }
 
-    // The program as WGSL: each local a variable a value, from what it is at the start.
+    // The program as WGSL: each local a variable a value, from what it is at the start (a name
+    // of the program's own, a number or a vector).
     let widths = widths(script);
     let inputs = script.vars.len();
     let var = |k: usize| if k < inputs { exprs[k].clone() } else { format!("l{}_0", k - inputs) };
+    let texel = |k: usize| match image_of.get(k).copied().flatten() {
+        Some(i) => format!("imgv{i}"),
+        None => format!("vec4<f32>(vec3<f32>({}), 1.0)", var(k)),
+    };
+    let sample_texel = |k: usize, x: &str, y: &str| match image_of.get(k).copied().flatten() {
+        Some(i) => format!("widen(sample_bilinear(t{i}, vec2<f32>({x}, {y}), P.tiling), gray_input({}u))", 4 + i),
+        None => texel(k),
+    };
     let sample = |k: usize, x: &str, y: &str| match image_of.get(k).copied().flatten() {
-        Some(i) => format!("chan(widen(sample_bilinear(t{i}, vec2<f32>({x}, {y}), P.tiling), gray_input({}u)))", 4 + i),
+        Some(_) => format!("chan({})", sample_texel(k, x, y)),
         None => var(k),
     };
+    let dim = |k: usize| script.var_dim(k);
+    let env = expr::wgsl::Env { var: &var, dim: &dim, texel: &texel, sample: &sample, sample_texel: &sample_texel };
     let mut program = String::new();
     for (l, width) in widths.iter().enumerate() {
         let start = FX_MAP_STARTS.get(l).copied().unwrap_or(&[]);
+        let own = script.local_dims[l];
+        if l >= FX_MAP_OUTPUTS.len() && own > 1 {
+            let ty = expr::wgsl::wgsl_type(own);
+            program.push_str(&format!("    var l{l}_0: {ty} = {ty}(0.0);\n"));
+            continue;
+        }
         for j in 0..*width {
             let v = start.get(j).copied().unwrap_or(0.0);
             program.push_str(&format!("    var l{l}_{j}: f32 = {v:?};\n"));
         }
     }
-    for (l, values) in expr::wgsl::statements_wgsl(script, &var, &sample) {
+    for (l, values) in expr::wgsl::statements_wgsl(script, &env) {
         // All of a list worked out before any of it is set (it may read what it sets).
         program.push_str("    {\n");
-        for (j, v) in values.iter().enumerate() {
+        let mut components: Vec<String> = Vec::new();
+        for (j, (v, d)) in values.iter().enumerate() {
             program.push_str(&format!("        let a{j} = {v};\n"));
-        }
-        for j in 0..widths[l] {
-            // One value for a size is its width and its height; three for a color, an opaque one.
-            let value = if j < values.len() {
-                format!("a{j}")
-            } else if values.len() == 1 {
-                "a0".to_string()
+            if *d == 1 || l >= FX_MAP_OUTPUTS.len() {
+                components.push(format!("a{j}"));
             } else {
-                "1.0".to_string()
-            };
-            program.push_str(&format!("        l{l}_{j} = {value};\n"));
+                components.extend(["x", "y", "z", "w"].iter().take(usize::from(*d)).map(|c| format!("a{j}.{c}")));
+            }
+        }
+        if l >= FX_MAP_OUTPUTS.len() {
+            // A name of the program's own: its one value.
+            program.push_str(&format!("        l{l}_0 = a0;\n"));
+        } else {
+            for j in 0..widths[l] {
+                // One value for a size is its width and its height; three for a color, an
+                // opaque one.
+                let value = if j < components.len() {
+                    components[j].clone()
+                } else if components.len() == 1 {
+                    components[0].clone()
+                } else {
+                    "1.0".to_string()
+                };
+                program.push_str(&format!("        l{l}_{j} = {value};\n"));
+            }
         }
         program.push_str("    }\n");
     }
@@ -362,7 +391,8 @@ pub fn fx_map(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     for i in 0..images.len() {
         bindings.push_str(&format!("@group(0) @binding({}) var t{i}: texture_2d<f32>;\n", 5 + i));
         // Read at the middle of the cell.
-        reads.push_str(&format!("    let img{i} = chan(widen(sample_bilinear(t{i}, vec2<f32>(cu, cv), P.tiling), gray_input({}u)));\n", 4 + i));
+        reads.push_str(&format!("    let imgv{i} = widen(sample_bilinear(t{i}, vec2<f32>(cu, cv), P.tiling), gray_input({}u));\n", 4 + i));
+        reads.push_str(&format!("    let img{i} = chan(imgv{i});\n"));
     }
     let source = format!(
         "{}{}{}",

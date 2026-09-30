@@ -44,6 +44,14 @@ pub enum Func {
     Hash,
     Rand,
     Sample,
+    Vec2,
+    Vec3,
+    Vec4,
+    Dot,
+    Length,
+    Distance,
+    Normalize,
+    Cross,
 }
 
 pub const VARIADIC: usize = usize::MAX;
@@ -127,7 +135,60 @@ pub static FUNCTIONS: &[FuncInfo] = &[
         "sample(image, x, y)",
         "Pixel Math: the image input at (x, y), from 0 to 1 like u and v, between pixels; a value is the same everywhere",
     ),
+    f("vec2", Func::Vec2, 1, 2, "vec2(x, y)", "A vector of two components (one value: both)"),
+    f("vec3", Func::Vec3, 1, 3, "vec3(x, y, z)", "A vector of three, as a color r, g, b; vec3(v.xy, z) too (one value: all three)"),
+    f("vec4", Func::Vec4, 1, 4, "vec4(x, y, z, w)", "A vector of four, as a color r, g, b, a (one value: all four)"),
+    f("dot", Func::Dot, 2, 2, "dot(a, b)", "Dot product of two vectors"),
+    f("length", Func::Length, 1, 1, "length(v)", "Length of a vector"),
+    f("distance", Func::Distance, 2, 2, "distance(a, b)", "Distance between two points"),
+    f("normalize", Func::Normalize, 1, 1, "normalize(v)", "The vector of length 1 pointing the way v does"),
+    f("cross", Func::Cross, 2, 2, "cross(a, b)", "Cross product of two vec3"),
 ];
+
+/// How many components a call of `func` makes of arguments of `dims` components, or why it
+/// cannot (the argument count is already right).
+pub fn result_dim(func: Func, dims: &[u8]) -> Result<u8, String> {
+    let widest = dims.iter().copied().max().unwrap_or(1);
+    let describe = super::parser::describe_dim;
+    match func {
+        // Numbers only.
+        Func::Hash | Func::Rand | Func::Hypot => match dims.iter().find(|d| **d > 1) {
+            Some(d) => Err(format!("takes numbers, not {}", describe(*d))),
+            None => Ok(1),
+        },
+        Func::Sample => match dims.iter().skip(1).find(|d| **d > 1) {
+            Some(d) => Err(format!("x and y are numbers, not {}", describe(*d))),
+            None => Ok(1),
+        },
+        Func::If if dims[0] > 1 => Err(format!("the condition is a number, not {}", describe(dims[0]))),
+        Func::Vec2 | Func::Vec3 | Func::Vec4 => {
+            let n = match func {
+                Func::Vec2 => 2,
+                Func::Vec3 => 3,
+                _ => 4,
+            };
+            let given: u8 = dims.iter().sum();
+            if (dims.len() == 1 && dims[0] == 1) || given == n {
+                Ok(n)
+            } else {
+                let parts: Vec<String> = dims.iter().map(|d| d.to_string()).collect();
+                Err(format!("takes {n} components, not {} ({})", given, parts.join(" + ")))
+            }
+        }
+        Func::Dot | Func::Distance if dims[0] != dims[1] => {
+            Err(format!("takes two of as many components, not {} and {}", describe(dims[0]), describe(dims[1])))
+        }
+        Func::Dot | Func::Distance | Func::Length => Ok(1),
+        Func::Normalize => Ok(dims[0]),
+        Func::Cross if dims[0] != 3 || dims[1] != 3 => Err(format!("takes two vec3, not {} and {}", describe(dims[0]), describe(dims[1]))),
+        Func::Cross => Ok(3),
+        // Of each component: a number goes with a vector as a vector of it.
+        _ => match dims.iter().find(|d| **d > 1 && **d != widest) {
+            Some(d) => Err(format!("{} and {} do not go together", describe(*d), describe(widest))),
+            None => Ok(if func == Func::If { dims[1].max(dims[2]) } else { widest }),
+        },
+    }
+}
 
 pub struct ConstInfo {
     pub name: &'static str,
@@ -274,6 +335,13 @@ pub fn call(func: Func, a: &[f64]) -> f64 {
         Func::Hash => pcg_hash((x as f32).to_bits()) as f64 / 4_294_967_296.0,
         // Of nothing in particular: the random numbers of seed 0.
         Func::Rand => super::script::rand(0, x),
+        // (Of numbers: what the vectors of them are, see `super::eval_with`.)
+        Func::Vec2 | Func::Vec3 | Func::Vec4 => x,
+        Func::Dot => x * y,
+        Func::Length => x.abs(),
+        Func::Distance => (x - y).abs(),
+        Func::Normalize => call(Func::Sign, &[x]),
+        Func::Cross => 0.0,
         // A value is the same wherever it is read: only an image of Pixel Math differs.
         Func::Sample => x,
     }

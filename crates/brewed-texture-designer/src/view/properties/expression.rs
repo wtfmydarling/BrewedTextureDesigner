@@ -201,7 +201,11 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
             );
         }
         list = list.push(
-            text("Operators: + - * / % ^ (or **), < <= > >= == !=, && || !, cond ? a : b, implicit 2x")
+            text(
+                "Operators: + - * / % ^ (or **), < <= > >= == !=, && || !, cond ? a : b, implicit 2x · Vectors: vec2, vec3, \
+                 vec4, worked on component by component; .x .xy .rgb … take their components (of an image input, its \
+                 channels) · name = value lines before the value (or ; between them) give names values; # comments",
+            )
                 .size(style::SMALL)
                 .color(style::TEXT_DIM),
         );

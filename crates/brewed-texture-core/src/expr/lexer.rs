@@ -35,6 +35,8 @@ pub enum TokenKind {
     Assign,
     /// `;`: between the statements of a script.
     Semicolon,
+    /// `.`: before the channels taken of a value (`c.rgb`).
+    Dot,
     /// Something the language does not understand, with a human readable reason.
     Error(String),
     Eof,
@@ -68,6 +70,7 @@ impl TokenKind {
             TokenKind::Colon => "':'".into(),
             TokenKind::Assign => "'=' (to compare values, write '==')".into(),
             TokenKind::Semicolon => "';'".into(),
+            TokenKind::Dot => "'.'".into(),
             TokenKind::Error(_) => "invalid input".into(),
             TokenKind::Eof => "end of expression".into(),
         }
@@ -78,6 +81,8 @@ impl TokenKind {
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
+    /// Whether it begins a line: a line break is between it and the token before.
+    pub line: bool,
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -145,13 +150,14 @@ pub fn tokenize(src: &str) -> Vec<Token> {
                 Ok(v) => TokenKind::Number(v),
                 Err(_) => TokenKind::Error(format!("Invalid number '{text}'")),
             };
-            tokens.push(Token { kind, span: Span::new(start, end) });
+            tokens.push(Token { kind, span: Span::new(start, end), line: false });
             // A second dot right after a number ("1.2.3") is a typo worth naming.
             if char_at(j) == Some('.') {
                 let s = byte_at(j);
                 tokens.push(Token {
                     kind: TokenKind::Error("Unexpected '.' (a number can only have one decimal point)".into()),
                     span: Span::new(s, byte_at(j + 1)),
+                    line: false,
                 });
                 j += 1;
             }
@@ -165,7 +171,7 @@ pub fn tokenize(src: &str) -> Vec<Token> {
                 j += 1;
             }
             let end = byte_at(j);
-            tokens.push(Token { kind: TokenKind::Ident(src[start..end].to_string()), span: Span::new(start, end) });
+            tokens.push(Token { kind: TokenKind::Ident(src[start..end].to_string()), span: Span::new(start, end), line: false });
             i = j;
             continue;
         }
@@ -196,6 +202,7 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             ('π', _) => (TokenKind::Ident("pi".into()), 1),
             ('τ', _) => (TokenKind::Ident("tau".into()), 1),
             ('=', _) => (TokenKind::Assign, 1),
+            ('.', _) => (TokenKind::Dot, 1),
             (';', _) => (TokenKind::Semicolon, 1),
             ('&', _) => (TokenKind::Error("Unexpected '&' (use '&&' for logical AND)".into()), 1),
             ('|', _) => (TokenKind::Error("Unexpected '|' (use '||' for logical OR)".into()), 1),
@@ -204,11 +211,17 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             _ => (TokenKind::Error(format!("Unexpected character '{c}'")), 1),
         };
         let end = byte_at(i + len);
-        tokens.push(Token { kind, span: Span::new(start, end) });
+        tokens.push(Token { kind, span: Span::new(start, end), line: false });
         i += len;
     }
 
-    tokens.push(Token { kind: TokenKind::Eof, span: Span::new(src.len(), src.len()) });
+    tokens.push(Token { kind: TokenKind::Eof, span: Span::new(src.len(), src.len()), line: false });
+    // Which begin lines (what is between tokens is blanks and comments).
+    let mut end = 0;
+    for t in &mut tokens {
+        t.line = src.get(end..t.span.start).is_some_and(|between| between.contains('\n'));
+        end = t.span.end;
+    }
     tokens
 }
 

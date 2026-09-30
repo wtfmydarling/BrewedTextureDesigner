@@ -1444,12 +1444,25 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         exprs.push(e);
     }
     // `sample(image, x, y)`: the image between its pixels, wrapping where the node tiles; a
-    // variable that is not an image is the same everywhere.
-    let sample = |i: usize, x: &str, y: &str| match image_of[i] {
-        Some((k, gray)) => format!("chan(widen(sample_bilinear(t{k}, vec2<f32>({x}, {y}), P.tiling), {gray}))"),
-        None => exprs[i].clone(),
+    // variable that is not an image is the same everywhere. Its channels (`img.rgb`), read
+    // where they are taken; those of a value, the value in red, green and blue, opaque.
+    let inputs = program.vars.len();
+    let var = |i: usize| if i < inputs { exprs[i].clone() } else { format!("l{}", i - inputs) };
+    let texel = |i: usize| match image_of.get(i).copied().flatten() {
+        Some((k, _)) => format!("imgv{k}"),
+        None => format!("vec4<f32>(vec3<f32>({}), 1.0)", var(i)),
     };
-    let values = expr::wgsl::components_wgsl(program, &|i| exprs[i].clone(), &sample);
+    let sample_texel = |i: usize, x: &str, y: &str| match image_of.get(i).copied().flatten() {
+        Some((k, gray)) => format!("widen(sample_bilinear(t{k}, vec2<f32>({x}, {y}), P.tiling), {gray})"),
+        None => texel(i),
+    };
+    let sample = |i: usize, x: &str, y: &str| match image_of.get(i).copied().flatten() {
+        Some(_) => format!("chan({})", sample_texel(i, x, y)),
+        None => var(i),
+    };
+    let dim = |i: usize| program.var_dim(i);
+    let env = expr::wgsl::Env { var: &var, dim: &dim, texel: &texel, sample: &sample, sample_texel: &sample_texel };
+    let (body, values) = expr::wgsl::program_wgsl(program, &env, &|k| format!("l{k}"));
 
     let mut source = String::new();
     source.push_str(crate::gpu::COMMON_WGSL);
@@ -1475,12 +1488,15 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
          fn main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {\n\
              let gid = pixel(at);\n\
              let size = target_size();\n\
-             let uv = out_uv(gid.xy, size);\n",
+             let uv = out_uv(gid.xy, size);\n\
+             fx_seed = fx_pcg(gid.x ^ fx_pcg(gid.y + 0x632be5abu));\n",
     );
     for (i, image) in images.iter().enumerate() {
         let gray = image.is_gray();
-        source.push_str(&format!("    let img{i} = chan(widen(read_input(t{i}, gid.xy, size, P.tiling), {gray}));\n"));
+        source.push_str(&format!("    let imgv{i} = widen(read_input(t{i}, gid.xy, size, P.tiling), {gray});\n"));
+        source.push_str(&format!("    let img{i} = chan(imgv{i});\n"));
     }
+    source.push_str(&body);
     // One value: gray; a list: red, green, blue and alpha (the missing ones none, and opaque).
     let result = match values.as_slice() {
         [r] => format!("    let r = finite({r});\n    return vec4<f32>(r, r, r, 1.0);\n}}\n"),
