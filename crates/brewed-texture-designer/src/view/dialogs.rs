@@ -91,6 +91,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
         Dialog::Settings(settings) => crate::view::settings::view(app, settings),
         Dialog::NewGraph(dialog) => new_graph(app, dialog),
         Dialog::Export(dialog) => export(app, dialog),
+        Dialog::Versions(dialog) => versions(app, dialog),
         Dialog::Shortcuts => {
             let line = |keys: String, what: String| {
                 row![
@@ -311,6 +312,70 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
         .align_y(Alignment::Center),
     );
     modal(dialog_box(body, 680.0), None)
+}
+
+/// The earlier versions of a package: each, when it was kept and what it is, to be restored in
+/// place of the package or opened beside it.
+fn versions<'a>(app: &'a App, dialog: &'a crate::app::versions::VersionsDialog) -> Element<'a, Message> {
+    use brewed_texture_core::versions::Kind;
+    use crate::app::versions::VersionsMessage as V;
+    let name = dialog.path.file_name().map_or_else(|| dialog.path.display().to_string(), |n| n.to_string_lossy().into_owned());
+    let mut list = column![].spacing(2);
+    for version in &dialog.list {
+        let what = match version.kind {
+            Kind::Saved => "Saved",
+            Kind::Found => "The file as it was before a save wrote over it",
+            Kind::Replaced => "Unsaved changes, as they were when an earlier version was restored",
+        };
+        list = list.push(
+            container(
+                row![
+                    icon(Icon::Package, 16.0, style::TEXT_DIM),
+                    column![
+                        text(crate::clock::said(version.time)).size(style::TEXT_SIZE).font(style::bold()),
+                        text(what).size(style::SMALL).color(style::TEXT_DIM),
+                    ]
+                    .spacing(2)
+                    .width(Length::Fill),
+                    button(text("Open a Copy").size(style::TEXT_SIZE))
+                        .padding([5, 12])
+                        .style(style::flat_button)
+                        .on_press(Message::Versions(V::Copy(version.file.clone()))),
+                    button(text("Restore").size(style::TEXT_SIZE))
+                        .padding([5, 12])
+                        .style(style::button)
+                        .on_press(Message::Versions(V::Restore(version.file.clone()))),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+            )
+            .padding([6, 8]),
+        );
+    }
+    let kept = app.settings.keep_versions;
+    if dialog.list.is_empty() {
+        let none = if kept == 0 { "None: earlier versions are not kept (Settings → Recovery)." } else { "None yet: each save keeps one." };
+        list = list.push(text(none).size(style::TEXT_SIZE).color(style::TEXT_DIM));
+    }
+    let restoring = if app.package_doc(dialog.key).is_some_and(|d| d.is_dirty()) {
+        "Restored, a version takes the package's place, not saved yet: saving saves it. Its unsaved changes are kept as a version first."
+    } else {
+        "Restored, a version takes the package's place, not saved yet: saving saves it. The file stays as it is until then."
+    };
+    let body = column![
+        text(format!("History of {name}")).size(18).font(style::bold()),
+        text(format!("Each save keeps the package as it was saved: the newest {kept} of it, beside the settings, never beside the package."))
+            .size(style::TEXT_SIZE)
+            .color(style::TEXT_DIM),
+        container(scrollable(list).height(Length::Shrink).style(style::scrollable)).max_height(360.0),
+        text(restoring).size(style::SMALL).color(style::TEXT_FAINT),
+        row![
+            space().width(Length::Fill),
+            button(text("Close").size(style::TEXT_SIZE)).padding([6, 14]).style(style::button).on_press(Message::Dialog(None)),
+        ],
+    ]
+    .spacing(12);
+    modal(dialog_box(body, 620.0), None)
 }
 
 /// Id of the name field of the New Package dialog (it takes the keyboard as it opens).

@@ -409,6 +409,16 @@ pub fn read_graphs(path: &Path) -> Result<Vec<GraphSummary>, String> {
     Ok(graphs)
 }
 
+/// The files the package file at `path` uses, as its nodes say them (`embedded:<sha256>.<ext>`
+/// for one it holds): read without the rest of the package.
+pub fn read_files(path: &Path) -> Result<Vec<String>, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+    let mut archive = Archive::new(BufReader::new(file))?;
+    let manifest: Manifest =
+        serde_json::from_slice(&archive.read(MANIFEST, MAX_JSON)?).map_err(|e| format!("The package cannot be read: {e}"))?;
+    Ok(manifest.files.into_iter().filter_map(|f| serde_json::from_value::<FileItem>(f).ok()).map(|f| f.file).collect())
+}
+
 /// Read a package file of `bytes`, which is in `dir`: its relative paths are taken from there.
 pub fn from_bytes(bytes: &[u8], dir: Option<&Path>) -> Result<Loaded, String> {
     read_from(Cursor::new(bytes), dir)

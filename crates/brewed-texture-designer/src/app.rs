@@ -14,6 +14,7 @@ pub(crate) mod home;
 pub(crate) mod library;
 pub(crate) mod packages;
 pub(crate) mod settings_dialog;
+pub(crate) mod versions;
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -56,6 +57,9 @@ pub struct StartupOptions {
     /// Where unsaved work is kept to be recovered after a crash (see [`autosave`]), and what
     /// programs that stopped kept is found. `None` keeps nothing.
     pub recovery: Option<PathBuf>,
+    /// Where the earlier versions of the packages are kept as they are saved (see [`versions`]).
+    /// `None` keeps none.
+    pub versions: Option<PathBuf>,
     /// The settings, and where they are kept (by default: as they are by default, nowhere).
     pub settings: settings::Store,
     /// The graphics API is the settings' choice, given in the environment (see
@@ -239,6 +243,8 @@ pub enum Dialog {
     NewGraph(home::NewGraphDialog),
     /// What is exported of the graph, in what and where (see [`export_dialog`]).
     Export(export_dialog::ExportDialog),
+    /// The earlier versions of a package (see [`versions`]).
+    Versions(versions::VersionsDialog),
     /// Files a package names that are not there (see [`MissingFiles`]).
     Missing(MissingFiles),
 }
@@ -518,6 +524,8 @@ pub struct App {
     /// The pictures of package files, as PNG, by path: what their files had, or were saved with
     /// (see [`home`]).
     pictures: HashMap<String, Arc<Vec<u8>>>,
+    /// Where the earlier versions of the packages are kept (see [`versions`]).
+    versions: Option<brewed_texture_core::versions::Versions>,
     /// The tools for developing the program: screenshots, the autopilot (see [`dev`]).
     #[cfg(any(test, feature = "dev-tools"))]
     dev: dev::Dev,
@@ -798,6 +806,8 @@ pub enum Message {
     NewGraph(home::NewGraphMessage),
     /// The export dialog (see [`export_dialog`]).
     Export(export_dialog::ExportMessage),
+    /// The earlier versions of a package (see [`versions`]).
+    Versions(versions::VersionsMessage),
     PanelPress(DragPayload),
     PanelAdd(DragPayload),
     // properties
@@ -820,7 +830,8 @@ pub enum Message {
     /// Quitting: whether the window fills the screen, for the next session.
     Quitting(bool),
     /// A package was written, or could not be (see `App::save_package`): its key, and where.
-    Saved(u64, PathBuf, Result<(), String>),
+    /// A package was saved (and why its version could not be kept, if it could not), or not.
+    Saved(u64, PathBuf, Result<Option<String>, String>),
     /// A package file was read, with the packages it uses, or could not be (see
     /// `App::open_file`): where, and whether it takes the place of the package being edited.
     Opened(String, bool, Result<Arc<packages::Opened>, String>),
@@ -1063,6 +1074,7 @@ impl App {
             host: eyedropper::Host::default(),
             library: library::Library::default(),
             pictures: HashMap::new(),
+            versions: opts.versions.clone().map(brewed_texture_core::versions::Versions::new),
             #[cfg(any(test, feature = "dev-tools"))]
             dev: dev::Dev::new(&opts.dev),
         };
@@ -1073,6 +1085,10 @@ impl App {
         }
         if let Some(root) = &opts.recovery {
             app.start_autosave(root);
+        }
+        // The versions held to what the settings keep now; what no version needs any more goes.
+        if let Some((versions, keep)) = app.versions_kept() {
+            opened.push(Task::perform(blocking(move || versions.tidy(keep)), |_| Message::Tick));
         }
         #[cfg(any(test, feature = "dev-tools"))]
         app.select_at_start();
@@ -2304,6 +2320,7 @@ impl App {
             Message::Home(message) => return self.home_message(message),
             Message::NewGraph(message) => return self.new_graph_message(message),
             Message::Export(message) => return self.export_message(message),
+            Message::Versions(message) => return self.versions_message(message),
             Message::LibraryLooked(found) => return self.library_looked(found),
             Message::LibraryRead { package, graph, name, pos, result } => self.library_read(package, graph, name, pos, result),
             Message::LibraryToggle(c) => {

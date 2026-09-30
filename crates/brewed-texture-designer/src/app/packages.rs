@@ -460,8 +460,18 @@ impl App {
         self.set_status(format!("Saving {}…", path.display()), false);
         let (written, to) = (package.clone(), path.clone());
         self.ui.saving.insert(key, Saving { path: path.display().to_string(), package, then, again: None, open: None });
+        // Its earlier versions (see `versions`): the file it writes over first, if they have not
+        // got it, then it as it is saved. A version that cannot be kept is said, the save done.
+        let versions = self.versions_kept();
         self.in_background(
-            move || project::save_with_picture(&to, &written, &views, current, picture.as_ref().map(|p| p.as_slice())),
+            move || -> Result<Option<String>, String> {
+                let mut unkept = versions.as_ref().and_then(|(v, keep)| v.before_writing(&to, *keep).err());
+                project::save_with_picture(&to, &written, &views, current, picture.as_ref().map(|p| p.as_slice()))?;
+                if let Some((v, keep)) = &versions {
+                    unkept = unkept.or(v.keep(&to, &written, &views, current, brewed_texture_core::versions::Kind::Saved, *keep).err());
+                }
+                Ok(unkept)
+            },
             move |done| Message::Saved(key, path.clone(), done.unwrap_or_else(|| Err("The package was not saved: what wrote it stopped".into()))),
         )
     }
@@ -469,11 +479,14 @@ impl App {
     /// A package was written, or could not be (see [`App::save_package`]): saved if it is as it
     /// was written; what was to follow the save follows. What waited for the packages being
     /// saved goes on once none is.
-    pub(super) fn saved(&mut self, key: u64, path: PathBuf, result: Result<(), String>) -> Task<Message> {
+    pub(super) fn saved(&mut self, key: u64, path: PathBuf, result: Result<Option<String>, String>) -> Task<Message> {
         let Some(saving) = self.ui.saving.remove(&key) else { return Task::none() };
         let task = match result {
-            Ok(()) => {
-                self.set_status(format!("Saved {}", path.display()), false);
+            Ok(unkept) => {
+                match unkept {
+                    None => self.set_status(format!("Saved {}", path.display()), false),
+                    Some(e) => self.set_status(format!("Saved {}, but its version was not kept: {e}", path.display()), true),
+                }
                 // Into a library folder: the Library shows it as it is now.
                 let library = if self.in_library(&path) { self.look_at_library() } else { Task::none() };
                 if let Some(doc) = self.package_doc_mut(key) {

@@ -2,8 +2,6 @@
 //! Open…, and where to learn more; on the right, the packages opened last with their pictures
 //! (Home) or the examples (Learn).
 
-use std::time::SystemTime;
-
 use iced::widget::{button, column, container, image, row, scrollable, space, text};
 use iced::{Alignment, Element, Length, Padding};
 use brewed_texture_core::templates::Example;
@@ -19,21 +17,6 @@ const SIDEBAR: f32 = 230.0;
 
 fn say(message: HomeMessage) -> Message {
     Message::Home(message)
-}
-
-/// How long ago `at` was, in words.
-fn ago(at: SystemTime) -> String {
-    let Ok(since) = SystemTime::now().duration_since(at) else { return "just now".into() };
-    let minutes = since.as_secs() / 60;
-    match minutes {
-        0 => "just now".into(),
-        1 => "a minute ago".into(),
-        2..=59 => format!("{minutes} minutes ago"),
-        60..=119 => "an hour ago".into(),
-        120..=1439 => format!("{} hours ago", minutes / 60),
-        1440..=2879 => "yesterday".into(),
-        _ => format!("{} days ago", minutes / 1440),
-    }
 }
 
 /// A page of the sidebar, lit when it is the one shown.
@@ -119,7 +102,7 @@ fn card(recent: &Recent) -> Element<'_, Message> {
     let when = if !recent.there {
         "Not found where it was".to_string()
     } else {
-        recent.modified.map(ago).unwrap_or_default()
+        recent.modified.map(crate::clock::ago).unwrap_or_default()
     };
     let body = column![
         container(picture).style(style::picture_frame),

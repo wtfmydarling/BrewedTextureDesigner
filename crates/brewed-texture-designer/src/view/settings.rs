@@ -452,6 +452,27 @@ fn library<'a>(app: &App, applied: &Settings, draft: &'a Settings) -> Vec<Elemen
 fn recovery<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>> {
     let d = Settings::default();
     let every = with(&[1, 2, 5, 10, 15, 30].map(Minutes), Minutes(draft.keep_every), |m| m.0);
+    let versions = number(f64::from(draft.keep_versions), 0.0, 100.0)
+        .integer(true)
+        .limits(0.0, 100.0)
+        .default_value(f64::from(d.keep_versions))
+        .on_change(|v| set(Setting::KeepVersions(v.round() as u32)));
+    let saved = group(
+        "Saved Packages",
+        vec![
+            Row::new(
+                "Earlier versions",
+                if draft.keep_versions == 0 {
+                    "None are kept: a save writes over the package, and what it was is gone."
+                } else {
+                    "How many of each package are kept as it is saved: beside the settings, never beside the package. \
+                     File → Package History… brings one back. A file the package holds is kept once, however many hold it."
+                },
+                versions,
+            )
+            .state(applied.keep_versions, draft.keep_versions, d.keep_versions, set(Setting::KeepVersions(d.keep_versions))),
+        ],
+    );
     vec![group(
         "Unsaved Work",
         vec![
@@ -472,7 +493,7 @@ fn recovery<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message
             )
             .state(applied.keep_every, draft.keep_every, d.keep_every, set(Setting::KeepEvery(d.keep_every))),
         ],
-    )]
+    ), saved]
 }
 
 fn graphics<'a>(app: &App, applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>> {

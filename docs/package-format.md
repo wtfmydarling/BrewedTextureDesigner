@@ -310,6 +310,12 @@ crash (`<settings>/Recovery/<session>/<n>.brewtex`). It is a package file with o
 1970>}`), whose paths are as they are in memory (absolute), and whose files are kept beside it
 (`<sha256>.held`), once for all the snapshots of a session, instead of in it.
 
+The earlier versions of a package, kept as it is saved (`<settings>/History/<hash of where the
+package is>/<milliseconds>-<n>-<saved|found|replaced>.brewtex`), are snapshots too, whose files
+are kept once for all the versions of every package (`<settings>/History/files/<sha256>.held`).
+A version of a file that could not be read as a package (`found`, kept before it was written
+over) is that file, byte for byte.
+
 ## Limits of the reader
 
 Brewed Texture Designer reads packages of at most 100 000 entries, with a directory of at most

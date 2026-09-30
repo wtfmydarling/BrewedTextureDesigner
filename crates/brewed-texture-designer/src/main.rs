@@ -6,6 +6,7 @@ mod app;
 #[cfg(any(test, feature = "dev-tools"))]
 mod autopilot;
 mod brand;
+mod clock;
 mod environment;
 mod eyedropper;
 mod gpu;
@@ -231,11 +232,14 @@ fn main() -> iced::Result {
         // Unsaved work, kept to be recovered after a crash, beside the settings (not in the
         // temporary folder, which a system may empty as it starts again after the power went).
         options.recovery = workspace::folder().map(|f| f.join("Recovery"));
+        // The earlier versions of the packages, there too: never beside the packages.
+        options.versions = workspace::folder().map(|f| f.join("History"));
     }
     // The autopilot keeps its own beside its log, as a user's is kept.
     #[cfg(any(test, feature = "dev-tools"))]
     if let Some(flight) = &options.dev.autopilot {
         options.recovery = Some(autopilot::folder(flight.seed).join("recovery"));
+        options.versions = Some(autopilot::folder(flight.seed).join("history"));
     }
 
     // A daemon: besides the main window, the eyedropper opens a window on every monitor.

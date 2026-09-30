@@ -32,6 +32,7 @@ pub mod project;
 pub mod recovery;
 pub mod templates;
 pub mod types;
+pub mod versions;
 
 pub use document::Document;
 pub use edit::{Edit, EditResult};

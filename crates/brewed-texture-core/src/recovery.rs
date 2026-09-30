@@ -154,15 +154,7 @@ impl Orphan {
     /// it is the bytes its name says).
     pub fn load(&self, snapshot: &Snapshot) -> Result<Loaded, String> {
         let mut loaded = crate::project::load(&snapshot.file)?;
-        for resource in &mut loaded.package.resources {
-            let Some(hash) = files::embedded_hash(&resource.path).filter(|_| resource.data.is_none()) else { continue };
-            let Ok(bytes) = std::fs::read(self.dir.join(format!("{hash}.{HELD}"))) else { continue };
-            if files::holds(&resource.path, &bytes) {
-                let bytes = Arc::new(bytes);
-                files::keep(&resource.path, &bytes, &resource.name);
-                resource.data = Some(bytes);
-            }
-        }
+        take_held(&mut loaded.package, |hash| self.dir.join(format!("{hash}.{HELD}")));
         Ok(loaded)
     }
 
@@ -171,6 +163,20 @@ impl Orphan {
         let Orphan { dir, _lock, .. } = self;
         drop(_lock);
         clear(&dir);
+    }
+}
+
+/// Give the files `package` holds that a snapshot kept apart their bytes, read where `apart`
+/// says each of a hash is: each taken only if it is the bytes its name says.
+pub(crate) fn take_held(package: &mut crate::package::Package, apart: impl Fn(&str) -> PathBuf) {
+    for resource in &mut package.resources {
+        let Some(hash) = files::embedded_hash(&resource.path).filter(|_| resource.data.is_none()) else { continue };
+        let Ok(bytes) = std::fs::read(apart(hash)) else { continue };
+        if files::holds(&resource.path, &bytes) {
+            let bytes = Arc::new(bytes);
+            files::keep(&resource.path, &bytes, &resource.name);
+            resource.data = Some(bytes);
+        }
     }
 }
 

@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use brewed_texture_core::graph::{input_socket_key, output_socket_key};
 use brewed_texture_core::{DataType, Edit, NodeId, NodeKind, ParamDef, ParamKind, ParamValue, SocketRef, Value};
 
+use crate::app::versions::VersionsMessage;
 use crate::app::{App, Dialog, DragPayload, ExplorerMessage, GraphMessage, Message, PendingAction, PreviewMessage, SelectMode, SettingsMessage};
 use crate::settings::{FileDialogs, Page, Setting, Settings};
 use crate::view::view3d::{Camera, Move, Shape};
@@ -903,7 +904,39 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                         })),
                     ])
                 }
-                4 => Some(back_home("saving and opening")),
+                // Saved again, changed, and the history of the package looked at.
+                4 => Some(vec![
+                    edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }),
+                    Step::Do(Message::Save),
+                    Step::Wait,
+                    edit(Edit::AddNode { kind: NodeKind::LEVELS, pos: [40.0, 0.0] }),
+                    Step::Do(Message::Versions(VersionsMessage::Open)),
+                    Step::Check(Box::new(|app: &App| match &app.ui.dialog {
+                        Some(Dialog::Versions(dialog)) if dialog.list.len() >= 2 => None,
+                        other => Some(format!("the history of a package saved twice is {other:?}")),
+                    })),
+                ]),
+                // The oldest version (the first save) restored in the package's place, not saved;
+                // the change it replaced kept as a version.
+                5 => {
+                    let Some(Dialog::Versions(dialog)) = &app.ui.dialog else { return Some(Vec::new()) };
+                    let (oldest, expected, file, versions) = (dialog.list.last().map(|v| v.file.clone()), counts, saved.clone(), dialog.list.len());
+                    Some(vec![
+                        Step::Do(Message::Versions(VersionsMessage::Restore(oldest.unwrap_or_default()))),
+                        Step::Wait,
+                        Step::Note("the first save restored".into()),
+                        Step::Check(Box::new(move |app: &App| {
+                            let now = (app.graph().nodes.len(), app.graph().links.len());
+                            let kept = app.versions_kept().map_or(0, |(v, _)| v.of(&file).len());
+                            if !app.doc.is_dirty() || app.doc.path() != Some(&file) || now != expected {
+                                Some(format!("restored, the package is {now:?} (not {expected:?}), at {:?}, dirty {}", app.doc.path(), app.doc.is_dirty()))
+                            } else {
+                                (kept != versions + 1).then(|| format!("{kept} versions after a restore, not {}", versions + 1))
+                            }
+                        })),
+                    ])
+                }
+                6 => Some(back_home("saving and opening")),
                 _ => None,
             }
         }),

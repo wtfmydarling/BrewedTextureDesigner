@@ -474,6 +474,65 @@ fn exports_follow_the_preset_chosen() {
     assert_eq!(w.app.ui.export_preset, Preset::Unreal, "offered next time");
 }
 
+/// Each save keeps a version of the package, beside the settings and never beside it: File →
+/// Package History… lists them, the newest first; one restored takes the package's place, not
+/// saved yet (the unsaved changes it replaces kept as a version first); one opened as a copy is
+/// untitled, beside it.
+#[test]
+fn saved_packages_keep_their_versions() {
+    use crate::app::SettingsMessage;
+    use crate::app::versions::VersionsMessage as V;
+    use brewed_texture_core::versions::{Kind, Versions};
+    let dir = scratch("versions");
+    let opts = StartupOptions { versions: Some(dir.join("History")), ..StartupOptions::default() };
+    let Some(mut w) = Harness::started(Box::new(view::root), Size::new(1280.0, 800.0), opts) else {
+        eprintln!("no GPU for the headless renderer: test skipped");
+        return;
+    };
+    let walls = dir.join("walls.brewtex");
+    let blurs = |p: &brewed_texture_core::package::Package| p.graphs.iter().map(|g| g.graph.nodes_of(NodeKind::BLUR).count()).sum::<usize>();
+    w.send(Message::SavePicked(Some(walls.clone())));
+    let first = blurs(w.app.doc.package());
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
+    w.send(Message::Save);
+    let mut beside: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    beside.sort();
+    assert_eq!(beside, ["History", "walls.brewtex"], "nothing beside the package");
+
+    // Changed, not saved; the first version restored.
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [80.0, 0.0] }));
+    w.send(Message::Versions(V::Open));
+    let Some(Dialog::Versions(dialog)) = w.app.ui.dialog.clone() else { panic!("the history dialog") };
+    assert_eq!(dialog.list.iter().map(|v| v.kind).collect::<Vec<_>>(), [Kind::Saved, Kind::Saved]);
+    w.input(&[]);
+    assert_eq!(texts(&mut w, "History of walls.brewtex").len(), 1);
+    assert_eq!(texts(&mut w, "Restore").len(), 2);
+    w.snapshot("versions");
+    w.send(Message::Versions(V::Restore(dialog.list[1].file.clone())));
+    assert_eq!(w.app.ui.dialog, None);
+    assert!(w.app.doc.is_dirty() && w.app.doc.path() == Some(&walls), "in its place, not saved yet");
+    assert_eq!(blurs(w.app.doc.package()), first, "as it was saved first");
+    let versions = Versions::new(dir.join("History"));
+    let kept = versions.of(&walls);
+    assert_eq!(kept.iter().map(|v| v.kind).collect::<Vec<_>>(), [Kind::Replaced, Kind::Saved, Kind::Saved]);
+    assert_eq!(blurs(&versions.load(&kept[0]).unwrap().package), first + 2, "the unsaved changes, kept");
+
+    // Opened as a copy: untitled, beside it.
+    w.send(Message::Versions(V::Open));
+    let Some(Dialog::Versions(dialog)) = w.app.ui.dialog.clone() else { panic!("the history dialog") };
+    w.send(Message::Versions(V::Copy(dialog.list[0].file.clone())));
+    assert_eq!((w.app.doc.path(), blurs(w.app.doc.package())), (None, first + 2));
+    assert_eq!(w.app.shelf.len(), 1, "beside the package");
+
+    // How many are kept: Settings → Recovery.
+    w.send(Message::Settings(SettingsMessage::Open));
+    w.send(Message::Settings(SettingsMessage::Page(crate::settings::Page::Recovery)));
+    w.input(&[]);
+    assert!(!texts(&mut w, "Earlier versions").is_empty());
+    w.snapshot("settings-recovery");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Pressing a library item, moving onto the graph and releasing adds the node there.
 #[test]
 fn library_items_can_be_dropped_on_the_graph() {

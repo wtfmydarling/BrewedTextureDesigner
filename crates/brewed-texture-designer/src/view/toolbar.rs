@@ -91,6 +91,11 @@ fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
         separator(),
         item("Save", app.key_of(Command::Save), Some(Message::Save)),
         item("Save As…", app.key_of(Command::SaveAs), Some(Message::SaveAs)),
+        item(
+            "Package History…",
+            "",
+            app.doc.path().is_some().then_some(Message::Versions(crate::app::versions::VersionsMessage::Open)),
+        ),
         item("Close Package", "", Some(Message::Explorer(ExplorerMessage::Close(key)))),
         separator(),
         item("Export…", app.key_of(Command::Export), Some(Message::Export(crate::app::export_dialog::ExportMessage::Open))),

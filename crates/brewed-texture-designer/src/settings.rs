@@ -45,6 +45,9 @@ const TEMPLATE: &str = r#"# The settings of Brewed Texture Designer. Edit → Se
 
 # keep: keep unsaved work, to offer it back after a crash (true by default).
 # every_minutes: how often (1 to 60; 2 by default).
+# versions: how many earlier versions of each package are kept as it is saved, beside the
+# settings, never beside the package; File → Package History… brings one back (0 to 100; 20
+# by default; 0 keeps none).
 [recovery]
 
 # Taken when the program starts. api: the graphics API, "auto" (the one wgpu finds best; the
@@ -83,6 +86,9 @@ pub struct Settings {
     /// minutes.
     pub keep_unsaved: bool,
     pub keep_every: u32,
+    /// How many earlier versions of each package are kept as it is saved (see
+    /// `app::versions`).
+    pub keep_versions: u32,
     /// The graphics API, and whether edges are smoothed (taken when the program starts).
     pub graphics: Graphics,
     pub antialiasing: bool,
@@ -103,6 +109,7 @@ impl Default for Settings {
             library_folders: Vec::new(),
             keep_unsaved: true,
             keep_every: 2,
+            keep_versions: 20,
             graphics: Graphics::Auto,
             antialiasing: true,
             shortcuts: Shortcuts::default(),
@@ -141,7 +148,7 @@ impl Page {
             Page::General => "Undo, the packages offered again, the file dialogs, the mouse wheel.",
             Page::Packages => "The files taken into packages, and the graphs made in them.",
             Page::Library => "Folders of packages whose graphs the Library offers as nodes.",
-            Page::Recovery => "Unsaved work kept, to be offered back after a crash.",
+            Page::Recovery => "Unsaved work kept, to be offered back after a crash, and the versions of saved packages.",
             Page::Graphics => "How the program draws: taken when it starts.",
             Page::Shortcuts => "The keys of the commands. Click a key to give another; Esc always closes what is open.",
         }
@@ -160,6 +167,7 @@ pub enum Setting {
     GraphPrecision(Precision),
     KeepUnsaved(bool),
     KeepEvery(u32),
+    KeepVersions(u32),
     Graphics(Graphics),
     Antialiasing(bool),
 }
@@ -177,6 +185,7 @@ impl Settings {
             Setting::GraphPrecision(p) => self.graph_precision = p,
             Setting::KeepUnsaved(on) => self.keep_unsaved = on,
             Setting::KeepEvery(n) => self.keep_every = n.clamp(1, 60),
+            Setting::KeepVersions(n) => self.keep_versions = n.min(100),
             Setting::Graphics(g) => self.graphics = g,
             Setting::Antialiasing(on) => self.antialiasing = on,
         }
@@ -200,6 +209,7 @@ impl Settings {
             Page::Recovery => {
                 self.keep_unsaved = from.keep_unsaved;
                 self.keep_every = from.keep_every;
+                self.keep_versions = from.keep_versions;
             }
             Page::Graphics => {
                 self.graphics = from.graphics;
@@ -342,6 +352,7 @@ fn read(doc: &DocumentMut) -> (Settings, Vec<String>) {
     let folders = get("library", "folders");
     let keep = get("recovery", "keep");
     let every = get("recovery", "every_minutes");
+    let versions = get("recovery", "versions");
     let api = get("graphics", "api");
     let antialiasing = get("graphics", "antialiasing");
     let shortcuts = match doc.get("shortcuts") {
@@ -370,6 +381,7 @@ fn read(doc: &DocumentMut) -> (Settings, Vec<String>) {
         library_folders: texts(folders, "library.folders", &mut said),
         keep_unsaved: boolean(keep, "recovery.keep", d.keep_unsaved, &mut said),
         keep_every: number(every, "recovery.every_minutes", d.keep_every, 1, 60, &mut said),
+        keep_versions: number(versions, "recovery.versions", d.keep_versions, 0, 100, &mut said),
         graphics: named(api, "graphics.api", &graphics, d.graphics, &mut said),
         antialiasing: boolean(antialiasing, "graphics.antialiasing", d.antialiasing, &mut said),
         shortcuts,
@@ -487,6 +499,7 @@ fn write(doc: &mut DocumentMut, before: &Settings, now: &Settings) {
     setting!(library_folders, "library", "folders", Value::Array(now.library_folders.iter().map(String::as_str).collect()));
     setting!(keep_unsaved, "recovery", "keep", Value::from(now.keep_unsaved));
     setting!(keep_every, "recovery", "every_minutes", whole(now.keep_every));
+    setting!(keep_versions, "recovery", "versions", whole(now.keep_versions));
     setting!(graphics, "graphics", "api", Value::from(now.graphics.id()));
     setting!(antialiasing, "graphics", "antialiasing", Value::from(now.antialiasing));
     for command in Command::ALL.iter().copied() {
@@ -679,6 +692,7 @@ mod tests {
             library_folders: vec!["D:/Textures".into()],
             keep_unsaved: false,
             keep_every: 10,
+            keep_versions: 5,
             graphics: Graphics::Vulkan,
             antialiasing: false,
             shortcuts: Shortcuts::default(),
@@ -745,7 +759,7 @@ mod tests {
         for line in ["undo_steps = 500", "api = \"vulkan\"", "redo = [\"Ctrl+Shift+Z\"]", "frame = []", "folders = [\"D:/Textures\"]"] {
             assert!(said(&text, line), "{line}: {text}");
         }
-        for key in ["recent_packages", "file_dialogs", "new ", "size", "keep", "every_minutes", "antialiasing", "undo "] {
+        for key in ["recent_packages", "file_dialogs", "new ", "size", "keep", "every_minutes", "versions", "antialiasing", "undo "] {
             assert!(!said(&text, key), "{key} is as it is by default, and not said: {text}");
         }
         assert!(text.contains("# undo_steps: how many steps"), "what can be said, said: {text}");
