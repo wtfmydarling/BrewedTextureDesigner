@@ -184,8 +184,8 @@ fn group<'a>(title: &'a str, rows: Vec<Row<'a>>) -> Element<'a, Message> {
         list = list.push(strip(r, i % 2 == 0));
     }
     column![
-        container(text(title.to_uppercase()).size(style::CAPTION).font(style::bold()).color(style::TEXT_FAINT))
-            .padding(Padding { top: 20.0, bottom: 6.0, left: 2.0, right: 0.0 }),
+        // A heading: white and heavy, as headings are everywhere.
+        container(text(title).size(14).font(style::heavy()).color(style::TEXT_BRIGHT)).padding(Padding { top: 20.0, bottom: 8.0, left: 2.0, right: 0.0 }),
         container(list).padding(1).width(Length::Fill).style(style::setting_list),
     ]
     .into()
@@ -337,20 +337,27 @@ fn general<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>
     ]
 }
 
-/// A texture size, as the lists say it.
+/// A side of a texture, as the lists say it.
 #[derive(Clone, Copy, PartialEq)]
 struct Side(u32);
 
 impl std::fmt::Display for Side {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{0} × {0}", self.0)
+        write!(f, "{}", self.0)
     }
 }
 
 fn packages<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>> {
     let d = Settings::default();
     let files = segmented(&[(NewFiles::Embed, "Embed in the package"), (NewFiles::Link, "Link to the file")], draft.new_files, true, Setting::NewFiles);
-    let sizes = with(&crate::view::toolbar::RESOLUTIONS.map(Side), Side(draft.graph_size), |s| s.0);
+    let [width, height] = draft.graph_size;
+    let size = row![
+        choices(with(&crate::view::toolbar::RESOLUTIONS.map(Side), Side(width), |s| s.0), Side(width), true, move |s: Side| Setting::GraphSize([s.0, height])),
+        text("×").size(style::TEXT_SIZE).color(style::TEXT_DIM),
+        choices(with(&crate::view::toolbar::RESOLUTIONS.map(Side), Side(height), |s| s.0), Side(height), true, move |s: Side| Setting::GraphSize([width, s.0])),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
     let precision = segmented(
         &[(Precision::Bits8, "8 bits"), (Precision::Half, "16 bits float"), (Precision::Full, "32 bits float")],
         draft.graph_precision,
@@ -375,7 +382,7 @@ fn packages<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message
         group(
             "New Graphs",
             vec![
-                Row::new("Size", "The size of the images of a graph made new. Each graph has its own, in its properties.", choices(sizes, Side(draft.graph_size), true, |s: Side| Setting::GraphSize(s.0)))
+                Row::new("Size", "How wide and how high the images of a graph made new are. Each graph has its own, in its properties.", size)
                     .state(applied.graph_size, draft.graph_size, d.graph_size, set(Setting::GraphSize(d.graph_size))),
                 Row::new("Precision", "What its images are kept in: more bits, finer steps, and more memory.", precision).state(
                     applied.graph_precision,

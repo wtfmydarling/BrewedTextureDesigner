@@ -3298,7 +3298,8 @@ fn fx_map_programs_hold_vectors() {
 fn examples_and_templates_are_computed() {
     use brewed_texture_core::templates::{Example, Template};
     let Some(mut e) = engine() else { return };
-    let mut graphs = vec![("PBR".to_string(), Template::Pbr.graph(256, brewed_texture_core::Precision::Half))];
+    let mut graphs: Vec<(String, Graph)> =
+        Template::ALL.iter().map(|t| (t.name().to_string(), t.graph([256, 256], brewed_texture_core::Precision::Half))).collect();
     for example in [Example::FxMaps, Example::PixelMath] {
         let (package, _) = example.package();
         graphs.extend(package.graphs.iter().map(|g| (g.name.clone(), Graph::clone(&g.graph))));
@@ -3310,7 +3311,8 @@ fn examples_and_templates_are_computed() {
             assert!(ev.node(n.id).and_then(|n| n.error()).is_none(), "{name}: {}", n.def().name);
             assert!(e.state(n.id).is_none_or(|s| s.error.is_none()), "{name}: {} {:?}", n.def().name, e.state(n.id).and_then(|s| s.error.clone()));
         }
-        if name != "PBR" {
+        // (A template's values are uniform, to be replaced; a filter's input too.)
+        if Template::ALL.iter().all(|t| t.name() != name) || name == "Pixel Processor" || name == "FX-Map" {
             for out in g.nodes_of(NodeKind::OUTPUT) {
                 let px = e.read_image(out.id).expect("an image").2;
                 let m = mean(&px);

@@ -239,7 +239,7 @@ mod tests {
     /// turned over where the graph's normal maps are the other way.
     #[test]
     fn presets_make_the_files_engines_expect() {
-        let g = Template::Pbr.graph(512, crate::Precision::Half);
+        let g = Template::Pbr.graph([512, 512], crate::Precision::Half);
         let names = |preset: Preset, directx: bool| plan(&g, "Rusty Metal", preset, directx).into_iter().map(|f| f.name).collect::<Vec<_>>();
         assert_eq!(
             names(Preset::Outputs, false),
@@ -274,7 +274,7 @@ mod tests {
         assert_eq!(mask[2], Source::Value(1.0));
         assert!(matches!(mask[3], Source::Output { invert: true, .. }), "smoothness: 1 − roughness");
         // No such maps: values.
-        let empty = Template::Empty.graph(512, crate::Precision::Half);
+        let empty = Template::Empty.graph([512, 512], crate::Precision::Half);
         assert!(plan(&empty, "x", Preset::Unreal, false).is_empty(), "nothing to base on, nothing packed of nothing");
     }
 }

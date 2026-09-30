@@ -12,7 +12,7 @@ pub fn view(app: &App, shown: HomePage) -> Element<'_, Message> {
         name: brewed_texture_core::APP_NAME,
         logo: Some(crate::brand::logo_large()),
         tagline: "Textures made of nodes, every one tiling, computed on the graphics card: start a package from a template, open one, or see how the examples are made.",
-        new: "New Package…",
+        new: "New Graph…",
         start_heading: "Start from a template",
         start: &app.home.start,
         more: "More templates…",

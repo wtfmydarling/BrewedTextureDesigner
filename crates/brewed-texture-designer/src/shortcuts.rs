@@ -71,7 +71,7 @@ macro_rules! commands {
 }
 
 commands! {
-    New: "new", "New Package", Window, ["Ctrl+N"];
+    New: "new", "New Graph…", Window, ["Ctrl+N"];
     Open: "open", "Open Package…", Anywhere, ["Ctrl+O"];
     Save: "save", "Save", Anywhere, ["Ctrl+S"];
     SaveAs: "save_as", "Save As…", Anywhere, ["Ctrl+Shift+S"];

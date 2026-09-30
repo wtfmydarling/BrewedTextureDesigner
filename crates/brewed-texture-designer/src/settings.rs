@@ -34,7 +34,8 @@ const TEMPLATE: &str = r#"# The settings of Brewed Texture Designer. Edit → Se
 # it where it is).
 [files]
 
-# size: the size of the images of a new graph, in pixels (16 to 8192; 2048 by default).
+# size: the size of the images of a new graph, in pixels: one number, as wide as high, or
+# [width, height] (16 to 8192; 2048 by default).
 # precision: what they are kept in: "unorm8" (8 bits), "float16" (16 bits float; the default)
 # or "float32" (32 bits float).
 [new_graphs]
@@ -78,7 +79,7 @@ pub struct Settings {
     /// What becomes of a file chosen for a node or dropped on the window.
     pub new_files: NewFiles,
     /// A new graph: the size of its images, and what they are kept in.
-    pub graph_size: u32,
+    pub graph_size: [u32; 2],
     pub graph_precision: Precision,
     /// The folders whose packages offer their graphs in the Library (see `app::library`).
     pub library_folders: Vec<String>,
@@ -104,7 +105,7 @@ impl Default for Settings {
             file_dialogs: FileDialogs::Auto,
             invert_zoom: false,
             new_files: NewFiles::Embed,
-            graph_size: 2048,
+            graph_size: [2048, 2048],
             graph_precision: Precision::Half,
             library_folders: Vec::new(),
             keep_unsaved: true,
@@ -163,7 +164,7 @@ pub enum Setting {
     FileDialogs(FileDialogs),
     InvertZoom(bool),
     NewFiles(NewFiles),
-    GraphSize(u32),
+    GraphSize([u32; 2]),
     GraphPrecision(Precision),
     KeepUnsaved(bool),
     KeepEvery(u32),
@@ -181,7 +182,7 @@ impl Settings {
             Setting::FileDialogs(f) => self.file_dialogs = f,
             Setting::InvertZoom(on) => self.invert_zoom = on,
             Setting::NewFiles(f) => self.new_files = f,
-            Setting::GraphSize(n) => self.graph_size = n.clamp(16, 8192),
+            Setting::GraphSize(n) => self.graph_size = n.map(|n| n.clamp(16, 8192)),
             Setting::GraphPrecision(p) => self.graph_precision = p,
             Setting::KeepUnsaved(on) => self.keep_unsaved = on,
             Setting::KeepEvery(n) => self.keep_every = n.clamp(1, 60),
@@ -376,7 +377,7 @@ fn read(doc: &DocumentMut) -> (Settings, Vec<String>) {
         file_dialogs: named(file_dialogs, "general.file_dialogs", &FILE_DIALOGS, d.file_dialogs, &mut said),
         invert_zoom: boolean(invert_zoom, "general.invert_zoom", d.invert_zoom, &mut said),
         new_files: named(new_files, "files.new", &NEW_FILES, d.new_files, &mut said),
-        graph_size: number(size, "new_graphs.size", d.graph_size, 16, 8192, &mut said),
+        graph_size: sizes(size, "new_graphs.size", d.graph_size, &mut said),
         graph_precision: named(precision, "new_graphs.precision", &PRECISIONS, d.graph_precision, &mut said),
         library_folders: texts(folders, "library.folders", &mut said),
         keep_unsaved: boolean(keep, "recovery.keep", d.keep_unsaved, &mut said),
@@ -406,6 +407,27 @@ fn number(value: Option<Value>, name: &str, default: u32, min: u32, max: u32, sa
         said(format!("{name} is {n}: taken as {held}, from {min} to {max}"));
     }
     held as u32
+}
+
+/// A size the file says: one number, as wide as high, or [width, height]; each held to 16 to
+/// 8192; `default` for none, or for what is neither.
+fn sizes(value: Option<Value>, name: &str, default: [u32; 2], said: &mut impl FnMut(String)) -> [u32; 2] {
+    let Some(value) = value else { return default };
+    match value.as_array() {
+        Some(array) if array.len() == 2 => {
+            let width = number(array.get(0).cloned(), name, default[0], 16, 8192, said);
+            let height = number(array.get(1).cloned(), name, default[1], 16, 8192, said);
+            [width, height]
+        }
+        Some(_) => {
+            said(format!("{name} is {}, not a size nor [width, height]", value.to_string().trim()));
+            default
+        }
+        None => {
+            let n = number(Some(value), name, default[0], 16, 8192, said);
+            [n, n]
+        }
+    }
 }
 
 /// A list of texts the file says (none: an empty one); what is not a text is left out.
@@ -494,7 +516,12 @@ fn write(doc: &mut DocumentMut, before: &Settings, now: &Settings) {
     setting!(file_dialogs, "general", "file_dialogs", Value::from(id_of(&FILE_DIALOGS, &now.file_dialogs)));
     setting!(invert_zoom, "general", "invert_zoom", Value::from(now.invert_zoom));
     setting!(new_files, "files", "new", Value::from(id_of(&NEW_FILES, &now.new_files)));
-    setting!(graph_size, "new_graphs", "size", whole(now.graph_size));
+    let size = if now.graph_size[0] == now.graph_size[1] {
+        whole(now.graph_size[0])
+    } else {
+        Value::Array(now.graph_size.iter().map(|n| i64::from(*n)).collect())
+    };
+    setting!(graph_size, "new_graphs", "size", size);
     setting!(graph_precision, "new_graphs", "precision", Value::from(id_of(&PRECISIONS, &now.graph_precision)));
     setting!(library_folders, "library", "folders", Value::Array(now.library_folders.iter().map(String::as_str).collect()));
     setting!(keep_unsaved, "recovery", "keep", Value::from(now.keep_unsaved));
@@ -687,7 +714,7 @@ mod tests {
             file_dialogs: FileDialogs::Last,
             invert_zoom: true,
             new_files: NewFiles::Link,
-            graph_size: 512,
+            graph_size: [512, 256],
             graph_precision: Precision::Full,
             library_folders: vec!["D:/Textures".into()],
             keep_unsaved: false,

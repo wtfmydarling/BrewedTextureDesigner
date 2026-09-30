@@ -347,8 +347,10 @@ pub struct Ui {
     pub home: Option<home::HomePage>,
     /// The packages opened last, as the Home screen shows them.
     pub home_recent: Vec<home::Recent>,
-    /// How the Home screen shows the packages opened last, and sorts them.
+    /// How the Home screen shows the packages opened last, and sorts them; and how the dialog of
+    /// a new graph shows its templates.
     pub home_layout: home_screen::Layout,
+    pub template_layout: home_screen::Layout,
     pub home_sort: home_screen::Sort,
     /// The template a new graph was made from last (the next one is offered it).
     pub last_template: brewed_texture_core::templates::Template,
@@ -986,8 +988,7 @@ impl App {
         // to what is made or opened there. Else the demo.
         let (package, preview_node) = if opts.home {
             let settings = opts.settings.settings();
-            let size = settings.graph_size;
-            (Package::new("Graph", Graph { resolution: [size, size], precision: settings.graph_precision, ..Graph::default() }), None)
+            (Package::new("Graph", Graph { resolution: settings.graph_size, precision: settings.graph_precision, ..Graph::default() }), None)
         } else {
             brewed_texture_core::demo::package()
         };
@@ -1041,6 +1042,7 @@ impl App {
                 home_recent: Vec::new(),
                 home_layout: home::layout_of(opts.workspace.as_ref().and_then(|w| w.home_layout.as_deref())),
                 home_sort: home::sort_of(opts.workspace.as_ref().and_then(|w| w.home_sort.as_deref())),
+                template_layout: home::layout_of(opts.workspace.as_ref().and_then(|w| w.template_layout.as_deref())),
                 last_template: brewed_texture_core::templates::Template::Pbr,
                 export_preset: brewed_texture_core::export_presets::Preset::Outputs,
                 export_folder: None,
@@ -1182,8 +1184,7 @@ impl App {
 
     /// A new graph, as the settings say new graphs are.
     pub(crate) fn new_graph(&self) -> Graph {
-        let size = self.settings.graph_size;
-        Graph { resolution: [size, size], precision: self.settings.graph_precision, ..Graph::default() }
+        Graph { resolution: self.settings.graph_size, precision: self.settings.graph_precision, ..Graph::default() }
     }
 
     /// A document of `package`, as the settings say documents are.
@@ -1923,6 +1924,7 @@ impl App {
             opened: self.ui.recent_opened.iter().filter(|(p, _)| self.ui.recent.contains(p)).map(|(p, t)| (p.clone(), *t)).collect(),
             home_layout: Some(home::layout_said(self.ui.home_layout).into()),
             home_sort: Some(home::sort_said(self.ui.home_sort)),
+            template_layout: Some(home::layout_said(self.ui.template_layout).into()),
             last_folder: self.ui.last_folder.as_ref().map(|f| f.display().to_string()),
             ..Workspace::default()
         }

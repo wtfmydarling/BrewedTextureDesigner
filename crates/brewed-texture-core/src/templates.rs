@@ -3,9 +3,33 @@
 //! rather than kept as files: they are what the program makes of them now.
 
 use crate::graph::{Graph, NodeId, Precision};
-use crate::nodes::{NodeKind, USAGE_AO, USAGE_BASE_COLOR, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL, USAGE_ROUGHNESS};
+use crate::nodes::{NodeKind, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL, USAGE_ROUGHNESS};
 use crate::package::Package;
 use crate::types::ParamValue;
+
+/// A category of templates, as Substance Designer lists its.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Category {
+    Pbr,
+    Filters,
+    PixelProcessor,
+    FxMap,
+    Others,
+}
+
+impl Category {
+    pub const ALL: [Category; 5] = [Category::Pbr, Category::Filters, Category::PixelProcessor, Category::FxMap, Category::Others];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Category::Pbr => "PBR (Metallic/Roughness)",
+            Category::Filters => "Filters",
+            Category::PixelProcessor => "Pixel Processor",
+            Category::FxMap => "FX-Map",
+            Category::Others => "Others",
+        }
+    }
+}
 
 /// What a new graph starts as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -13,17 +37,33 @@ pub enum Template {
     /// The maps of a physically based material, metallic and rough, each an Output made for
     /// the 3D view, fed a uniform value to be replaced.
     Pbr,
+    /// Those, and an emissive map.
+    PbrEmissive,
+    /// A graph that changes a grayscale image: an image input to an output.
+    GrayFilter,
+    /// The same, of color.
+    ColorFilter,
+    /// Pixel Math to an output.
+    PixelProcessor,
+    /// An FX-Map to an output.
+    FxMap,
     /// Nothing.
     Empty,
 }
 
 impl Template {
-    pub const ALL: [Template; 2] = [Template::Pbr, Template::Empty];
+    pub const ALL: [Template; 7] =
+        [Template::Pbr, Template::PbrEmissive, Template::GrayFilter, Template::ColorFilter, Template::PixelProcessor, Template::FxMap, Template::Empty];
 
     /// What names it where a name of words will not do (what the Home screen is told of it).
     pub fn id(self) -> &'static str {
         match self {
             Template::Pbr => "pbr",
+            Template::PbrEmissive => "pbr-emissive",
+            Template::GrayFilter => "gray-filter",
+            Template::ColorFilter => "color-filter",
+            Template::PixelProcessor => "pixel-processor",
+            Template::FxMap => "fx-map",
             Template::Empty => "empty",
         }
     }
@@ -32,21 +72,67 @@ impl Template {
         Template::ALL.into_iter().find(|t| t.id() == id)
     }
 
+    pub fn category(self) -> Category {
+        match self {
+            Template::Pbr | Template::PbrEmissive => Category::Pbr,
+            Template::GrayFilter | Template::ColorFilter => Category::Filters,
+            Template::PixelProcessor => Category::PixelProcessor,
+            Template::FxMap => Category::FxMap,
+            Template::Empty => Category::Others,
+        }
+    }
+
+    /// Its name in its category.
     pub fn name(self) -> &'static str {
         match self {
-            Template::Pbr => "PBR (Metallic/Roughness)",
+            Template::Pbr => "Base",
+            Template::PbrEmissive => "Base with Emissive",
+            Template::GrayFilter => "Grayscale Filter",
+            Template::ColorFilter => "Color Filter",
+            Template::PixelProcessor => "Pixel Processor",
+            Template::FxMap => "FX-Map",
             Template::Empty => "Empty",
         }
     }
 
-    /// What it is, said under its name.
+    /// Its name where its category is not said with it (the Home screen's row).
+    pub fn full_name(self) -> &'static str {
+        match self {
+            Template::Pbr => "PBR Material",
+            Template::PbrEmissive => "PBR with Emissive",
+            Template::Empty => "Empty Graph",
+            other => other.name(),
+        }
+    }
+
+    /// What kind of graph it makes.
+    pub fn kind(self) -> &'static str {
+        match self {
+            Template::Pbr | Template::PbrEmissive => "Standard material",
+            Template::GrayFilter | Template::ColorFilter => "Filter",
+            Template::PixelProcessor | Template::FxMap => "Generator",
+            Template::Empty => "Empty graph",
+        }
+    }
+
+    /// What it is, in a few words.
     pub fn about(self) -> &'static str {
         match self {
             Template::Pbr => {
-                "The maps of a physically based material, as game engines and renderers read them: base color, normal, \
-                 roughness, metallic, height and ambient occlusion, each an Output the 3D view shows, fed a uniform \
-                 value to replace with what makes it."
+                "The maps of a physically based material, as game engines and renderers read them: each an Output the \
+                 3D view shows, fed a uniform value to replace with what makes it."
             }
+            Template::PbrEmissive => "The maps of Base, and an emissive map: what glows of itself, black where nothing does.",
+            Template::GrayFilter => {
+                "Changes a grayscale image: the image the graph takes, what is done to it, and its output. Used as a node, \
+                 it filters what is connected to it."
+            }
+            Template::ColorFilter => {
+                "Changes a color image: the image the graph takes, what is done to it, and its output. Used as a node, it \
+                 filters what is connected to it."
+            }
+            Template::PixelProcessor => "Every pixel computed by Pixel Math: an expression of where it is (u, v), of values and of images read anywhere.",
+            Template::FxMap => "Patterns scattered, stacked and colored as the program of an FX-Map says.",
             Template::Empty => "A graph with nothing in it.",
         }
     }
@@ -55,32 +141,66 @@ impl Template {
     pub fn outputs(self) -> &'static [&'static str] {
         match self {
             Template::Pbr => &["basecolor", "normal", "roughness", "metallic", "height", "ambientocclusion"],
+            Template::PbrEmissive => &["basecolor", "normal", "roughness", "metallic", "height", "ambientocclusion", "emissive"],
+            Template::GrayFilter | Template::ColorFilter | Template::PixelProcessor | Template::FxMap => &["output"],
             Template::Empty => &[],
         }
     }
 
-    /// The graph, its images `size` pixels square, kept in `precision`.
-    pub fn graph(self, size: u32, precision: Precision) -> Graph {
-        let mut g = Graph { resolution: [size, size], precision, ..Graph::default() };
-        if self == Template::Pbr {
-            // Each map: what feeds it (to be replaced), its value, and what the 3D view takes it for.
-            let maps: [(&str, [f32; 4], bool, u32); 6] = [
-                ("basecolor", [0.5, 0.5, 0.5, 1.0], false, USAGE_BASE_COLOR),
-                ("normal", [0.5, 0.5, 1.0, 1.0], false, USAGE_NORMAL),
-                ("roughness", [0.5, 0.5, 0.5, 1.0], true, USAGE_ROUGHNESS),
-                ("metallic", [0.0, 0.0, 0.0, 1.0], true, USAGE_METALLIC),
-                ("height", [0.5, 0.5, 0.5, 1.0], true, USAGE_HEIGHT),
-                ("ambientocclusion", [1.0, 1.0, 1.0, 1.0], true, USAGE_AO),
-            ];
-            for (row, (name, color, gray, usage)) in maps.into_iter().enumerate() {
-                let y = row as f32 * 130.0;
-                let value = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, y]);
-                set(&mut g, value, "color", ParamValue::Color(color));
-                set(&mut g, value, "output", ParamValue::Enum(u32::from(gray)));
-                let output = output(&mut g, name, usage, [340.0, y]);
-                let _ = g.connect(value, "o:output", output, "i:input");
+    /// The graph, its images `size` pixels wide and high, kept in `precision`.
+    pub fn graph(self, size: [u32; 2], precision: Precision) -> Graph {
+        let mut g = Graph { resolution: size, precision, ..Graph::default() };
+        match self {
+            Template::Pbr | Template::PbrEmissive => {
+                // Each map: what feeds it (to be replaced), its value, and what the 3D view takes it for.
+                let mut maps: Vec<(&str, [f32; 4], bool, u32)> = vec![
+                    ("basecolor", [0.5, 0.5, 0.5, 1.0], false, USAGE_BASE_COLOR),
+                    ("normal", [0.5, 0.5, 1.0, 1.0], false, USAGE_NORMAL),
+                    ("roughness", [0.5, 0.5, 0.5, 1.0], true, USAGE_ROUGHNESS),
+                    ("metallic", [0.0, 0.0, 0.0, 1.0], true, USAGE_METALLIC),
+                    ("height", [0.5, 0.5, 0.5, 1.0], true, USAGE_HEIGHT),
+                    ("ambientocclusion", [1.0, 1.0, 1.0, 1.0], true, USAGE_AO),
+                ];
+                if self == Template::PbrEmissive {
+                    maps.push(("emissive", [0.0, 0.0, 0.0, 1.0], false, USAGE_EMISSIVE));
+                }
+                let rows = maps.len() as f32;
+                for (row, (name, color, gray, usage)) in maps.into_iter().enumerate() {
+                    let y = row as f32 * 130.0;
+                    let value = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, y]);
+                    set(&mut g, value, "color", ParamValue::Color(color));
+                    set(&mut g, value, "output", ParamValue::Enum(u32::from(gray)));
+                    let output = output(&mut g, name, usage, [340.0, y]);
+                    let _ = g.connect(value, "o:output", output, "i:input");
+                }
+                g.add_comment("Replace each uniform value with what makes the map".into(), [-30.0, -60.0], [290.0, rows * 130.0 + 40.0]);
             }
-            g.add_comment("Replace each uniform value with what makes the map".into(), [-30.0, -60.0], [290.0, 6.0 * 130.0 + 40.0]);
+            Template::GrayFilter | Template::ColorFilter => {
+                let input = g.add_node(NodeKind::IMAGE_INPUT, [0.0, 0.0]);
+                let _ = g.bind_variable(input, "input");
+                if self == Template::ColorFilter
+                    && let Some(image) = g.variable_mut("input").and_then(|v| v.image.as_mut())
+                {
+                    image.kind = crate::nodes::ImageKind::Color;
+                }
+                let output = output(&mut g, "output", 0, [420.0, 0.0]);
+                let _ = g.connect(input, "o:output", output, "i:input");
+                g.add_comment("Put what changes the image between its input and its output".into(), [-30.0, -60.0], [560.0, 200.0]);
+            }
+            Template::PixelProcessor => {
+                let math = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
+                set(&mut g, math, "expression", ParamValue::Text("vec3(u, v, 0.5)".into()));
+                let output = output(&mut g, "output", 0, [340.0, 0.0]);
+                let _ = g.connect(math, "o:output", output, "i:input");
+                g.add_comment("Pixel Math: each pixel is what its expression says of it (u and v: where it is)".into(), [-30.0, -60.0], [480.0, 220.0]);
+            }
+            Template::FxMap => {
+                let fx = g.add_node(NodeKind::FX_MAP, [0.0, 0.0]);
+                let output = output(&mut g, "output", 0, [340.0, 0.0]);
+                let _ = g.connect(fx, "o:output", output, "i:input");
+                g.add_comment("An FX-Map: its program says where each splat goes, how big and how bright".into(), [-30.0, -60.0], [480.0, 220.0]);
+            }
+            Template::Empty => {}
         }
         g
     }
@@ -302,16 +422,23 @@ fn pixel_math() -> (Package, Option<NodeId>) {
 mod tests {
     use super::*;
 
-    /// Every template and example is whole: its links lead somewhere, and nothing in it says
-    /// anything is wrong.
+    /// Every template and example is whole: its links lead somewhere, nothing in it says
+    /// anything is wrong, and a template's outputs are those it says, in its category.
     #[test]
     fn templates_and_examples_are_whole() {
-        let pbr = Template::Pbr.graph(512, Precision::Full);
-        assert_eq!((pbr.resolution, pbr.precision), ([512, 512], Precision::Full));
-        let outputs: Vec<&str> = pbr.nodes_of(NodeKind::OUTPUT).map(|n| n.text("name")).collect();
-        assert_eq!(outputs, Template::Pbr.outputs());
-        assert!(Template::Empty.graph(2048, Precision::Half).nodes.is_empty());
-        let mut graphs = vec![pbr];
+        let pbr = Template::Pbr.graph([512, 256], Precision::Full);
+        assert_eq!((pbr.resolution, pbr.precision), ([512, 256], Precision::Full));
+        assert!(Template::Empty.graph([2048, 2048], Precision::Half).nodes.is_empty());
+        let mut graphs = Vec::new();
+        for template in Template::ALL {
+            let g = template.graph([512, 512], Precision::Half);
+            let outputs: Vec<&str> = g.nodes_of(NodeKind::OUTPUT).map(|n| n.text("name")).collect();
+            assert_eq!(outputs, template.outputs(), "{template:?}");
+            assert_eq!(Template::from_id(template.id()), Some(template));
+            assert!(Category::ALL.contains(&template.category()));
+            graphs.push(g);
+        }
+        assert!(Category::ALL.iter().all(|c| Template::ALL.iter().any(|t| t.category() == *c)), "no category is empty");
         for example in Example::ALL {
             let (package, preview) = example.package();
             assert!(preview.is_some_and(|id| package.graphs[0].graph.node(id).is_some()), "{example:?} shows one of its nodes");

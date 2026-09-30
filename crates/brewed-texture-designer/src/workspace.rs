@@ -36,6 +36,8 @@ pub struct Workspace {
     /// what column ("opened", "name-desc"…).
     pub home_layout: Option<String>,
     pub home_sort: Option<String>,
+    /// How the dialog of a new graph shows its templates ("grid" or "list").
+    pub template_layout: Option<String>,
     /// The folder a file dialog was answered from last.
     pub last_folder: Option<String>,
 }
@@ -148,6 +150,7 @@ mod tests {
             opened: [("C:/work/walls.brewtex".to_string(), 1_790_000_000)].into_iter().collect(),
             home_layout: Some("list".into()),
             home_sort: Some("name-desc".into()),
+            template_layout: Some("grid".into()),
             last_folder: Some("C:/work".into()),
         };
         let json = serde_json::to_string(&w).unwrap();

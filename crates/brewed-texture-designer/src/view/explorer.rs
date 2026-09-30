@@ -140,7 +140,7 @@ fn status<'a>(warning: Option<String>, notes: Option<String>) -> Element<'a, Mes
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let tools = row![
-        tool(Icon::Plus, "New package from a template (Ctrl+N)", Message::NewGraph(crate::app::home::NewGraphMessage::Open(None))),
+        tool(Icon::Plus, "New graph from a template, in a new package or one open (Ctrl+N)", Message::NewGraph(crate::app::home::NewGraphMessage::Open(None))),
         tool(Icon::Folder, "Open a package (Ctrl+O)", Message::Open),
     ]
     .spacing(2);

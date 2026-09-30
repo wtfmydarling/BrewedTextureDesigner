@@ -18,6 +18,7 @@ pub mod picker;
 pub mod preview;
 pub mod properties;
 pub mod settings;
+pub mod templates;
 pub mod toolbar;
 pub mod view3d;
 

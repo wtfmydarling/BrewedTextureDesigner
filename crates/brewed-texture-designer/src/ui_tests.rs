@@ -344,7 +344,7 @@ fn library_folders_offer_their_graphs() {
 }
 
 /// Given no package to open, the program starts on the Home screen, with nothing being edited;
-/// New Package… makes one from a template in its place (and the Home screen gives way to the
+/// New Graph… makes one from a template in its place (and the Home screen gives way to the
 /// editor); Home comes back, and Escape goes back to what is edited; Learn opens examples beside
 /// it.
 #[test]
@@ -361,10 +361,11 @@ fn the_program_starts_on_the_home_screen() {
     assert!(w.app.blank(), "nothing is being edited");
     for said in [
         "Welcome to Brewed Texture Designer",
-        "New Package…",
+        "New Graph…",
         "Open…",
         "Start from a template",
-        "PBR (Metallic/Roughness)",
+        "PBR Material",
+        "FX-Map",
         "More templates…",
         "Recent",
         "Learn",
@@ -383,13 +384,19 @@ fn the_program_starts_on_the_home_screen() {
     // A package made from a template, in place of the blank one.
     w.send(Message::NewGraph(NewGraphMessage::Open(None)));
     w.input(&[]);
-    for said in ["New Package", "PBR (Metallic/Roughness)", "Empty", "Create"] {
+    for said in ["New Graph", "Templates", "PBR (Metallic/Roughness)", "Base", "Filters", "Empty", "Create graph in", "Create"] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
-    w.snapshot("new_package");
+    w.snapshot("new_graph");
+    w.send(Message::NewGraph(NewGraphMessage::Layout(home_screen::Layout::List)));
+    w.input(&[]);
+    w.snapshot("new_graph_list");
+    w.send(Message::NewGraph(NewGraphMessage::Layout(home_screen::Layout::Grid)));
     w.send(Message::NewGraph(NewGraphMessage::Name("Rusty Metal".into())));
     w.send(Message::NewGraph(NewGraphMessage::Template(Template::Pbr)));
-    w.send(Message::NewGraph(NewGraphMessage::Size(512)));
+    w.send(Message::NewGraph(NewGraphMessage::Width(512)));
+    let Some(Dialog::NewGraph(dialog)) = w.app.ui.dialog.clone() else { panic!("the dialog") };
+    assert_eq!(dialog.size, [512, 512], "width and height together");
     w.send(Message::NewGraph(NewGraphMessage::Create));
     assert_eq!(w.app.ui.home, None, "in the editor");
     assert_eq!(w.app.packages().len(), 1, "in place of the blank one");
@@ -397,6 +404,23 @@ fn the_program_starts_on_the_home_screen() {
     assert_eq!(w.app.graph().resolution, [512, 512]);
     let outputs: Vec<String> = w.app.graph().nodes_of(NodeKind::OUTPUT).map(|n| n.text("name").to_string()).collect();
     assert_eq!(outputs, Template::Pbr.outputs());
+
+    // A graph not square, in the package open: width and height apart.
+    let key = w.app.doc_key;
+    w.send(Message::NewGraph(NewGraphMessage::Open(None)));
+    w.send(Message::NewGraph(NewGraphMessage::Into(Some(key))));
+    w.send(Message::NewGraph(NewGraphMessage::Template(Template::GrayFilter)));
+    w.send(Message::NewGraph(NewGraphMessage::Link(false)));
+    w.send(Message::NewGraph(NewGraphMessage::Width(1024)));
+    w.send(Message::NewGraph(NewGraphMessage::Height(256)));
+    w.send(Message::NewGraph(NewGraphMessage::Name("Sharpen".into())));
+    w.send(Message::NewGraph(NewGraphMessage::Create));
+    assert_eq!((w.app.packages().len(), w.app.doc_key), (1, key), "in the package, not a new one");
+    assert_eq!(w.app.doc.package().graphs.len(), 2);
+    assert_eq!(w.app.graph().resolution, [1024, 256]);
+    assert_eq!(w.app.graph().nodes_of(NodeKind::IMAGE_INPUT).count(), 1, "a filter takes an image");
+    w.send(Message::Undo);
+    assert_eq!(w.app.doc.package().graphs.len(), 1, "undone in one step");
 
     // Home again, and back with Escape.
     w.send(Message::Home(HomeMessage::Show(HomePage::Home)));
@@ -421,7 +445,7 @@ fn the_program_starts_on_the_home_screen() {
     assert_eq!(w.app.ui.home, None);
     assert_eq!(w.app.packages().len(), 2, "in place of the example, untouched (as a package opened)");
     assert!(w.app.graph().nodes.is_empty());
-    assert_eq!(w.app.graph().resolution, [w.app.settings.graph_size; 2]);
+    assert_eq!(w.app.graph().resolution, w.app.settings.graph_size);
     // The shortcuts, from Learn and from the resources.
     w.send(Message::Home(HomeMessage::Screen(home_screen::Event::Lesson("shortcuts".into()))));
     assert_eq!(w.app.ui.dialog, Some(Dialog::Shortcuts));
@@ -3173,10 +3197,10 @@ fn settings_are_changed_and_applied() {
     let at = place_of(&mut w, "Packages");
     click(&mut w, at);
     assert_eq!(page(&w), Some(Page::Packages));
-    w.send(Message::Settings(S::Set(Setting::GraphSize(512))));
+    w.send(Message::Settings(S::Set(Setting::GraphSize([512, 512]))));
     w.send(Message::Settings(S::Set(Setting::GraphPrecision(Precision::Full))));
     draw_frame(&mut w, std::time::Instant::now());
-    assert_eq!(w.app.settings.graph_size, 2048, "not taken before Apply");
+    assert_eq!(w.app.settings.graph_size, [2048, 2048], "not taken before Apply");
     assert!(!texts(&mut w, "●").is_empty() && !texts(&mut w, "Cancel").is_empty(), "marked, and to be cancelled");
     w.snapshot("settings-changed");
     press(&mut w, keyboard::key::Named::Escape);
@@ -3186,12 +3210,12 @@ fn settings_are_changed_and_applied() {
     // Opened again on the page shown last; applied, taken, and the dialog stays.
     key(&mut w, ",", Physical::Code(Code::Comma), ctrl);
     assert_eq!(page(&w), Some(Page::Packages));
-    w.send(Message::Settings(S::Set(Setting::GraphSize(512))));
+    w.send(Message::Settings(S::Set(Setting::GraphSize([512, 512]))));
     w.send(Message::Settings(S::Set(Setting::GraphPrecision(Precision::Full))));
     draw_frame(&mut w, std::time::Instant::now());
     let at = place_of(&mut w, "Apply");
     click(&mut w, at);
-    assert_eq!((w.app.settings.graph_size, w.app.settings.graph_precision), (512, Precision::Full));
+    assert_eq!((w.app.settings.graph_size, w.app.settings.graph_precision), ([512, 512], Precision::Full));
     assert_eq!(page(&w), Some(Page::Packages));
     draw_frame(&mut w, std::time::Instant::now());
     assert!(texts(&mut w, "●").is_empty() && !texts(&mut w, "Close").is_empty(), "nothing waits to be applied");

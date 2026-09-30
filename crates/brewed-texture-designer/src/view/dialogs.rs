@@ -1,7 +1,7 @@
 //! Modal dialogs: unsaved changes, work kept by a program that stopped, files a package cannot
 //! find, the settings (see [`crate::view::settings`]), keyboard and mouse, about.
 
-use iced::widget::{button, center, column, container, mouse_area, opaque, row, scrollable, space, text};
+use iced::widget::{button, center, column, container, mouse_area, opaque, row, rule, scrollable, space, text};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::package::{MissingKind, file_name};
 
@@ -167,17 +167,69 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
 
 /// The dialog of a new package, or of a new graph of one: its name, its template, the size and
 /// precision of its images.
+/// The package a new graph goes into, as the dialog lists it.
+#[derive(Clone, Debug, PartialEq)]
+struct Place {
+    key: Option<u64>,
+    said: String,
+}
+
+impl std::fmt::Display for Place {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.said)
+    }
+}
+
+/// The dialog of a new graph, as Substance Designer's: on the left, darker, the templates by
+/// category, as pictures or as a list; on the right, the package it goes in, its name, the size
+/// of its images and their precision.
 fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> Element<'a, Message> {
     use brewed_texture_core::Precision;
-    use brewed_texture_core::templates::Template;
+    use brewed_texture_core::templates::{Category, Template};
+    use home_screen::Layout;
     use crate::app::home::NewGraphMessage as N;
     let say = Message::NewGraph;
-    let into = dialog.into.and_then(|key| app.package_doc(key)).map(|d| d.title());
-    let title = match &into {
-        Some(package) => format!("New Graph in {package}"),
-        None => "New Package".to_string(),
+    let layout = app.ui.template_layout;
+
+    // The templates.
+    let toggle = |this: Layout, glyph: Icon| {
+        let chosen = layout == this;
+        button(icon(glyph, 14.0, if chosen { style::TEXT_BRIGHT } else { style::TEXT_DIM })).padding([4, 7]).style(style::segment(chosen)).on_press(say(N::Layout(this)))
     };
-    let label = |t: &'static str| text(t).size(style::TEXT_SIZE).color(style::TEXT_DIM).width(Length::Fixed(110.0));
+    let mut templates = column![
+        row![
+            text("Templates").size(15).font(style::heavy()).color(style::TEXT_BRIGHT),
+            space().width(Length::Fill),
+            container(row![toggle(Layout::Grid, Icon::Grid), toggle(Layout::List, Icon::List)].spacing(2)).padding(2).style(style::segments),
+        ]
+        .align_y(Alignment::Center),
+    ]
+    .spacing(10);
+    for category in Category::ALL {
+        let of: Vec<Template> = Template::ALL.into_iter().filter(|t| t.category() == category).collect();
+        templates = templates.push(text(category.name()).size(style::TEXT_SIZE).font(style::heavy()).color(style::TEXT_BRIGHT));
+        templates = templates.push(match layout {
+            Layout::Grid => iced::widget::Row::with_children(of.into_iter().map(|t| crate::view::templates::card(t, t == dialog.template))).spacing(10).wrap().into(),
+            Layout::List => Element::from(column(of.into_iter().map(|t| crate::view::templates::list_row(t, t == dialog.template))).spacing(3)),
+        });
+    }
+    let templates = container(scrollable(container(templates).padding(16)).height(Length::Fill).spacing(8).style(style::scrollable))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(style::template_area);
+
+    // Where, what it is called, how big, how precise.
+    let label = |t: &'static str| text(t).size(style::SMALL).color(style::TEXT_DIM);
+    let mut places = vec![Place { key: None, said: "New package".into() }];
+    for (key, doc) in app.packages() {
+        places.push(Place { key: Some(key), said: doc.title() });
+    }
+    let chosen = places.iter().find(|p| p.key == dialog.into).cloned();
+    let into = iced::widget::pick_list(places, chosen, |p: Place| Message::NewGraph(N::Into(p.key)))
+        .width(Length::Fill)
+        .text_size(style::TEXT_SIZE)
+        .padding([5, 8])
+        .style(style::pick_list);
     let name = iced::widget::text_input("Graph", &dialog.name)
         .id(new_graph_name_id())
         .on_input(|n| Message::NewGraph(N::Name(n)))
@@ -185,44 +237,51 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
         .size(style::TEXT_SIZE)
         .padding([5, 8])
         .style(style::text_input);
-    let mut templates = column![].spacing(4);
-    for template in Template::ALL {
-        let chosen = template == dialog.template;
-        let outputs = template.outputs();
-        let mut about = column![text(template.name()).size(style::TEXT_SIZE).font(style::bold()), text(template.about()).size(style::SMALL).color(style::TEXT_DIM)].spacing(3);
-        if !outputs.is_empty() {
-            about = about.push(text(format!("Outputs: {}", outputs.join(", "))).size(style::SMALL).color(style::TEXT_FAINT));
-        }
-        templates = templates.push(
-            button(about).width(Length::Fill).padding([8, 10]).style(style::option_button(chosen, false)).on_press(say(N::Template(template))),
-        );
-    }
-    let sizes = iced::widget::pick_list(crate::view::toolbar::RESOLUTIONS, Some(dialog.size), |s| Message::NewGraph(N::Size(s)))
-        .text_size(style::TEXT_SIZE)
-        .padding([4, 8])
-        .style(style::pick_list);
+    let side = |value: u32, message: fn(u32) -> N| {
+        iced::widget::pick_list(crate::view::toolbar::RESOLUTIONS, Some(value), move |s| Message::NewGraph(message(s)))
+            .width(Length::Fill)
+            .text_size(style::TEXT_SIZE)
+            .padding([5, 8])
+            .style(style::pick_list)
+    };
+    let link = button(icon(Icon::Link, 15.0, if dialog.linked { style::TEXT_BRIGHT } else { style::TEXT_DIM }))
+        .padding(5)
+        .style(style::segment(dialog.linked))
+        .on_press(say(N::Link(!dialog.linked)));
+    let link = crate::view::tip(link, if dialog.linked { "Width and height together: click to set them apart" } else { "Width and height apart: click to set them together" }, iced::widget::tooltip::Position::Top);
+    let size = row![side(dialog.size[0], N::Width), link, side(dialog.size[1], N::Height)].spacing(6).align_y(Alignment::Center);
     let mut precisions = row![].spacing(0);
-    for (precision, name) in [(Precision::Bits8, "8 bits"), (Precision::Half, "16 bits float"), (Precision::Full, "32 bits float")] {
+    for (precision, said) in [(Precision::Bits8, "8 bits"), (Precision::Half, "16 bits float"), (Precision::Full, "32 bits float")] {
         precisions = precisions.push(
-            button(text(name).size(style::TEXT_SIZE)).padding([5, 10]).style(style::segment(precision == dialog.precision)).on_press(say(N::Precision(precision))),
+            button(text(said).size(style::TEXT_SIZE)).padding([5, 10]).style(style::segment(precision == dialog.precision)).on_press(say(N::Precision(precision))),
         );
     }
+    let chosen = dialog.template;
+    let settings = column![
+        column![label("Create graph in"), into].spacing(5),
+        column![label("Graph name"), name].spacing(5),
+        column![label("Size (pixels)"), size].spacing(5),
+        column![label("Precision"), container(precisions).style(style::segments)].spacing(5),
+        rule::horizontal(1).style(|_| rule::Style { color: style::LINE, radius: 0.0.into(), fill_mode: rule::FillMode::Full, snap: true }),
+        text(format!("{} · {}", chosen.category().name(), chosen.name())).size(style::TEXT_SIZE).font(style::heavy()).color(style::TEXT_BRIGHT),
+        text(chosen.about()).size(style::SMALL).color(style::TEXT_DIM),
+    ]
+    .spacing(16)
+    .width(Length::Fixed(300.0));
+
     let body = column![
-        text(title).size(18).font(style::bold()),
-        row![label("Name"), name].align_y(Alignment::Center),
-        row![label("Template"), templates].align_y(Alignment::Start),
-        row![label("Size"), sizes, text("px").size(style::SMALL).color(style::TEXT_FAINT)].spacing(6).align_y(Alignment::Center),
-        row![label("Precision"), container(precisions).style(style::segments)].align_y(Alignment::Center),
+        text("New Graph").size(18).font(style::heavy()).color(style::TEXT_BRIGHT),
+        row![templates, settings].spacing(18).height(Length::Fixed(470.0)),
         row![
             space().width(Length::Fill),
             button(text("Cancel").size(style::TEXT_SIZE)).padding([6, 14]).style(style::flat_button).on_press(Message::Dialog(None)),
-            button(text("Create").size(style::TEXT_SIZE)).padding([6, 18]).style(style::primary_button).on_press(say(N::Create)),
+            button(text("Create").size(style::TEXT_SIZE).font(style::bold())).padding([6, 18]).style(style::primary_button).on_press(say(N::Create)),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
     ]
     .spacing(14);
-    modal(dialog_box(body, 560.0), None)
+    modal(dialog_box(body, 1000.0), None)
 }
 
 /// The export dialog: what is written, in what, and where; and the files, listed.
@@ -390,7 +449,7 @@ fn versions<'a>(app: &'a App, dialog: &'a crate::app::versions::VersionsDialog) 
     modal(dialog_box(body, 620.0), None)
 }
 
-/// Id of the name field of the New Package dialog (it takes the keyboard as it opens).
+/// Id of the name field of the New Graph dialog (it takes the keyboard as it opens).
 pub fn new_graph_name_id() -> iced::widget::Id {
     iced::widget::Id::new("brewed-new-graph-name")
 }

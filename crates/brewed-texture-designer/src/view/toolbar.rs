@@ -117,8 +117,7 @@ fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
     let mut items = vec![
         h(item("Home Screen", "", Some(Message::Home(crate::app::home::HomeMessage::Show(crate::app::home::HomePage::Home))))),
         separator(),
-        h(item("New Package…", app.key_of(Command::New), Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(None))))),
-        h(item("New Graph…", "", Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(Some(key)))))),
+        h(item("New Graph…", app.key_of(Command::New), Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(None))))),
         h(item("Open Package…", app.key_of(Command::Open), Some(Message::Open))),
         recent_packages(app),
     ];

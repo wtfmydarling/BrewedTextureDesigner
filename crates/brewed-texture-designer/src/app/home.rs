@@ -6,8 +6,10 @@
 //! `project::save_with_picture`) and a package dropped on the window opens; Learn opens the
 //! examples. The editor is behind it all the while, with what it has.
 //!
-//! And the dialog of a new package, or of a new graph of one (File → New Package…, New
-//! Graph…): its name, its template (see [`Template`]), the size and precision of its images.
+//! And the dialog of a new graph (File → New Graph…, the Explorer's +), as Substance Designer's:
+//! the templates on the left, by category (see [`Template`]), as pictures or as a list, each
+//! saying what it is on its (i); on the right, the package it goes in (a new one, or one open),
+//! its name, the size of its images (wide and high, together or not) and their precision.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -15,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use brewed_texture_core::project::{self, ViewState};
-use brewed_texture_core::templates::{Example, Template};
+use brewed_texture_core::templates::{Category, Example, Template};
 use brewed_texture_core::{NodeKind, PackageEdit, Precision};
 use brewed_texture_core::package::Package;
 use home_screen::{Event, Glyph, Layout, Lesson, Resource, Sort, Start};
@@ -60,15 +62,17 @@ impl HomeLists {
             .into_iter()
             .map(|t| {
                 let detail = match t.outputs().len() {
-                    0 => "Nothing in it".to_string(),
-                    n => format!("{n} outputs for the 3D view"),
+                    n if n > 1 => format!("{} · {n} outputs", t.kind()),
+                    _ => t.kind().to_string(),
                 };
-                Start {
-                    id: t.id().into(),
-                    title: t.name().into(),
-                    detail,
-                    glyph: if t == Template::Empty { Glyph::Graph } else { Glyph::Material },
-                }
+                let glyph = match t.category() {
+                    Category::Pbr => Glyph::Material,
+                    Category::Filters => Glyph::Filter,
+                    Category::PixelProcessor => Glyph::Grid,
+                    Category::FxMap => Glyph::Pattern,
+                    Category::Others => Glyph::Graph,
+                };
+                Start { id: t.id().into(), title: t.full_name().into(), detail, glyph }
             })
             .collect();
         let mut lessons: Vec<Lesson> = Example::ALL
@@ -221,11 +225,13 @@ impl App {
             Event::Start(id) => {
                 if let Some(template) = Template::from_id(&id) {
                     self.ui.last_template = template;
+                    let size = self.settings.graph_size;
                     let dialog = NewGraphDialog {
                         into: None,
                         name: "Graph".into(),
                         template,
-                        size: self.settings.graph_size,
+                        size,
+                        linked: size[0] == size[1],
                         precision: self.settings.graph_precision,
                     };
                     self.create_graph(dialog);
@@ -250,11 +256,13 @@ impl App {
     pub(crate) fn new_graph_message(&mut self, message: NewGraphMessage) -> Task<Message> {
         if let NewGraphMessage::Open(into) = message {
             self.close_popups();
+            let size = self.settings.graph_size;
             let dialog = NewGraphDialog {
                 into,
                 name: "Graph".into(),
                 template: self.ui.last_template,
-                size: self.settings.graph_size,
+                size,
+                linked: size[0] == size[1],
                 precision: self.settings.graph_precision,
             };
             self.ui.dialog = Some(Dialog::NewGraph(dialog));
@@ -265,8 +273,27 @@ impl App {
             NewGraphMessage::Open(_) => {}
             NewGraphMessage::Name(name) => dialog.name = name,
             NewGraphMessage::Template(template) => dialog.template = template,
-            NewGraphMessage::Size(size) => dialog.size = size.clamp(16, 8192),
+            NewGraphMessage::Into(into) => dialog.into = into,
+            NewGraphMessage::Width(width) => {
+                dialog.size[0] = width.clamp(16, 8192);
+                if dialog.linked {
+                    dialog.size[1] = dialog.size[0];
+                }
+            }
+            NewGraphMessage::Height(height) => {
+                dialog.size[1] = height.clamp(16, 8192);
+                if dialog.linked {
+                    dialog.size[0] = dialog.size[1];
+                }
+            }
+            NewGraphMessage::Link(linked) => {
+                dialog.linked = linked;
+                if linked {
+                    dialog.size[1] = dialog.size[0];
+                }
+            }
             NewGraphMessage::Precision(precision) => dialog.precision = precision,
+            NewGraphMessage::Layout(layout) => self.ui.template_layout = layout,
             NewGraphMessage::Create => {
                 let dialog = dialog.clone();
                 self.ui.dialog = None;
@@ -356,7 +383,7 @@ impl App {
     }
 }
 
-/// The dialog of a new package, or of a new graph of an open one.
+/// The dialog of a new graph.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewGraphDialog {
     /// The package the graph goes into (its key in the Explorer); none: a package of its own.
@@ -364,7 +391,9 @@ pub struct NewGraphDialog {
     /// The name of the graph (and of the package, until it is saved).
     pub name: String,
     pub template: Template,
-    pub size: u32,
+    /// How wide and how high its images are, and whether the one follows the other.
+    pub size: [u32; 2],
+    pub linked: bool,
     pub precision: Precision,
 }
 
@@ -374,8 +403,14 @@ pub enum NewGraphMessage {
     Open(Option<u64>),
     Name(String),
     Template(Template),
-    Size(u32),
+    /// The package the graph goes into: a new one, or the one open as the key.
+    Into(Option<u64>),
+    Width(u32),
+    Height(u32),
+    Link(bool),
     Precision(Precision),
+    /// The templates as pictures, or as a list.
+    Layout(home_screen::Layout),
     Create,
 }
 
