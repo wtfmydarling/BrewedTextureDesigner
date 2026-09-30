@@ -64,7 +64,9 @@ pub enum Request {
     },
     /// Read a file again (edited elsewhere): see [`crate::Engine::reload_file`].
     ReloadFile(String),
-    /// Forget every cached image (e.g. after opening another document).
+    /// Another document: forget every image, and the graph, what the views show of it and
+    /// what was asked of it. Nothing is computed until the new one is sent (right after);
+    /// files asked for before are written first, of the document they were asked of.
     Reset,
 }
 
@@ -169,9 +171,12 @@ impl Drop for EngineService {
     }
 }
 
+/// A graph to compute: the revision of the front end it is, the graph and its evaluation.
+type Current = (u64, Arc<Graph>, Arc<Evaluation>);
+
 #[derive(Default)]
 struct Pending {
-    evaluate: Option<(u64, Arc<Graph>, Arc<Evaluation>)>,
+    evaluate: Option<Current>,
     stats: Vec<NodeId>,
     probe: Option<(NodeId, [u32; 2])>,
     choices: Vec<(NodeKind, String)>,
@@ -181,14 +186,21 @@ struct Pending {
 }
 
 fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
-    let mut current: Option<(u64, Arc<Graph>, Arc<Evaluation>)> = None;
+    let mut current: Option<Current> = None;
     let mut preview: Option<NodeId> = None;
     let mut materials: Vec<NodeId> = Vec::new();
     // The GPU memory the front end was last told of (`None`: not yet, or it forgot).
     let mut memory: Option<Memory> = None;
     // A request that came while the last round was at work: the next round starts with it.
     let mut waiting: Option<Request> = None;
+    // A reset that waited for files asked of the document it forgets to be written.
+    let mut reset = false;
+    // The files being written, by path (see `write`).
+    let mut writing: HashMap<PathBuf, JoinHandle<()>> = HashMap::new();
     loop {
+        if std::mem::take(&mut reset) {
+            forget(&mut engine, &mut current, &mut preview, &mut materials, &mut memory);
+        }
         // Wait for work; poll while files are being decoded in the background.
         let first = if let Some(request) = waiting.take() {
             Some(request)
@@ -242,10 +254,17 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                     pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
                 }
                 Request::Reset => {
-                    engine.reset();
-                    // The front end forgets everything it was told with it.
-                    memory = None;
-                    pending.evaluate = pending.evaluate.take().or_else(|| current.clone());
+                    // Files asked of the document that goes are written of it first: the
+                    // reset waits for the next round, and what came after it too.
+                    if !pending.exports.is_empty() {
+                        reset = true;
+                        break;
+                    }
+                    forget(&mut engine, &mut current, &mut preview, &mut materials, &mut memory);
+                    // What was asked of it goes with it (the pictures of choices are of kinds
+                    // of nodes, of no document), and it is not computed again: the new one
+                    // comes next.
+                    pending = Pending { choices: std::mem::take(&mut pending.choices), ..Pending::default() };
                 }
             }
         }
@@ -346,7 +365,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                     Some(e) => (emit)(Event::Exported(Err(e))),
                     None => {
                         let (emit, size) = (emit.clone(), engine.resolution());
-                        std::thread::spawn(move || {
+                        write(&mut writing, job.path.clone(), move || {
                             let result = export::write_packed(&job.path, &job.pack, &images, size, job.bit_depth).map(|_| job.path);
                             (emit)(Event::Exported(result));
                         });
@@ -359,7 +378,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                     let emit = emit.clone();
                     // Converting and encoding happen off the engine thread, from the image as
                     // the GPU stores it, a band at a time.
-                    std::thread::spawn(move || {
+                    write(&mut writing, job.path.clone(), move || {
                         let result =
                             export::write_stored(&job.path, &image, job.format, job.bit_depth).map(|_| job.path);
                         (emit)(Event::Exported(result));
@@ -380,6 +399,42 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         engine.keep_scratch(waiting.is_some());
         report_memory(&engine, &mut memory, &emit);
     }
+    // The files being written are written whole before the thread ends: the program quits
+    // once they are, and leaves none half written.
+    for file in writing.into_values() {
+        let _ = file.join();
+    }
+}
+
+/// Write a file off the engine thread once the write of it before is done: of two exports of
+/// a file at once, the one asked for last is the file, however long the one before takes.
+/// Files of their own are written side by side.
+fn write(writing: &mut HashMap<PathBuf, JoinHandle<()>>, path: PathBuf, job: impl FnOnce() + Send + 'static) {
+    writing.retain(|_, file| !file.is_finished());
+    let before = writing.remove(&path);
+    let file = std::thread::spawn(move || {
+        if let Some(before) = before {
+            let _ = before.join();
+        }
+        job();
+    });
+    writing.insert(path, file);
+}
+
+/// Forget the document (see [`Request::Reset`]): every image of the engine, and the graph, what
+/// the views show of it and the memory the front end was told of, which it forgot too.
+fn forget(
+    engine: &mut Engine,
+    current: &mut Option<Current>,
+    preview: &mut Option<NodeId>,
+    materials: &mut Vec<NodeId>,
+    memory: &mut Option<Memory>,
+) {
+    engine.reset();
+    *current = None;
+    *preview = None;
+    materials.clear();
+    *memory = None;
 }
 
 /// Tell the front end how much GPU memory the engine's images take, when that is not what it

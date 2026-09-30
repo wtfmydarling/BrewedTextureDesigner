@@ -537,6 +537,9 @@ fn exports_follow_the_preset_chosen() {
     assert_eq!(w.app.ui.dialog, None);
     assert_eq!(w.app.res.exports_pending, 4);
     assert_eq!(w.app.ui.export_preset, Preset::Unreal, "offered next time");
+    // Another package at once: the files are written all the same, and still waited for.
+    w.send(Message::Proceed(PendingAction::New));
+    assert_eq!(w.app.res.exports_pending, 4);
 }
 
 /// Each save keeps a version of the package, beside the settings and never beside it: File →

@@ -832,7 +832,10 @@ impl Engine {
     /// a view that moved on to an image that is there, which needs no evaluation.
     pub fn sweep(&mut self) {
         let shown = self.shown();
-        self.shown_copies.retain(|id, _| shown.contains(id));
+        // A copy stays while a view shows it: of a node shown, of its image as it is.
+        let states = &self.states;
+        self.shown_copies
+            .retain(|id, (version, _)| shown.contains(id) && states.get(id).is_some_and(|s| s.version == *version));
         if self.keep == Keep::All {
             return;
         }
@@ -1305,6 +1308,8 @@ impl Engine {
         let version = self.version(node)?;
         let producer = self.producer(node);
         let image = if self.image(producer).is_some_and(|img| filterable(img.format())) {
+            // Shown as it is: a copy made of it when it could not be (see `shown_copy`) goes.
+            self.shown_copies.remove(&producer);
             self.ensure_mips(producer);
             let image = self.image(producer)?.clone();
             if !self.given.contains(&image.texture) {

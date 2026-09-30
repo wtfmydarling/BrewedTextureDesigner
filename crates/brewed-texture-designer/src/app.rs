@@ -1732,9 +1732,15 @@ impl App {
         self.ui.frame_request = true;
         self.ui.preview.node = preview;
         self.ui.preview.fit = true;
-        self.res = Results::default();
+        // The files being exported are written all the same, of the document before.
+        self.res = Results { exports_pending: self.res.exports_pending, ..Results::default() };
+        // The engine forgets the document before, and is told this one (see `Request::Reset`).
         self.send(Request::Reset);
-        self.refresh();
+        if (self.doc_key, self.doc.revision()) == self.seen {
+            self.send_graph();
+        } else {
+            self.refresh();
+        }
     }
 
     /// Do `job` off the UI thread (reading or writing a package may take a while), and take

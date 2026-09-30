@@ -1855,6 +1855,167 @@ fn a_texture_a_view_was_given_is_not_taken_by_another_image() {
     assert!(taken.iter().all(|t| t.texture != shown.texture));
 }
 
+/// What a view shows of an image it cannot filter is a copy of it (see `Engine::shown_copy`):
+/// once it shows the image itself, the copy goes.
+#[test]
+fn a_copy_of_what_a_view_shows_goes_when_it_shows_the_image_itself() {
+    use brewed_texture_core::Precision;
+    let Some(mut e) = engine() else { return };
+    e.set_keep(crate::engine::Keep::Read);
+    let mut g = graph();
+    g.precision = Precision::Full;
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    e.set_preview(Some(noise));
+    evaluate_blocking(&mut e, &g);
+    let copy = e.prepare_preview(Some(noise)).flatten().expect("the 2D view shows the noise");
+    assert_eq!(copy.texture.format(), wgpu::TextureFormat::R16Float, "a copy in half floats");
+    e.settle();
+    let image = e.image(noise).expect("its image").bytes();
+    assert_eq!(e.memory_report().shown, image + crate::gpu::texture_bytes(&copy.texture));
+    // In half floats the view filters the image itself.
+    g.precision = Precision::Half;
+    evaluate_blocking(&mut e, &g);
+    let shown = e.prepare_preview(Some(noise)).flatten().expect("the 2D view shows the noise");
+    e.settle();
+    let image = e.image(noise).expect("its image");
+    assert!(shown.texture == image.texture, "the image itself");
+    assert_eq!(e.memory_report().shown, image.bytes(), "and no copy of it besides");
+}
+
+/// Another document opened: the engine thread forgets the one before at once, and computes
+/// nothing until it is sent the new one, which the app lays out meanwhile (the old one again
+/// would be work for nothing, and its images would come to the new document's views).
+#[test]
+fn a_reset_forgets_the_document_and_computes_nothing() {
+    use crate::service::{EngineService, Event, Request};
+    use std::sync::Arc;
+    use std::time::Duration;
+    let Ok(gpu) = Gpu::headless() else { return };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let emit: crate::service::Emit = Arc::new(move |event| {
+        let _ = tx.send(event);
+    });
+    let service = EngineService::spawn(gpu.device.clone(), gpu.queue.clone(), gpu.adapter_info.clone(), emit);
+    let mut g = graph();
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let eval = Arc::new(brewed_texture_core::eval::evaluate(&g));
+    service.send(Request::Preview(Some(noise)));
+    service.send(Request::Evaluate { revision: 1, graph: Arc::new(g), eval });
+    let next = || rx.recv_timeout(Duration::from_secs(20)).expect("the engine thread says what it does");
+    while !matches!(next(), Event::Finished { revision: 1, .. }) {}
+    service.send(Request::Reset);
+    // Until it says it holds nothing, it says nothing of any document (but the memory of the
+    // one before, settled meanwhile).
+    loop {
+        match next() {
+            Event::Memory(m) if m.total() == 0 => break,
+            Event::Memory(_) => {}
+            other => panic!("after the reset: {other:?}"),
+        }
+    }
+}
+
+/// Files asked for just before another document is opened are of the document they were asked
+/// of, however many requests the engine thread takes in one round.
+#[test]
+fn files_asked_for_before_a_reset_are_of_the_document_before() {
+    use crate::service::{EngineService, Event, Request};
+    use std::sync::Arc;
+    use std::time::Duration;
+    let Ok(gpu) = Gpu::headless() else { return };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let emit: crate::service::Emit = Arc::new(move |event| {
+        let _ = tx.send(event);
+    });
+    let service = EngineService::spawn(gpu.device.clone(), gpu.queue.clone(), gpu.adapter_info.clone(), emit);
+    let color = |rgba: [f32; 4]| {
+        let mut g = graph();
+        let node = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+        set(&mut g, node, "color", ParamValue::Color(rgba));
+        (g, node)
+    };
+    let (red, node) = color([1.0, 0.0, 0.0, 1.0]);
+    let (blue, same) = color([0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(node, same, "the same node in both");
+    let send = |g: Graph, revision: u64| {
+        let eval = Arc::new(brewed_texture_core::eval::evaluate(&g));
+        service.send(Request::Evaluate { revision, graph: Arc::new(g), eval });
+    };
+    let dir = std::env::temp_dir().join(format!("brewed-reset-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("red.png");
+    // The red one, a file of it, and at once the blue one in its place.
+    send(red, 1);
+    let depth = brewed_texture_core::nodes::DEPTH_8;
+    let job = crate::ExportJob { node, path: path.clone(), format: 0, bit_depth: depth, pack: Vec::new() };
+    service.send(Request::Export(vec![job]));
+    service.send(Request::Reset);
+    send(blue, 2);
+    loop {
+        if let Event::Exported(result) = rx.recv_timeout(Duration::from_secs(20)).expect("the file written") {
+            assert_eq!(result, Ok(path.clone()));
+            break;
+        }
+    }
+    let written = image::open(&path).expect("a picture").to_rgba8();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(written.get_pixel(0, 0).0, [255, 0, 0, 255], "of the red one");
+}
+
+/// Two exports of a file at once: the one asked for last is the file, however long the one
+/// before takes to write.
+#[test]
+fn the_last_export_asked_for_of_a_file_is_the_file() {
+    use crate::service::{EngineService, Event, Request};
+    use std::sync::Arc;
+    use std::time::Duration;
+    let Ok(gpu) = Gpu::headless() else { return };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let emit: crate::service::Emit = Arc::new(move |event| {
+        let _ = tx.send(event);
+    });
+    let service = EngineService::spawn(gpu.device.clone(), gpu.queue.clone(), gpu.adapter_info.clone(), emit);
+    let mut g = graph();
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let send = |g: &Graph, revision: u64| {
+        let eval = Arc::new(brewed_texture_core::eval::evaluate(g));
+        service.send(Request::Evaluate { revision, graph: Arc::new(g.clone()), eval });
+    };
+    let next = || rx.recv_timeout(Duration::from_secs(60)).expect("the engine thread says what it does");
+    let dir = std::env::temp_dir().join(format!("brewed-twice-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("noise.png");
+    let depth = brewed_texture_core::nodes::DEPTH_16;
+    let job = crate::ExportJob { node: noise, path: path.clone(), format: 0, bit_depth: depth, pack: Vec::new() };
+    // Large and slow to write…
+    service.send(Request::Preview(Some(noise)));
+    g.resolution = [4096, 4096];
+    send(&g, 1);
+    let mut exported = Vec::new();
+    loop {
+        match next() {
+            Event::Finished { revision: 1, .. } => break,
+            Event::Exported(result) => exported.push(result),
+            _ => {}
+        }
+    }
+    service.send(Request::Export(vec![job.clone()]));
+    std::thread::sleep(Duration::from_millis(30));
+    // …and small and quick, asked for while it is written.
+    g.resolution = [64, 64];
+    send(&g, 2);
+    service.send(Request::Export(vec![job]));
+    while exported.len() < 2 {
+        if let Event::Exported(result) = next() {
+            exported.push(result);
+        }
+    }
+    let size = image::image_dimensions(&path);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(exported.iter().all(|r| r.as_ref() == Ok(&path)), "{exported:?}");
+    assert_eq!(size.expect("a picture"), (64, 64), "the last asked for");
+}
+
 /// The app's engine and views, as they run a graph: the 2D view shows one node, the 3D view
 /// the outputs with a usage, and each round goes as the engine thread goes (see
 /// `service::run`). The views hold what they were last given, as the app does.

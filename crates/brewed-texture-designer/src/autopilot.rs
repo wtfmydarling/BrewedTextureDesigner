@@ -1322,14 +1322,16 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                 Step::Wait,
                 Step::Note("after changes that did not wait".into()),
             ]);
-            // Whatever was exported is whole (an export of nodes that went with their document
-            // says so, and writes nothing).
+            // Whatever was exported is whole: of the document it was asked of, and the export
+            // asked for last of each file (at 1024) is the file.
             let race = race.clone();
             steps.push(Step::Check(Box::new(move |_: &App| {
                 let files: Vec<PathBuf> = std::fs::read_dir(&race).ok()?.flatten().map(|e| e.path()).collect();
-                files
-                    .iter()
-                    .find_map(|f| image::open(f).err().map(|e| format!("{} was exported broken: {e}", f.display())))
+                files.iter().find_map(|f| match image::image_dimensions(f) {
+                    Err(e) => Some(format!("{} was exported broken: {e}", f.display())),
+                    Ok(size) if size != (1024, 1024) => Some(format!("{} is {size:?}, not of the last export", f.display())),
+                    Ok(_) => image::open(f).err().map(|e| format!("{} was exported broken: {e}", f.display())),
+                })
             })));
             steps.extend(back_home("changes that did not wait"));
             Some(steps)
