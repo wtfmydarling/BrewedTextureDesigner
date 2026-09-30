@@ -47,7 +47,8 @@ pub fn view<'a>(app: &'a App, dialog: &'a SettingsDialog) -> Element<'a, Message
     // The pages, and which have changes not applied.
     let mut pages = column![].spacing(2).padding([10, 8]);
     for page in Page::ALL {
-        let mut label = row![text(page.name()).size(style::TEXT_SIZE)].align_y(Alignment::Center);
+        let chosen = page == dialog.page;
+        let mut label = row![text(page.name()).size(style::TEXT_SIZE).font(style::chosen_font(chosen))].align_y(Alignment::Center);
         if draft.differ(applied, page) {
             label = label.push(space().width(Length::Fill)).push(text("●").size(style::CAPTION).color(style::TEXT_DIM));
         }
@@ -55,7 +56,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a SettingsDialog) -> Element<'a, Message
             button(label)
                 .width(Length::Fill)
                 .padding([7, 12])
-                .style(style::row_button(page == dialog.page))
+                .style(style::nav_tab(chosen))
                 .on_press(say(SettingsMessage::Page(page))),
         );
     }
@@ -63,7 +64,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a SettingsDialog) -> Element<'a, Message
 
     let page = dialog.page;
     let mut content = column![
-        text(page.name()).size(20).font(style::bold()),
+        text(page.name()).size(20).font(style::heavy()).color(style::TEXT_BRIGHT),
         text(page.about()).size(style::TEXT_SIZE).color(style::TEXT_DIM),
     ]
     .spacing(4)
@@ -83,7 +84,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a SettingsDialog) -> Element<'a, Message
 
     // What is wrong with the settings file, over everything.
     let (file, problems) = app.settings_file();
-    let mut head = column![text("Settings").size(16).font(style::bold())].spacing(10).padding([12, 18]);
+    let mut head = column![text("Settings").size(16).font(style::heavy()).color(style::TEXT_BRIGHT)].spacing(10).padding([12, 18]);
     if !problems.is_empty() {
         let mut said: Vec<String> = problems.iter().take(3).cloned().collect();
         if problems.len() > 3 {
@@ -233,7 +234,9 @@ fn strip<'a>(r: Row<'a>, even: bool) -> Element<'a, Message> {
 fn segmented<'a, T: Copy + PartialEq + 'a>(options: &[(T, &'a str)], chosen: T, enabled: bool, on: impl Fn(T) -> Setting) -> Element<'a, Message> {
     let mut segments = row![].spacing(2);
     for (value, label) in options {
-        let option = button(text(*label).size(style::TEXT_SIZE).width(Length::Fill).align_x(Alignment::Center).wrapping(text::Wrapping::None))
+        let option = button(
+            text(*label).size(style::TEXT_SIZE).font(style::chosen_font(*value == chosen)).width(Length::Fill).align_x(Alignment::Center).wrapping(text::Wrapping::None),
+        )
             .width(Length::Fill)
             .padding([4, 6])
             .style(style::segment(*value == chosen));

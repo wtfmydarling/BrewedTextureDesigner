@@ -60,7 +60,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
     match dialog {
         Dialog::Unsaved(action) => {
             let body = column![
-                text("Save changes?").size(18).font(style::bold()),
+                text("Save changes?").size(18).font(style::heavy()).color(style::TEXT_BRIGHT),
                 text(format!(
                     "\"{}\" has unsaved changes. Do you want to save them before {}?",
                     app.doc.title(),
@@ -100,7 +100,13 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
                 ]
                 .spacing(12)
             };
-            let mut keyboard = column![crate::view::section("Keyboard")].spacing(4);
+            // Headings as the settings' groups have them: white and heavy, a line between.
+            let heading = |t: &'static str| {
+                container(text(t).size(14).font(style::heavy()).color(style::TEXT_BRIGHT))
+                    .padding(iced::Padding { top: 14.0, bottom: 6.0, left: 0.0, right: 0.0 })
+            };
+            let line_between = rule::horizontal(1).style(|_| rule::Style { color: style::LINE, radius: 0.0.into(), fill_mode: rule::FillMode::Full, snap: true });
+            let mut keyboard = column![heading("Keyboard")].spacing(4);
             for (_, commands) in crate::view::settings::GROUPS {
                 for command in *commands {
                     let keys: Vec<String> = app.settings.shortcuts.of(*command).iter().map(|c| c.shown()).collect();
@@ -109,13 +115,13 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
                 }
             }
             keyboard = keyboard.push(line("Esc".into(), "Close menus and dialogs, cancel picking from the screen or a rename".into()));
-            let mut mouse = column![crate::view::section("Mouse")].spacing(4);
+            let mut mouse = column![line_between, heading("Mouse")].spacing(4);
             for (what, does) in MOUSE {
                 mouse = mouse.push(line(what.to_string(), does.to_string()));
             }
             let body = column![
                 row![
-                    text("Keyboard & mouse").size(18).font(style::bold()),
+                    text("Shortcuts and the mouse").size(18).font(style::heavy()).color(style::TEXT_BRIGHT),
                     space().width(Length::Fill),
                     button(text("Change the Keys…").size(style::TEXT_SIZE))
                         .padding([4, 12])
@@ -138,7 +144,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             let title = row![
                 iced::widget::image(crate::brand::logo_large()).width(Length::Fixed(48.0)).height(Length::Fixed(48.0)),
                 column![
-                    text(brewed_texture_core::APP_NAME).size(24).font(style::bold()),
+                    text(brewed_texture_core::APP_NAME).size(24).font(style::heavy()).color(style::TEXT_BRIGHT),
                     text(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(style::TEXT_SIZE).color(style::TEXT_DIM),
                 ]
                 .spacing(2),
@@ -253,7 +259,10 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
     let mut precisions = row![].spacing(0);
     for (precision, said) in [(Precision::Bits8, "8 bits"), (Precision::Half, "16 bits float"), (Precision::Full, "32 bits float")] {
         precisions = precisions.push(
-            button(text(said).size(style::TEXT_SIZE)).padding([5, 10]).style(style::segment(precision == dialog.precision)).on_press(say(N::Precision(precision))),
+            button(text(said).size(style::TEXT_SIZE).font(style::chosen_font(precision == dialog.precision)))
+                .padding([5, 10])
+                .style(style::segment(precision == dialog.precision))
+                .on_press(say(N::Precision(precision))),
         );
     }
     let chosen = dialog.template;
@@ -305,14 +314,14 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
     let segmented = |options: Vec<(&'static str, Message, bool)>| {
         let mut r = row![].spacing(0);
         for (name, message, chosen) in options {
-            r = r.push(button(text(name).size(style::TEXT_SIZE)).padding([5, 10]).style(style::segment(chosen)).on_press(message));
+            r = r.push(button(text(name).size(style::TEXT_SIZE).font(style::chosen_font(chosen))).padding([5, 10]).style(style::segment(chosen)).on_press(message));
         }
         container(r).style(style::segments)
     };
     // (A first base: the window is to be made again, as its user said, and says so.)
     let mut body = column![
         text("ПЕРЕДЕЛАТЬ!!!").size(30).font(style::heavy()).color(style::ERROR),
-        text(format!("Export {}", app.doc.entry().name)).size(18).font(style::bold()),
+        text(format!("Export {}", app.doc.entry().name)).size(18).font(style::heavy()).color(style::TEXT_BRIGHT),
         row![label("Preset"), presets].align_y(Alignment::Start),
     ]
     .spacing(12);
@@ -434,7 +443,7 @@ fn versions<'a>(app: &'a App, dialog: &'a crate::app::versions::VersionsDialog) 
         "Restored, a version takes the package's place, not saved yet: saving saves it. The file stays as it is until then."
     };
     let body = column![
-        text(format!("History of {name}")).size(18).font(style::bold()),
+        text(format!("History of {name}")).size(18).font(style::heavy()).color(style::TEXT_BRIGHT),
         text(format!("Each save keeps the package as it was saved: the newest {kept} of it, beside the settings, never beside the package."))
             .size(style::TEXT_SIZE)
             .color(style::TEXT_DIM),
@@ -496,7 +505,7 @@ fn recover(app: &App) -> Element<'_, Message> {
         button(text(label).size(style::TEXT_SIZE)).padding([6, 14]).style(style).on_press(Message::Recover(choice))
     };
     let body = column![
-        text("Recover unsaved work?").size(18).font(style::bold()),
+        text("Recover unsaved work?").size(18).font(style::heavy()).color(style::TEXT_BRIGHT),
         text(format!(
             "{} stopped without quitting last time. What these packages had not saved yet was kept:",
             brewed_texture_core::APP_NAME
@@ -559,7 +568,7 @@ fn missing_files<'a>(app: &'a App, missing: &'a MissingFiles) -> Element<'a, Mes
         );
     }
     let mut body = column![
-        text("Missing files").size(18).font(style::bold()),
+        text("Missing files").size(18).font(style::heavy()).color(style::TEXT_BRIGHT),
         text(format!(
             "{title} uses files that are not where it says. Say where each one is now: the package says so from \
              then on, and the others that were in the same folder are looked for next to it."

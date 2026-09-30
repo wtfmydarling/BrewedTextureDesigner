@@ -210,6 +210,20 @@ impl App {
                 let _ = self.doc.apply(Edit::SetResolution([1024, 1024]));
                 self.ui.dialog = Some(Dialog::Unsaved(PendingAction::Quit));
             }
+            // The other windows, as the menus open them.
+            "settings" => return self.handle(Message::Settings(super::SettingsMessage::Open)),
+            other if other.starts_with("settings:") => {
+                let name = &other["settings:".len()..];
+                match crate::settings::Page::ALL.into_iter().find(|p| p.name().eq_ignore_ascii_case(name)) {
+                    Some(page) => return self.handle(Message::Settings(super::SettingsMessage::OpenPage(page))),
+                    None => log::warn!("no page '{name}' in the settings"),
+                }
+            }
+            "shortcuts" => self.ui.dialog = Some(Dialog::Shortcuts),
+            "about" => self.ui.dialog = Some(Dialog::About),
+            "new-graph" => return self.handle(Message::NewGraph(super::home::NewGraphMessage::Open(None))),
+            "export" => return self.handle(Message::Export(super::export_dialog::ExportMessage::Open)),
+            "versions" => return self.handle(Message::Versions(super::versions::VersionsMessage::Open)),
             "tile" => {
                 if let Some(id) = first(NodeKind::TILE_GENERATOR) {
                     self.ui.selection = [id].into_iter().collect();

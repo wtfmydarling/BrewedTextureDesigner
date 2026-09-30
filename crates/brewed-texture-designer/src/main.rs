@@ -67,6 +67,7 @@ tools for developing the program:
   --scenario       UI state for the screenshot: add-menu, file-menu, context-menu, home,
                    learn, home-about, example:ID (brick-wall, fx-maps, pixel-math), gradient, math, levels, inputs, transform, tiling, dialog, tile,
                    choices, lighting-menu, tile-sampler, shape:NAME (mat-ball …),
+                   settings, settings:PAGE, shortcuts, about, new-graph, export, versions,
                    environment:FILE, exposure:EV, blur:0..1; several joined by ';'
   --select KIND    select the first node of this type (e.g. math, levels)
   --preview KIND   show the first node of this type in the 2D view

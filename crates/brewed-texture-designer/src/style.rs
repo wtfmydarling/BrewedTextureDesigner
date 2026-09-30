@@ -402,6 +402,25 @@ pub fn segment(chosen: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::S
 }
 
 /// A row of a list or menu: full width, highlighted when hovered or selected.
+/// A page of a side bar (of the settings), as the Home screen's: darker than the bar when it is
+/// the one shown, its text white (and heavier, see its label); lighter when pointed at.
+pub fn nav_tab(chosen: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
+    move |_, status| {
+        let (bg, text) = match (chosen, status) {
+            (true, _) => (Some(gray(17)), TEXT_BRIGHT),
+            (false, button_w::Status::Hovered) => (Some(gray(46)), TEXT),
+            (false, button_w::Status::Pressed) => (Some(gray(52)), TEXT_BRIGHT),
+            (false, _) => (None, TEXT_DIM),
+        };
+        button_w::Style { background: bg.map(Background::Color), text_color: text, border: border::rounded(4), shadow: Shadow::default(), snap: true }
+    }
+}
+
+/// The font of a label of an option: heavier when it is the one chosen.
+pub fn chosen_font(chosen: bool) -> Font {
+    if chosen { bold() } else { ui_font() }
+}
+
 pub fn row_button(selected: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
     move |_, status| {
         let bg = match (selected, status) {
