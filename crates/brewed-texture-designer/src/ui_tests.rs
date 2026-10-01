@@ -3700,3 +3700,27 @@ fn files_are_renamed_in_the_explorer() {
     w.send(Message::Undo);
     assert_eq!(name(&w).as_deref(), Some("bricks.png"));
 }
+
+/// Under an open menu nothing takes the cursor (see `widget::blind`): over a menu whose submenu
+/// was open, the Explorer under it took the cursor as its own and showed its tooltips. What is
+/// under the menus is told the cursor came in while they are closed, and not while one is open.
+#[test]
+fn nothing_under_an_open_menu_takes_the_cursor() {
+    use crate::app::MenuId;
+    use crate::widget::blind::blind;
+    // What is under the menus says the cursor came in by opening the Help menu.
+    fn under_a_menu(app: &App) -> Element<'_, Message> {
+        let under = iced::widget::container(iced::widget::text("under")).width(iced::Length::Fill).height(iced::Length::Fill);
+        blind(iced::widget::mouse_area(under).on_enter(Message::Menu(Some(MenuId::Help))), app.ui.menu.is_some()).into()
+    }
+    let Some(mut w) = Harness::started(Box::new(under_a_menu), Size::new(400.0, 300.0), StartupOptions::default()) else {
+        eprintln!("no GPU for the headless renderer: test skipped");
+        return;
+    };
+    w.hover(Point::new(200.0, 150.0));
+    assert_eq!(w.app.ui.menu, Some(MenuId::Help), "with the menus closed, it takes the cursor");
+    w.app.ui.menu = Some(MenuId::File);
+    w.hover(Point::new(-50.0, -50.0));
+    w.hover(Point::new(200.0, 150.0));
+    assert_eq!(w.app.ui.menu, Some(MenuId::File), "under an open menu, it does not");
+}

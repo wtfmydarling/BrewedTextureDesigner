@@ -23,6 +23,7 @@ pub mod toolbar;
 pub mod view3d;
 
 use iced::widget::{column, container, mouse_area, opaque, pane_grid, pin, row, space, stack, text, tooltip};
+use crate::widget::blind::blind;
 use iced::{Alignment, Element, Length, Point};
 
 use crate::app::{App, Message, Pane};
@@ -54,17 +55,19 @@ pub fn root(app: &App) -> Element<'_, Message> {
     });
 
     // The Home screen, in place of the editor while it is shown (the editor is behind it); with
-    // it, the probe that has the engine start meanwhile (see `gpu_probe`).
+    // it, the probe that has the engine start meanwhile (see `gpu_probe`). Under an open menu
+    // nothing takes the cursor (see `widget::blind`).
+    let menu_open = app.ui.menu.is_some();
     let window = match app.ui.home {
         Some(page) => column![
             toolbar::menu_bar(app),
-            container(home::view(app, page)).height(Length::Fill).style(style::window_bar),
+            blind(container(home::view(app, page)).height(Length::Fill).style(style::window_bar), menu_open),
             gpu_probe::probe(),
         ],
         None => column![
             toolbar::menu_bar(app),
-            container(grid).height(Length::Fill).style(style::window_bar),
-            toolbar::status_bar(app),
+            blind(container(grid).height(Length::Fill).style(style::window_bar), menu_open),
+            blind(toolbar::status_bar(app), menu_open),
         ],
     };
     let mut layers: Vec<Element<'_, Message>> = vec![window.into()];
