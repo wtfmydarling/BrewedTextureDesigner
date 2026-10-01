@@ -243,7 +243,7 @@ mod tests {
         let names = |preset: Preset, directx: bool| plan(&g, "Rusty Metal", preset, directx).into_iter().map(|f| f.name).collect::<Vec<_>>();
         assert_eq!(
             names(Preset::Outputs, false),
-            ["basecolor", "normal", "roughness", "metallic", "height", "ambientocclusion"]
+            ["baseColor", "normal", "specularRoughness", "baseMetalness", "height", "ambientOcclusion"]
         );
         assert_eq!(names(Preset::Unreal, false), ["T_Rusty_Metal_BaseColor", "T_Rusty_Metal_Normal", "T_Rusty_Metal_ORM", "T_Rusty_Metal_Height"]);
         assert_eq!(
@@ -268,7 +268,7 @@ mod tests {
             Source::Output { node, .. } => g.node(*node).map(|n| n.text("name").to_string()),
             Source::Value(_) => None,
         };
-        assert_eq!(orm.iter().map(usage).collect::<Vec<_>>(), [Some("ambientocclusion".into()), Some("roughness".into()), Some("metallic".into())]);
+        assert_eq!(orm.iter().map(usage).collect::<Vec<_>>(), [Some("ambientOcclusion".into()), Some("specularRoughness".into()), Some("baseMetalness".into())]);
         let hdrp = plan(&g, "Rusty Metal", Preset::UnityHdrp, false);
         let Planned::Pack(mask) = &hdrp[2].what else { panic!() };
         assert_eq!(mask[2], Source::Value(1.0));

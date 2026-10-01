@@ -66,7 +66,7 @@ const SHORTCUTS: &str = "shortcuts";
 
 impl HomeLists {
     pub fn new() -> HomeLists {
-        let start = Template::ALL
+        let start = Template::STARTERS
             .into_iter()
             .map(|t| {
                 let detail = match t.outputs().len() {
@@ -74,10 +74,12 @@ impl HomeLists {
                     _ => t.kind().to_string(),
                 };
                 let glyph = match t.category() {
-                    Category::Pbr => Glyph::Material,
-                    Category::Filters => Glyph::Filter,
+                    Category::OpenPbr => Glyph::Material,
+                    Category::Hdri => Glyph::Light,
                     Category::PixelProcessor => Glyph::Grid,
                     Category::FxMap => Glyph::Pattern,
+                    Category::ScanProcessing => Glyph::Camera,
+                    Category::Filters => Glyph::Filter,
                     Category::Others => Glyph::Graph,
                 };
                 Start { id: t.id().into(), title: t.full_name().into(), detail, glyph }
@@ -99,7 +101,7 @@ impl HomeLists {
             .collect();
         lessons.push(Lesson {
             id: SHORTCUTS.into(),
-            title: "Shortcuts and the mouse".into(),
+            title: "Shortcuts".into(),
             about: "What every key does (each can be given another in the settings), and the mouse in the graph and the views.".into(),
             picture: None,
             glyph: Glyph::Keyboard,
@@ -233,15 +235,7 @@ impl App {
             Event::Start(id) => {
                 if let Some(template) = Template::from_id(&id) {
                     self.ui.last_template = template;
-                    let size = self.settings.graph_size;
-                    let dialog = NewGraphDialog {
-                        into: None,
-                        name: "Graph".into(),
-                        template,
-                        size,
-                        linked: size[0] == size[1],
-                        precision: self.settings.graph_precision,
-                    };
+                    let dialog = NewGraphDialog::new(None, template, self.settings.graph_size, self.settings.graph_precision);
                     self.create_graph(dialog);
                 }
             }
@@ -264,15 +258,7 @@ impl App {
     pub(crate) fn new_graph_message(&mut self, message: NewGraphMessage) -> Task<Message> {
         if let NewGraphMessage::Open(into) = message {
             self.close_popups();
-            let size = self.settings.graph_size;
-            let dialog = NewGraphDialog {
-                into,
-                name: "Graph".into(),
-                template: self.ui.last_template,
-                size,
-                linked: size[0] == size[1],
-                precision: self.settings.graph_precision,
-            };
+            let dialog = NewGraphDialog::new(into, self.ui.last_template, self.settings.graph_size, self.settings.graph_precision);
             self.ui.dialog = Some(Dialog::NewGraph(dialog));
             return iced::widget::operation::focus(crate::view::dialogs::new_graph_name_id());
         }
@@ -280,27 +266,34 @@ impl App {
         match message {
             NewGraphMessage::Open(_) => {}
             NewGraphMessage::Name(name) => dialog.name = name,
-            NewGraphMessage::Template(template) => dialog.template = template,
+            NewGraphMessage::Template(template) => dialog.choose(template),
             NewGraphMessage::Into(into) => dialog.into = into,
             NewGraphMessage::Width(width) => {
+                // What is set by hand stays, whatever template is chosen after.
+                dialog.before = None;
                 dialog.size[0] = width.clamp(16, 8192);
                 if dialog.linked {
                     dialog.size[1] = dialog.size[0];
                 }
             }
             NewGraphMessage::Height(height) => {
+                dialog.before = None;
                 dialog.size[1] = height.clamp(16, 8192);
                 if dialog.linked {
                     dialog.size[0] = dialog.size[1];
                 }
             }
             NewGraphMessage::Link(linked) => {
+                dialog.before = None;
                 dialog.linked = linked;
                 if linked {
                     dialog.size[1] = dialog.size[0];
                 }
             }
-            NewGraphMessage::Precision(precision) => dialog.precision = precision,
+            NewGraphMessage::Precision(precision) => {
+                dialog.before = None;
+                dialog.precision = precision;
+            }
             NewGraphMessage::Layout(layout) => self.ui.template_layout = layout,
             NewGraphMessage::Create => {
                 let dialog = dialog.clone();
@@ -403,6 +396,35 @@ pub struct NewGraphDialog {
     pub size: [u32; 2],
     pub linked: bool,
     pub precision: Precision,
+    /// What the size, its link and the precision were before the template chosen set them
+    /// (a panorama's): they come back when another is chosen.
+    pub before: Option<([u32; 2], bool, Precision)>,
+}
+
+impl NewGraphDialog {
+    /// The dialog of a graph of `template` (into the package open as `into`, or a new one), its
+    /// images `size` and `precision` unless the template needs others.
+    pub fn new(into: Option<u64>, template: Template, size: [u32; 2], precision: Precision) -> NewGraphDialog {
+        let mut dialog = NewGraphDialog { into, name: "Graph".into(), template, size, linked: size[0] == size[1], precision, before: None };
+        dialog.choose(template);
+        dialog
+    }
+
+    /// Choose `template`: what it needs of the size and the precision is set (a panorama is
+    /// twice as wide as high, in 32-bit floats), and what was there before comes back with
+    /// another.
+    pub fn choose(&mut self, template: Template) {
+        if let Some((size, linked, precision)) = self.before.take() {
+            (self.size, self.linked, self.precision) = (size, linked, precision);
+        }
+        let fitted = template.fit(self.size, self.precision);
+        if fitted != (self.size, self.precision) {
+            self.before = Some((self.size, self.linked, self.precision));
+            (self.size, self.precision) = fitted;
+            self.linked = fitted.0[0] == fitted.0[1];
+        }
+        self.template = template;
+    }
 }
 
 #[derive(Clone, Debug)]

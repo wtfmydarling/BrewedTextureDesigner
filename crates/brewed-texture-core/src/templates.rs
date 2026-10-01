@@ -1,31 +1,42 @@
-//! What a new graph starts as (File → New Package…, New Graph…, the Home screen), as
-//! Substance Designer's templates; and the packages the Home screen's Learn opens, made here
-//! rather than kept as files: they are what the program makes of them now.
+//! What a new graph starts as (File → New Graph…, the Home screen), grouped as Substance
+//! Designer groups its templates, as far as they make sense here: none for another company's
+//! program or format (a filter that runs inside another program, a measured material only its
+//! maker's library reads); and the packages the Home screen's Learn opens, made here rather
+//! than kept as files: they are what the program makes of them now.
 
 use crate::graph::{Graph, NodeId, Precision};
 use crate::nodes::{NodeKind, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL, USAGE_ROUGHNESS};
 use crate::package::Package;
 use crate::types::ParamValue;
 
-/// A category of templates, as Substance Designer lists its.
+/// A category of templates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Category {
-    Pbr,
-    Filters,
+    /// Materials of OpenPBR, the open standard of the Academy Software Foundation that Adobe's
+    /// and Autodesk's material models gave way to.
+    OpenPbr,
+    /// Light all around: environments.
+    Hdri,
     PixelProcessor,
     FxMap,
+    /// Materials made of scans.
+    ScanProcessing,
+    Filters,
     Others,
 }
 
 impl Category {
-    pub const ALL: [Category; 5] = [Category::Pbr, Category::Filters, Category::PixelProcessor, Category::FxMap, Category::Others];
+    pub const ALL: [Category; 7] =
+        [Category::OpenPbr, Category::Hdri, Category::PixelProcessor, Category::FxMap, Category::ScanProcessing, Category::Filters, Category::Others];
 
     pub fn name(self) -> &'static str {
         match self {
-            Category::Pbr => "PBR (Metallic/Roughness)",
-            Category::Filters => "Filters",
+            Category::OpenPbr => "OpenPBR",
+            Category::Hdri => "HDRi",
             Category::PixelProcessor => "Pixel Processor",
             Category::FxMap => "FX-Map",
+            Category::ScanProcessing => "Scan Processing",
+            Category::Filters => "Filters",
             Category::Others => "Others",
         }
     }
@@ -34,36 +45,58 @@ impl Category {
 /// What a new graph starts as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Template {
-    /// The maps of a physically based material, metallic and rough, each an Output made for
-    /// the 3D view, fed a uniform value to be replaced.
+    /// The maps of an OpenPBR material, each an Output made for the 3D view, fed a uniform
+    /// value to be replaced.
     Pbr,
-    /// Those, and an emissive map.
+    /// Those, and the color of its emission.
     PbrEmissive,
-    /// A graph that changes a grayscale image: an image input to an output.
-    GrayFilter,
-    /// The same, of color.
-    ColorFilter,
+    /// An environment light: a studio, as a panorama twice as wide as high, in floats.
+    StudioPanorama,
     /// Pixel Math to an output.
     PixelProcessor,
     /// An FX-Map to an output.
     FxMap,
+    /// The maps of a scan made into those of a material: tiled, the light it was taken in
+    /// taken away.
+    ScanProcessing,
+    /// A graph that changes a grayscale image: an image input to an output.
+    GrayFilter,
+    /// The same, of color.
+    ColorFilter,
     /// Nothing.
     Empty,
 }
 
 impl Template {
-    pub const ALL: [Template; 7] =
-        [Template::Pbr, Template::PbrEmissive, Template::GrayFilter, Template::ColorFilter, Template::PixelProcessor, Template::FxMap, Template::Empty];
+    pub const ALL: [Template; 9] = [
+        Template::Pbr,
+        Template::PbrEmissive,
+        Template::StudioPanorama,
+        Template::PixelProcessor,
+        Template::FxMap,
+        Template::ScanProcessing,
+        Template::GrayFilter,
+        Template::ColorFilter,
+        Template::Empty,
+    ];
 
-    /// What names it where a name of words will not do (what the Home screen is told of it).
+    /// Those the Home screen offers in its row, one of each kind; the window of a new graph
+    /// has them all.
+    pub const STARTERS: [Template; 6] =
+        [Template::Pbr, Template::StudioPanorama, Template::PixelProcessor, Template::FxMap, Template::ScanProcessing, Template::Empty];
+
+    /// What names it where a name of words will not do (what the Home screen is told of it,
+    /// what the workspace keeps of the one chosen last).
     pub fn id(self) -> &'static str {
         match self {
             Template::Pbr => "pbr",
             Template::PbrEmissive => "pbr-emissive",
-            Template::GrayFilter => "gray-filter",
-            Template::ColorFilter => "color-filter",
+            Template::StudioPanorama => "studio-panorama",
             Template::PixelProcessor => "pixel-processor",
             Template::FxMap => "fx-map",
+            Template::ScanProcessing => "scan-processing",
+            Template::GrayFilter => "gray-filter",
+            Template::ColorFilter => "color-filter",
             Template::Empty => "empty",
         }
     }
@@ -74,10 +107,12 @@ impl Template {
 
     pub fn category(self) -> Category {
         match self {
-            Template::Pbr | Template::PbrEmissive => Category::Pbr,
-            Template::GrayFilter | Template::ColorFilter => Category::Filters,
+            Template::Pbr | Template::PbrEmissive => Category::OpenPbr,
+            Template::StudioPanorama => Category::Hdri,
             Template::PixelProcessor => Category::PixelProcessor,
             Template::FxMap => Category::FxMap,
+            Template::ScanProcessing => Category::ScanProcessing,
+            Template::GrayFilter | Template::ColorFilter => Category::Filters,
             Template::Empty => Category::Others,
         }
     }
@@ -86,11 +121,13 @@ impl Template {
     pub fn name(self) -> &'static str {
         match self {
             Template::Pbr => "Base",
-            Template::PbrEmissive => "Base with Emissive",
-            Template::GrayFilter => "Grayscale Filter",
-            Template::ColorFilter => "Color Filter",
+            Template::PbrEmissive => "Base with Emission",
+            Template::StudioPanorama => "Studio Panorama",
             Template::PixelProcessor => "Pixel Processor",
             Template::FxMap => "FX-Map",
+            Template::ScanProcessing => "Material from a Scan",
+            Template::GrayFilter => "Grayscale Filter",
+            Template::ColorFilter => "Color Filter",
             Template::Empty => "Empty",
         }
     }
@@ -98,8 +135,10 @@ impl Template {
     /// Its name where its category is not said with it (the Home screen's row).
     pub fn full_name(self) -> &'static str {
         match self {
-            Template::Pbr => "PBR Material",
-            Template::PbrEmissive => "PBR with Emissive",
+            Template::Pbr => "OpenPBR Material",
+            Template::PbrEmissive => "OpenPBR with Emission",
+            Template::StudioPanorama => "HDRi Panorama",
+            Template::ScanProcessing => "Scan Processing",
             Template::Empty => "Empty Graph",
             other => other.name(),
         }
@@ -108,7 +147,8 @@ impl Template {
     /// What kind of graph it makes.
     pub fn kind(self) -> &'static str {
         match self {
-            Template::Pbr | Template::PbrEmissive => "Standard material",
+            Template::Pbr | Template::PbrEmissive | Template::ScanProcessing => "Standard material",
+            Template::StudioPanorama => "Environment light",
             Template::GrayFilter | Template::ColorFilter => "Filter",
             Template::PixelProcessor | Template::FxMap => "Generator",
             Template::Empty => "Empty graph",
@@ -119,10 +159,20 @@ impl Template {
     pub fn about(self) -> &'static str {
         match self {
             Template::Pbr => {
-                "The maps of a physically based material, as game engines and renderers read them: each an Output the \
-                 3D view shows, fed a uniform value to replace with what makes it."
+                "The maps of an OpenPBR material, named as the open standard names them: each an Output the 3D view \
+                 shows, fed a uniform value to replace with what makes it."
             }
-            Template::PbrEmissive => "The maps of Base, and an emissive map: what glows of itself, black where nothing does.",
+            Template::PbrEmissive => "The maps of Base, and the color of its emission: what glows of itself, black where nothing does.",
+            Template::StudioPanorama => {
+                "Light all around, as a panorama twice as wide as high in 32-bit floats: a studio of softboxes far \
+                 brighter than white. Exported as EXR, it lights the 3D view."
+            }
+            Template::PixelProcessor => "Every pixel computed by Pixel Math: an expression of where it is (u, v), of values and of images read anywhere.",
+            Template::FxMap => "Patterns scattered, stacked and colored as the program of an FX-Map says.",
+            Template::ScanProcessing => {
+                "A scan made a material: its color, normals and height tiled, the light it was photographed in taken \
+                 away, its roughness and occlusion worked out."
+            }
             Template::GrayFilter => {
                 "Changes a grayscale image: the image the graph takes, what is done to it, and its output. Used as a node, \
                  it filters what is connected to it."
@@ -131,8 +181,6 @@ impl Template {
                 "Changes a color image: the image the graph takes, what is done to it, and its output. Used as a node, it \
                  filters what is connected to it."
             }
-            Template::PixelProcessor => "Every pixel computed by Pixel Math: an expression of where it is (u, v), of values and of images read anywhere.",
-            Template::FxMap => "Patterns scattered, stacked and colored as the program of an FX-Map says.",
             Template::Empty => "A graph with nothing in it.",
         }
     }
@@ -140,29 +188,42 @@ impl Template {
     /// The Outputs it has: their names, as their files are named.
     pub fn outputs(self) -> &'static [&'static str] {
         match self {
-            Template::Pbr => &["basecolor", "normal", "roughness", "metallic", "height", "ambientocclusion"],
-            Template::PbrEmissive => &["basecolor", "normal", "roughness", "metallic", "height", "ambientocclusion", "emissive"],
+            Template::Pbr => &["baseColor", "normal", "specularRoughness", "baseMetalness", "height", "ambientOcclusion"],
+            Template::PbrEmissive => &["baseColor", "normal", "specularRoughness", "baseMetalness", "height", "ambientOcclusion", "emissionColor"],
+            Template::StudioPanorama => &["panorama"],
+            Template::ScanProcessing => &["baseColor", "normal", "specularRoughness", "height", "ambientOcclusion"],
             Template::GrayFilter | Template::ColorFilter | Template::PixelProcessor | Template::FxMap => &["output"],
             Template::Empty => &[],
         }
     }
 
-    /// The graph, its images `size` pixels wide and high, kept in `precision`.
+    /// The size and the precision of its graph, of those asked: a panorama is twice as wide as
+    /// high (as wide as asked), and keeps its light, far above white, in 32-bit floats.
+    pub fn fit(self, size: [u32; 2], precision: Precision) -> ([u32; 2], Precision) {
+        match self {
+            Template::StudioPanorama => ([size[0].max(32), (size[0] / 2).max(16)], Precision::Full),
+            _ => (size, precision),
+        }
+    }
+
+    /// The graph, its images `size` pixels wide and high, kept in `precision` (as `fit` has
+    /// them).
     pub fn graph(self, size: [u32; 2], precision: Precision) -> Graph {
+        let (size, precision) = self.fit(size, precision);
         let mut g = Graph { resolution: size, precision, ..Graph::default() };
         match self {
             Template::Pbr | Template::PbrEmissive => {
                 // Each map: what feeds it (to be replaced), its value, and what the 3D view takes it for.
                 let mut maps: Vec<(&str, [f32; 4], bool, u32)> = vec![
-                    ("basecolor", [0.5, 0.5, 0.5, 1.0], false, USAGE_BASE_COLOR),
+                    ("baseColor", [0.5, 0.5, 0.5, 1.0], false, USAGE_BASE_COLOR),
                     ("normal", [0.5, 0.5, 1.0, 1.0], false, USAGE_NORMAL),
-                    ("roughness", [0.5, 0.5, 0.5, 1.0], true, USAGE_ROUGHNESS),
-                    ("metallic", [0.0, 0.0, 0.0, 1.0], true, USAGE_METALLIC),
+                    ("specularRoughness", [0.5, 0.5, 0.5, 1.0], true, USAGE_ROUGHNESS),
+                    ("baseMetalness", [0.0, 0.0, 0.0, 1.0], true, USAGE_METALLIC),
                     ("height", [0.5, 0.5, 0.5, 1.0], true, USAGE_HEIGHT),
-                    ("ambientocclusion", [1.0, 1.0, 1.0, 1.0], true, USAGE_AO),
+                    ("ambientOcclusion", [1.0, 1.0, 1.0, 1.0], true, USAGE_AO),
                 ];
                 if self == Template::PbrEmissive {
-                    maps.push(("emissive", [0.0, 0.0, 0.0, 1.0], false, USAGE_EMISSIVE));
+                    maps.push(("emissionColor", [0.0, 0.0, 0.0, 1.0], false, USAGE_EMISSIVE));
                 }
                 let rows = maps.len() as f32;
                 for (row, (name, color, gray, usage)) in maps.into_iter().enumerate() {
@@ -176,13 +237,53 @@ impl Template {
                 frame(
                     &mut g,
                     "Replace each uniform value with what makes the map",
-                    "Each Output is one map of the material, named as its file is, and the 3D view uses it as its \
-                     usage says. The uniform colors only hold a value: connect what makes each map in their place.",
+                    "Each Output is one map of an OpenPBR material, named as the standard names it, and the 3D view \
+                     uses it as its usage says. The uniform colors only hold a value: connect what makes each map in \
+                     their place.",
                     [-30.0, -110.0],
                     [568.0, 110.0 + (rows - 1.0) * ROW + TALL + 30.0],
                     GRAY,
                 );
             }
+            Template::StudioPanorama => {
+                let studio = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
+                set(
+                    &mut g,
+                    studio,
+                    "expression",
+                    ParamValue::Text(
+                        "# Where the pixel looks: u once around, v from straight up (0) to straight down (1).\n\
+                         up = cos(v * pi)\n\
+                         # The backdrop: a dark floor, a soft gray above the horizon.\n\
+                         backdrop = lerp(0.03, 0.2, smoothstep(-0.15, 0.25, up))\n\
+                         # Two softboxes, far brighter than white: light, not color.\n\
+                         key = (1 - smoothstep(0.04, 0.05, abs(u - 0.25))) * (1 - smoothstep(0.07, 0.08, abs(v - 0.3)))\n\
+                         fill = (1 - smoothstep(0.07, 0.08, abs(u - 0.7))) * (1 - smoothstep(0.04, 0.05, abs(v - 0.35)))\n\
+                         # A glow straight above.\n\
+                         top = smoothstep(0.9, 0.98, up)\n\
+                         light = backdrop + key * 16 + fill * 5 + top * 2\n\
+                         vec3(light, light, light)"
+                            .into(),
+                    ),
+                );
+                let panorama = output(&mut g, "panorama", 0, [340.0, 0.0]);
+                // Its three channels, in 32-bit floats: an EXR.
+                set(&mut g, panorama, "format", ParamValue::Enum(1));
+                set(&mut g, panorama, "bit_depth", ParamValue::Enum(crate::nodes::DEPTH_32F));
+                let _ = g.connect(studio, "o:output", panorama, "i:input");
+                frame(
+                    &mut g,
+                    "Light all around, as a panorama",
+                    "An environment light is a panorama: u goes once around, v from straight up to straight down, so \
+                     it is twice as wide as high. Pixel Math draws a studio in it: a backdrop, two softboxes and a \
+                     glow above, far brighter than white (light, not color: kept in 32-bit floats). Exported as EXR, \
+                     it lights the 3D view (the sun button, Load an Environment Image…).",
+                    [-30.0, -150.0],
+                    [568.0, 150.0 + 216.0 + 30.0],
+                    GRAY,
+                );
+            }
+            Template::ScanProcessing => scan_processing(&mut g),
             Template::GrayFilter | Template::ColorFilter => {
                 let input = g.add_node(NodeKind::IMAGE_INPUT, [0.0, 0.0]);
                 let _ = g.bind_variable(input, "input");
@@ -236,6 +337,83 @@ impl Template {
         }
         g
     }
+}
+
+/// The graph of Scan Processing: the maps of a scan, each an image input, tiled; the color's
+/// light taken away; roughness and occlusion worked out; each map an Output.
+fn scan_processing(g: &mut Graph) {
+    use crate::nodes::ImageKind;
+    // The scan: an input a row, of the color it is while it has no picture (a flat normal).
+    let mut input = |name: &str, kind: ImageKind, color: [f32; 4], y: f32| {
+        let node = g.add_node(NodeKind::IMAGE_INPUT, [0.0, y]);
+        let _ = g.bind_variable(node, name);
+        if let Some(var) = g.variable_mut(name) {
+            (var.value, var.default) = (crate::Value::Color(color), crate::Value::Color(color));
+            if let Some(image) = var.image.as_mut() {
+                image.kind = kind;
+            }
+        }
+        let tiled = g.add_node(NodeKind::MAKE_IT_TILE, [300.0, y]);
+        let _ = g.connect(node, "o:output", tiled, "i:input");
+        tiled
+    };
+    let albedo = input("albedo", ImageKind::Color, [0.5, 0.5, 0.5, 1.0], 0.0);
+    let normal = input("normal", ImageKind::Color, [0.5, 0.5, 1.0, 1.0], 2.0 * ROW);
+    // ("height" says the height of the image in pixels where expressions read it.)
+    let height = input("heightmap", ImageKind::Gray, [0.5, 0.5, 0.5, 1.0], 3.0 * ROW);
+    // The light it was photographed in: the color blurred far; the color divided by it is the
+    // surface's own.
+    let light = g.add_node(NodeKind::BLUR, [600.0, 0.0]);
+    set(g, light, "radius", ParamValue::Float(48.0));
+    let _ = g.connect(albedo, "o:output", light, "i:input");
+    let delit = g.add_node(NodeKind::PIXEL_MATH, [900.0, 0.0]);
+    set(
+        g,
+        delit,
+        "expression",
+        ParamValue::Text(
+            "# How bright the light was where the pixel is.\n\
+             shade = light.r * 0.3 + light.g * 0.59 + light.b * 0.11\n\
+             # The surface's own color: as bright everywhere as half white.\n\
+             albedo.rgb / max(shade, 0.02) * 0.5"
+                .into(),
+        ),
+    );
+    let _ = g.connect(albedo, "o:output", delit, &crate::graph::var_socket_key("albedo"));
+    let _ = g.connect(light, "o:output", delit, &crate::graph::var_socket_key("light"));
+    let rough = g.add_node(NodeKind::PIXEL_MATH, [900.0, ROW]);
+    set(
+        g,
+        rough,
+        "expression",
+        ParamValue::Text("# Darker in the color, rougher.\nlum = color.r * 0.3 + color.g * 0.59 + color.b * 0.11\n0.45 + 0.4 * (1 - clamp(lum, 0, 1))".into()),
+    );
+    let _ = g.connect(delit, "o:output", rough, &crate::graph::var_socket_key("color"));
+    let occlusion = g.add_node(NodeKind::AMBIENT_OCCLUSION, [600.0, 4.0 * ROW]);
+    let _ = g.connect(height, "o:output", occlusion, "i:input");
+    // The maps, in the order their files are listed.
+    let maps = [
+        ("baseColor", USAGE_BASE_COLOR, delit, 0.0),
+        ("normal", USAGE_NORMAL, normal, 2.0 * ROW),
+        ("specularRoughness", USAGE_ROUGHNESS, rough, ROW),
+        ("height", USAGE_HEIGHT, height, 3.0 * ROW),
+        ("ambientOcclusion", USAGE_AO, occlusion, 4.0 * ROW),
+    ];
+    for (name, usage, from, y) in maps {
+        let out = output(g, name, usage, [1200.0, y]);
+        let _ = g.connect(from, "o:output", out, "i:input");
+    }
+    frame(
+        g,
+        "A material from a scan",
+        "A scan of a surface, as a camera and a scanner make it: its color, its normals and its height, each an \
+         Input. Make It Tile blends each over its edges, so that it repeats without a seam. A photograph keeps the \
+         light it was taken in: Blur finds that light, and the color divided by it is the surface's own. The \
+         roughness follows the color, darker rougher, and Ambient Occlusion comes of the height. The pictures          of the scan are chosen in Input Values.",
+        [-30.0, -130.0],
+        [1428.0, 130.0 + 4.0 * ROW + TALL + 30.0],
+        GRAY,
+    );
 }
 
 fn set(g: &mut Graph, node: NodeId, key: &str, value: ParamValue) {
@@ -556,6 +734,10 @@ mod tests {
     fn templates_and_examples_are_whole() {
         let pbr = Template::Pbr.graph([512, 256], Precision::Full);
         assert_eq!((pbr.resolution, pbr.precision), ([512, 256], Precision::Full));
+        // A panorama: twice as wide as high, as wide as asked, its light in 32-bit floats.
+        let panorama = Template::StudioPanorama.graph([1024, 1024], Precision::Half);
+        assert_eq!((panorama.resolution, panorama.precision), ([1024, 512], Precision::Full));
+        assert!(Template::STARTERS.iter().all(|t| Template::ALL.contains(t)));
         assert!(Template::Empty.graph([2048, 2048], Precision::Half).nodes.is_empty());
         let mut graphs = Vec::new();
         for template in Template::ALL {

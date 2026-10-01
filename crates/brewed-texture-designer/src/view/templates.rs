@@ -19,6 +19,11 @@ pub const PICTURE: [f32; 2] = [150.0, 100.0];
 
 /// The picture of `template`: what it makes, drawn.
 fn picture(template: Template) -> svg::Handle {
+    svg::Handle::from_memory(picture_svg(template).into_bytes())
+}
+
+/// The picture of `template`, as SVG.
+fn picture_svg(template: Template) -> String {
     let mut art = String::from(r##"<rect width="150" height="100" fill="#1a1a1a"/>"##);
     match template {
         Template::Pbr | Template::PbrEmissive => {
@@ -37,6 +42,44 @@ fn picture(template: Template) -> svg::Handle {
                     <path d="{cracks}" fill="none" stroke="#ffb35c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>"##
                 );
             }
+        }
+        Template::StudioPanorama => {
+            // The studio as a panorama: twice as wide as high, the horizon across its middle,
+            // two softboxes and a glow above, brighter than anything else.
+            art.push_str(
+                r##"<defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#686868"/><stop offset="0.49" stop-color="#383838"/><stop offset="0.51" stop-color="#161616"/><stop offset="1" stop-color="#0b0b0b"/></linearGradient><radialGradient id="glow" cx="0.5" cy="0" r="0.6"><stop offset="0" stop-color="#fff" stop-opacity="0.55"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+                <rect x="8" y="17" width="134" height="67" rx="3" fill="url(#sky)"/>
+                <rect x="8" y="17" width="134" height="30" rx="3" fill="url(#glow)"/>
+                <path d="M8 50.5h134" stroke="#8a8a8a" stroke-width="0.8" opacity="0.5"/>
+                <rect x="36" y="29" width="13" height="17" rx="1.5" fill="#fff"/>
+                <rect x="96" y="33" width="19" height="10" rx="1.5" fill="#d8d8d8"/>
+                <rect x="8.5" y="17.5" width="133" height="66" rx="3" fill="none" stroke="#5a5a5a"/>"##,
+            );
+        }
+        Template::ScanProcessing => {
+            // A photograph of stones, lit from one side; the material made of it, tiled, as
+            // bright all over.
+            let stones = |dx: f32, dy: f32, k: f32| {
+                [(12.0, 13.0, 7.0, 5.0), (27.0, 10.0, 6.0, 4.5), (37.0, 22.0, 8.0, 6.0), (17.0, 31.0, 7.5, 5.5), (33.0, 39.0, 6.5, 4.0), (8.0, 42.0, 4.5, 3.5)]
+                    .iter()
+                    .map(|(x, y, rx, ry)| format!(r##"<ellipse cx="{}" cy="{}" rx="{}" ry="{}"/>"##, dx + x * k, dy + y * k, rx * k, ry * k))
+                    .collect::<String>()
+            };
+            let _ = write!(
+                art,
+                r##"<defs><linearGradient id="lit" x1="0" y1="0" x2="1" y2="0.3"><stop offset="0" stop-color="#cdbda4"/><stop offset="1" stop-color="#4a4037"/></linearGradient></defs>
+                <rect x="10" y="25" width="50" height="50" rx="3" fill="url(#lit)"/>
+                <g fill="#000" opacity="0.28">{}</g>
+                <path d="M66 50h11m-5-5 5 5-5 5" fill="none" stroke="#bdbdbd" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                <rect x="84" y="25" width="50" height="50" rx="3" fill="#8b7d6a"/>
+                <g fill="#000" opacity="0.22">{}{}{}{}</g>
+                <path d="M109 25v50M84 50h50" stroke="#6f6354" stroke-width="0.8"/>"##,
+                stones(10.0, 25.0, 1.0),
+                stones(84.0, 25.0, 0.5),
+                stones(109.0, 25.0, 0.5),
+                stones(84.0, 50.0, 0.5),
+                stones(109.0, 50.0, 0.5)
+            );
         }
         Template::GrayFilter | Template::ColorFilter => {
             let (a, b, c, d) = if template == Template::GrayFilter { ("#2e2e2e", "#b8b8b8", "#0d0d0d", "#f0f0f0") } else { ("#c2562a", "#2b6fd6", "#4fc26a", "#9a3fc9") };
@@ -85,8 +128,7 @@ fn picture(template: Template) -> svg::Handle {
             }
         }
     }
-    let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 100">{art}</svg>"#);
-    svg::Handle::from_memory(svg.into_bytes())
+    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 100">{art}</svg>"#)
 }
 
 /// What the (i) of `template` says: its name, its type, what it is, its outputs.
@@ -147,4 +189,23 @@ pub fn list_row<'a>(template: Template, chosen: bool) -> Element<'a, Message> {
         .style(style::template_card(chosen))
         .on_press(Message::NewGraph(NewGraphMessage::Template(template)))
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every template's picture is SVG that draws: a broken one would show as nothing.
+    #[test]
+    fn every_template_has_a_picture() {
+        for template in Template::ALL {
+            let tree = resvg::usvg::Tree::from_str(&picture_svg(template), &resvg::usvg::Options::default())
+                .unwrap_or_else(|e| panic!("{template:?}: {e}"));
+            let mut pixmap = resvg::tiny_skia::Pixmap::new(150, 100).expect("a picture");
+            resvg::render(&tree, resvg::tiny_skia::Transform::default(), &mut pixmap.as_mut());
+            // More than the dark ground it is drawn on (the grid of Empty, faint as it is).
+            let drawn = pixmap.pixels().iter().filter(|p| p.red().abs_diff(0x1a) > 4 || p.green().abs_diff(0x1a) > 4).count();
+            assert!(drawn > 300, "{template:?} draws {drawn} pixels");
+        }
+    }
 }

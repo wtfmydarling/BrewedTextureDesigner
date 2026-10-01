@@ -364,7 +364,8 @@ fn the_program_starts_on_the_home_screen() {
         "New Graph…",
         "Open…",
         "Start from a template",
-        "PBR Material",
+        "OpenPBR Material",
+        "HDRi Panorama",
         "FX-Map",
         "More templates…",
         "Recent",
@@ -384,7 +385,7 @@ fn the_program_starts_on_the_home_screen() {
     // A package made from a template, in place of the blank one.
     w.send(Message::NewGraph(NewGraphMessage::Open(None)));
     w.input(&[]);
-    for said in ["New Graph", "Templates", "PBR (Metallic/Roughness)", "Base", "Filters", "Empty", "Create graph in", "Create"] {
+    for said in ["New Graph", "Templates", "OpenPBR", "Base", "HDRi", "Studio Panorama", "Scan Processing", "Filters", "Empty", "Create graph in", "Create"] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
     w.snapshot("new_graph");
@@ -393,7 +394,15 @@ fn the_program_starts_on_the_home_screen() {
     w.snapshot("new_graph_list");
     w.send(Message::NewGraph(NewGraphMessage::Layout(home_screen::Layout::Grid)));
     w.send(Message::NewGraph(NewGraphMessage::Name("Rusty Metal".into())));
+    // A panorama: twice as wide as high, in 32-bit floats; another template gives back what
+    // was set before.
+    let before = w.app.ui.dialog.clone();
+    w.send(Message::NewGraph(NewGraphMessage::Template(Template::StudioPanorama)));
+    let Some(Dialog::NewGraph(panorama)) = w.app.ui.dialog.clone() else { panic!("the dialog") };
+    assert_eq!((panorama.size[0], panorama.size[1] * 2, panorama.precision), (panorama.size[0], panorama.size[0], brewed_texture_core::Precision::Full));
     w.send(Message::NewGraph(NewGraphMessage::Template(Template::Pbr)));
+    let (Some(Dialog::NewGraph(a)), Some(Dialog::NewGraph(b))) = (before, w.app.ui.dialog.clone()) else { panic!("the dialog") };
+    assert_eq!((a.size, a.linked, a.precision), (b.size, b.linked, b.precision));
     w.send(Message::NewGraph(NewGraphMessage::Width(512)));
     let Some(Dialog::NewGraph(dialog)) = w.app.ui.dialog.clone() else { panic!("the dialog") };
     assert_eq!(dialog.size, [512, 512], "width and height together");

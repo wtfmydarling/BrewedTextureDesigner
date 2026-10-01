@@ -121,7 +121,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             }
             let body = column![
                 row![
-                    text("Shortcuts and the mouse").size(18).font(style::heavy()).color(style::TEXT_BRIGHT),
+                    text("Shortcuts").size(18).font(style::heavy()).color(style::TEXT_BRIGHT),
                     space().width(Length::Fill),
                     button(text("Change the Keys…").size(style::TEXT_SIZE))
                         .padding([4, 12])

@@ -219,6 +219,11 @@ impl App {
                     None => log::warn!("no page '{name}' in the settings"),
                 }
             }
+            // A graph made of a template, as the Home screen's row makes it.
+            other if other.starts_with("template:") => {
+                let id = other["template:".len()..].to_string();
+                return self.home_message(super::home::HomeMessage::Screen(home_screen::Event::Start(id)));
+            }
             "shortcuts" => self.ui.dialog = Some(Dialog::Shortcuts),
             "about" => self.ui.dialog = Some(Dialog::About),
             "new-graph" => return self.handle(Message::NewGraph(super::home::NewGraphMessage::Open(None))),
