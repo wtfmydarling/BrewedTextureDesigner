@@ -49,8 +49,10 @@ const MANIFEST: &str = "package.json";
 const EDITOR: &str = "editor.json";
 /// A snapshot's (see [`crate::recovery`]): what it says of its package.
 const RECOVERY: &str = "recovery.json";
-/// A picture of the package, for lists of packages (the Home screen's): of the first output of
-/// the graph that was being edited, as it was when the package was saved.
+/// A picture of the package, for lists of packages (the Home screen's), as it was when the
+/// package was saved: of the model of the 3D view as the view starts, or of the first output of
+/// the graph where the model wears nothing of it. Not part of the package: it makes no version
+/// (see [`fingerprint`]).
 const PICTURE: &str = "thumbnail.png";
 /// The largest picture read: a larger one is no picture for a list.
 const MAX_PICTURE: u64 = 4 << 20;

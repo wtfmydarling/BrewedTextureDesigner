@@ -115,6 +115,11 @@ impl App {
     }
 
     fn apply_scenario(&mut self, scenario: &str) -> Task<Message> {
+        // Several at once: split first, before one of them (an example's id) takes the rest
+        // as its own.
+        if scenario.contains(';') {
+            return Task::batch(scenario.split(';').map(|s| self.apply_scenario(s)).collect::<Vec<_>>());
+        }
         let graph = self.doc.graph().clone();
         let first = |kind: NodeKind| graph.nodes_of(kind).next().map(|n| n.id);
         match scenario {
@@ -266,8 +271,6 @@ impl App {
                     self.ui.preview.node = Some(id);
                 }
             }
-            // Several at once.
-            other if other.contains(';') => return Task::batch(other.split(';').map(|s| self.apply_scenario(s)).collect::<Vec<_>>()),
             // The model of the 3D view, by its name ("mat-ball").
             other if other.starts_with("shape:") => {
                 let name = other["shape:".len()..].replace('-', " ");

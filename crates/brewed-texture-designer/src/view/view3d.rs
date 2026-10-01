@@ -353,25 +353,27 @@ fn maps_of(app: &App) -> ([Option<wgpu::TextureView>; 7], u32) {
     (maps, gray)
 }
 
-/// A picture of the model as the 3D view shows it, `size` pixels square, on the background the
-/// view has: what lists of packages show of one (see `app::home`). None when the model wears
-/// no map of the graph's (nothing of the package on it), or the GPU could not draw it. The
-/// view's pipeline, made once, is kept in `pipeline`.
+/// The camera of a picture of a package (see [`picture`]): the view's as it starts, whatever
+/// way the model was turned, moved or neared and the light turned (a picture is not of where
+/// someone left the view: it would show a corner, or nothing, of the model); the model, its
+/// relief and its repetitions are kept, they are how the package is looked at.
+pub fn picture_camera(view: Camera) -> Camera {
+    Camera { shape: view.shape, displacement: view.displacement, tiling: view.tiling, ..Camera::default() }
+}
+
+/// A picture of the model the 3D view shows, `size` pixels square, as the view starts: from
+/// its first camera (see [`picture_camera`]), in the studio's light as bright as it is made,
+/// on the studio's background: what lists of packages show of one (see `app::home`), the same
+/// whatever the view was left at. None when the model wears no map of the graph's (nothing of
+/// the package on it), or the GPU could not draw it. The view's pipeline, made once, is kept
+/// in `pipeline`.
 pub fn picture(app: &App, pipeline: &mut Option<Pipeline>, gpu: &crate::gpu::GpuHandles, size: u32) -> Option<::image::RgbaImage> {
     use shader::Primitive as _;
     let (maps, gray) = maps_of(app);
     if maps.iter().all(Option::is_none) {
         return None;
     }
-    let l = &app.ui.preview.lighting;
-    let primitive = Primitive {
-        camera: app.ui.preview.view3d,
-        maps,
-        gray,
-        environment: l.shown.clone(),
-        exposure: l.exposure.clamp(-12.0, 12.0).exp2(),
-        background: l.background.then_some(l.blur.clamp(0.0, 1.0)),
-    };
+    let primitive = Primitive { camera: picture_camera(app.ui.preview.view3d), maps, gray, environment: None, exposure: 1.0, background: None };
     let (device, queue) = (&gpu.device, &gpu.queue);
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let pipeline = pipeline.get_or_insert_with(|| <Pipeline as shader::Pipeline>::new(device, queue, format));
@@ -1031,6 +1033,26 @@ impl shader::Primitive for Primitive {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A picture of a package is of the model as the view starts, wherever the view was left:
+    /// turned, moved off, neared, its light turned; the model, its relief and repetitions kept.
+    #[test]
+    fn pictures_of_packages_are_from_the_first_camera() {
+        let left = Camera {
+            target: [3.0, -2.0, 9.0],
+            yaw: 2.7,
+            pitch: -1.2,
+            distance: 0.3,
+            light_yaw: 2.0,
+            light_pitch: -0.4,
+            shape: Shape::Cloth,
+            displacement: 0.12,
+            tiling: 3.0,
+        };
+        let shown = picture_camera(left);
+        assert_eq!(shown, Camera { shape: Shape::Cloth, displacement: 0.12, tiling: 3.0, ..Camera::default() });
+        assert_eq!(picture_camera(Camera::default()), Camera::default());
+    }
 
     #[test]
     fn projection_maps_the_target_to_the_center() {

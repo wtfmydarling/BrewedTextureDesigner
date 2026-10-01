@@ -434,8 +434,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A package saved again as it was, or with only its view moved, is no new version; a node
-    /// moved is.
+    /// A package saved again as it was, or with only its view moved, or with another picture
+    /// (the 3D view turned before saving: the picture is of what it shows), is no new version; a
+    /// node moved is.
     #[test]
     fn saves_of_the_same_package_are_one_version() {
         let dir = root("same");
@@ -454,7 +455,15 @@ mod tests {
         }
         let moved = [(open, ViewState { graph_pan: Some([300.0, 20.0]), graph_zoom: Some(1.5), ..ViewState::default() })].into_iter().collect();
         save(&p, &moved);
-        assert_eq!(versions.of(&file).len(), 1, "saved six times as it was");
+        // Pictures of the package that differ, and another node shown in the 2D view.
+        let shown = [(open, ViewState { preview: Some(crate::graph::NodeId(7)), ..ViewState::default() })].into_iter().collect();
+        for picture in [&b"a picture of the model turned one way"[..], &b"and another, turned the other way"[..]] {
+            versions.before_writing(&file, 20).unwrap();
+            project::save_with_picture(&file, &p, &shown, open, Some(picture)).unwrap();
+            versions.keep(&file, &p, &shown, open, Kind::Saved, 20).unwrap();
+            assert_eq!(project::read_picture(&file).as_deref(), Some(picture), "the file has the picture it was saved with");
+        }
+        assert_eq!(versions.of(&file).len(), 1, "saved eight times as it was");
         let mut graph = crate::graph::Graph::default();
         graph.add_node(crate::NodeKind::BLUR, [10.0, 20.0]);
         p.graphs[0].graph = std::sync::Arc::new(graph);
