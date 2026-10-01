@@ -192,7 +192,7 @@ const TILE: f32 = 176.0;
 const PICTURE: f32 = 176.0;
 /// The pictures of the lessons, and of the rows of the list.
 const LESSON: [f32; 2] = [180.0, 112.0];
-const THUMB: f32 = 30.0;
+const THUMB: f32 = 64.0;
 
 /// The Home screen.
 pub fn view<'a>(content: Content<'a>, state: State, style: Style) -> Element<'a, Event> {
@@ -421,7 +421,7 @@ fn list<'a>(recent: Vec<&'a Recent>, sort: Sort, time: fn(SystemTime) -> String,
     for r in recent {
         let thumb: Element<'a, Event> = match &r.picture {
             Some(handle) => image(handle.clone()).width(Length::Fixed(THUMB)).height(Length::Fixed(THUMB)).content_fit(ContentFit::Cover).into(),
-            None => container(glyph(Glyph::File, 18.0, style.faint)).center(Length::Fixed(THUMB)).into(),
+            None => container(glyph(Glyph::File, 26.0, style.faint)).center(Length::Fixed(THUMB)).into(),
         };
         let cell = |said: String, width: Length| text(said).size(style.small_size).color(style.dim).width(width).wrapping(text::Wrapping::None);
         let name = text(r.name.as_str()).size(style.text_size).width(widths[0]).wrapping(text::Wrapping::None);
