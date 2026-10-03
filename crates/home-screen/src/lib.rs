@@ -5,10 +5,15 @@
 //!
 //! On the left: New… and Open…, the pages (Home, Learn), going back to what is being edited,
 //! and the resources. On the right, Home: a welcome, a row of what a new file can start from
-//! (the last tile shows every choice), and the files opened last, as pictures or as a list
+//! (the last card shows every choice), and the files opened last, as pictures or as a list
 //! sorted by any column; Learn: the lessons, each with its picture.
+//!
+//! What a new file starts from is shown by [`template_card`] (and [`template_row`], in a list):
+//! the same cards the program's window of a new file shows, so that they are the same
+//! everywhere.
 
 mod glyph;
+pub mod hover_card;
 mod style;
 
 use std::time::SystemTime;
@@ -97,9 +102,16 @@ impl State {
 pub struct Start {
     pub id: String,
     pub title: String,
-    /// What it is, in a few words: its size, its outputs.
+    /// Its category, said in gray under its name.
     pub detail: String,
+    /// What stands for it where it has no picture.
     pub glyph: Glyph,
+    /// A picture of what it makes, square.
+    pub picture: Option<image::Handle>,
+    /// What its (i) says: what kind of thing it makes, what it is, and its outputs.
+    pub kind: String,
+    pub about: String,
+    pub outputs: Vec<String>,
 }
 
 /// A file opened last.
@@ -188,7 +200,8 @@ pub enum Event {
 
 const SIDEBAR: f32 = 250.0;
 /// The tiles of what to start from, and the pictures of the files opened last.
-const TILE: f32 = 176.0;
+/// How large the picture of a card of what a new file starts from is, square.
+const CARD: f32 = 132.0;
 const PICTURE: f32 = 176.0;
 /// The pictures of the lessons, and of the rows of the list.
 const LESSON: [f32; 2] = [180.0, 112.0];
@@ -315,9 +328,9 @@ fn home<'a>(content: &Content<'a>, state: State, style: Style) -> Element<'a, Ev
     ]
     .spacing(8);
     // What to start from, and every choice last.
-    let mut tiles: Vec<Element<'a, Event>> = content.start.iter().map(|s| start_tile(s.glyph, &s.title, &s.detail, Event::Start(s.id.clone()), style)).collect();
-    tiles.push(start_tile(Glyph::More, content.more, "", Event::More, style));
-    page = page.push(Row::with_children(tiles).spacing(12).wrap());
+    let mut cards: Vec<Element<'a, Event>> = content.start.iter().map(|s| template_card(s, false, Event::Start(s.id.clone()), style)).collect();
+    cards.push(more_card(content.more, Event::More, style));
+    page = page.push(Row::with_children(cards).spacing(12).wrap());
     page = page.push(space().height(16)).push(line(style)).push(space().height(6));
     page = page.push(row![heading("Recent", 16.0, style), space().width(Length::Fill), layout_toggle(state.layout, style)].align_y(Alignment::Center));
     if content.recent.is_empty() {
@@ -336,16 +349,87 @@ fn home<'a>(content: &Content<'a>, state: State, style: Style) -> Element<'a, Ev
 }
 
 /// A tile of what to start from: its glyph, its name, and what it is.
-fn start_tile<'a>(g: Glyph, title: &'a str, detail: &'a str, event: Event, style: Style) -> Element<'a, Event> {
+/// A card of what a new file starts from: its picture, its (i) at the top right of it, its name
+/// and, in gray, its category. Lit when pointed at, outlined white when `chosen`; `on_press`
+/// says it is chosen. (The (i) shows a card of its own while it is pointed at: see
+/// [`hover_card`].)
+pub fn template_card<'a, M: Clone + 'a>(start: &'a Start, chosen: bool, on_press: M, style: Style) -> Element<'a, M> {
+    let picture: Element<'a, M> = match &start.picture {
+        Some(handle) => image(handle.clone()).width(Length::Fixed(CARD)).height(Length::Fixed(CARD)).content_fit(ContentFit::Cover).into(),
+        None => container(glyph(start.glyph, 36.0, style.faint)).center(Length::Fixed(CARD)).into(),
+    };
+    let top = iced::widget::stack![
+        container(picture).style(style.frame()).clip(true),
+        container(info_badge(start, style)).width(Length::Fixed(CARD)).align_x(Alignment::End).padding(5),
+    ];
     let body = column![
-        glyph(g, 30.0, style.text),
-        space().height(8),
-        text(title).size(style.text_size).font(style.semibold()),
-        text(detail).size(style.small_size).color(style.dim),
+        top,
+        text(start.title.as_str()).size(style.text_size).font(style.semibold()).wrapping(text::Wrapping::None),
+        text(start.detail.as_str()).size(style.small_size).color(style.faint).wrapping(text::Wrapping::None),
     ]
-    .spacing(3)
-    .width(Length::Fill);
-    button(container(body).height(Length::Fixed(94.0)).clip(true)).width(Length::Fixed(TILE)).padding(14).style(style.tile()).on_press(event).into()
+    .spacing(4)
+    .width(Length::Fixed(CARD));
+    button(body).padding(8).style(style.template_card(chosen)).on_press(on_press).into()
+}
+
+/// The last card of a row of what a new file starts from: every choice, `label`.
+pub fn more_card<'a, M: Clone + 'a>(label: &'a str, on_press: M, style: Style) -> Element<'a, M> {
+    let body = column![
+        container(glyph(Glyph::More, 36.0, style.dim)).center(Length::Fixed(CARD)).style(style.frame()),
+        text(label).size(style.text_size).font(style.semibold()).wrapping(text::Wrapping::None),
+        text(" ").size(style.small_size),
+    ]
+    .spacing(4)
+    .width(Length::Fixed(CARD));
+    button(body).padding(8).style(style.template_card(false)).on_press(on_press).into()
+}
+
+/// What a new file starts from, as a row of a list: a small picture, its name, its category and
+/// its kind, its (i); outlined white when `chosen`.
+pub fn template_row<'a, M: Clone + 'a>(start: &'a Start, chosen: bool, on_press: M, style: Style) -> Element<'a, M> {
+    const SMALL: f32 = 40.0;
+    let picture: Element<'a, M> = match &start.picture {
+        Some(handle) => image(handle.clone()).width(Length::Fixed(SMALL)).height(Length::Fixed(SMALL)).content_fit(ContentFit::Cover).into(),
+        None => container(glyph(start.glyph, 20.0, style.faint)).center(Length::Fixed(SMALL)).into(),
+    };
+    let said = row![
+        container(picture).style(style.frame()).clip(true),
+        text(start.title.as_str()).size(style.text_size).font(style.semibold()).width(Length::FillPortion(3)),
+        text(start.detail.as_str()).size(style.small_size).color(style.faint).width(Length::FillPortion(3)),
+        text(start.kind.as_str()).size(style.small_size).color(style.dim).width(Length::FillPortion(2)),
+        info_badge(start, style),
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center);
+    button(said)
+        .width(Length::Fill)
+        .padding(Padding { top: 4.0, right: 8.0, bottom: 4.0, left: 4.0 })
+        .style(style.template_card(chosen))
+        .on_press(on_press)
+        .into()
+}
+
+/// The (i) of `start`, which says what it is while it is pointed at.
+fn info_badge<'a, M: 'a>(start: &'a Start, style: Style) -> Element<'a, M> {
+    hover_card::hover_card(container(glyph(Glyph::Info, 16.0, style.text)).padding(3).style(style.badge()), info(start, style)).into()
+}
+
+/// What the (i) of `start` says: its name, its kind, what it is, its outputs.
+fn info<'a, M: 'a>(start: &'a Start, style: Style) -> Element<'a, M> {
+    let outputs = if start.outputs.is_empty() { "none".to_string() } else { start.outputs.join(", ") };
+    container(
+        column![
+            text(start.title.as_str()).size(14).font(style.heavy()).color(style.bright),
+            text(format!("Type: {}", start.kind)).size(style.small_size).color(style.dim),
+            text(start.about.as_str()).size(style.small_size).color(style.text),
+            text(format!("Outputs: {outputs}")).size(style.small_size).color(style.dim),
+        ]
+        .spacing(6),
+    )
+    .padding(12)
+    .width(Length::Fixed(280.0))
+    .style(style.tooltip())
+    .into()
 }
 
 /// The pictures, or the list.

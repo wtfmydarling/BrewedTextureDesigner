@@ -22,6 +22,14 @@ pub struct DevOptions {
     /// Save the picture of the model, as the package's picture is made (see
     /// `view3d::picture`), once everything is computed, then quit.
     pub picture: Option<PathBuf>,
+    /// How large the picture is, wide and high (512 square by default).
+    pub picture_size: Option<[u32; 2]>,
+    /// The picture in the light of the 3D view (its environment image, behind the model too),
+    /// not the studio's a package's picture has.
+    pub picture_lit: bool,
+    /// Export every output of the graph into this folder once everything is computed, as File
+    /// → Export writes them, then quit (or take the screenshot or the picture).
+    pub export: Option<PathBuf>,
     /// UI state to show in the screenshot.
     pub scenario: Option<String>,
     /// Select the first node of this type at startup.
@@ -36,6 +44,8 @@ pub struct DevOptions {
 #[derive(Default)]
 pub struct Dev {
     screenshot_requested: bool,
+    /// The export of `--export` was asked for.
+    exported: bool,
     /// The autopilot, when the app drives itself.
     pub pilot: Option<crate::autopilot::Autopilot>,
 }
@@ -46,7 +56,7 @@ impl Dev {
             let pilot = crate::autopilot::Autopilot::new(flight);
             pilot.map_err(|e| log::error!("the autopilot cannot start: {e}")).ok()
         });
-        Dev { screenshot_requested: false, pilot }
+        Dev { screenshot_requested: false, exported: false, pilot }
     }
 }
 
@@ -87,7 +97,8 @@ impl App {
 
     /// Ticks to see when a screenshot can be taken, and the autopilot's turns.
     pub(super) fn dev_subscriptions(&self, subs: &mut Vec<Subscription<Message>>) {
-        if (self.opts.dev.screenshot.is_some() || self.opts.dev.picture.is_some()) && self.ui.status.is_none() {
+        let dev = &self.opts.dev;
+        if ((dev.screenshot.is_some() || dev.picture.is_some()) && self.ui.status.is_none()) || dev.export.is_some() {
             subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
         }
         if self.dev.pilot.as_ref().is_some_and(|p| !p.is_done()) {
@@ -224,6 +235,42 @@ impl App {
                     None => log::warn!("no page '{name}' in the settings"),
                 }
             }
+            // A graph of the package being edited, by its name.
+            other if other.starts_with("graph:") => {
+                let name = &other["graph:".len()..];
+                match self.doc.package().graphs.iter().find(|g| g.name == name).map(|g| g.id) {
+                    Some(id) => self.activate(self.doc_key, Some(id)),
+                    None => log::warn!("no graph '{name}'"),
+                }
+            }
+            // A picture for an image input of the graph: picture:NAME=FILE.
+            other if other.starts_with("picture:") => {
+                if let Some((name, file)) = other["picture:".len()..].split_once('=') {
+                    self.apply(Edit::SetVariablePicture { name: name.into(), picture: file.into(), default: false });
+                }
+            }
+            // The value of the uniform color that feeds the Output called NAME: uniform:NAME=V or
+            // uniform:NAME=R,G,B.
+            other if other.starts_with("uniform:") => {
+                let said = other["uniform:".len()..].split_once('=').map(|(name, v)| (name.to_string(), v.split(',').filter_map(|c| c.trim().parse::<f32>().ok()).collect::<Vec<_>>()));
+                let graph = self.graph();
+                let output = said.as_ref().and_then(|(name, _)| graph.nodes_of(NodeKind::OUTPUT).find(|n| n.text("name") == name).map(|n| n.id));
+                let fed = output.and_then(|o| graph.link_into(o, "i:input")).map(|l| l.from);
+                match (fed, said) {
+                    (Some(node), Some((_, v))) if !v.is_empty() => {
+                        let color = if v.len() >= 3 { [v[0], v[1], v[2], 1.0] } else { [v[0], v[0], v[0], 1.0] };
+                        self.apply(Edit::SetParam { node, key: "color".into(), value: ParamValue::Color(color) });
+                    }
+                    _ => log::warn!("no uniform value in '{other}'"),
+                }
+            }
+            // The texture size of the graph, as square: size:N.
+            other if other.starts_with("size:") => match other["size:".len()..].parse::<u32>() {
+                Ok(side) => {
+                    self.apply(Edit::SetResolution([side, side]));
+                }
+                Err(e) => log::warn!("size: {e}"),
+            },
             // A graph made of a template, as the Home screen's row makes it.
             other if other.starts_with("template:") => {
                 let id = other["template:".len()..].to_string();
@@ -290,7 +337,8 @@ impl App {
     }
 
     pub(super) fn maybe_screenshot(&mut self) -> Task<Message> {
-        if (self.opts.dev.screenshot.is_none() && self.opts.dev.picture.is_none()) || self.dev.screenshot_requested {
+        let dev = &self.opts.dev;
+        if (dev.screenshot.is_none() && dev.picture.is_none() && dev.export.is_none()) || self.dev.screenshot_requested {
             return Task::none();
         }
         let settled = self.res.evaluated_revision == self.eval_revision
@@ -311,11 +359,28 @@ impl App {
             }
             return Task::none();
         }
+        // The outputs exported first, and written whole.
+        if let Some(folder) = self.opts.dev.export.clone() {
+            if !self.dev.exported {
+                self.dev.exported = true;
+                let _ = std::fs::create_dir_all(&folder);
+                return self.handle(Message::ExportFolderPicked(Some(folder)));
+            }
+            if self.res.exports_pending > 0 {
+                return Task::none();
+            }
+            if self.opts.dev.screenshot.is_none() && self.opts.dev.picture.is_none() {
+                self.dev.screenshot_requested = true;
+                println!("exported to {}", folder.display());
+                return iced::exit();
+            }
+        }
         self.dev.screenshot_requested = true;
         if let Some(path) = self.opts.dev.picture.clone() {
             let picture = self.gpu.clone().and_then(|gpu| {
                 let mut pipeline = self.picture_pipeline.take();
-                let picture = crate::view::view3d::picture(self, &mut pipeline, &gpu, 512);
+                let (size, lit) = (self.opts.dev.picture_size.unwrap_or([512, 512]), self.opts.dev.picture_lit);
+                let picture = crate::view::view3d::picture(self, &mut pipeline, &gpu, size, lit);
                 self.picture_pipeline = pipeline;
                 picture
             });
@@ -351,17 +416,13 @@ fn find_kind(graph: &Graph, name: &str) -> Option<NodeId> {
         .map(|n| n.id)
 }
 
-/// Save a picture of the model: as it is, or, as a .jpg, as a lesson of Learn shows it (see
-/// `LESSON_PICTURES`): its middle, as wide as it is and 10 high for 16 wide.
-fn save_picture(picture: &::image::RgbaImage, path: &std::path::Path) -> Result<(), String> {
+/// Save a picture: as PNG, or as JPEG (of quality 90) where the name says .jpg.
+pub(crate) fn save_picture(picture: &::image::RgbaImage, path: &std::path::Path) -> Result<(), String> {
     let jpeg = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"));
     if !jpeg {
         return picture.save(path).map_err(|e| e.to_string());
     }
-    let (w, h) = picture.dimensions();
-    let band = (w * 10 / 16).min(h);
-    let middle = ::image::imageops::crop_imm(picture, 0, (h - band) / 2, w, band).to_image();
-    let rgb = ::image::DynamicImage::ImageRgba8(middle).to_rgb8();
+    let rgb = ::image::DynamicImage::ImageRgba8(picture.clone()).to_rgb8();
     let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
     ::image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), 90).encode_image(&rgb).map_err(|e| e.to_string())
 }

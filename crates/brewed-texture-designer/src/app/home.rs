@@ -59,6 +59,51 @@ pub struct HomeLists {
     pub start: Vec<Start>,
     pub lessons: Vec<Lesson>,
     pub resources: Vec<Resource>,
+    /// Every template, as the window of a new graph shows it (the same cards as the row).
+    pub templates: Vec<(Template, Start)>,
+}
+
+/// The pictures of the templates: what each makes, rendered (made with `--picture`,
+/// `--export` and `--compose`, see the README).
+const TEMPLATE_PICTURES: [(Template, &[u8]); 14] = [
+    (Template::Pbr, include_bytes!("../../assets/templates/pbr.jpg")),
+    (Template::Anisotropy, include_bytes!("../../assets/templates/openpbr-anisotropy.jpg")),
+    (Template::Coat, include_bytes!("../../assets/templates/openpbr-coat.jpg")),
+    (Template::Subsurface, include_bytes!("../../assets/templates/openpbr-subsurface.jpg")),
+    (Template::Fuzz, include_bytes!("../../assets/templates/openpbr-fuzz.jpg")),
+    (Template::Complete, include_bytes!("../../assets/templates/openpbr-complete.jpg")),
+    (Template::StudioPanorama, include_bytes!("../../assets/templates/studio-panorama.jpg")),
+    (Template::Convolution, include_bytes!("../../assets/templates/convolution.jpg")),
+    (Template::Grid, include_bytes!("../../assets/templates/fx-map-grid.jpg")),
+    (Template::Noise, include_bytes!("../../assets/templates/fx-map-noise.jpg")),
+    (Template::ScanProcessing, include_bytes!("../../assets/templates/scan-processing.jpg")),
+    (Template::GrayFilter, include_bytes!("../../assets/templates/gray-filter.jpg")),
+    (Template::ColorFilter, include_bytes!("../../assets/templates/color-filter.jpg")),
+    (Template::Empty, include_bytes!("../../assets/templates/empty.jpg")),
+];
+
+/// The card of `template`, the same on the Home screen and in the window of a new graph: its
+/// picture, name and category, and what its (i) says.
+fn template_start(template: Template) -> Start {
+    let glyph = match template.category() {
+        Category::OpenPbr => Glyph::Material,
+        Category::Hdri => Glyph::Light,
+        Category::PixelProcessor => Glyph::Grid,
+        Category::FxMap => Glyph::Pattern,
+        Category::ScanProcessing => Glyph::Camera,
+        Category::Filters => Glyph::Filter,
+        Category::Others => Glyph::Graph,
+    };
+    Start {
+        id: template.id().into(),
+        title: template.name().into(),
+        detail: template.category().name().into(),
+        glyph,
+        picture: TEMPLATE_PICTURES.iter().find(|(of, _)| *of == template).map(|(_, bytes)| image::Handle::from_bytes(*bytes)),
+        kind: template.kind().into(),
+        about: template.about().into(),
+        outputs: template.outputs().into_iter().map(String::from).collect(),
+    }
 }
 
 /// The shortcuts, a lesson and a resource.
@@ -66,25 +111,8 @@ const SHORTCUTS: &str = "shortcuts";
 
 impl HomeLists {
     pub fn new() -> HomeLists {
-        let start = Template::STARTERS
-            .into_iter()
-            .map(|t| {
-                let detail = match t.outputs().len() {
-                    n if n > 1 => format!("{} · {n} outputs", t.kind()),
-                    _ => t.kind().to_string(),
-                };
-                let glyph = match t.category() {
-                    Category::OpenPbr => Glyph::Material,
-                    Category::Hdri => Glyph::Light,
-                    Category::PixelProcessor => Glyph::Grid,
-                    Category::FxMap => Glyph::Pattern,
-                    Category::ScanProcessing => Glyph::Camera,
-                    Category::Filters => Glyph::Filter,
-                    Category::Others => Glyph::Graph,
-                };
-                Start { id: t.id().into(), title: t.full_name().into(), detail, glyph }
-            })
-            .collect();
+        let templates: Vec<(Template, Start)> = Template::ALL.into_iter().map(|t| (t, template_start(t))).collect();
+        let start = Template::STARTERS.iter().filter_map(|t| templates.iter().find(|(of, _)| of == t).map(|(_, s)| s.clone())).collect();
         let mut lessons: Vec<Lesson> = Example::ALL
             .into_iter()
             .map(|e| Lesson {
@@ -116,7 +144,7 @@ impl HomeLists {
             resource("forum", "Forum", Glyph::Chat, false),
             resource("community", "Community Resources", Glyph::People, false),
         ];
-        HomeLists { start, lessons, resources }
+        HomeLists { start, lessons, resources, templates }
     }
 }
 
@@ -361,7 +389,7 @@ impl App {
         if key == self.doc_key {
             let model = self.gpu.clone().and_then(|gpu| {
                 let mut pipeline = self.picture_pipeline.take();
-                let picture = crate::view::view3d::picture(self, &mut pipeline, &gpu, PICTURE);
+                let picture = crate::view::view3d::picture(self, &mut pipeline, &gpu, [PICTURE, PICTURE], false);
                 self.picture_pipeline = pipeline;
                 png(&picture?)
             });
@@ -471,14 +499,26 @@ mod tests {
     use super::*;
 
     /// Every example of Learn has its picture, as wide as the cards show it on a screen of three
-    /// times the pixels, and 10 high for 16 wide as they are.
+    /// times the pixels, and 10 high for 16 wide as they are; every template its picture, square,
+    /// and its card the same on the Home screen and in the window of a new graph.
     #[test]
-    fn every_lesson_has_its_picture() {
+    fn every_lesson_and_template_has_its_picture() {
         for example in Example::ALL {
             let (_, bytes) = LESSON_PICTURES.iter().find(|(of, _)| *of == example).expect("a picture of every example");
             let picture = ::image::load_from_memory(bytes).expect("a picture");
             assert_eq!((picture.width(), picture.height()), (512, 320), "{example:?}");
         }
-        assert!(HomeLists::new().lessons.iter().filter(|l| l.picture.is_some()).count() == Example::ALL.len());
+        for template in Template::ALL {
+            let (_, bytes) = TEMPLATE_PICTURES.iter().find(|(of, _)| *of == template).expect("a picture of every template");
+            let picture = ::image::load_from_memory(bytes).expect("a picture");
+            assert_eq!((picture.width(), picture.height()), (384, 384), "{template:?}");
+        }
+        let lists = HomeLists::new();
+        assert_eq!(lists.lessons.iter().filter(|l| l.picture.is_some()).count(), Example::ALL.len());
+        assert_eq!(lists.templates.len(), Template::ALL.len());
+        for start in &lists.start {
+            let (_, card) = lists.templates.iter().find(|(t, _)| t.id() == start.id).expect("a template");
+            assert_eq!(card, start, "the same card");
+        }
     }
 }

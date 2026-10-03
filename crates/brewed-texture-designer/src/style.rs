@@ -447,20 +447,6 @@ pub fn option_button(current: bool, lit: bool) -> impl Fn(&Theme, button_w::Stat
     }
 }
 
-/// A card of a template of a new graph: framed, lit when pointed at, outlined white when it
-/// is the one chosen.
-pub fn template_card(chosen: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
-    move |_, status| {
-        let bg = match status {
-            button_w::Status::Hovered => gray(44),
-            button_w::Status::Pressed => gray(50),
-            _ => gray(34),
-        };
-        let border = if chosen { Border { color: gray(214), width: 1.5, radius: 5.0.into() } } else { Border { color: gray(52), width: 1.0, radius: 5.0.into() } };
-        button_w::Style { background: Some(Background::Color(bg)), text_color: TEXT, border, shadow: Shadow::default(), snap: true }
-    }
-}
-
 /// Where the templates of a new graph are: darker than the dialog.
 pub fn template_area(_: &Theme) -> container::Style {
     container::Style {
@@ -468,11 +454,6 @@ pub fn template_area(_: &Theme) -> container::Style {
         border: Border { color: LINE, width: 1.0, radius: 4.0.into() },
         ..Default::default()
     }
-}
-
-/// The dark round behind an (i) on a picture.
-pub fn info_badge(_: &Theme) -> container::Style {
-    container::Style { background: Some(alpha(gray(12), 0.7).into()), border: border::rounded(20), ..Default::default() }
 }
 
 /// The frame around a picture of an option.

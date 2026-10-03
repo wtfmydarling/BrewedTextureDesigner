@@ -212,11 +212,14 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
     ]
     .spacing(10);
     for category in Category::ALL {
-        let of: Vec<Template> = Template::ALL.into_iter().filter(|t| t.category() == category).collect();
+        let of: Vec<&(Template, home_screen::Start)> = app.home.templates.iter().filter(|(t, _)| t.category() == category).collect();
         templates = templates.push(text(category.name()).size(style::TEXT_SIZE).font(style::heavy()).color(style::TEXT_BRIGHT));
         templates = templates.push(match layout {
-            Layout::Grid => iced::widget::Row::with_children(of.into_iter().map(|t| crate::view::templates::card(t, t == dialog.template))).spacing(10).wrap().into(),
-            Layout::List => Element::from(column(of.into_iter().map(|t| crate::view::templates::list_row(t, t == dialog.template))).spacing(3)),
+            Layout::Grid => iced::widget::Row::with_children(of.into_iter().map(|(t, card)| home_screen::template_card(card, *t == dialog.template, say(N::Template(*t)), home_screen::Style::default())))
+                .spacing(10)
+                .wrap()
+                .into(),
+            Layout::List => Element::from(column(of.into_iter().map(|(t, card)| home_screen::template_row(card, *t == dialog.template, say(N::Template(*t)), home_screen::Style::default()))).spacing(3)),
         });
     }
     let templates = container(scrollable(container(templates).padding(16)).height(Length::Fill).spacing(8).style(style::scrollable))

@@ -1,13 +1,13 @@
-//! What a new graph starts as (File → New Graph…, the Home screen), grouped as Substance
-//! Designer groups its templates, as far as they make sense here: none for another company's
-//! program or format (a filter that runs inside another program, a measured material only its
-//! maker's library reads); and the packages the Home screen's Learn opens, made here rather
-//! than kept as files: they are what the program makes of them now.
+//! What a new graph starts as (File → New Graph…, the Home screen): the templates Substance
+//! Designer 16 has, as far as they make sense here, named as it names them (its OpenPBR
+//! materials, its studio, its samples of Pixel Processor and FX-Map, its scan processing), and
+//! none of another company's program or format; and the packages the Home screen's Learn
+//! opens, made here rather than kept as files: they are what the program makes of them now.
 
 use crate::graph::{Graph, NodeId, Precision};
 use crate::nodes::{NodeKind, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL, USAGE_ROUGHNESS};
 use crate::package::Package;
-use crate::types::ParamValue;
+use crate::types::{ParamValue, Value};
 
 /// A category of templates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -45,17 +45,27 @@ impl Category {
 /// What a new graph starts as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Template {
-    /// The maps of an OpenPBR material, each an Output made for the 3D view, fed a uniform
-    /// value to be replaced.
+    /// OpenPBR: the maps of its base, each an Output made for the 3D view, fed a uniform value
+    /// to be replaced.
     Pbr,
-    /// Those, and the color of its emission.
-    PbrEmissive,
+    /// The base, its roughness running one way more than the other.
+    Anisotropy,
+    /// The base under a clear coat.
+    Coat,
+    /// Light that goes in under the surface and out elsewhere.
+    Subsurface,
+    /// The base under a fine fuzz.
+    Fuzz,
+    /// Every parameter of OpenPBR, each a map.
+    Complete,
     /// An environment light: a studio, as a panorama twice as wide as high, in floats.
     StudioPanorama,
-    /// Pixel Math to an output.
-    PixelProcessor,
-    /// An FX-Map to an output.
-    FxMap,
+    /// A filter of Pixel Math: a box blur as wide as a map says.
+    Convolution,
+    /// An FX-Map: a grid of squares.
+    Grid,
+    /// An FX-Map: noise of splats at every split of the image.
+    Noise,
     /// The maps of a scan made into those of a material: tiled, the light it was taken in
     /// taken away.
     ScanProcessing,
@@ -67,33 +77,158 @@ pub enum Template {
     Empty,
 }
 
+/// A map of a material template: the Output's name (its file's), the uniform value it is fed
+/// (the standard's default), whether that is gray, and what the 3D view takes it for (none: the
+/// map is written for renderers that read it, the view here shows no such thing).
+struct Map(&'static str, [f32; 4], bool, u32);
+
+const fn gray(v: f32) -> [f32; 4] {
+    [v, v, v, 1.0]
+}
+/// A normal straight out of the surface, and a tangent along u, as their maps say them.
+const FLAT: [f32; 4] = [0.5, 0.5, 1.0, 1.0];
+const ALONG: [f32; 4] = [1.0, 0.5, 0.5, 1.0];
+const NONE: u32 = 0;
+
+/// The maps of each OpenPBR template, in the order Substance Designer lists them. Each layer's
+/// maps hold the standard's defaults; the base of each template is of a material that layer is
+/// for (brushed metal, car paint, skin, velvet), so that the templates look as what they are.
+const BASE: &[Map] = &[
+    Map("base_color", gray(0.8), false, USAGE_BASE_COLOR),
+    Map("base_metalness", gray(0.0), true, USAGE_METALLIC),
+    Map("specular_roughness", gray(0.3), true, USAGE_ROUGHNESS),
+    Map("height", gray(0.5), true, USAGE_HEIGHT),
+    Map("normal", FLAT, false, USAGE_NORMAL),
+    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
+];
+const ANISOTROPY: &[Map] = &[
+    Map("base_color", [0.92, 0.92, 0.95, 1.0], false, USAGE_BASE_COLOR),
+    Map("base_metalness", gray(1.0), true, USAGE_METALLIC),
+    Map("specular_roughness", gray(0.35), true, USAGE_ROUGHNESS),
+    Map("specular_roughness_anisotropy", gray(0.6), true, NONE),
+    Map("height", gray(0.5), true, USAGE_HEIGHT),
+    Map("normal", FLAT, false, USAGE_NORMAL),
+    Map("tangent", ALONG, false, NONE),
+    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
+];
+const COAT: &[Map] = &[
+    Map("base_color", [0.55, 0.04, 0.05, 1.0], false, USAGE_BASE_COLOR),
+    Map("base_metalness", gray(0.0), true, USAGE_METALLIC),
+    Map("specular_roughness", gray(0.45), true, USAGE_ROUGHNESS),
+    Map("coat_weight", gray(1.0), true, NONE),
+    Map("coat_color", gray(1.0), false, NONE),
+    Map("coat_roughness", gray(0.0), true, NONE),
+    Map("height", gray(0.5), true, USAGE_HEIGHT),
+    Map("normal", FLAT, false, USAGE_NORMAL),
+    Map("coat_normal", FLAT, false, NONE),
+    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
+    Map("coat_roughness_anisotropy", gray(0.0), true, NONE),
+    Map("coat_tangent", ALONG, false, NONE),
+];
+const SUBSURFACE: &[Map] = &[
+    Map("base_color", [0.82, 0.58, 0.47, 1.0], false, USAGE_BASE_COLOR),
+    Map("specular_roughness", gray(0.5), true, USAGE_ROUGHNESS),
+    Map("subsurface_weight", gray(1.0), true, NONE),
+    Map("subsurface_color", [0.9, 0.45, 0.35, 1.0], false, NONE),
+    Map("subsurface_radius_scale", [1.0, 0.5, 0.25, 1.0], false, NONE),
+    Map("height", gray(0.5), true, USAGE_HEIGHT),
+    Map("normal", FLAT, false, USAGE_NORMAL),
+    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
+];
+const FUZZ: &[Map] = &[
+    Map("base_color", [0.28, 0.07, 0.36, 1.0], false, USAGE_BASE_COLOR),
+    Map("base_metalness", gray(0.0), true, USAGE_METALLIC),
+    Map("specular_roughness", gray(0.8), true, USAGE_ROUGHNESS),
+    Map("fuzz_weight", gray(1.0), true, NONE),
+    Map("fuzz_color", gray(1.0), false, NONE),
+    Map("fuzz_roughness", gray(0.5), true, NONE),
+    Map("height", gray(0.5), true, USAGE_HEIGHT),
+    Map("normal", FLAT, false, USAGE_NORMAL),
+    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
+];
+const COMPLETE: &[Map] = &[
+    Map("base_weight", gray(1.0), true, NONE),
+    Map("base_color", [0.55, 0.66, 0.78, 1.0], false, USAGE_BASE_COLOR),
+    Map("base_metalness", gray(0.0), true, USAGE_METALLIC),
+    Map("base_diffuse_roughness", gray(0.0), true, NONE),
+    Map("specular_weight", gray(1.0), true, NONE),
+    Map("specular_color", gray(1.0), false, NONE),
+    Map("specular_roughness", gray(0.2), true, USAGE_ROUGHNESS),
+    Map("specular_roughness_anisotropy", gray(0.0), true, NONE),
+    Map("specular_ior", gray(1.5), true, NONE),
+    Map("transmission_weight", gray(0.0), true, NONE),
+    Map("transmission_color", gray(1.0), false, NONE),
+    Map("transmission_depth", gray(0.0), true, NONE),
+    Map("transmission_scatter", gray(0.0), false, NONE),
+    Map("transmission_scatter_anisotropy", gray(0.0), true, NONE),
+    Map("transmission_dispersion_scale", gray(0.0), true, NONE),
+    Map("transmission_dispersion_abbe_number", gray(20.0), true, NONE),
+    Map("subsurface_weight", gray(0.0), true, NONE),
+    Map("subsurface_color", gray(0.8), false, NONE),
+    Map("subsurface_radius", gray(1.0), true, NONE),
+    Map("subsurface_radius_scale", [1.0, 0.5, 0.25, 1.0], false, NONE),
+    Map("subsurface_scatter_anisotropy", gray(0.0), true, NONE),
+    Map("coat_weight", gray(0.0), true, NONE),
+    Map("coat_color", gray(1.0), false, NONE),
+    Map("coat_roughness", gray(0.0), true, NONE),
+    Map("coat_roughness_anisotropy", gray(0.0), true, NONE),
+    Map("coat_ior", gray(1.6), true, NONE),
+    Map("coat_darkening", gray(1.0), true, NONE),
+    Map("fuzz_weight", gray(0.0), true, NONE),
+    Map("fuzz_color", gray(1.0), false, NONE),
+    Map("fuzz_roughness", gray(0.5), true, NONE),
+    Map("emission_luminance", gray(0.0), true, NONE),
+    // (Black: what the 3D view shows of it glows as bright as its color, whatever the luminance.)
+    Map("emission_color", gray(0.0), false, USAGE_EMISSIVE),
+    Map("thin_film_weight", gray(0.0), true, NONE),
+    Map("thin_film_thickness", gray(0.5), true, NONE),
+    Map("thin_film_ior", gray(1.4), true, NONE),
+    Map("opacity", gray(1.0), true, NONE),
+    Map("thin_walled", gray(0.0), true, NONE),
+    Map("height", gray(0.5), true, USAGE_HEIGHT),
+    Map("normal", FLAT, false, USAGE_NORMAL),
+    Map("tangent", ALONG, false, NONE),
+    Map("coat_normal", FLAT, false, NONE),
+    Map("coat_tangent", ALONG, false, NONE),
+    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
+];
+
 impl Template {
-    pub const ALL: [Template; 9] = [
+    pub const ALL: [Template; 14] = [
         Template::Pbr,
-        Template::PbrEmissive,
+        Template::Anisotropy,
+        Template::Coat,
+        Template::Subsurface,
+        Template::Fuzz,
+        Template::Complete,
         Template::StudioPanorama,
-        Template::PixelProcessor,
-        Template::FxMap,
+        Template::Convolution,
+        Template::Grid,
+        Template::Noise,
         Template::ScanProcessing,
         Template::GrayFilter,
         Template::ColorFilter,
         Template::Empty,
     ];
 
-    /// Those the Home screen offers in its row, one of each kind; the window of a new graph
-    /// has them all.
+    /// Those the Home screen offers, one of each kind; the window of a new graph has them all.
     pub const STARTERS: [Template; 6] =
-        [Template::Pbr, Template::StudioPanorama, Template::PixelProcessor, Template::FxMap, Template::ScanProcessing, Template::Empty];
+        [Template::Pbr, Template::StudioPanorama, Template::Convolution, Template::Noise, Template::ScanProcessing, Template::Empty];
 
     /// What names it where a name of words will not do (what the Home screen is told of it,
     /// what the workspace keeps of the one chosen last).
     pub fn id(self) -> &'static str {
         match self {
             Template::Pbr => "pbr",
-            Template::PbrEmissive => "pbr-emissive",
+            Template::Anisotropy => "openpbr-anisotropy",
+            Template::Coat => "openpbr-coat",
+            Template::Subsurface => "openpbr-subsurface",
+            Template::Fuzz => "openpbr-fuzz",
+            Template::Complete => "openpbr-complete",
             Template::StudioPanorama => "studio-panorama",
-            Template::PixelProcessor => "pixel-processor",
-            Template::FxMap => "fx-map",
+            Template::Convolution => "convolution",
+            Template::Grid => "fx-map-grid",
+            Template::Noise => "fx-map-noise",
             Template::ScanProcessing => "scan-processing",
             Template::GrayFilter => "gray-filter",
             Template::ColorFilter => "color-filter",
@@ -107,50 +242,49 @@ impl Template {
 
     pub fn category(self) -> Category {
         match self {
-            Template::Pbr | Template::PbrEmissive => Category::OpenPbr,
+            Template::Pbr | Template::Anisotropy | Template::Coat | Template::Subsurface | Template::Fuzz | Template::Complete => Category::OpenPbr,
             Template::StudioPanorama => Category::Hdri,
-            Template::PixelProcessor => Category::PixelProcessor,
-            Template::FxMap => Category::FxMap,
+            Template::Convolution => Category::PixelProcessor,
+            Template::Grid | Template::Noise => Category::FxMap,
             Template::ScanProcessing => Category::ScanProcessing,
             Template::GrayFilter | Template::ColorFilter => Category::Filters,
             Template::Empty => Category::Others,
         }
     }
 
-    /// Its name in its category.
+    /// Its name in its category, as Substance Designer names it.
     pub fn name(self) -> &'static str {
         match self {
             Template::Pbr => "Base",
-            Template::PbrEmissive => "Base with Emission",
-            Template::StudioPanorama => "Studio Panorama",
-            Template::PixelProcessor => "Pixel Processor",
-            Template::FxMap => "FX-Map",
-            Template::ScanProcessing => "Material from a Scan",
+            Template::Anisotropy => "Anisotropy",
+            Template::Coat => "Coat",
+            Template::Subsurface => "Subsurface",
+            Template::Fuzz => "Fuzz",
+            Template::Complete => "Complete",
+            Template::StudioPanorama => "Studio",
+            Template::Convolution => "Convolution",
+            Template::Grid => "Grid",
+            Template::Noise => "Noise",
+            Template::ScanProcessing => "Metallic Roughness",
             Template::GrayFilter => "Grayscale Filter",
             Template::ColorFilter => "Color Filter",
             Template::Empty => "Empty",
         }
     }
 
-    /// Its name where its category is not said with it (the Home screen's row).
-    pub fn full_name(self) -> &'static str {
-        match self {
-            Template::Pbr => "OpenPBR Material",
-            Template::PbrEmissive => "OpenPBR with Emission",
-            Template::StudioPanorama => "HDRi Panorama",
-            Template::ScanProcessing => "Scan Processing",
-            Template::Empty => "Empty Graph",
-            other => other.name(),
-        }
-    }
-
     /// What kind of graph it makes.
     pub fn kind(self) -> &'static str {
         match self {
-            Template::Pbr | Template::PbrEmissive | Template::ScanProcessing => "Standard material",
+            Template::Pbr
+            | Template::Anisotropy
+            | Template::Coat
+            | Template::Subsurface
+            | Template::Fuzz
+            | Template::Complete
+            | Template::ScanProcessing => "Standard material",
             Template::StudioPanorama => "Environment light",
-            Template::GrayFilter | Template::ColorFilter => "Filter",
-            Template::PixelProcessor | Template::FxMap => "Generator",
+            Template::Convolution | Template::GrayFilter | Template::ColorFilter => "Filter",
+            Template::Grid | Template::Noise => "Generator",
             Template::Empty => "Empty graph",
         }
     }
@@ -159,19 +293,27 @@ impl Template {
     pub fn about(self) -> &'static str {
         match self {
             Template::Pbr => {
-                "The maps of an OpenPBR material, named as the open standard names them: each an Output the 3D view \
-                 shows, fed a uniform value to replace with what makes it."
+                "The maps of an OpenPBR material: base color and metalness, specular roughness, normal, height and \
+                 occlusion, each an Output fed a uniform value to replace with what makes it."
             }
-            Template::PbrEmissive => "The maps of Base, and the color of its emission: what glows of itself, black where nothing does.",
+            Template::Anisotropy => "Base, its roughness running one way more than the other (brushed metal), and the tangent it runs along.",
+            Template::Coat => "Base under a clear coat (varnish, car paint): its weight, color, roughness, normal and anisotropy.",
+            Template::Subsurface => "Light that goes in under the surface and out elsewhere (skin, wax, marble): how much, of what color, how far.",
+            Template::Fuzz => "Base under a fine fuzz (velvet, dust, the skin of a peach): its weight, color and roughness.",
+            Template::Complete => {
+                "Every parameter of OpenPBR a map: base, specular, transmission, subsurface, coat, fuzz, emission, thin \
+                 film, opacity and geometry."
+            }
             Template::StudioPanorama => {
-                "Light all around, as a panorama twice as wide as high in 32-bit floats: a studio of softboxes far \
-                 brighter than white. Exported as EXR, it lights the 3D view."
+                "An environment light simulating a studio: a panorama twice as wide as high in 32-bit floats, softboxes \
+                 far brighter than white. Exported as EXR, it lights the 3D view."
             }
-            Template::PixelProcessor => "Every pixel computed by Pixel Math: an expression of where it is (u, v), of values and of images read anywhere.",
-            Template::FxMap => "Patterns scattered, stacked and colored as the program of an FX-Map says.",
+            Template::Convolution => "A convolution filter of a grayscale image: each pixel the average of those around it, as far as a map says (a box blur that is not the same everywhere).",
+            Template::Grid => "A grid of squares, as many across and down as its input values say, drawn by one FX-Map.",
+            Template::Noise => "Noise of splats: one at every split of the image, the finer the weaker, added up (as clouds are).",
             Template::ScanProcessing => {
-                "A scan made a material: its color, normals and height tiled, the light it was photographed in taken \
-                 away, its roughness and occlusion worked out."
+                "A scan made a metallic/roughness material: its color, normals and height tiled, the light it was \
+                 photographed in taken away, its roughness worked out."
             }
             Template::GrayFilter => {
                 "Changes a grayscale image: the image the graph takes, what is done to it, and its output. Used as a node, \
@@ -185,15 +327,28 @@ impl Template {
         }
     }
 
-    /// The Outputs it has: their names, as their files are named.
-    pub fn outputs(self) -> &'static [&'static str] {
+    /// The maps of a material template of OpenPBR.
+    fn maps(self) -> Option<&'static [Map]> {
         match self {
-            Template::Pbr => &["baseColor", "normal", "specularRoughness", "baseMetalness", "height", "ambientOcclusion"],
-            Template::PbrEmissive => &["baseColor", "normal", "specularRoughness", "baseMetalness", "height", "ambientOcclusion", "emissionColor"],
-            Template::StudioPanorama => &["panorama"],
-            Template::ScanProcessing => &["baseColor", "normal", "specularRoughness", "height", "ambientOcclusion"],
-            Template::GrayFilter | Template::ColorFilter | Template::PixelProcessor | Template::FxMap => &["output"],
-            Template::Empty => &[],
+            Template::Pbr => Some(BASE),
+            Template::Anisotropy => Some(ANISOTROPY),
+            Template::Coat => Some(COAT),
+            Template::Subsurface => Some(SUBSURFACE),
+            Template::Fuzz => Some(FUZZ),
+            Template::Complete => Some(COMPLETE),
+            _ => None,
+        }
+    }
+
+    /// The Outputs it has: their names, as their files are named.
+    pub fn outputs(self) -> Vec<&'static str> {
+        if let Some(maps) = self.maps() {
+            return maps.iter().map(|m| m.0).collect();
+        }
+        match self {
+            Template::ScanProcessing => vec!["basecolor", "normal", "roughness", "metallic", "height"],
+            Template::Empty => Vec::new(),
+            _ => vec!["output"],
         }
     }
 
@@ -211,40 +366,11 @@ impl Template {
     pub fn graph(self, size: [u32; 2], precision: Precision) -> Graph {
         let (size, precision) = self.fit(size, precision);
         let mut g = Graph { resolution: size, precision, ..Graph::default() };
+        if let Some(maps) = self.maps() {
+            material(&mut g, self, maps);
+            return g;
+        }
         match self {
-            Template::Pbr | Template::PbrEmissive => {
-                // Each map: what feeds it (to be replaced), its value, and what the 3D view takes it for.
-                let mut maps: Vec<(&str, [f32; 4], bool, u32)> = vec![
-                    ("baseColor", [0.5, 0.5, 0.5, 1.0], false, USAGE_BASE_COLOR),
-                    ("normal", [0.5, 0.5, 1.0, 1.0], false, USAGE_NORMAL),
-                    ("specularRoughness", [0.5, 0.5, 0.5, 1.0], true, USAGE_ROUGHNESS),
-                    ("baseMetalness", [0.0, 0.0, 0.0, 1.0], true, USAGE_METALLIC),
-                    ("height", [0.5, 0.5, 0.5, 1.0], true, USAGE_HEIGHT),
-                    ("ambientOcclusion", [1.0, 1.0, 1.0, 1.0], true, USAGE_AO),
-                ];
-                if self == Template::PbrEmissive {
-                    maps.push(("emissionColor", [0.0, 0.0, 0.0, 1.0], false, USAGE_EMISSIVE));
-                }
-                let rows = maps.len() as f32;
-                for (row, (name, color, gray, usage)) in maps.into_iter().enumerate() {
-                    let y = row as f32 * ROW;
-                    let value = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, y]);
-                    set(&mut g, value, "color", ParamValue::Color(color));
-                    set(&mut g, value, "output", ParamValue::Enum(u32::from(gray)));
-                    let output = output(&mut g, name, usage, [340.0, y]);
-                    let _ = g.connect(value, "o:output", output, "i:input");
-                }
-                frame(
-                    &mut g,
-                    "Replace each uniform value with what makes the map",
-                    "Each Output is one map of an OpenPBR material, named as the standard names it, and the 3D view \
-                     uses it as its usage says. The uniform colors only hold a value: connect what makes each map in \
-                     their place.",
-                    [-30.0, -110.0],
-                    [568.0, 110.0 + (rows - 1.0) * ROW + TALL + 30.0],
-                    GRAY,
-                );
-            }
             Template::StudioPanorama => {
                 let studio = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
                 set(
@@ -266,7 +392,7 @@ impl Template {
                             .into(),
                     ),
                 );
-                let panorama = output(&mut g, "panorama", 0, [340.0, 0.0]);
+                let panorama = output(&mut g, "output", 0, [340.0, 0.0]);
                 // Its three channels, in 32-bit floats: an EXR.
                 set(&mut g, panorama, "format", ParamValue::Enum(1));
                 set(&mut g, panorama, "bit_depth", ParamValue::Enum(crate::nodes::DEPTH_32F));
@@ -280,6 +406,101 @@ impl Template {
                      it lights the 3D view (the sun button, Load an Environment Image…).",
                     [-30.0, -150.0],
                     [568.0, 150.0 + 216.0 + 30.0],
+                    GRAY,
+                );
+            }
+            Template::Convolution => {
+                // (Of a grayscale image: what Pixel Math samples of an image is one value.)
+                let input = image_input(&mut g, "input", crate::nodes::ImageKind::Gray, gray(0.5), [0.0, 0.0]);
+                let amount = image_input(&mut g, "amount", crate::nodes::ImageKind::Gray, gray(1.0), [0.0, ROW]);
+                let blur = g.add_node(NodeKind::PIXEL_MATH, [300.0, 0.0]);
+                set(
+                    &mut g,
+                    blur,
+                    "expression",
+                    ParamValue::Text(
+                        "# How far around each pixel is averaged: up to 8 pixels, as far as the amount map says.\n\
+                         dx = amount * 8 / width\n\
+                         dy = amount * 8 / height\n\
+                         # The pixel and the eight around it, that far off: their average.\n\
+                         sum = sample(input, u - dx, v - dy) + sample(input, u, v - dy) + sample(input, u + dx, v - dy) + \
+                         sample(input, u - dx, v) + input + sample(input, u + dx, v) + sample(input, u - dx, v + dy) + \
+                         sample(input, u, v + dy) + sample(input, u + dx, v + dy)\n\
+                         sum / 9"
+                            .into(),
+                    ),
+                );
+                let _ = g.connect(input, "o:output", blur, &crate::graph::var_socket_key("input"));
+                let _ = g.connect(amount, "o:output", blur, &crate::graph::var_socket_key("amount"));
+                let out = output(&mut g, "output", 0, [600.0, 0.0]);
+                let _ = g.connect(blur, "o:output", out, "i:input");
+                frame(
+                    &mut g,
+                    "A convolution: each pixel the average of those around it",
+                    "Pixel Math reads the input a pixel's distance around each pixel (sample reads it anywhere) and \
+                     averages the nine: a box blur. How far it reaches is the amount map's, up to 8 pixels: white \
+                     blurs most, black not at all. Choose the pictures in Input Values.",
+                    [-30.0, -130.0],
+                    [828.0, 130.0 + ROW + TALL + 30.0],
+                    GRAY,
+                );
+            }
+            Template::Grid => {
+                let across = int_input(&mut g, "x_amount", 8, [-300.0, 0.0]);
+                let down = int_input(&mut g, "y_amount", 8, [-300.0, 110.0]);
+                let fx = g.add_node(NodeKind::FX_MAP, [0.0, 0.0]);
+                set(
+                    &mut g,
+                    fx,
+                    "program",
+                    ParamValue::Text(
+                        "# One square a cell of the grid: i counts them, across, then down.\n\
+                         draw = i < x_amount * y_amount\n\
+                         x = (mod(i, x_amount) + 0.5) / x_amount\n\
+                         y = (floor(i / x_amount) + 0.5) / y_amount\n\
+                         size = 0.8 / x_amount, 0.8 / y_amount"
+                            .into(),
+                    ),
+                );
+                set(&mut g, fx, "count", ParamValue::Int(256));
+                set(&mut g, fx, "pattern", ParamValue::Enum(2));
+                let _ = g.connect(across, "o:value", fx, &crate::graph::var_socket_key("x_amount"));
+                let _ = g.connect(down, "o:value", fx, &crate::graph::var_socket_key("y_amount"));
+                let out = output(&mut g, "output", 0, [400.0, 0.0]);
+                let _ = g.connect(fx, "o:output", out, "i:input");
+                frame(
+                    &mut g,
+                    "A grid drawn by one FX-Map",
+                    "The FX-Map draws up to 256 splats (Count) in the one cell of depth 0; its program places each by \
+                     its number i, across and then down, and leaves out those past x_amount × y_amount, the input \
+                     values. Change them in Input Values.",
+                    [-330.0, -130.0],
+                    [928.0, 130.0 + FX_TALL + 2.0 * 20.0 + 30.0],
+                    GRAY,
+                );
+            }
+            Template::Noise => {
+                let background = g.add_node(NodeKind::UNIFORM_COLOR, [-320.0, 0.0]);
+                set(&mut g, background, "color", ParamValue::Color(gray(0.5)));
+                set(&mut g, background, "output", ParamValue::Enum(1));
+                let fx = g.add_node(NodeKind::FX_MAP, [0.0, 0.0]);
+                set(&mut g, fx, "program", ParamValue::Text("# A splat at every depth, each finer one weaker.\nsize = 1.4\nvalue = (rand(1) - 0.5) * 0.6^depth".into()));
+                set(&mut g, fx, "count", ParamValue::Int(1));
+                set(&mut g, fx, "from_depth", ParamValue::Int(0));
+                set(&mut g, fx, "depth", ParamValue::Int(8));
+                set(&mut g, fx, "pattern", ParamValue::Enum(12));
+                set(&mut g, fx, "blend", ParamValue::Enum(1));
+                let _ = g.connect(background, "o:output", fx, "i:background");
+                let out = output(&mut g, "output", 0, [400.0, 0.0]);
+                let _ = g.connect(fx, "o:output", out, "i:input");
+                frame(
+                    &mut g,
+                    "Noise made of splats",
+                    "Every split of the image, from depth 0 (one cell) to depth 8 (256 × 256 cells), draws a soft \
+                     splat a cell, lighter or darker at random and the weaker the finer (0.6^depth); Add sums them \
+                     over the gray of the background, as noise is made of octaves.",
+                    [-350.0, -130.0],
+                    [948.0, 130.0 + FX_TALL + 30.0],
                     GRAY,
                 );
             }
@@ -304,63 +525,95 @@ impl Template {
                     GRAY,
                 );
             }
-            Template::PixelProcessor => {
-                let math = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
-                set(&mut g, math, "expression", ParamValue::Text("vec3(u, v, 0.5)".into()));
-                let output = output(&mut g, "output", 0, [340.0, 0.0]);
-                let _ = g.connect(math, "o:output", output, "i:input");
-                frame(
-                    &mut g,
-                    "Pixel Math: every pixel is what its expression says",
-                    "The expression is worked out for every pixel on the GPU: u and v say where the pixel is, 0 to 1 \
-                     across and down, and vec3(u, v, 0.5) makes a color of them. Change it in the properties.",
-                    [-30.0, -110.0],
-                    [568.0, 110.0 + 216.0 + 30.0],
-                    GRAY,
-                );
-            }
-            Template::FxMap => {
-                let fx = g.add_node(NodeKind::FX_MAP, [0.0, 0.0]);
-                let output = output(&mut g, "output", 0, [340.0, 0.0]);
-                let _ = g.connect(fx, "o:output", output, "i:input");
-                frame(
-                    &mut g,
-                    "An FX-Map: its program says where each splat goes, how big and how bright",
-                    "The program runs once for every splat: x and y say where it goes, size how big, value how \
-                     bright. How many there are, and the pattern each draws, are in the properties.",
-                    [-30.0, -110.0],
-                    [568.0, 110.0 + FX_TALL + 30.0],
-                    GRAY,
-                );
-            }
-            Template::Empty => {}
+            _ => {}
         }
         g
     }
 }
 
+/// The graph of a material template: each map a uniform value into its Output, side by side in
+/// as many columns as it takes to keep the graph from running far down, in a frame that says
+/// what to do with them.
+fn material(g: &mut Graph, template: Template, maps: &[Map]) {
+    let columns = match maps.len() {
+        0..=8 => 1,
+        9..=16 => 2,
+        _ => 4,
+    };
+    const PAIR: f32 = 620.0;
+    for (i, Map(name, value, is_gray, usage)) in maps.iter().enumerate() {
+        let [x, y] = [(i % columns) as f32 * PAIR, (i / columns) as f32 * ROW];
+        let uniform = g.add_node(NodeKind::UNIFORM_COLOR, [x, y]);
+        set(g, uniform, "color", ParamValue::Color(*value));
+        set(g, uniform, "output", ParamValue::Enum(u32::from(*is_gray)));
+        let out = output(g, name, *usage, [x + 340.0, y]);
+        let _ = g.connect(uniform, "o:output", out, "i:input");
+    }
+    let rows = maps.len().div_ceil(columns) as f32;
+    let shown = if template == Template::Pbr {
+        ""
+    } else {
+        " The 3D view here shows the base of the material (color, metalness, roughness, normal, height, occlusion); \
+         the other maps are written for renderers that read OpenPBR."
+    };
+    let said = format!(
+        "Each Output is one map of an OpenPBR material, named as the standard names it, fed the value the standard \
+         has by default. The uniform colors only hold that value: connect what makes each map in their place.{shown}"
+    );
+    let width = (columns as f32 - 1.0) * PAIR + 568.0;
+    let top = said_height(&said, width);
+    frame(g, "Replace each uniform value with what makes the map", &said, [-30.0, -top], [width, top + (rows - 1.0) * ROW + TALL + 30.0], GRAY);
+}
+
+/// How much room a frame `width` wide takes above its nodes for its title and for what it says,
+/// at the most: as the graph view draws it (a title bar, lines of a size of text a little over
+/// 12 points, about 7 points a letter), a line more than it takes, rounded up to 10.
+fn said_height(said: &str, width: f32) -> f32 {
+    let per_line = ((width - 16.0) / 7.25).max(1.0);
+    let lines = (said.chars().count() as f32 / per_line).ceil() + 1.0;
+    ((30.0 + 16.0 + lines * 16.9) / 10.0).ceil() * 10.0
+}
+
+/// An image input of the graph called `name`, taking `kind`, `color` while it has no picture.
+fn image_input(g: &mut Graph, name: &str, kind: crate::nodes::ImageKind, color: [f32; 4], pos: [f32; 2]) -> NodeId {
+    let node = g.add_node(NodeKind::IMAGE_INPUT, pos);
+    let _ = g.bind_variable(node, name);
+    if let Some(var) = g.variable_mut(name) {
+        (var.value, var.default) = (Value::Color(color), Value::Color(color));
+        if let Some(image) = var.image.as_mut() {
+            image.kind = kind;
+        }
+    }
+    node
+}
+
+/// An integer input value of the graph called `name`, `value` by default (1 to 16).
+fn int_input(g: &mut Graph, name: &str, value: i32, pos: [f32; 2]) -> NodeId {
+    let node = g.add_node(NodeKind::INT_INPUT, pos);
+    let _ = g.bind_variable(node, name);
+    if let Some(var) = g.variable_mut(name) {
+        (var.value, var.default, var.min, var.max) = (Value::Int(value), Value::Int(value), Value::Int(1), Value::Int(16));
+    }
+    node
+}
+
 /// The graph of Scan Processing: the maps of a scan, each an image input, tiled; the color's
-/// light taken away; roughness and occlusion worked out; each map an Output.
+/// light taken away; roughness worked out; each map an Output, as Substance Designer's scan
+/// template has them.
 fn scan_processing(g: &mut Graph) {
     use crate::nodes::ImageKind;
-    // The scan: an input a row, of the color it is while it has no picture (a flat normal).
-    let mut input = |name: &str, kind: ImageKind, color: [f32; 4], y: f32| {
-        let node = g.add_node(NodeKind::IMAGE_INPUT, [0.0, y]);
-        let _ = g.bind_variable(node, name);
-        if let Some(var) = g.variable_mut(name) {
-            (var.value, var.default) = (crate::Value::Color(color), crate::Value::Color(color));
-            if let Some(image) = var.image.as_mut() {
-                image.kind = kind;
-            }
-        }
+    // The scan: an input a row, of the color it is while it has no picture (a flat normal),
+    // each made to tile.
+    let mut tiled = |name: &str, kind: ImageKind, color: [f32; 4], y: f32| {
+        let input = image_input(g, name, kind, color, [0.0, y]);
         let tiled = g.add_node(NodeKind::MAKE_IT_TILE, [300.0, y]);
-        let _ = g.connect(node, "o:output", tiled, "i:input");
+        let _ = g.connect(input, "o:output", tiled, "i:input");
         tiled
     };
-    let albedo = input("albedo", ImageKind::Color, [0.5, 0.5, 0.5, 1.0], 0.0);
-    let normal = input("normal", ImageKind::Color, [0.5, 0.5, 1.0, 1.0], 2.0 * ROW);
+    let albedo = tiled("albedo", ImageKind::Color, gray(0.5), 0.0);
+    let normal = tiled("normal", ImageKind::Color, FLAT, 2.0 * ROW);
     // ("height" says the height of the image in pixels where expressions read it.)
-    let height = input("heightmap", ImageKind::Gray, [0.5, 0.5, 0.5, 1.0], 3.0 * ROW);
+    let height = tiled("heightmap", ImageKind::Gray, gray(0.5), 3.0 * ROW);
     // The light it was photographed in: the color blurred far; the color divided by it is the
     // surface's own.
     let light = g.add_node(NodeKind::BLUR, [600.0, 0.0]);
@@ -389,15 +642,17 @@ fn scan_processing(g: &mut Graph) {
         ParamValue::Text("# Darker in the color, rougher.\nlum = color.r * 0.3 + color.g * 0.59 + color.b * 0.11\n0.45 + 0.4 * (1 - clamp(lum, 0, 1))".into()),
     );
     let _ = g.connect(delit, "o:output", rough, &crate::graph::var_socket_key("color"));
-    let occlusion = g.add_node(NodeKind::AMBIENT_OCCLUSION, [600.0, 4.0 * ROW]);
-    let _ = g.connect(height, "o:output", occlusion, "i:input");
+    // A scan is of no metal: none.
+    let metal = g.add_node(NodeKind::UNIFORM_COLOR, [900.0, 4.0 * ROW]);
+    set(g, metal, "color", ParamValue::Color(gray(0.0)));
+    set(g, metal, "output", ParamValue::Enum(1));
     // The maps, in the order their files are listed.
     let maps = [
-        ("baseColor", USAGE_BASE_COLOR, delit, 0.0),
+        ("basecolor", USAGE_BASE_COLOR, delit, 0.0),
         ("normal", USAGE_NORMAL, normal, 2.0 * ROW),
-        ("specularRoughness", USAGE_ROUGHNESS, rough, ROW),
+        ("roughness", USAGE_ROUGHNESS, rough, ROW),
+        ("metallic", USAGE_METALLIC, metal, 4.0 * ROW),
         ("height", USAGE_HEIGHT, height, 3.0 * ROW),
-        ("ambientOcclusion", USAGE_AO, occlusion, 4.0 * ROW),
     ];
     for (name, usage, from, y) in maps {
         let out = output(g, name, usage, [1200.0, y]);
@@ -409,7 +664,8 @@ fn scan_processing(g: &mut Graph) {
         "A scan of a surface, as a camera and a scanner make it: its color, its normals and its height, each an \
          Input. Make It Tile blends each over its edges, so that it repeats without a seam. A photograph keeps the \
          light it was taken in: Blur finds that light, and the color divided by it is the surface's own. The \
-         roughness follows the color, darker rougher, and Ambient Occlusion comes of the height. The pictures          of the scan are chosen in Input Values.",
+         roughness follows the color, darker rougher; a scan is of no metal. The pictures of the scan are chosen \
+         in Input Values.",
         [-30.0, -130.0],
         [1428.0, 130.0 + 4.0 * ROW + TALL + 30.0],
         GRAY,

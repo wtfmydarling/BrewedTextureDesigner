@@ -7,6 +7,8 @@ mod app;
 mod autopilot;
 mod brand;
 mod clock;
+#[cfg(feature = "dev-tools")]
+mod compose;
 mod environment;
 mod eyedropper;
 mod gpu;
@@ -62,13 +64,17 @@ tools for developing the program:
        brewed-texture-designer --autopilot [MINUTES] [--seed N]
 
   --screenshot     start, wait until everything is computed, save a screenshot and quit
-  --picture OUT    the same, saving the picture of the model a saved package gets (a .jpg: as a
-                   lesson of Learn shows it, 16 wide for 10 high)
+  --picture OUT    the same, saving the picture of the model a saved package gets (PNG, or JPEG
+                   for a .jpg); --picture-size W[xH] says how large (512 square), --picture-lit
+                   lights it as the 3D view is lit (its environment image) and not as a studio
+  --export DIR     the same, exporting every output of the graph into DIR (as File → Export)
+  --compose ...    pictures made of pictures, for the templates and lessons (--compose help)
   --scenario       UI state for the screenshot: add-menu, file-menu, context-menu, home,
                    learn, home-about, example:ID (brick-wall, fx-maps, pixel-math), gradient, math, levels, inputs, transform, tiling, dialog, tile,
                    choices, lighting-menu, tile-sampler, shape:NAME (mat-ball …),
                    settings, settings:PAGE, shortcuts, about, new-graph, export, versions,
-                   template:ID (pbr, studio-panorama, scan-processing …),
+                   template:ID (pbr, studio-panorama, scan-processing …), graph:NAME,
+                   picture:INPUT=FILE, uniform:OUTPUT=V[,G,B], size:N,
                    environment:FILE, exposure:EV, blur:0..1; several joined by ';'
   --select KIND    select the first node of this type (e.g. math, levels)
   --preview KIND   show the first node of this type in the 2D view
@@ -121,6 +127,14 @@ fn main() -> iced::Result {
                 return Ok(());
             }
             #[cfg(feature = "dev-tools")]
+            "--compose" => {
+                if let Err(e) = compose::run(&args[i + 1..]) {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            #[cfg(feature = "dev-tools")]
             "--contact-sheet" => {
                 let out = value(i).unwrap_or_else(|| "contact_sheet.png".into());
                 let (graph, nodes) = if args.get(i + 2).map(String::as_str) == Some("demo") {
@@ -149,6 +163,23 @@ fn main() -> iced::Result {
             #[cfg(any(test, feature = "dev-tools"))]
             "--picture" => {
                 options.dev.picture = value(i).map(PathBuf::from);
+                i += 1;
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--picture-lit" => options.dev.picture_lit = true,
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--export" => {
+                options.dev.export = value(i).map(PathBuf::from);
+                i += 1;
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--picture-size" => {
+                // WIDTH or WIDTHxHEIGHT.
+                options.dev.picture_size = value(i).and_then(|s| {
+                    let mut sides = s.split('x').map(|n| n.trim().parse::<u32>().ok());
+                    let width = sides.next()??;
+                    Some([width, sides.next().flatten().unwrap_or(width)])
+                });
                 i += 1;
             }
             #[cfg(any(test, feature = "dev-tools"))]

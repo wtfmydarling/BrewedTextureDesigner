@@ -364,8 +364,12 @@ fn the_program_starts_on_the_home_screen() {
         "New Graph…",
         "Open…",
         "Start from a template",
-        "OpenPBR Material",
-        "HDRi Panorama",
+        // The same cards as the window of a new graph's: the template, its category.
+        "Base",
+        "OpenPBR",
+        "Studio",
+        "HDRi",
+        "Noise",
         "FX-Map",
         "More templates…",
         "Recent",
@@ -385,7 +389,7 @@ fn the_program_starts_on_the_home_screen() {
     // A package made from a template, in place of the blank one.
     w.send(Message::NewGraph(NewGraphMessage::Open(None)));
     w.input(&[]);
-    for said in ["New Graph", "Templates", "OpenPBR", "Base", "HDRi", "Studio Panorama", "Scan Processing", "Filters", "Empty", "Create graph in", "Create"] {
+    for said in ["New Graph", "Templates", "OpenPBR", "Base", "HDRi", "Studio", "Metallic Roughness", "Scan Processing", "Filters", "Empty", "Create graph in", "Create"] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
     w.snapshot("new_graph");

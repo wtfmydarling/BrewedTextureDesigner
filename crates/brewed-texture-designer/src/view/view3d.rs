@@ -353,33 +353,90 @@ fn maps_of(app: &App) -> ([Option<wgpu::TextureView>; 7], u32) {
     (maps, gray)
 }
 
-/// The camera of a picture of a package (see [`picture`]): the view's as it starts, whatever
-/// way the model was turned, moved or neared and the light turned (a picture is not of where
-/// someone left the view: it would show a corner, or nothing, of the model); the model, its
-/// relief and its repetitions are kept, they are how the package is looked at.
-pub fn picture_camera(view: Camera) -> Camera {
-    Camera { shape: view.shape, displacement: view.displacement, tiling: view.tiling, ..Camera::default() }
+/// How much of a picture of a model the model fills, in its longer way across.
+pub const PICTURE_FILL: f32 = 0.82;
+
+/// The camera of a picture of a package (see [`picture`]), `aspect` wide for its height: from
+/// where the view starts to look, whatever way the model was turned, moved or neared and the
+/// light turned (a picture is not of where someone left the view: it would show a corner, or
+/// nothing, of the model); the model, its relief and its repetitions are kept, they are how the
+/// package is looked at. It looks at the middle of the model as the picture shows it, from as
+/// far as makes the model fill [`PICTURE_FILL`] of it: as much room above it as below, on the
+/// left as on the right.
+pub fn picture_camera(view: Camera, aspect: f32) -> Camera {
+    let mut camera = Camera { shape: view.shape, displacement: view.displacement, tiling: view.tiling, ..Camera::default() };
+    let (vertices, _) = build_mesh(camera.shape);
+    // (Perspective is not linear: a few steps bring it there.)
+    for _ in 0..6 {
+        let ([lo, hi], ..) = projected(&camera, aspect, vertices.iter().map(|v| v.pos));
+        let middle = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+        let half = ((hi[0] - lo[0]) / 2.0).max((hi[1] - lo[1]) / 2.0).max(1e-3);
+        // The target moved across the view by as much of the world as the middle is off, at
+        // the target's distance; the camera as far as makes the model the size it is to be.
+        let eye = camera.eye();
+        let forward = normalize(sub(camera.target, eye));
+        let right = normalize(cross(forward, [0.0, 1.0, 0.0]));
+        let up = cross(right, forward);
+        let half_height = camera.distance * (FOV / 2.0).tan();
+        let shift = [middle[0] * half_height * aspect, middle[1] * half_height];
+        for (axis, (r, u)) in right.iter().zip(up).enumerate() {
+            camera.target[axis] += r * shift[0] + u * shift[1];
+        }
+        camera.distance *= half / PICTURE_FILL;
+    }
+    camera
 }
 
-/// A picture of the model the 3D view shows, `size` pixels square, as the view starts: from
+/// Where `points` are in the picture of `camera`, `aspect` wide for its height: the corners of
+/// what they cover, from -1 to 1 across and up.
+fn projected(camera: &Camera, aspect: f32, points: impl Iterator<Item = [f32; 3]>) -> ([[f32; 2]; 2], usize) {
+    let m = mul(&perspective(FOV, aspect, 0.05, 50.0), &look_at(camera.eye(), camera.target, [0.0, 1.0, 0.0]));
+    let (mut lo, mut hi, mut n) = ([f32::MAX; 2], [f32::MIN; 2], 0);
+    for p in points {
+        let p = [p[0], p[1], p[2], 1.0];
+        let clip: [f32; 4] = std::array::from_fn(|r| (0..4).map(|c| m[c][r] * p[c]).sum());
+        let at = [clip[0] / clip[3], clip[1] / clip[3]];
+        lo = [lo[0].min(at[0]), lo[1].min(at[1])];
+        hi = [hi[0].max(at[0]), hi[1].max(at[1])];
+        n += 1;
+    }
+    ([lo, hi], n)
+}
+
+/// A picture of the model the 3D view shows, `size` pixels wide and high, framed as
+/// [`picture_camera`] frames it; in the light of the view (`lit`: its environment image, behind
+/// the model too, and its exposure) or as the view starts: from
 /// its first camera (see [`picture_camera`]), in the studio's light as bright as it is made,
 /// on the studio's background: what lists of packages show of one (see `app::home`), the same
 /// whatever the view was left at. None when the model wears no map of the graph's (nothing of
 /// the package on it), or the GPU could not draw it. The view's pipeline, made once, is kept
 /// in `pipeline`.
-pub fn picture(app: &App, pipeline: &mut Option<Pipeline>, gpu: &crate::gpu::GpuHandles, size: u32) -> Option<::image::RgbaImage> {
+pub fn picture(app: &App, pipeline: &mut Option<Pipeline>, gpu: &crate::gpu::GpuHandles, size: [u32; 2], lit: bool) -> Option<::image::RgbaImage> {
     use shader::Primitive as _;
     let (maps, gray) = maps_of(app);
     if maps.iter().all(Option::is_none) {
         return None;
     }
-    let primitive = Primitive { camera: picture_camera(app.ui.preview.view3d), maps, gray, environment: None, exposure: 1.0, background: None };
+    let camera = picture_camera(app.ui.preview.view3d, size[0] as f32 / size[1].max(1) as f32);
+    let l = &app.ui.preview.lighting;
+    let primitive = match lit {
+        true => Primitive {
+            camera,
+            maps,
+            gray,
+            environment: l.shown.clone(),
+            exposure: l.exposure.clamp(-12.0, 12.0).exp2(),
+            background: Some(l.blur.clamp(0.0, 1.0)),
+        },
+        false => Primitive { camera, maps, gray, environment: None, exposure: 1.0, background: None },
+    };
     let (device, queue) = (&gpu.device, &gpu.queue);
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let pipeline = pipeline.get_or_insert_with(|| <Pipeline as shader::Pipeline>::new(device, queue, format));
-    let side = size as f32;
-    primitive.prepare(pipeline, device, queue, &Rectangle::new(iced::Point::ORIGIN, iced::Size::new(side, side)), &Viewport::with_physical_size(iced::Size::new(size, size), 1.0));
-    let extent = wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 };
+    let [width, height] = size;
+    let bounds = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(width as f32, height as f32));
+    primitive.prepare(pipeline, device, queue, &bounds, &Viewport::with_physical_size(iced::Size::new(width, height), 1.0));
+    let extent = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("brewed 3d picture"),
         size: extent,
@@ -405,12 +462,12 @@ pub fn picture(app: &App, pipeline: &mut Option<Pipeline>, gpu: &crate::gpu::Gpu
         timestamp_writes: None,
         occlusion_query_set: None,
     }));
-    primitive.render(pipeline, &mut encoder, &target, &Rectangle { x: 0, y: 0, width: size, height: size });
-    let row = size * 4;
+    primitive.render(pipeline, &mut encoder, &target, &Rectangle { x: 0, y: 0, width, height });
+    let row = width * 4;
     let padded = row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("brewed 3d picture"),
-        size: u64::from(padded) * u64::from(size),
+        size: u64::from(padded) * u64::from(height),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -418,7 +475,7 @@ pub fn picture(app: &App, pipeline: &mut Option<Pipeline>, gpu: &crate::gpu::Gpu
         wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
         wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(size) },
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(height) },
         },
         extent,
     );
@@ -429,13 +486,13 @@ pub fn picture(app: &App, pipeline: &mut Option<Pipeline>, gpu: &crate::gpu::Gpu
     });
     device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
     got.recv().ok()?.ok()?;
-    let mut rgba = Vec::with_capacity((row * size) as usize);
+    let mut rgba = Vec::with_capacity((row * height) as usize);
     {
         let mapped = buffer.slice(..).get_mapped_range();
         for (y, line) in mapped.chunks(padded as usize).enumerate() {
             // The view's background where the model is not: from 48 at the top to 18 at the
             // bottom, as the view is drawn on.
-            let back = (48.0 - 30.0 * y as f32 / side.max(1.0)).round() as u8;
+            let back = (48.0 - 30.0 * y as f32 / (height as f32).max(1.0)).round() as u8;
             for px in line[..row as usize].chunks(4) {
                 let a = f32::from(px[3]) / 255.0;
                 let over = |c: u8| (f32::from(c) + f32::from(back) * (1.0 - a)).round().min(255.0) as u8;
@@ -444,7 +501,7 @@ pub fn picture(app: &App, pipeline: &mut Option<Pipeline>, gpu: &crate::gpu::Gpu
         }
     }
     buffer.unmap();
-    ::image::RgbaImage::from_raw(size, size, rgba)
+    ::image::RgbaImage::from_raw(width, height, rgba)
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -1036,6 +1093,7 @@ mod tests {
 
     /// A picture of a package is of the model as the view starts, wherever the view was left:
     /// turned, moved off, neared, its light turned; the model, its relief and repetitions kept.
+    /// Every model is in the middle of it, filling as much of it as the others, square or wide.
     #[test]
     fn pictures_of_packages_are_from_the_first_camera() {
         let left = Camera {
@@ -1049,9 +1107,23 @@ mod tests {
             displacement: 0.12,
             tiling: 3.0,
         };
-        let shown = picture_camera(left);
-        assert_eq!(shown, Camera { shape: Shape::Cloth, displacement: 0.12, tiling: 3.0, ..Camera::default() });
-        assert_eq!(picture_camera(Camera::default()), Camera::default());
+        let first = Camera { shape: Shape::Cloth, displacement: 0.12, tiling: 3.0, ..Camera::default() };
+        assert_eq!(picture_camera(left, 1.0), picture_camera(first, 1.0), "wherever the view was left");
+        let shown = picture_camera(left, 1.0);
+        let start = Camera::default();
+        assert_eq!((shown.yaw, shown.pitch, shown.light_yaw, shown.light_pitch), (start.yaw, start.pitch, start.light_yaw, start.light_pitch));
+        assert_eq!((shown.shape, shown.displacement, shown.tiling), (Shape::Cloth, 0.12, 3.0));
+        for shape in Shape::ALL {
+            for aspect in [1.0, 1.6] {
+                let camera = picture_camera(Camera { shape, ..Camera::default() }, aspect);
+                let ([lo, hi], n) = projected(&camera, aspect, build_mesh(shape).0.iter().map(|v| v.pos));
+                assert!(n > 0);
+                let middle = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+                let half = ((hi[0] - lo[0]) / 2.0).max((hi[1] - lo[1]) / 2.0);
+                assert!(middle[0].abs() < 0.01 && middle[1].abs() < 0.01, "{shape:?} at {aspect}: off the middle by {middle:?}");
+                assert!((half - PICTURE_FILL).abs() < 0.01, "{shape:?} at {aspect}: fills {half}");
+            }
+        }
     }
 
     #[test]

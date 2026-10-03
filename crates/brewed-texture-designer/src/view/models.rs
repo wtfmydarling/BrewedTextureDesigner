@@ -77,7 +77,7 @@ pub(super) fn normalize(a: [f32; 3]) -> [f32; 3] {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct Vertex {
-    pos: [f32; 3],
+    pub(super) pos: [f32; 3],
     normal: [f32; 3],
     tangent: [f32; 4],
     uv: [f32; 2],

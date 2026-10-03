@@ -167,6 +167,25 @@ impl Style {
         }
     }
 
+    /// A card of what a new file starts from: framed, lit when pointed at, outlined white when
+    /// it is the one chosen.
+    pub(crate) fn template_card(self, chosen: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+        move |_, status| {
+            let bg = match status {
+                button::Status::Hovered => self.hover,
+                button::Status::Pressed => gray(52),
+                _ => self.card,
+            };
+            let border = if chosen { Border { color: gray(214), width: 1.5, radius: 6.0.into() } } else { Border { color: self.line, width: 1.0, radius: 6.0.into() } };
+            button::Style { background: Some(Background::Color(bg)), text_color: self.text, border, shadow: Shadow::default(), snap: true }
+        }
+    }
+
+    /// The dark round behind an (i) on a picture.
+    pub(crate) fn badge(self) -> impl Fn(&Theme) -> container::Style {
+        move |_| container::Style { background: Some(Color { a: 0.7, ..gray(12) }.into()), border: border::rounded(20), ..Default::default() }
+    }
+
     /// A tile (what to start from, a file opened last): a card, lit when pointed at.
     pub(crate) fn tile(self) -> impl Fn(&Theme, button::Status) -> button::Style {
         move |_, status| {

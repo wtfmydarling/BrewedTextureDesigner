@@ -5,7 +5,6 @@ pub mod color;
 pub mod curve;
 pub mod dropdown;
 pub mod gradient;
-pub mod hover_card;
 pub mod layered;
 pub mod number;
 pub mod outside;
