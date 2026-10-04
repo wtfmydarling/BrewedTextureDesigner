@@ -220,6 +220,7 @@ fn view_menu(app: &App) -> Vec<Element<'_, Message>> {
 fn help_menu(app: &App) -> Vec<Element<'_, Message>> {
     vec![
         item("Keyboard Shortcuts", app.key_of(Command::Help), Some(Message::Dialog(Some(Dialog::Shortcuts)))),
+        item("Third-Party Notices…", "", Some(Message::Dialog(Some(Dialog::Notices(Default::default()))))),
         item(format!("About {}", brewed_texture_core::APP_NAME), "", Some(Message::Dialog(Some(Dialog::About)))),
     ]
 }

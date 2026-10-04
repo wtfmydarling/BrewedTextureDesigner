@@ -286,6 +286,7 @@ impl App {
             }
             "shortcuts" => self.ui.dialog = Some(Dialog::Shortcuts),
             "about" => self.ui.dialog = Some(Dialog::About),
+            "notices" => self.ui.dialog = Some(Dialog::Notices(Default::default())),
             "new-graph" => return self.handle(Message::NewGraph(super::home::NewGraphMessage::Open(None))),
             "export" => return self.handle(Message::Export(super::export_dialog::ExportMessage::Open)),
             "versions" => return self.handle(Message::Versions(super::versions::VersionsMessage::Open)),

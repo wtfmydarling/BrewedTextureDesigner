@@ -446,6 +446,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "env_logger",
+ "flate2",
  "futures",
  "half",
  "home-screen",

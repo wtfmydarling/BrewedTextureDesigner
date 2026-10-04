@@ -14,6 +14,7 @@ pub mod home;
 pub mod inputs;
 pub mod library;
 pub mod models;
+pub mod notices;
 pub mod picker;
 pub mod preview;
 pub mod properties;

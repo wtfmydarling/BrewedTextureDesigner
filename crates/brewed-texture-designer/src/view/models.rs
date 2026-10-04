@@ -8,8 +8,10 @@ pub enum Shape {
     /// catch the light. What a material is usually looked at on.
     RoundedCube,
     Sphere,
-    /// A ball on a stand, as materials are shown in catalogues: the ball turns away from the
-    /// light every way, the stand has flat, hollow and rounded parts.
+    /// A shader ball: a ball cut open into shells and rings, as materials are shown in
+    /// catalogues, its surfaces turned every way, flat, hollow and rounded. The model is "Shader
+    /// Ball JL 01" by Craneo, under Creative Commons Attribution 4.0 (see Help → Third-Party
+    /// Notices).
     MatBall,
     Cube,
     /// A cylinder with rounded edges: round all over but for its flat ends.
@@ -38,7 +40,7 @@ impl Shape {
         match self {
             Shape::RoundedCube => "Rounded Cube",
             Shape::Sphere => "Sphere",
-            Shape::MatBall => "Mat Ball",
+            Shape::MatBall => "Matball",
             Shape::Cube => "Cube",
             Shape::RoundedCylinder => "Rounded Cylinder",
             Shape::Cylinder => "Cylinder",
@@ -217,6 +219,38 @@ const CUBE_FACES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
     ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
 ];
 
+/// The model of the Matball: made of "Shader Ball JL 01" (by Craneo, CC BY 4.0) in Blender
+/// (its modifiers applied, made triangles, its tangents MikkTSpace's), turned to stand up as the
+/// view has it, made the size of the other models and its texture as large on it as on the
+/// sphere; kept as b"BTDM", a version (1), then deflated (zlib): the number of vertices and of
+/// indices, the vertices as twelve floats each (as [`Vertex`] is), the indices.
+const MATBALL: &[u8] = include_bytes!("../../assets/models/matball.bin");
+
+/// The triangles of a model kept as [`MATBALL`] is.
+fn read_model(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u32>), String> {
+    use std::io::Read;
+    let packed = bytes.strip_prefix(b"BTDM").ok_or("not a model")?;
+    let (version, packed) = packed.split_at_checked(4).ok_or("cut short")?;
+    if version != 1u32.to_le_bytes() {
+        return Err("of another version".into());
+    }
+    let mut data = Vec::new();
+    flate2::read::ZlibDecoder::new(packed).read_to_end(&mut data).map_err(|e| e.to_string())?;
+    let word = |i: usize| data.get(i * 4..i * 4 + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let (vertices, indices) = (word(0).ok_or("cut short")? as usize, word(1).ok_or("cut short")? as usize);
+    const SIZE: usize = std::mem::size_of::<Vertex>();
+    let (from, to) = (8, 8 + vertices * SIZE);
+    if data.len() != to + indices * 4 {
+        return Err("of another size".into());
+    }
+    let vs = data[from..to].as_chunks::<SIZE>().0.iter().map(|b| bytemuck::pod_read_unaligned::<Vertex>(b)).collect();
+    let is: Vec<u32> = data[to..].as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
+    if is.iter().any(|&i| i as usize >= vertices) {
+        return Err("a triangle of a vertex it has not".into());
+    }
+    Ok((vs, is))
+}
+
 pub(super) fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
     use std::f32::consts::{FRAC_PI_2, PI, TAU};
     let mut out = (Vec::new(), Vec::new());
@@ -262,27 +296,11 @@ pub(super) fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
             },
             &mut out,
         ),
-        Shape::MatBall => {
-            // The ball, as the sphere is textured.
-            const BALL: f32 = 0.7;
-            let size = TAU * BALL / 2.0;
-            lathe(&[Piece::Arc { center: [0.0, 0.12], radius: BALL, from: 0.0, to: PI }], 160, 192, 2.0, size, &mut out);
-            // Its stand: a neck from inside the ball, hollowing out into a round foot.
-            lathe(
-                &[
-                    Piece::Line([0.16, -0.45], [0.16, -0.70]),
-                    Piece::Arc { center: [0.28, -0.70], radius: 0.12, from: -FRAC_PI_2, to: -PI },
-                    Piece::Line([0.28, -0.82], [0.52, -0.82]),
-                    Piece::Arc { center: [0.52, -0.87], radius: 0.05, from: 0.0, to: PI },
-                    Piece::Line([0.52, -0.92], [0.0, -0.92]),
-                ],
-                96,
-                128,
-                1.0,
-                size,
-                &mut out,
-            );
-        }
+        Shape::MatBall => match read_model(MATBALL) {
+            Ok(model) => return model,
+            // (It is built in: a test reads it.)
+            Err(e) => log::error!("the matball: {e}"),
+        },
         Shape::Plane => grid(
             256,
             [1.0, 1.0],
@@ -376,8 +394,11 @@ mod tests {
 
     /// Every triangle of every model faces the way its normals do (counter-clockwise seen from
     /// there: the shader lights a surface seen from behind from that side), and shows the
-    /// texture unmirrored: `u` along the tangent, `v` against the bitangent, as normal maps
-    /// are read.
+    /// texture as its tangent says: `u` along the tangent, `v` against the bitangent (the
+    /// normal and the tangent crossed, turned over where the tangent's handedness says the
+    /// texture is mirrored there), as normal maps are read. The Matball, made elsewhere, has
+    /// normals the bevels of its edges lean (Blender's weighted normals): a few of its slivers
+    /// face away from them.
     #[test]
     fn meshes_face_out_and_wear_the_texture_the_right_way_round() {
         let scale = |a: [f32; 3], k: f32| a.map(|c| c * k);
@@ -406,13 +427,14 @@ mod tests {
                 let pu = scale(sub(scale(e1, dv2), scale(e2, dv1)), 1.0 / det);
                 let pv = scale(sub(scale(e2, du1), scale(e1, du2)), 1.0 / det);
                 let tangent = [a.tangent[0], a.tangent[1], a.tangent[2]];
-                if dot(pu, tangent) <= 0.0 || dot(pv, cross(a.normal, tangent)) >= 0.0 {
+                if dot(pu, tangent) <= 0.0 || dot(pv, cross(a.normal, tangent)) * a.tangent[3] >= 0.0 {
                     mirrored += 1;
                 }
             }
             assert!(checked > 1000, "{shape:?}");
-            assert_eq!(facing, 0, "{shape:?}: {facing} of {checked} triangles face away from their normals");
-            assert_eq!(mirrored, 0, "{shape:?}: {mirrored} of {checked} triangles show the texture mirrored");
+            let slivers = if shape == Shape::MatBall { checked / 1000 } else { 0 };
+            assert!(facing <= slivers, "{shape:?}: {facing} of {checked} triangles face away from their normals");
+            assert!(mirrored <= slivers, "{shape:?}: {mirrored} of {checked} triangles show the texture mirrored");
         }
     }
 }

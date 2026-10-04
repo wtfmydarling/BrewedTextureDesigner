@@ -87,6 +87,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             modal(dialog_box(body, 440.0), None)
         }
         Dialog::Missing(missing) => missing_files(app, missing),
+        Dialog::Notices(notices) => crate::view::notices::view(notices),
         Dialog::Recover => recover(app),
         Dialog::Settings(settings) => crate::view::settings::view(app, settings),
         Dialog::NewGraph(dialog) => new_graph(app, dialog),
@@ -159,11 +160,15 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
                 text(format!("GPU: {gpu}")).size(style::TEXT_SIZE),
                 text(format!("CPU threads: {}", std::thread::available_parallelism().map_or(1, |n| n.get())))
                     .size(style::TEXT_SIZE),
-                text("Rust · wgpu · iced").size(style::SMALL).color(style::TEXT_DIM),
                 row![
                     space().width(Length::Fill),
+                    button(text("Third-Party Notices…").size(style::TEXT_SIZE))
+                        .padding([5, 14])
+                        .style(style::button)
+                        .on_press(Message::Dialog(Some(Dialog::Notices(Default::default())))),
                     button(text("Close").size(style::TEXT_SIZE)).padding([5, 14]).style(style::button).on_press(Message::Dialog(None))
-                ],
+                ]
+                .spacing(8),
             ]
             .spacing(10);
             modal(dialog_box(body, 440.0), Some(Message::Dialog(None)))

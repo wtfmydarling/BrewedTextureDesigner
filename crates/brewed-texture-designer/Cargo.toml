@@ -38,6 +38,9 @@ toml_edit = "0.25"
 # Draws the logo (assets/logo.svg) at the sizes the windows ask for — the library iced
 # draws its SVGs with, so nothing more to build.
 resvg = { version = "0.45", default-features = false }
+# The model of the Matball is kept deflated (assets/models): what the core writes packages
+# with.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [build-dependencies]
 # ...and at the sizes the Windows executable embeds.

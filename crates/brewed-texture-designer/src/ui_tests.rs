@@ -3765,3 +3765,29 @@ fn the_graphs_panorama_lights_the_3d_view() {
     w.send(Message::PickChoice(out, "usage", Usage::BaseColor.index()));
     assert!(w.app.panorama_node().is_none() && w.app.environment_shown().is_none());
 }
+
+/// Help → Third-Party Notices says whose work the program is made with, and under what: the
+/// Matball's model (its author, where it is, its license, what was changed of it), the font,
+/// Rust's standard library and every crate; searched, the work found is shown. About says no
+/// more of what the program is built with, but opens this window.
+#[test]
+fn the_third_party_notices_say_whose_work_is_used() {
+    use crate::app::NoticesMessage;
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let shown = |w: &mut Harness, text: &str| !texts(w, text).is_empty();
+    w.send(Message::Dialog(Some(Dialog::Notices(Default::default()))));
+    for text in ["Third-Party Notices", "Matball: Shader Ball JL 01", "Craneo", "https://skfb.ly/ozVxI", "CC BY 4.0", "Inter", "Rust standard library"] {
+        assert!(shown(&mut w, text), "{text} is in the window");
+    }
+    w.send(Message::Notices(NoticesMessage::Search("wgpu".into())));
+    let Some(Dialog::Notices(dialog)) = &w.app.ui.dialog else { panic!("the window is open") };
+    let found = &crate::third_party::notices().works[dialog.chosen];
+    assert!(found.name.starts_with("wgpu") && !found.texts.is_empty(), "the first work the search finds: {}", found.name);
+    assert!(shown(&mut w, &found.name) && !shown(&mut w, "Matball: Shader Ball JL 01"), "only what the search finds");
+    w.snapshot("third_party_notices");
+    w.send(Message::Dialog(Some(Dialog::About)));
+    assert!(!shown(&mut w, "Rust · wgpu · iced"), "About says no more of what the program is built with");
+    let notices = *texts(&mut w, "Third-Party Notices…").last().expect("About opens the notices");
+    click(&mut w, notices.center());
+    assert!(matches!(w.app.ui.dialog, Some(Dialog::Notices(_))));
+}

@@ -138,6 +138,7 @@ impl HomeLists {
         let resources = vec![
             resource(SHORTCUTS, "Shortcuts", Glyph::Keyboard, true),
             resource("settings", "Settings", Glyph::Settings, true),
+            resource("notices", "Third-Party Notices", Glyph::File, true),
             resource("about", &format!("About {}", brewed_texture_core::APP_NAME), Glyph::Info, true),
             resource("website", "Website", Glyph::Globe, false),
             resource("documentation", "Documentation", Glyph::Book, false),
@@ -276,6 +277,7 @@ impl App {
             Event::Resource(id) => match id.as_str() {
                 SHORTCUTS => self.ui.dialog = Some(Dialog::Shortcuts),
                 "settings" => return self.handle(Message::Settings(SettingsMessage::Open)),
+                "notices" => self.ui.dialog = Some(Dialog::Notices(Default::default())),
                 "about" => self.ui.dialog = Some(Dialog::About),
                 _ => {}
             },

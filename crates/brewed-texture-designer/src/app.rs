@@ -238,6 +238,14 @@ pub enum PendingAction {
     Quit,
 }
 
+/// What the window of the third-party notices is told.
+#[derive(Clone, Debug)]
+pub enum NoticesMessage {
+    /// Show this work (of `third_party::notices`).
+    Choose(usize),
+    Search(String),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dialog {
     Unsaved(PendingAction),
@@ -254,6 +262,9 @@ pub enum Dialog {
     Versions(versions::VersionsDialog),
     /// Files a package names that are not there (see [`MissingFiles`]).
     Missing(MissingFiles),
+    /// The works of others the program is made with, and their licenses (see
+    /// [`crate::third_party`]).
+    Notices(view::notices::NoticesDialog),
 }
 
 /// The files a package open in the Explorer names that are not there: they are looked for
@@ -836,6 +847,8 @@ pub enum Message {
     Home(home::HomeMessage),
     /// The dialog of a new package or graph.
     NewGraph(home::NewGraphMessage),
+    /// The window of the third-party notices.
+    Notices(NoticesMessage),
     /// The export dialog (see [`export_dialog`]).
     Export(export_dialog::ExportMessage),
     /// The earlier versions of a package (see [`versions`]).
@@ -2409,6 +2422,29 @@ impl App {
             Message::LookAtLibrary => return self.look_at_library(),
             Message::Home(message) => return self.home_message(message),
             Message::NewGraph(message) => return self.new_graph_message(message),
+            Message::Notices(message) => {
+                if let Some(Dialog::Notices(dialog)) = &mut self.ui.dialog {
+                    match message {
+                        NoticesMessage::Choose(i) => dialog.chosen = i,
+                        NoticesMessage::Search(query) => {
+                            // The work chosen stays, if the search leaves it; else the first it does whose
+                            // name begins with what is typed, or the first it does.
+                            let works = &crate::third_party::notices().works;
+                            let typed = query.trim().to_lowercase();
+                            let found = |w: &crate::third_party::Work| view::notices::matches(w, &query);
+                            if !works.get(dialog.chosen).is_some_and(found)
+                                && let Some(first) = works
+                                    .iter()
+                                    .position(|w| found(w) && w.name.to_lowercase().starts_with(&typed))
+                                    .or_else(|| works.iter().position(found))
+                            {
+                                dialog.chosen = first;
+                            }
+                            dialog.query = query;
+                        }
+                    }
+                }
+            }
             Message::Export(message) => return self.export_message(message),
             Message::Versions(message) => return self.versions_message(message),
             Message::LibraryLooked(found) => return self.library_looked(found),
