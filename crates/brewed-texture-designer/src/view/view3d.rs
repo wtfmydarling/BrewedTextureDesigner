@@ -157,6 +157,10 @@ pub struct Lighting {
     pub blur: f32,
     /// Whether the menu of the lighting is open.
     pub menu: bool,
+    /// Whether the graph's panorama (its Output of usage Panorama) lights the model, where the
+    /// graph has one: so it does, as Substance Designer puts an output in the 3D view by its
+    /// usage, until the studio or an image is chosen in its place.
+    pub use_panorama: bool,
 }
 
 /// How many environment images the menu offers again.
@@ -164,7 +168,18 @@ pub const RECENT: usize = 8;
 
 impl Default for Lighting {
     fn default() -> Self {
-        Lighting { file: None, recent: Vec::new(), shown: None, kept: None, reading: None, exposure: 0.0, background: true, blur: 0.25, menu: false }
+        Lighting {
+            file: None,
+            recent: Vec::new(),
+            shown: None,
+            kept: None,
+            reading: None,
+            exposure: 0.0,
+            background: true,
+            blur: 0.25,
+            menu: false,
+            use_panorama: true,
+        }
     }
 }
 
@@ -228,11 +243,13 @@ pub fn toolbar(app: &App) -> Element<'_, Message> {
 /// The button of the lighting's menu, and the menu while it is open.
 fn lighting_button(app: &App) -> Element<'_, Message> {
     let l = &app.ui.preview.lighting;
-    let face = button(icon(Icon::Sun, 14.0, if l.file.is_some() { style::TEXT } else { style::TEXT_DIM }))
+    let lit = l.file.is_some() || app.lit_by_panorama();
+    let face = button(icon(Icon::Sun, 14.0, if lit { style::TEXT } else { style::TEXT_DIM }))
         .padding(4)
         .style(style::toggle_button(l.menu))
         .on_press(Message::Preview(PreviewMessage::LightingMenu(!l.menu)));
-    let face = crate::view::tip(face, format!("Lit by {}: the environment, its brightness, and what shows behind the model", l.name()), Position::Bottom);
+    let name = if app.lit_by_panorama() { "the graph's panorama".to_string() } else { l.name() };
+    let face = crate::view::tip(face, format!("Lit by {name}: the environment, its brightness, and what shows behind the model"), Position::Bottom);
     dropdown(face, lighting_menu(app), l.menu).on_dismiss(Message::Preview(PreviewMessage::LightingMenu(false))).into()
 }
 
@@ -265,8 +282,20 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
     };
     let mut items: Vec<Element<'_, Message>> =
         vec![container(text("Environment").size(style::SMALL).color(style::TEXT_DIM)).padding([4, 10]).into()];
+    // The graph's own light first, where it has one.
+    let panorama = app.lit_by_panorama();
+    if let Some(node) = app.panorama_node().and_then(|id| app.graph().node(id)) {
+        items.push(choice(
+            panorama,
+            format!("The Graph's Panorama: {}", node.text("name")),
+            "The image of the graph's Output whose usage is Panorama: the light all around, as the graph makes it, \
+             brought up to date as the graph changes"
+                .into(),
+            send(PreviewMessage::UsePanorama),
+        ));
+    }
     items.push(choice(
-        l.file.is_none(),
+        l.file.is_none() && !panorama,
         "Studio".into(),
         "A key light and a fill light under a sky. They stay where they are in the scene while the camera goes round, \
          so each side of the model is seen lit as it is; right drag turns them, or Turn and Height below"
@@ -276,7 +305,7 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
     for f in &l.recent {
         let reading = if l.reading.as_deref() == Some(f.as_str()) { "  (reading…)" } else { "" };
         items.push(choice(
-            l.file.as_deref() == Some(f.as_str()),
+            l.file.as_deref() == Some(f.as_str()) && !panorama,
             format!("{}{reading}", file_name(f)),
             f.clone(),
             send(PreviewMessage::Environment(Some(f.clone()))),
@@ -318,7 +347,8 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
             .on_change(move |v| send(PreviewMessage::Camera(Camera { light_yaw: (v as f32).to_radians(), ..cam })))
             .into(),
     ));
-    if l.file.is_none() {
+    let lit_by_image = l.file.is_some() || panorama;
+    if !lit_by_image {
         // How high the key light is above the horizon.
         items.push(field(
             "Height",
@@ -330,7 +360,7 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
                 .into(),
         ));
     }
-    if l.file.is_some() {
+    if lit_by_image {
         items.push(choice(
             l.background,
             "Show It Behind the Model".into(),
@@ -438,7 +468,7 @@ pub fn picture(app: &App, pipeline: &mut Option<Pipeline>, gpu: &crate::gpu::Gpu
         true => Primitive {
             camera,
             maps,
-            environment: l.shown.clone(),
+            environment: app.environment_shown(),
             exposure: l.exposure.clamp(-12.0, 12.0).exp2(),
             background: Some(l.blur.clamp(0.0, 1.0)),
         },
@@ -532,7 +562,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         camera: app.ui.preview.view3d,
         maps,
         realtime: app.ui.realtime,
-        environment: l.shown.clone(),
+        environment: app.environment_shown(),
         exposure: l.exposure.clamp(-12.0, 12.0).exp2(),
         background: l.background.then_some(l.blur.clamp(0.0, 1.0)),
     };

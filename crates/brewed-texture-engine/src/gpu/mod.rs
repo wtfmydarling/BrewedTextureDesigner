@@ -228,6 +228,10 @@ static KERNELS: &[KernelSource] = &[
     kernel!("tile_gen", "tile_gen.wgsl", "main", 1),
     kernel!("tile_sampler", "tile_sampler.wgsl", "main", 8),
     kernel!("gradient", "gradient.wgsl", "main", 0),
+    kernel!("hdri_gradient", "hdri.wgsl", "gradient_main", 0),
+    kernel!("hdri_shape_light", "hdri.wgsl", "shape_main", 1),
+    kernel!("hdri_line_light", "hdri.wgsl", "line_main", 1),
+    kernel!("hdri_plane_light", "hdri.wgsl", "plane_main", 1),
     // One pipeline per type of noise (and white noise after them).
     kinded_kernel!("noise", "noise.wgsl", "main", 0, brewed_texture_core::nodes::NOISE_TYPES.len() as u32),
     kernel!("transform", "transform.wgsl", "main", 1),

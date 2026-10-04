@@ -11,6 +11,7 @@ mod adjustments;
 mod effects;
 mod filters;
 mod generators;
+mod hdri;
 mod output;
 mod usage;
 mod values;
@@ -37,6 +38,10 @@ pub use output::{
     OUTPUT_FORMATS, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL,
     USAGE_ROUGHNESS, output_format_channels,
 };
+pub use hdri::{
+    LIGHT_COLOR_MODES, LIGHT_COLOR_TEMPERATURE, LINE_LIGHT_PATTERNS, PLANE_LIGHT_PATTERNS, PLANE_LIGHT_PLACEMENTS,
+    SHAPE_LIGHT_SHAPES, temperature_color,
+};
 pub use usage::{USAGE_GROUPS, Usage, UsageGroup};
 pub use values::DEFAULT_MATH_EXPRESSION;
 
@@ -49,6 +54,8 @@ pub enum Category {
     Filters,
     Effects,
     Adjustments,
+    /// What makes environments: panoramas, and the lights in them.
+    Hdri,
     Output,
     /// Graphs used as nodes (see [`Role::Instance`]): none of them is in the library, the
     /// packages are.
@@ -56,12 +63,13 @@ pub enum Category {
 }
 
 impl Category {
-    pub const ALL: [Category; 6] = [
+    pub const ALL: [Category; 7] = [
         Category::Values,
         Category::Generators,
         Category::Filters,
         Category::Effects,
         Category::Adjustments,
+        Category::Hdri,
         Category::Output,
     ];
 
@@ -72,6 +80,7 @@ impl Category {
             Category::Filters => "Filters",
             Category::Effects => "Height & Normal",
             Category::Adjustments => "Adjustments",
+            Category::Hdri => "HDRI Tools",
             Category::Output => "Output",
             Category::Graphs => "Graphs",
         }
@@ -871,6 +880,11 @@ impl NodeKind {
     pub const RGBA_MERGE: NodeKind = NodeKind(&adjustments::RGBA_MERGE);
     pub const POSTERIZE: NodeKind = NodeKind(&adjustments::POSTERIZE);
     // Output.
+    pub const HDRI_GRADIENT: NodeKind = NodeKind(&hdri::HDRI_GRADIENT);
+    pub const HDRI_SHAPE_LIGHT: NodeKind = NodeKind(&hdri::HDRI_SHAPE_LIGHT);
+    pub const HDRI_LINE_LIGHT: NodeKind = NodeKind(&hdri::HDRI_LINE_LIGHT);
+    pub const HDRI_PLANE_LIGHT: NodeKind = NodeKind(&hdri::HDRI_PLANE_LIGHT);
+
     pub const OUTPUT: NodeKind = NodeKind(&output::OUTPUT);
     /// A graph used as a node (see [`crate::instance`]). Not in [`NodeKind::ALL`]: it is made
     /// from a graph, not from the library.
@@ -930,6 +944,10 @@ impl NodeKind {
         NodeKind::CHANNEL_SHUFFLE,
         NodeKind::RGBA_MERGE,
         NodeKind::POSTERIZE,
+        NodeKind::HDRI_GRADIENT,
+        NodeKind::HDRI_SHAPE_LIGHT,
+        NodeKind::HDRI_LINE_LIGHT,
+        NodeKind::HDRI_PLANE_LIGHT,
         NodeKind::OUTPUT,
     ];
 

@@ -322,8 +322,8 @@ impl Template {
                  film, opacity and geometry."
             }
             Template::StudioPanorama => {
-                "An environment light simulating a studio: a panorama twice as wide as high in 32-bit floats, softboxes \
-                 far brighter than white. Exported as EXR, it lights the 3D view."
+                "An environment light of a studio, made of HDRI tools (a softbox overhead, a strip light, a large panel \
+                 behind, over the gray of the room): a panorama in 32-bit floats whose usage, Panorama, lights the 3D view."
             }
             Template::Convolution => "A convolution filter of a grayscale image: each pixel the average of those around it, as far as a map says (a box blur that is not the same everywhere).",
             Template::Grid => "A grid of squares, as many across and down as its input values say, drawn by one FX-Map.",
@@ -389,42 +389,51 @@ impl Template {
         }
         match self {
             Template::StudioPanorama => {
-                let studio = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
-                set(
-                    &mut g,
-                    studio,
-                    "expression",
-                    ParamValue::Text(
-                        "# Where the pixel looks: u once around, v from straight up (0) to straight down (1).\n\
-                         up = cos(v * pi)\n\
-                         # The backdrop: a dark floor, a soft gray above the horizon.\n\
-                         backdrop = lerp(0.03, 0.2, smoothstep(-0.15, 0.25, up))\n\
-                         # Two softboxes, far brighter than white: light, not color.\n\
-                         key = (1 - smoothstep(0.04, 0.05, abs(u - 0.25))) * (1 - smoothstep(0.07, 0.08, abs(v - 0.3)))\n\
-                         fill = (1 - smoothstep(0.07, 0.08, abs(u - 0.7))) * (1 - smoothstep(0.04, 0.05, abs(v - 0.35)))\n\
-                         # A glow straight above.\n\
-                         top = smoothstep(0.9, 0.98, up)\n\
-                         light = backdrop + key * 16 + fill * 5 + top * 2\n\
-                         vec3(light, light, light)"
-                            .into(),
-                    ),
-                );
-                let panorama = output(&mut g, "output", Usage::Panorama.index(), [340.0, 0.0]);
+                // As Substance Designer's studio is made: the gray of the room, and over it a
+                // softbox overhead, a strip light to the right, a large panel behind.
+                let room = g.add_node(NodeKind::HDRI_GRADIENT, [0.0, 0.0]);
+                set(&mut g, room, "top", ParamValue::Color([0.291, 0.296, 0.3, 1.0]));
+                set(&mut g, room, "bottom", ParamValue::Color([0.089, 0.09, 0.09, 1.0]));
+                set(&mut g, room, "contrast", ParamValue::Float(0.5));
+                let softbox = g.add_node(NodeKind::HDRI_SHAPE_LIGHT, [300.0, 0.0]);
+                set(&mut g, softbox, "position", ParamValue::Vec2([0.5, 0.12]));
+                set(&mut g, softbox, "size", ParamValue::Vec2([0.5, 0.5]));
+                set(&mut g, softbox, "hardness", ParamValue::Float(0.62));
+                set(&mut g, softbox, "exposure", ParamValue::Float(2.0));
+                set(&mut g, softbox, "hotspot_exposure", ParamValue::Float(4.0));
+                set(&mut g, softbox, "hotspot_size", ParamValue::Float(1.0));
+                let _ = g.connect(room, "o:output", softbox, "i:background");
+                let strip = g.add_node(NodeKind::HDRI_LINE_LIGHT, [600.0, 0.0]);
+                set(&mut g, strip, "point_1", ParamValue::Vec2([0.6933, 0.0402]));
+                set(&mut g, strip, "point_2", ParamValue::Vec2([0.8515, 0.4598]));
+                set(&mut g, strip, "thickness", ParamValue::Float(0.085));
+                set(&mut g, strip, "pattern", ParamValue::Enum(3));
+                set(&mut g, strip, "color_mode", ParamValue::Enum(crate::nodes::LIGHT_COLOR_TEMPERATURE));
+                set(&mut g, strip, "temperature", ParamValue::Float(8500.0));
+                set(&mut g, strip, "exposure", ParamValue::Float(4.0));
+                let _ = g.connect(softbox, "o:output", strip, "i:background");
+                let panel = g.add_node(NodeKind::HDRI_PLANE_LIGHT, [900.0, 0.0]);
+                set(&mut g, panel, "position", ParamValue::Vec2([0.0194, 0.6257]));
+                set(&mut g, panel, "size", ParamValue::Vec2([2.0, 2.0]));
+                set(&mut g, panel, "hardness", ParamValue::Float(0.25));
+                set(&mut g, panel, "color_mode", ParamValue::Enum(crate::nodes::LIGHT_COLOR_TEMPERATURE));
+                set(&mut g, panel, "temperature", ParamValue::Float(8205.0));
+                set(&mut g, panel, "exposure", ParamValue::Float(0.5));
+                let _ = g.connect(strip, "o:output", panel, "i:background");
+                let panorama = output(&mut g, "output", Usage::Panorama.index(), [1200.0, 0.0]);
                 // Its three channels, in 32-bit floats: an EXR.
                 set(&mut g, panorama, "format", ParamValue::Enum(1));
                 set(&mut g, panorama, "bit_depth", ParamValue::Enum(crate::nodes::DEPTH_32F));
-                let _ = g.connect(studio, "o:output", panorama, "i:input");
-                frame(
-                    &mut g,
-                    "Light all around, as a panorama",
-                    "An environment light is a panorama: u goes once around, v from straight up to straight down, so \
-                     it is twice as wide as high. Pixel Math draws a studio in it: a backdrop, two softboxes and a \
-                     glow above, far brighter than white (light, not color: kept in 32-bit floats). Exported as EXR, \
-                     it lights the 3D view (the sun button, Load an Environment Image…).",
-                    [-30.0, -150.0],
-                    [568.0, 150.0 + 216.0 + 30.0],
-                    GRAY,
-                );
+                let _ = g.connect(panel, "o:output", panorama, "i:input");
+                let said = "An environment light is a panorama: across, once round; down, from straight up to straight down, \
+                            so it is twice as wide as high. The HDRI tools draw a studio in it, each over the one before: \
+                            Gradient Linear (HDRI) the gray of the room, a Shape Light the softbox overhead with its hotspot, \
+                            a Line Light the strip light to the right, a Plane Light the large panel behind (across the seam: \
+                            on both edges of the panorama). Their light is far brighter than white, kept in 32-bit floats. The \
+                            Output's usage is Panorama: the 3D view is lit by it (the sun button: The Graph's Panorama).";
+                let width = 1200.0 + 568.0 - 340.0;
+                let top = said_height(said, width);
+                frame(&mut g, "Light all around, as a panorama", said, [-30.0, -top], [width, top + 216.0 + 30.0], GRAY);
             }
             Template::Convolution => {
                 // (Of a grayscale image: what Pixel Math samples of an image is one value.)

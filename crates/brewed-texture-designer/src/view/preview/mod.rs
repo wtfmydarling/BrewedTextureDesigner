@@ -124,7 +124,7 @@ fn footer_3d(app: &App) -> Element<'_, Message> {
     if let Some(file) = &lighting.reading {
         words.push(format!("reading {}…", brewed_texture_core::package::file_name(file)));
     }
-    let light = if lighting.shown.is_some() { "the environment" } else { "the light" };
+    let light = if app.environment_shown().is_some() { "the environment" } else { "the light" };
     words.push(format!("left drag orbits, middle drag moves, right drag turns {light}, the wheel zooms"));
     footer(Vec::new(), words)
 }

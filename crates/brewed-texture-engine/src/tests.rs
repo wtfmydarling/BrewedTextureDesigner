@@ -3582,3 +3582,71 @@ fn presets_write_what_arrives_at_outputs() {
     assert!(finer, "16 bits of what arrives, not the Output's 8");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The nodes of panoramas draw what they draw where the panorama sees it: the gradient's top
+/// color straight up and its bottom straight down; a softbox in front and nothing of it behind,
+/// its hotspot brighter, a warm one warm; a tube along the arc between its points; a ceiling
+/// overhead and none underfoot, in stripes where asked; each over the panorama it is given.
+#[test]
+fn panorama_lights_are_where_they_are() {
+    let Some(mut e) = engine() else { return };
+    let at = |d: &[f32], u: f32, v: f32| pixel(d, ((u * RES as f32) as u32).min(RES - 1), ((v * RES as f32) as u32).min(RES - 1));
+    let mut g = graph();
+    let gradient = g.add_node(NodeKind::HDRI_GRADIENT, [0.0, 0.0]);
+    set(&mut g, gradient, "top", ParamValue::Color([1.0, 1.0, 1.0, 1.0]));
+    set(&mut g, gradient, "bottom", ParamValue::Color([0.0, 0.0, 0.0, 1.0]));
+    set(&mut g, gradient, "contrast", ParamValue::Float(0.0));
+    let d = eval_read(&mut e, &g, gradient);
+    assert!(close(at(&d, 0.5, 0.0)[0], 1.0, 0.02) && close(at(&d, 0.1, 0.999)[0], 0.0, 0.02), "{:?} {:?}", at(&d, 0.5, 0.0), at(&d, 0.1, 0.999));
+    assert!(close(at(&d, 0.3, 0.5)[0], 0.5, 0.03), "{:?}", at(&d, 0.3, 0.5));
+
+    // A softbox in front, over the gradient.
+    let softbox = g.add_node(NodeKind::HDRI_SHAPE_LIGHT, [0.0, 0.0]);
+    assert!(g.connect(gradient, "o:output", softbox, "i:background").is_ok());
+    set(&mut g, softbox, "position", ParamValue::Vec2([0.5, 0.5]));
+    set(&mut g, softbox, "size", ParamValue::Vec2([0.2, 0.2]));
+    set(&mut g, softbox, "hotspot_size", ParamValue::Float(0.0));
+    set(&mut g, softbox, "exposure", ParamValue::Float(2.0));
+    let d = eval_read(&mut e, &g, softbox);
+    assert!(close(at(&d, 0.5, 0.5)[0], 4.0, 0.05), "in front: {:?}", at(&d, 0.5, 0.5));
+    assert!(close(at(&d, 0.0, 0.5)[0], 0.5, 0.03), "behind, the gradient: {:?}", at(&d, 0.0, 0.5));
+    assert!(close(at(&d, 0.5, 0.3)[0], at(&d, 0.1, 0.3)[0], 0.02), "above it, the gradient");
+    set(&mut g, softbox, "hotspot_size", ParamValue::Float(0.5));
+    set(&mut g, softbox, "hotspot_exposure", ParamValue::Float(4.0));
+    let d = eval_read(&mut e, &g, softbox);
+    assert!(close(at(&d, 0.5, 0.5)[0], 16.0, 0.2), "its hotspot: {:?}", at(&d, 0.5, 0.5));
+    set(&mut g, softbox, "color_mode", ParamValue::Enum(1));
+    set(&mut g, softbox, "temperature", ParamValue::Float(2700.0));
+    let d = eval_read(&mut e, &g, softbox);
+    let warm = at(&d, 0.5, 0.5);
+    assert!(warm[0] > warm[1] && warm[1] > warm[2], "a warm light: {warm:?}");
+
+    // A tube along the horizon in front, 45° each way; nothing of it above or behind.
+    let mut g = graph();
+    let tube = g.add_node(NodeKind::HDRI_LINE_LIGHT, [0.0, 0.0]);
+    set(&mut g, tube, "point_1", ParamValue::Vec2([0.375, 0.5]));
+    set(&mut g, tube, "point_2", ParamValue::Vec2([0.625, 0.5]));
+    set(&mut g, tube, "exposure", ParamValue::Float(3.0));
+    let d = eval_read(&mut e, &g, tube);
+    for u in [0.4, 0.5, 0.6] {
+        assert!(close(at(&d, u, 0.5)[0], 8.0, 0.1), "along it at {u}: {:?}", at(&d, u, 0.5));
+    }
+    assert!(at(&d, 0.5, 0.39)[0] < 0.01 && at(&d, 0.0, 0.5)[0] < 0.01 && at(&d, 0.75, 0.5)[0] < 0.01, "above, behind, past its end");
+
+    // A ceiling overhead, in stripes; none underfoot.
+    let mut g = graph();
+    let ceiling = g.add_node(NodeKind::HDRI_PLANE_LIGHT, [0.0, 0.0]);
+    set(&mut g, ceiling, "placement", ParamValue::Enum(1));
+    set(&mut g, ceiling, "position", ParamValue::Vec2([0.5, 0.15]));
+    set(&mut g, ceiling, "size", ParamValue::Vec2([1.0, 1.0]));
+    // (Its edges sharp: soft ones fade it from its middle.)
+    set(&mut g, ceiling, "hardness", ParamValue::Float(1.0));
+    let d = eval_read(&mut e, &g, ceiling);
+    assert!(close(at(&d, 0.5, 0.01)[0], 2.0, 0.05), "overhead: {:?}", at(&d, 0.5, 0.01));
+    assert!(at(&d, 0.5, 0.98)[0] < 0.01, "underfoot: {:?}", at(&d, 0.5, 0.98));
+    set(&mut g, ceiling, "pattern", ParamValue::Enum(1));
+    set(&mut g, ceiling, "gap", ParamValue::Float(0.5));
+    let d = eval_read(&mut e, &g, ceiling);
+    let row: Vec<f32> = (0..RES).map(|x| pixel(&d, x, (0.1 * RES as f32) as u32)[0]).collect();
+    assert!(row.iter().any(|v| *v > 1.9) && row.iter().filter(|v| **v < 0.05).count() > 20, "stripes: {row:?}");
+}

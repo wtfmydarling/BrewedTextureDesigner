@@ -1116,6 +1116,114 @@ posterize p:precision = unorm8
 posterize p:precision = float16
 posterize p:precision = float32
 posterize p:steps int
+hdri_gradient
+hdri_gradient o:output image
+hdri_gradient p:tiling choice
+hdri_gradient p:tiling = none
+hdri_gradient p:tiling = horizontal
+hdri_gradient p:tiling = vertical
+hdri_gradient p:tiling = both
+hdri_gradient p:precision choice
+hdri_gradient p:precision = graph
+hdri_gradient p:precision = unorm8
+hdri_gradient p:precision = float16
+hdri_gradient p:precision = float32
+hdri_gradient p:point vec2
+hdri_gradient p:top color
+hdri_gradient p:bottom color
+hdri_gradient p:contrast float
+hdri_gradient p:exposure float
+hdri_shape_light
+hdri_shape_light i:background image
+hdri_shape_light o:output image
+hdri_shape_light p:tiling choice
+hdri_shape_light p:tiling = none
+hdri_shape_light p:tiling = horizontal
+hdri_shape_light p:tiling = vertical
+hdri_shape_light p:tiling = both
+hdri_shape_light p:precision choice
+hdri_shape_light p:precision = graph
+hdri_shape_light p:precision = unorm8
+hdri_shape_light p:precision = float16
+hdri_shape_light p:precision = float32
+hdri_shape_light p:shape choice
+hdri_shape_light p:shape = rectangle
+hdri_shape_light p:shape = disc
+hdri_shape_light p:position vec2
+hdri_shape_light p:size vec2
+hdri_shape_light p:rotation float
+hdri_shape_light p:hardness float
+hdri_shape_light p:color_mode choice
+hdri_shape_light p:color_mode = rgb
+hdri_shape_light p:color_mode = temperature
+hdri_shape_light p:color color
+hdri_shape_light p:temperature float
+hdri_shape_light p:exposure float
+hdri_shape_light p:hotspot_exposure float
+hdri_shape_light p:hotspot_size float
+hdri_shape_light p:hotspot_falloff float
+hdri_shape_light p:hotspot_position vec2
+hdri_line_light
+hdri_line_light i:background image
+hdri_line_light o:output image
+hdri_line_light p:tiling choice
+hdri_line_light p:tiling = none
+hdri_line_light p:tiling = horizontal
+hdri_line_light p:tiling = vertical
+hdri_line_light p:tiling = both
+hdri_line_light p:precision choice
+hdri_line_light p:precision = graph
+hdri_line_light p:precision = unorm8
+hdri_line_light p:precision = float16
+hdri_line_light p:precision = float32
+hdri_line_light p:point_1 vec2
+hdri_line_light p:point_2 vec2
+hdri_line_light p:thickness float
+hdri_line_light p:pattern choice
+hdri_line_light p:pattern = smooth_square
+hdri_line_light p:pattern = sharp_square
+hdri_line_light p:pattern = cone
+hdri_line_light p:pattern = hemisphere
+hdri_line_light p:hardness float
+hdri_line_light p:color_mode choice
+hdri_line_light p:color_mode = rgb
+hdri_line_light p:color_mode = temperature
+hdri_line_light p:color color
+hdri_line_light p:temperature float
+hdri_line_light p:exposure float
+hdri_plane_light
+hdri_plane_light i:background image
+hdri_plane_light o:output image
+hdri_plane_light p:tiling choice
+hdri_plane_light p:tiling = none
+hdri_plane_light p:tiling = horizontal
+hdri_plane_light p:tiling = vertical
+hdri_plane_light p:tiling = both
+hdri_plane_light p:precision choice
+hdri_plane_light p:precision = graph
+hdri_plane_light p:precision = unorm8
+hdri_plane_light p:precision = float16
+hdri_plane_light p:precision = float32
+hdri_plane_light p:placement choice
+hdri_plane_light p:placement = facing
+hdri_plane_light p:placement = ceiling
+hdri_plane_light p:placement = floor
+hdri_plane_light p:position vec2
+hdri_plane_light p:size vec2
+hdri_plane_light p:rotation float
+hdri_plane_light p:hardness float
+hdri_plane_light p:pattern choice
+hdri_plane_light p:pattern = plain
+hdri_plane_light p:pattern = stripes
+hdri_plane_light p:pattern = grid
+hdri_plane_light p:cells int
+hdri_plane_light p:gap float
+hdri_plane_light p:color_mode choice
+hdri_plane_light p:color_mode = rgb
+hdri_plane_light p:color_mode = temperature
+hdri_plane_light p:color color
+hdri_plane_light p:temperature float
+hdri_plane_light p:exposure float
 output
 output i:input image
 output p:tiling choice

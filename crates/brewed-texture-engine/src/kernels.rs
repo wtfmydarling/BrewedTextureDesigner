@@ -10,7 +10,10 @@ use bytemuck::{Pod, Zeroable};
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::eval::Params;
 use brewed_texture_core::expr;
-use brewed_texture_core::nodes::{NOISE_CRACKS, NOISE_DIRECTIONAL_SCRATCHES, NOISE_FIBERS, NOISE_SCRATCHES, NOISE_VEINS, NOISE_WEAVE, NOISE_WOOD, TILE_PATTERN_IMAGE, WEAVE_REPEATS};
+use brewed_texture_core::nodes::{
+    LIGHT_COLOR_TEMPERATURE, NOISE_CRACKS, NOISE_DIRECTIONAL_SCRATCHES, NOISE_FIBERS, NOISE_SCRATCHES, NOISE_VEINS, NOISE_WEAVE, NOISE_WOOD,
+    TILE_PATTERN_IMAGE, WEAVE_REPEATS, temperature_color,
+};
 
 use crate::gpu::{Gpu, GpuImage, RUN_FORMAT, SEED_FORMAT};
 
@@ -118,6 +121,10 @@ pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
         "rgba_merge" => rgba_merge,
         "curve" => curve,
         "gradient_dynamic" => gradient_dynamic,
+        "hdri_gradient" => hdri_gradient,
+        "hdri_shape_light" => hdri_shape_light,
+        "hdri_line_light" => hdri_line_light,
+        "hdri_plane_light" => hdri_plane_light,
         "output" => output,
         _ => return None,
     };
@@ -705,6 +712,97 @@ fn gradient(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         tiling: p.tiling(),
     };
     cx.gpu.run(cx.encoder, "gradient", bytes(&u), &[], cx.output)?;
+    Ok(None)
+}
+
+/// The parameters of the panorama kernels (hdri.wgsl: `Params`, where each is said).
+#[repr(C)]
+#[derive(Clone, Copy, Default, Pod, Zeroable)]
+struct HdriU {
+    a: [f32; 4],
+    b: [f32; 4],
+    c: [f32; 4],
+    color: [f32; 4],
+    d: [f32; 4],
+    e: [u32; 4],
+    f: [f32; 4],
+}
+
+/// The color of a light: as picked, or of its temperature (linear, either way).
+fn light_color(p: &Params) -> [f32; 4] {
+    if p.u("color_mode") == LIGHT_COLOR_TEMPERATURE {
+        let [r, g, b] = temperature_color(p.f("temperature"));
+        [r, g, b, 1.0]
+    } else {
+        p.color("color")
+    }
+}
+
+/// How much light an exposure value is: each one doubles it, held where floats keep it.
+fn exposure(ev: f32) -> f32 {
+    ev.clamp(-30.0, 30.0).exp2()
+}
+
+fn hdri_gradient(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    let [x, y] = p.v2("point");
+    let u = HdriU {
+        a: [x, y, 0.0, 0.0],
+        b: [0.0, 0.0, exposure(p.f("exposure")), 0.0],
+        color: p.color("top"),
+        d: [0.0, 0.0, 0.0, p.f("contrast")],
+        f: p.color("bottom"),
+        ..HdriU::default()
+    };
+    cx.gpu.run(cx.encoder, "hdri_gradient", bytes(&u), &[], cx.output)?;
+    Ok(None)
+}
+
+fn hdri_shape_light(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    let ([x, y], [w, h], [hx, hy]) = (p.v2("position"), p.v2("size"), p.v2("hotspot_position"));
+    let u = HdriU {
+        a: [x, y, w, h],
+        b: [p.f("rotation"), p.f("hardness"), exposure(p.f("exposure")), exposure(p.f("hotspot_exposure"))],
+        c: [hx, hy, p.f("hotspot_size"), p.f("hotspot_falloff")],
+        color: light_color(p),
+        e: [p.u("shape"), 0, 0, 0],
+        ..HdriU::default()
+    };
+    let background = input(cx.inputs, 0, &cx.gpu.black);
+    cx.gpu.run(cx.encoder, "hdri_shape_light", bytes(&u), &[background], cx.output)?;
+    Ok(None)
+}
+
+fn hdri_line_light(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    let ([x1, y1], [x2, y2]) = (p.v2("point_1"), p.v2("point_2"));
+    let u = HdriU {
+        a: [x1, y1, x2, y2],
+        b: [0.0, p.f("hardness"), exposure(p.f("exposure")), 0.0],
+        color: light_color(p),
+        d: [p.f("thickness").max(0.0), 0.0, 0.0, 0.0],
+        e: [p.u("pattern"), 0, 0, 0],
+        ..HdriU::default()
+    };
+    let background = input(cx.inputs, 0, &cx.gpu.black);
+    cx.gpu.run(cx.encoder, "hdri_line_light", bytes(&u), &[background], cx.output)?;
+    Ok(None)
+}
+
+fn hdri_plane_light(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let p = cx.params;
+    let ([x, y], [w, h]) = (p.v2("position"), p.v2("size"));
+    let u = HdriU {
+        a: [x, y, w, h],
+        b: [p.f("rotation"), p.f("hardness"), exposure(p.f("exposure")), 0.0],
+        color: light_color(p),
+        d: [p.i("cells").clamp(1, 256) as f32, p.f("gap"), 0.0, 0.0],
+        e: [0, p.u("placement"), p.u("pattern"), 0],
+        ..HdriU::default()
+    };
+    let background = input(cx.inputs, 0, &cx.gpu.black);
+    cx.gpu.run(cx.encoder, "hdri_plane_light", bytes(&u), &[background], cx.output)?;
     Ok(None)
 }
 

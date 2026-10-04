@@ -51,6 +51,8 @@ pub enum Request {
     Preview(Option<NodeId>),
     /// Output nodes used by the 3D view.
     Materials(Vec<NodeId>),
+    /// The Output whose image lights the 3D view (its usage is Panorama), if the graph has one.
+    Panorama(Option<NodeId>),
     Stats(NodeId),
     Probe {
         node: NodeId,
@@ -89,6 +91,9 @@ pub enum Event {
     /// The 2D view image changed (or went away).
     Preview(Option<DisplayImage>),
     Materials(Vec<DisplayImage>),
+    /// The image of the Output that lights the 3D view, read back while it changes (small, to
+    /// be quick) and once it settles (whole); `None` when the graph has none any more.
+    Panorama(Option<Panorama>),
     Stats {
         node: NodeId,
         version: u64,
@@ -171,6 +176,54 @@ impl Drop for EngineService {
     }
 }
 
+/// The image of the Output that lights the 3D view (see [`Event::Panorama`]): linear RGB, row
+/// by row from the top (straight up).
+#[derive(Clone)]
+pub struct Panorama {
+    pub node: NodeId,
+    pub version: u64,
+    pub width: u32,
+    pub height: u32,
+    pub rgb: Arc<[f32]>,
+    /// Read whole, rather than smaller while it changes.
+    pub whole: bool,
+}
+
+impl std::fmt::Debug for Panorama {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Panorama({:?} v{} {}×{}{})", self.node, self.version, self.width, self.height, if self.whole { "" } else { ", quick" })
+    }
+}
+
+/// How wide the quick look at a panorama is (see [`Event::Panorama`]).
+const PANORAMA_QUICK: u32 = 512;
+
+/// Tell the front end of `node`'s panorama, if it is not what it was told: smaller while it
+/// changes, whole when `whole` (once things settle); that there is none, if there is none
+/// any more.
+fn send_panorama(engine: &Engine, node: Option<NodeId>, sent: &mut Option<(NodeId, u64, bool)>, whole: bool, emit: &Emit) {
+    let Some(node) = node else {
+        if sent.take().is_some() {
+            (emit)(Event::Panorama(None));
+        }
+        return;
+    };
+    let (Some(version), Some(image)) = (engine.version(node), engine.image(node)) else { return };
+    if sent.is_some_and(|(n, v, w)| n == node && v == version && (w || !whole)) {
+        return;
+    }
+    let [w, h] = image.size();
+    let (size, whole) = if whole || w <= PANORAMA_QUICK { ([w, h], true) } else { ([PANORAMA_QUICK, (h * PANORAMA_QUICK / w).max(1)], false) };
+    match engine.read_resized(node, size) {
+        Ok((width, height, rgba)) => {
+            let rgb: Arc<[f32]> = rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+            (emit)(Event::Panorama(Some(Panorama { node, version, width, height, rgb, whole })));
+            *sent = Some((node, version, whole));
+        }
+        Err(e) => log::error!("the panorama: {e}"),
+    }
+}
+
 /// A graph to compute: the revision of the front end it is, the graph and its evaluation.
 type Current = (u64, Arc<Graph>, Arc<Evaluation>);
 
@@ -183,12 +236,16 @@ struct Pending {
     exports: Vec<ExportJob>,
     preview_changed: bool,
     materials_changed: bool,
+    panorama_changed: bool,
 }
 
 fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
     let mut current: Option<Current> = None;
     let mut preview: Option<NodeId> = None;
     let mut materials: Vec<NodeId> = Vec::new();
+    // The Output that lights the 3D view, and what of it the front end was told last.
+    let mut panorama: Option<NodeId> = None;
+    let mut panorama_sent: Option<(NodeId, u64, bool)> = None;
     // The GPU memory the front end was last told of (`None`: not yet, or it forgot).
     let mut memory: Option<Memory> = None;
     // A request that came while the last round was at work: the next round starts with it.
@@ -200,6 +257,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
     loop {
         if std::mem::take(&mut reset) {
             forget(&mut engine, &mut current, &mut preview, &mut materials, &mut memory);
+            (panorama, panorama_sent) = (None, None);
         }
         // Wait for work; poll while files are being decoded in the background.
         let first = if let Some(request) = waiting.take() {
@@ -214,9 +272,11 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
             match rx.recv_timeout(IDLE) {
                 Ok(r) => Some(r),
                 Err(RecvTimeoutError::Timeout) => {
-                    // Nothing changes: all that stays is what the views show.
+                    // Nothing changes: all that stays is what the views show, and the 3D view
+                    // gets the whole of its panorama.
                     engine.settle();
                     report_memory(&engine, &mut memory, &emit);
+                    send_panorama(&engine, panorama, &mut panorama_sent, true, &emit);
                     match rx.recv() {
                         Ok(r) => Some(r),
                         Err(_) => break,
@@ -236,6 +296,10 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                 Request::Materials(nodes) => {
                     materials = nodes;
                     pending.materials_changed = true;
+                }
+                Request::Panorama(node) => {
+                    pending.panorama_changed |= node != panorama;
+                    panorama = node;
                 }
                 Request::Stats(node) => {
                     if !pending.stats.contains(&node) {
@@ -261,6 +325,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                         break;
                     }
                     forget(&mut engine, &mut current, &mut preview, &mut materials, &mut memory);
+                    (panorama, panorama_sent) = (None, None);
                     // What was asked of it goes with it (the pictures of choices are of kinds
                     // of nodes, of no document), and it is not computed again: the new one
                     // comes next.
@@ -308,6 +373,9 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
             && let Some(set) = engine.prepare_materials(&materials)
         {
             (emit)(Event::Materials(set));
+        }
+        if evaluated_now || pending.panorama_changed {
+            send_panorama(&engine, panorama, &mut panorama_sent, false, &emit);
         }
         // A view that moved on to an image that was there needed no evaluation: what it showed
         // before goes now.

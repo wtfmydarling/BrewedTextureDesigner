@@ -445,6 +445,9 @@ pub struct Results {
     pub thumbs: HashMap<NodeId, image::Handle>,
     pub preview: Option<DisplayImage>,
     pub materials: Vec<DisplayImage>,
+    /// The image of the graph's Output of usage Panorama, made an environment (see
+    /// `App::environment_shown`), and the node it is of.
+    pub panorama: Option<(NodeId, Arc<crate::environment::Hdri>)>,
     pub stats: HashMap<NodeId, (u64, Arc<ImageStats>)>,
     pub stats_requested: HashMap<NodeId, u64>,
     pub probe: Option<(NodeId, [u32; 2], [f32; 4])>,
@@ -618,6 +621,11 @@ pub enum PreviewMessage {
     EnvironmentPicked(Option<PathBuf>),
     /// An environment image was read from its file, or could not be.
     EnvironmentRead(String, Result<Arc<crate::environment::Hdri>, String>),
+    /// Light the 3D view by the graph's panorama (its Output of usage Panorama), where it has
+    /// one.
+    UsePanorama,
+    /// The graph's panorama was made an environment: of the document (its key) and the node.
+    PanoramaRead(u64, NodeId, Option<Arc<crate::environment::Hdri>>),
     /// The 3D view's brightness, in stops.
     Exposure(f32),
     /// Whether the environment image shows behind the model.
@@ -1358,7 +1366,34 @@ impl App {
         self.send(Request::Evaluate { revision: self.eval_revision, graph: self.flat.0.clone(), eval: self.flat.1.clone() });
         self.send(Request::Preview(self.ui.preview.node));
         self.send(Request::Materials(self.material_nodes()));
+        self.send(Request::Panorama(self.panorama_node()));
         self.ask_for_choices();
+    }
+
+    /// The Output of the open graph whose image lights the 3D view: the first of usage
+    /// Panorama.
+    pub fn panorama_node(&self) -> Option<NodeId> {
+        let panorama = brewed_texture_core::nodes::Usage::Panorama.index();
+        self.graph().nodes_of(NodeKind::OUTPUT).find(|n| n.enum_value("usage") == panorama).map(|n| n.id)
+    }
+
+    /// What lights the 3D view: the graph's panorama, where the graph has one and it is
+    /// chosen (as it is until the studio or an image is); else the image chosen, or the
+    /// studio (none).
+    pub fn environment_shown(&self) -> Option<Arc<crate::environment::Hdri>> {
+        let l = &self.ui.preview.lighting;
+        if l.use_panorama
+            && let Some((node, hdri)) = &self.res.panorama
+            && self.panorama_node() == Some(*node)
+        {
+            return Some(hdri.clone());
+        }
+        l.shown.clone()
+    }
+
+    /// Whether the graph's panorama lights the 3D view now.
+    pub fn lit_by_panorama(&self) -> bool {
+        self.ui.preview.lighting.use_panorama && self.panorama_node().is_some()
     }
 
     /// Have the engine draw the pictures of the choices of the kinds of nodes the graph has,
@@ -2656,6 +2691,17 @@ impl App {
             }
             Event::Preview(p) => self.res.preview = p,
             Event::Materials(m) => self.res.materials = m,
+            Event::Panorama(None) => self.res.panorama = None,
+            Event::Panorama(Some(p)) => {
+                // Made an environment off the UI thread, as an image of a file is.
+                let doc = self.doc_key;
+                let name = self.graph().node(p.node).map_or_else(|| "panorama".to_string(), |n| format!("{} (the graph's panorama)", n.text("name")));
+                let node = p.node;
+                return self.in_background(
+                    move || Arc::new(crate::environment::Hdri::new(name, p.width as usize, p.height as usize, p.rgb.to_vec())),
+                    move |hdri| Message::Preview(PreviewMessage::PanoramaRead(doc, node, hdri)),
+                );
+            }
             Event::Stats { node, version, stats } => {
                 self.res.stats.insert(node, (version, stats));
             }
@@ -3185,6 +3231,17 @@ impl App {
             PreviewMessage::EnvironmentPicked(Some(path)) => return self.choose_environment(Some(path.display().to_string())),
             PreviewMessage::EnvironmentPicked(None) => {}
             PreviewMessage::EnvironmentRead(file, result) => self.environment_read(file, result),
+            PreviewMessage::UsePanorama => {
+                self.close_popups();
+                self.ui.preview.lighting.use_panorama = true;
+            }
+            PreviewMessage::PanoramaRead(doc, node, Some(hdri)) => {
+                // (Of the document and the graph still open.)
+                if doc == self.doc_key && self.panorama_node() == Some(node) {
+                    self.res.panorama = Some((node, hdri));
+                }
+            }
+            PreviewMessage::PanoramaRead(_, _, None) => {}
             PreviewMessage::Exposure(ev) => {
                 if ev.is_finite() {
                     p.lighting.exposure = ev.clamp(-12.0, 12.0);
@@ -3205,6 +3262,8 @@ impl App {
     /// view shows what it did.
     fn choose_environment(&mut self, file: Option<String>) -> Task<Message> {
         let l = &mut self.ui.preview.lighting;
+        // Chosen over the graph's panorama.
+        l.use_panorama = false;
         l.file = file.clone();
         let Some(file) = file else {
             l.shown = None;

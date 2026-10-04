@@ -1418,6 +1418,24 @@ impl Engine {
         self.gpu.read_stored_blocking(image)
     }
 
+    /// `node`'s image read back as RGBA floats, `size` pixels (resampled where it is of another
+    /// size, in half floats then): a quick look at a large image, smaller.
+    pub fn read_resized(&self, node: NodeId, size: [u32; 2]) -> Result<(u32, u32, Vec<f32>), String> {
+        let image = self.image(node).ok_or("The node has no image")?;
+        let stored = if image.size() == size {
+            self.gpu.read_stored_blocking(image)?
+        } else {
+            let scaled = self.gpu.take_scratch(size[0].max(1), size[1].max(1), COLOR_FORMAT);
+            let mut encoder = self.gpu.encoder();
+            let copied = self.gpu.encode_show(&mut encoder, image, &scaled, 0);
+            self.gpu.submit(encoder);
+            let pixels = copied.and_then(|()| self.gpu.read_stored_blocking(&scaled));
+            self.gpu.recycle(scaled);
+            pixels?
+        };
+        Ok((stored.width, stored.height, stored.to_f32()))
+    }
+
     /// The same pixels as they are stored (see [`StoredImage`]): what an export writes.
     pub fn read_stored(&self, node: NodeId) -> Result<StoredImage, String> {
         let image = self.image(node).ok_or("The node has no image")?;

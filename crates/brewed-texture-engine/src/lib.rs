@@ -25,7 +25,7 @@ mod tests;
 
 pub use engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Keep, Memory, Thumbnail, open_picture};
 pub use gpu::Gpu;
-pub use service::{EngineService, Event, ExportJob, Request};
+pub use service::{EngineService, Event, ExportJob, Panorama, Request};
 
 /// The wgpu version the engine is built against (front ends must render with the same).
 pub use wgpu;

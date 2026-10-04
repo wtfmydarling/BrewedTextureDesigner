@@ -3728,3 +3728,40 @@ fn nothing_under_an_open_menu_takes_the_cursor() {
     w.hover(Point::new(200.0, 150.0));
     assert_eq!(w.app.ui.menu, Some(MenuId::File), "under an open menu, it does not");
 }
+
+/// An Output whose usage is Panorama lights the 3D view, as Substance Designer puts an output
+/// where its usage says: its image, made an environment, once the engine has it; the lighting
+/// menu offers it first. The studio or an image chosen in its place light the view; the
+/// panorama chosen again, it does. Of another graph, or once the Output has another usage, it
+/// lights nothing.
+#[test]
+fn the_graphs_panorama_lights_the_3d_view() {
+    use crate::app::PreviewMessage as P;
+    use brewed_texture_core::nodes::Usage;
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let shown = |w: &mut Harness, text: &str| !texts(w, text).is_empty();
+    assert!(w.app.panorama_node().is_none() && w.app.environment_shown().is_none(), "the demo has none: the studio");
+    let out = w.app.graph().nodes_of(NodeKind::OUTPUT).map(|n| n.id).next().expect("an output");
+    let name = w.app.graph().node(out).unwrap().text("name").to_string();
+    w.send(Message::PickChoice(out, "usage", Usage::Panorama.index()));
+    assert_eq!(w.app.panorama_node(), Some(out));
+    // Until the engine has it, the view is lit as it was; then by it.
+    assert!(w.app.environment_shown().is_none());
+    let sky = std::sync::Arc::new(crate::environment::Hdri::new("panorama".into(), 8, 4, vec![2.0; 8 * 4 * 3]));
+    let doc = w.app.doc_key;
+    w.send(Message::Preview(P::PanoramaRead(doc, out, Some(sky.clone()))));
+    assert!(w.app.environment_shown().is_some_and(|h| std::sync::Arc::ptr_eq(&h, &sky)), "lit by the graph's panorama");
+    w.send(Message::Preview(P::LightingMenu(true)));
+    for text in [format!("●  The Graph's Panorama: {name}"), "○  Studio".to_string(), "●  Show It Behind the Model".to_string()] {
+        assert!(shown(&mut w, &text), "{text} is in the menu");
+    }
+    // The studio in its place; the panorama again.
+    w.send(Message::Preview(P::Environment(None)));
+    assert!(w.app.environment_shown().is_none() && !w.app.lit_by_panorama(), "the studio, chosen");
+    w.send(Message::Preview(P::UsePanorama));
+    assert!(w.app.lit_by_panorama() && w.app.environment_shown().is_some());
+    // Of an older document, nothing; once the Output is of another usage, nothing.
+    w.send(Message::Preview(P::PanoramaRead(doc + 1, out, Some(sky.clone()))));
+    w.send(Message::PickChoice(out, "usage", Usage::BaseColor.index()));
+    assert!(w.app.panorama_node().is_none() && w.app.environment_shown().is_none());
+}
