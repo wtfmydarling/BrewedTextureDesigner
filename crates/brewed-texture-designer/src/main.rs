@@ -70,8 +70,8 @@ tools for developing the program:
                    lights it as the 3D view is lit (its environment image) and not as a studio
   --export DIR     the same, exporting every output of the graph into DIR (as File → Export)
   --compose ...    pictures made of pictures, for the templates and lessons (--compose help)
-  --third-party    read the notices of every crate again (Help → Third-Party Notices), out
-                   of the crates cargo has, and of the toolchain's texts of licenses
+  --third-party    make the list of the crates again (Help → Third-Party Notices): each its
+                   license and its repository, as cargo has them
   --scenario       UI state for the screenshot: add-menu, file-menu, context-menu, home,
                    learn, home-about, example:ID (brick-wall, fx-maps, pixel-math), gradient, math, levels, inputs, transform, tiling, dialog, tile,
                    choices, usage, lighting-menu, tile-sampler, shape:NAME (matball …),
@@ -132,15 +132,7 @@ fn main() -> iced::Result {
             #[cfg(feature = "dev-tools")]
             "--third-party" => {
                 let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/third-party/crates.json.z");
-                let sysroot = std::process::Command::new("rustc").args(["--print", "sysroot"]).output();
-                let licenses = match sysroot {
-                    Ok(o) if o.status.success() => std::path::PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()).join("share/doc/rust/licenses"),
-                    _ => {
-                        eprintln!("rustc --print sysroot: no toolchain");
-                        std::process::exit(1);
-                    }
-                };
-                if let Err(e) = third_party::write_crates(&out, &licenses) {
+                if let Err(e) = third_party::write_crates(&out) {
                     eprintln!("{e}");
                     std::process::exit(1);
                 }

@@ -1178,6 +1178,9 @@ hdri_line_light p:precision = float16
 hdri_line_light p:precision = float32
 hdri_line_light p:point_1 vec2
 hdri_line_light p:point_2 vec2
+hdri_line_light p:position_mode choice
+hdri_line_light p:position_mode = ground_ceiling
+hdri_line_light p:position_mode = distance
 hdri_line_light p:thickness float
 hdri_line_light p:pattern choice
 hdri_line_light p:pattern = smooth_square

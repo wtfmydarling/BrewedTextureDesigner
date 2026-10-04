@@ -19,6 +19,11 @@ pub const LIGHT_COLOR_TEMPERATURE: u32 = 1;
 pub const SHAPE_LIGHT_SHAPES: &[&str] = &["Rectangle", "Disc"];
 const SHAPE_LIGHT_SHAPE_IDS: &[&str] = &["rectangle", "disc"];
 
+/// Where a Line Light is, as Substance Designer's: on a ceiling or a floor, or as far from the
+/// middle of the scene every way.
+pub const LINE_LIGHT_POSITIONS: &[&str] = &["Ground / Ceiling", "Distance from Origin"];
+const LINE_LIGHT_POSITION_IDS: &[&str] = &["ground_ceiling", "distance"];
+
 /// How a Line Light is lit across: from its middle to its edges.
 pub const LINE_LIGHT_PATTERNS: &[&str] = &["Smooth Square", "Sharp Square", "Cone", "Hemisphere"];
 const LINE_LIGHT_PATTERN_IDS: &[&str] = &["smooth_square", "sharp_square", "cone", "hemisphere"];
@@ -87,14 +92,21 @@ pub static HDRI_LINE_LIGHT: NodeDef = NodeDef {
     id: "hdri_line_light",
     name: "Line Light",
     category: Category::Hdri,
-    description: "A tube of light from one point of the panorama to another (a strip light, a fluorescent tube), drawn over the panorama it is given.",
+    description: "A tube of light from one point of the panorama to another (a strip light, a fluorescent tube), where it is in the scene: thicker where it is nearer. Drawn over the panorama it is given.",
     keywords: "hdri environment panorama tube strip fluorescent line light studio",
     inputs: BACKGROUND,
     outputs: COLOR_OUT,
     params: &[
         vec2("point_1", "Point 1", [0.4, 0.3], 0.0, 1.0).tip("Where it begins: across, once round; down, from straight up (0) to straight down (1)."),
         vec2("point_2", "Point 2", [0.6, 0.3], 0.0, 1.0).tip("Where it ends."),
-        float("thickness", "Thickness", 0.05, 0.0, 0.5).at_least(0.0).tip("How thick it is, as far as it is from the middle of the scene."),
+        choice("position_mode", "Position Mode", 0, LINE_LIGHT_POSITIONS, LINE_LIGHT_POSITION_IDS).tip(
+            "Where its ends are in the scene: on a ceiling a step above the middle of the scene (where they are seen above \
+             the horizon) or on a floor a step below it, so that it is nearer and thicker overhead and thinner toward the \
+             horizon, as a tube on a ceiling is; or both a step from the middle.",
+        ),
+        float("thickness", "Thickness", 0.05, 0.0, 0.5)
+            .at_least(0.0)
+            .tip("How thick it is (its radius), as far as the ceiling is above the middle of the scene: it looks thicker where it is nearer."),
         choice("pattern", "Pattern", 0, LINE_LIGHT_PATTERNS, LINE_LIGHT_PATTERN_IDS)
             .tip("How it is lit across: evenly to soft edges, evenly to sharp ones, brightest along its middle (a cone), or as a round tube (a hemisphere)."),
         float("hardness", "Hardness", 0.5, 0.0, 1.0).bounded().tip("How sharp its edges are."),

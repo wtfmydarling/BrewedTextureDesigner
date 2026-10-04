@@ -7,7 +7,7 @@ use iced::{Color, Point, Rectangle, Size, Vector, keyboard};
 use brewed_texture_core::graph::NodeId;
 use brewed_texture_core::{Edit, NodeKind, ParamValue};
 
-use super::lights::Points;
+use super::lights::{Grip, Panel, Points};
 use crate::app::{App, Message, PreviewMessage};
 use crate::style;
 
@@ -58,6 +58,8 @@ enum Handle {
     Scale { src: [f32; 2], x: bool, y: bool },
     /// A point of a light of a panorama.
     Point(usize),
+    /// A grip of the gizmo of a softbox or a panel.
+    Panel(Grip),
 }
 
 #[derive(Clone, Debug)]
@@ -66,6 +68,8 @@ enum Drag {
     Gizmo { handle: Handle, start_uv: Vector, start_screen: Point, start: Xform },
     /// A point of a light: which, where it was taken, and the points as they were then.
     Point { index: usize, start_uv: Vector, start: Points },
+    /// A grip of a softbox's or a panel's gizmo, where it was taken, and the light as it was.
+    Panel { grip: Grip, start_uv: Vector, start: Panel },
 }
 
 #[derive(Default)]
@@ -111,6 +115,11 @@ impl Overlay<'_> {
     /// The points of the light of a panorama shown.
     fn points(&self) -> Option<Points> {
         Points::of(self.app, self.app.ui.preview.node?)
+    }
+
+    /// The softbox or the panel shown, whose gizmo is drawn.
+    fn panel(&self) -> Option<Panel> {
+        Panel::of(self.app, self.app.ui.preview.node?)
     }
 
     fn gizmo_node(&self) -> Option<NodeId> {
@@ -241,6 +250,7 @@ impl canvas::Program<Message> for Overlay<'_> {
         let aspect = image[0] as f32 / image[1] as f32;
         let gizmo = self.gizmo_node().and_then(|id| self.xform(id).map(|x| (id, x)));
         let points = self.points();
+        let panel = self.panel();
 
         match event {
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -267,6 +277,12 @@ impl canvas::Program<Message> for Overlay<'_> {
                             && let Some(index) = point_hit(ps, q, rect)
                         {
                             state.drag = Some(Drag::Point { index, start_uv: uv_of(q), start: ps.clone() });
+                            return Some(canvas::Action::capture());
+                        }
+                        if let Some(pn) = &panel
+                            && let Some(grip) = panel_hit(pn, q, rect)
+                        {
+                            state.drag = Some(Drag::Panel { grip, start_uv: uv_of(q), start: pn.clone() });
                             return Some(canvas::Action::capture());
                         }
                         if matches!(click.kind(), mouse::click::Kind::Double) {
@@ -299,6 +315,14 @@ impl canvas::Program<Message> for Overlay<'_> {
                             Some(canvas::Action::publish(Message::Edits(edits)))
                         }
                     }
+                    Some(Drag::Panel { grip, start_uv, start }) => {
+                        let edits = start.edits(*grip, *start_uv, uv_of(q), state.modifiers.shift());
+                        if edits.is_empty() {
+                            None
+                        } else {
+                            Some(canvas::Action::publish(Message::Edits(edits)))
+                        }
+                    }
                     Some(Drag::Point { index, start_uv, start }) => {
                         let edits = start.edits(*index, *start_uv, uv_of(q), state.modifiers.shift());
                         if edits.is_empty() {
@@ -315,6 +339,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                                 self.hit(q, center, &handles)
                             }
                             (None, Some(ps), Some(q)) => point_hit(ps, q, rect).map(Handle::Point),
+                            (None, None, Some(q)) => panel.as_ref().and_then(|pn| panel_hit(pn, q, rect)).map(Handle::Panel),
                             _ => None,
                         };
                         let redraw = hovered != state.hovered;
@@ -336,7 +361,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(_)) => match state.drag.take() {
-                Some(Drag::Gizmo { .. } | Drag::Point { .. }) => Some(canvas::Action::publish(Message::Seal)),
+                Some(Drag::Gizmo { .. } | Drag::Point { .. } | Drag::Panel { .. }) => Some(canvas::Action::publish(Message::Seal)),
                 Some(Drag::Pan { .. }) => None,
                 None => None,
             },
@@ -346,7 +371,7 @@ impl canvas::Program<Message> for Overlay<'_> {
 
     fn mouse_interaction(&self, state: &State, _bounds: Rectangle, _cursor: mouse::Cursor) -> mouse::Interaction {
         match state.drag {
-            Some(Drag::Pan { .. } | Drag::Gizmo { .. } | Drag::Point { .. }) => mouse::Interaction::Grabbing,
+            Some(Drag::Pan { .. } | Drag::Gizmo { .. } | Drag::Point { .. } | Drag::Panel { .. }) => mouse::Interaction::Grabbing,
             None if state.hovered.is_some() => mouse::Interaction::Grab,
             None => mouse::Interaction::default(),
         }
@@ -426,6 +451,16 @@ impl canvas::Program<Message> for Overlay<'_> {
             };
             draw_points(&mut frame, &points, rect, active);
         }
+        if let Some(panel) = self.panel() {
+            let active = match &state.drag {
+                Some(Drag::Panel { grip, .. }) => Some(*grip),
+                _ => match state.hovered {
+                    Some(Handle::Panel(grip)) => Some(grip),
+                    _ => None,
+                },
+            };
+            draw_panel(&mut frame, &panel, rect, active);
+        }
 
         vec![frame.into_geometry()]
     }
@@ -445,6 +480,80 @@ fn point_hit(points: &Points, p: Point, rect: Rectangle) -> Option<usize> {
         .filter(|(_, d)| *d < 10.0)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(i, _)| i)
+}
+
+/// How far the knob that turns a softbox or a panel stands out from its edge, in pixels.
+const STEM: f32 = 26.0;
+
+/// The grips of a softbox's or a panel's gizmo, where they are in the view: the knob a few pixels
+/// out from its edge, whatever the zoom.
+fn panel_grips(panel: &Panel, rect: Rectangle) -> Vec<(Point, Grip)> {
+    let mut grips: Vec<(Point, Grip)> = panel.grips().into_iter().map(|(uv, g)| (on_screen(rect, uv), g)).collect();
+    if let Some((base, beyond)) = panel.stem() {
+        let (b, d) = (on_screen(rect, base), on_screen(rect, beyond) - on_screen(rect, base));
+        let len = (d.x * d.x + d.y * d.y).sqrt();
+        if len > 1e-4 {
+            grips.push((b + d * (STEM / len), Grip::Turn));
+        }
+    }
+    grips
+}
+
+/// The grip of a softbox's or a panel's gizmo under `p`: the nearest of those it is on.
+fn panel_hit(panel: &Panel, p: Point, rect: Rectangle) -> Option<Grip> {
+    panel_grips(panel, rect)
+        .into_iter()
+        .filter(|(at, g)| at.distance(p) < if *g == Grip::Move { 10.0 } else { 8.0 })
+        .min_by(|a, b| a.0.distance(p).total_cmp(&b.0.distance(p)))
+        .map(|(_, g)| g)
+}
+
+/// A softbox's or a panel's gizmo, drawn as the Transform 2D's is: its outline (on the panorama,
+/// and where it goes on past an edge, at the other), the circle that moves it, the squares that
+/// size it, the knob that turns it.
+fn draw_panel(frame: &mut Frame, panel: &Panel, rect: Rectangle, active: Option<Grip>) {
+    let col = |g: Grip| {
+        if panel.locked(g) {
+            style::gray(112)
+        } else if active == Some(g) {
+            Color::WHITE
+        } else {
+            style::ACCENT
+        }
+    };
+    let outline = panel.outline();
+    frame.with_clip(rect, |f| {
+        for shift in [-1.0, 0.0, 1.0] {
+            for line in &outline {
+                let path = Path::new(|b| {
+                    b.move_to(on_screen(rect, line[0] + Vector::new(shift, 0.0)));
+                    for q in &line[1..] {
+                        b.line_to(on_screen(rect, *q + Vector::new(shift, 0.0)));
+                    }
+                });
+                f.stroke(&path, Stroke::default().with_width(1.5).with_color(style::alpha(style::ACCENT, 0.9)));
+            }
+        }
+    });
+    let grips = panel_grips(panel, rect);
+    if let (Some((base, _)), Some((knob, _))) = (panel.stem(), grips.iter().find(|(_, g)| *g == Grip::Turn)) {
+        frame.stroke(&Path::line(on_screen(rect, base), *knob), Stroke::default().with_width(1.0).with_color(col(Grip::Turn)));
+    }
+    let shade = Color::from_rgba(0.0, 0.0, 0.0, 0.6);
+    for (at, g) in &grips {
+        match g {
+            Grip::Move => {
+                frame.fill(&Path::circle(*at, 6.0), shade);
+                frame.stroke(&Path::circle(*at, 6.0), Stroke::default().with_width(2.0).with_color(col(*g)));
+            }
+            Grip::Turn => frame.fill(&Path::circle(*at, 4.5), col(*g)),
+            Grip::Size { .. } => {
+                let r = Rectangle::new(Point::new(at.x - 4.5, at.y - 4.5), Size::new(9.0, 9.0));
+                frame.fill_rectangle(r.position(), r.size(), shade);
+                frame.stroke_rectangle(r.position(), r.size(), Stroke::default().with_width(1.5).with_color(col(*g)));
+            }
+        }
+    }
 }
 
 /// The points of a light, drawn as the Transform 2D's center is: white while held or under the
@@ -490,11 +599,13 @@ mod tests {
         assert_eq!(tile_uv(Vector::new(0.5, 0.5), [false, false]), Some(Vector::new(0.5, 0.5)));
     }
 
-    /// The points of the nodes of panoramas are dragged in the 2D view, as Substance Designer's
-    /// HDRI tools are placed: as far as the mouse goes, round and round across, in one step of
-    /// the history; Shift keeps a point to one axis; one that takes its value from a socket stays.
+    /// The nodes of panoramas are placed in the 2D view as Substance Designer's HDRI tools are:
+    /// a gradient's and a tube's points dragged, a softbox's and a panel's gizmo moving, sizing
+    /// and turning them, as far as the mouse goes, round and round across, in one step of the
+    /// history; Shift keeps a move to one axis, proportions, and turns by 15°; what takes its value
+    /// from a socket stays.
     #[test]
-    fn the_points_of_the_lights_are_dragged_in_the_2d_view() {
+    fn the_lights_are_placed_in_the_2d_view() {
         use crate::app::StartupOptions;
         let (mut app, _) = App::boot(StartupOptions::default());
         let (bounds, image) = (Rectangle::new(Point::ORIGIN, Size::new(800.0, 800.0)), [1024, 1024]);
@@ -507,11 +618,18 @@ mod tests {
             let _ = app.update(Message::Edit(e));
             let _ = app.update(Message::Seal);
         };
-        // Drags the point `i` of the node shown by `by` pixels (a pixel is 1/768 of the
-        // panorama), Shift held or not.
-        let drag = |app: &mut App, i: usize, by: Vector, shift: bool| {
+        // Where the point `i` of the node shown is in the view, or a grip of its gizmo.
+        let point_at = |app: &App, i: usize| {
             let points = Points::of(app, app.ui.preview.node.expect("a node shown")).expect("its points");
-            let at = on_screen(rect, points.points().nth(i).expect("the point"));
+            on_screen(rect, points.points().nth(i).expect("the point"))
+        };
+        let grip_at = |app: &App, grip: Grip| {
+            let panel = Panel::of(app, app.ui.preview.node.expect("a node shown")).expect("its gizmo");
+            panel_grips(&panel, rect).into_iter().find(|(_, g)| *g == grip).expect("the grip").0
+        };
+        // Drags what is at `at` by `by` pixels (a pixel is 1/768 of the panorama), Shift held or
+        // not.
+        let drag_at = |app: &mut App, at: Point, by: Vector, shift: bool| {
             let mut state = State { bounds, ..State::default() };
             if shift {
                 state.modifiers = keyboard::Modifiers::SHIFT;
@@ -538,21 +656,56 @@ mod tests {
             id
         };
         let v2 = |app: &App, id: NodeId, key: &str| app.eval.params(id).expect("its parameters").v2(key);
+        let drag = |app: &mut App, i: usize, by: Vector, shift: bool| {
+            let at = point_at(app, i);
+            drag_at(app, at, by, shift);
+        };
+        let pull = |app: &mut App, grip: Grip, by: Vector, shift: bool| {
+            let at = grip_at(app, grip);
+            drag_at(app, at, by, shift);
+        };
 
-        // A softbox's point: as far as the mouse goes, one step back.
+        // A softbox, by its gizmo: moved as far as the mouse goes, one step back.
         let softbox = add(&mut app, NodeKind::HDRI_SHAPE_LIGHT);
-        drag(&mut app, 0, Vector::new(76.8, 38.4), false);
+        pull(&mut app, Grip::Move, Vector::new(76.8, 38.4), false);
         assert!(near(v2(&app, softbox, "position"), [0.6, 0.3]), "{:?}", v2(&app, softbox, "position"));
         let _ = app.update(Message::Undo);
         assert!(near(v2(&app, softbox, "position"), [0.5, 0.25]), "a drag is one step back");
         // With Shift, along one axis.
-        drag(&mut app, 0, Vector::new(76.8, 20.0), true);
+        pull(&mut app, Grip::Move, Vector::new(76.8, 20.0), true);
         assert!(near(v2(&app, softbox, "position"), [0.6, 0.25]), "{:?}", v2(&app, softbox, "position"));
+        // Sized by an edge: wider, as high; dragged back where it was, as it was.
+        let edge = Grip::Size { x: 1, y: 0 };
+        let was = grip_at(&app, edge);
+        pull(&mut app, edge, Vector::new(40.0, 0.0), false);
+        let [w, h] = v2(&app, softbox, "size");
+        assert!(w > 0.35 && (h - 0.2).abs() < 1e-4, "{w} {h}");
+        let back = was - grip_at(&app, edge);
+        let now = grip_at(&app, edge);
+        drag_at(&mut app, now, back, false);
+        assert!((v2(&app, softbox, "size")[0] - 0.3).abs() < 1e-3, "back to {:?}", v2(&app, softbox, "size"));
+        // By a corner with Shift: in proportion.
+        pull(&mut app, Grip::Size { x: -1, y: -1 }, Vector::new(-30.0, 30.0), true);
+        let [w, h] = v2(&app, softbox, "size");
+        assert!(w > 0.3 && (w / h - 1.5).abs() < 1e-3, "{w} {h}");
+        // Turned: the knob to the left turns it counter-clockwise; with Shift, by 15°.
+        let turned = |app: &App| app.eval.params(softbox).expect("its parameters").f("rotation");
+        pull(&mut app, Grip::Turn, Vector::new(-40.0, 0.0), false);
+        assert!(turned(&app) > 10.0 && turned(&app) < 90.0, "turned {}", turned(&app));
+        pull(&mut app, Grip::Turn, Vector::new(-25.0, 10.0), true);
+        assert!(turned(&app) > 0.0 && ((turned(&app) / 15.0).round() * 15.0 - turned(&app)).abs() < 1e-3, "by 15°: {}", turned(&app));
         // Taking its value from a socket, it stays.
         edit(&mut app, Edit::SetExposed { node: softbox, key: "position".into(), exposed: true });
         let held = v2(&app, softbox, "position");
-        drag(&mut app, 0, Vector::new(50.0, 0.0), false);
+        pull(&mut app, Grip::Move, Vector::new(50.0, 0.0), false);
         assert_eq!(v2(&app, softbox, "position"), held);
+        // Overhead, its grips seen over the pole are left out, and its outline goes round.
+        let high = add(&mut app, NodeKind::HDRI_SHAPE_LIGHT);
+        edit(&mut app, Edit::SetParam { node: high, key: "position".into(), value: ParamValue::Vec2([0.5, 0.08]) });
+        edit(&mut app, Edit::SetParam { node: high, key: "size".into(), value: ParamValue::Vec2([0.6, 0.6]) });
+        let panel = Panel::of(&app, high).expect("its gizmo");
+        assert!(panel.grips().iter().all(|(at, _)| (at.x - 0.5).abs() < 0.5), "{:?}", panel.grips());
+        assert!(panel.grips().len() < 9 && panel.stem().is_some(), "{:?}", panel.grips());
 
         // A tube's two points, each on its own.
         let tube = add(&mut app, NodeKind::HDRI_LINE_LIGHT);
@@ -566,9 +719,11 @@ mod tests {
         drag(&mut app, 0, Vector::new(-460.8, 1000.0), false);
         assert!(near(v2(&app, gradient, "point"), [0.9, 1.0]), "{:?}", v2(&app, gradient, "point"));
 
-        // A panel's point.
+        // A panel, by its gizmo.
         let panel = add(&mut app, NodeKind::HDRI_PLANE_LIGHT);
-        drag(&mut app, 0, Vector::new(38.4, -76.8), false);
+        pull(&mut app, Grip::Move, Vector::new(38.4, -76.8), false);
         assert!(near(v2(&app, panel, "position"), [0.55, 0.3]), "{:?}", v2(&app, panel, "position"));
+        pull(&mut app, Grip::Size { x: 0, y: 1 }, Vector::new(0.0, -30.0), false);
+        assert!(v2(&app, panel, "size")[1] > 0.55, "{:?}", v2(&app, panel, "size"));
     }
 }

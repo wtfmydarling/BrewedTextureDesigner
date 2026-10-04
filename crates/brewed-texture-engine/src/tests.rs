@@ -3624,6 +3624,7 @@ fn panorama_lights_are_where_they_are() {
     // A tube along the horizon in front, 45° each way; nothing of it above or behind.
     let mut g = graph();
     let tube = g.add_node(NodeKind::HDRI_LINE_LIGHT, [0.0, 0.0]);
+    set(&mut g, tube, "position_mode", ParamValue::Enum(1));
     set(&mut g, tube, "point_1", ParamValue::Vec2([0.375, 0.5]));
     set(&mut g, tube, "point_2", ParamValue::Vec2([0.625, 0.5]));
     set(&mut g, tube, "exposure", ParamValue::Float(3.0));
@@ -3632,6 +3633,15 @@ fn panorama_lights_are_where_they_are() {
         assert!(close(at(&d, u, 0.5)[0], 8.0, 0.1), "along it at {u}: {:?}", at(&d, u, 0.5));
     }
     assert!(at(&d, 0.5, 0.39)[0] < 0.01 && at(&d, 0.0, 0.5)[0] < 0.01 && at(&d, 0.75, 0.5)[0] < 0.01, "above, behind, past its end");
+    // On the ceiling, from overhead to near the horizon in front: thicker overhead, where it is
+    // nearer, and thinner far off.
+    set(&mut g, tube, "position_mode", ParamValue::Enum(0));
+    set(&mut g, tube, "point_1", ParamValue::Vec2([0.5, 0.1]));
+    set(&mut g, tube, "point_2", ParamValue::Vec2([0.5, 0.45]));
+    set(&mut g, tube, "thickness", ParamValue::Float(0.1));
+    let d = eval_read(&mut e, &g, tube);
+    let wide = |v: f32| (0..RES).filter(|x| at(&d, (*x as f32 + 0.5) / RES as f32, v)[0] > 1.0).count();
+    assert!(wide(0.15) > wide(0.4) * 2 && wide(0.4) > 0, "{} across overhead, {} far off", wide(0.15), wide(0.4));
 
     // A ceiling overhead, in stripes; none underfoot.
     let mut g = graph();

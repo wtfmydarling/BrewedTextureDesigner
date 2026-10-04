@@ -238,12 +238,30 @@ pub enum PendingAction {
     Quit,
 }
 
+/// Open `link` (a web page) in the browser the system has for it; not in the tests, which open
+/// nothing outside the program.
+fn open_link(link: &str) {
+    if cfg!(test) || !link.starts_with("https://") {
+        log::info!("not opened: {link}");
+        return;
+    }
+    #[cfg(windows)]
+    let opened = std::process::Command::new("explorer").arg(link).spawn();
+    #[cfg(target_os = "macos")]
+    let opened = std::process::Command::new("open").arg(link).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let opened = std::process::Command::new("xdg-open").arg(link).spawn();
+    if let Err(e) = opened {
+        log::warn!("{link}: {e}");
+    }
+}
+
 /// What the window of the third-party notices is told.
 #[derive(Clone, Debug)]
 pub enum NoticesMessage {
-    /// Show this work (of `third_party::notices`).
-    Choose(usize),
     Search(String),
+    /// Open where a work is (its repository, its page), in the browser.
+    Open(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2439,23 +2457,8 @@ impl App {
             Message::Notices(message) => {
                 if let Some(Dialog::Notices(dialog)) = &mut self.ui.dialog {
                     match message {
-                        NoticesMessage::Choose(i) => dialog.chosen = i,
-                        NoticesMessage::Search(query) => {
-                            // The work chosen stays, if the search leaves it; else the first it does whose
-                            // name begins with what is typed, or the first it does.
-                            let works = &crate::third_party::notices().works;
-                            let typed = query.trim().to_lowercase();
-                            let found = |w: &crate::third_party::Work| view::notices::matches(w, &query);
-                            if !works.get(dialog.chosen).is_some_and(found)
-                                && let Some(first) = works
-                                    .iter()
-                                    .position(|w| found(w) && w.name.to_lowercase().starts_with(&typed))
-                                    .or_else(|| works.iter().position(found))
-                            {
-                                dialog.chosen = first;
-                            }
-                            dialog.query = query;
-                        }
+                        NoticesMessage::Search(query) => dialog.query = query,
+                        NoticesMessage::Open(link) => open_link(&link),
                     }
                 }
             }

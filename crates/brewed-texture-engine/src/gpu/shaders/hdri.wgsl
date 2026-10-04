@@ -111,30 +111,35 @@ fn across(kind: u32, x: f32, hardness: f32, aa: f32) -> f32 {
     }
 }
 
+// Where an end of a Line Light is in the scene, seen at `uv`: on a ceiling a step above the
+// middle (seen above the horizon) or a floor a step below (`mode` 0), or a step from the middle.
+fn line_end(uv: vec2<f32>, mode: u32) -> vec3<f32> {
+    let d = direction(uv);
+    if (mode == 1u) {
+        return d;
+    }
+    return d / max(abs(d.y), 0.02);
+}
+
 @fragment
 fn line_main(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let gid = pixel(at);
     let size = target_size();
     let d = direction(out_uv(gid.xy, size));
-    let a = direction(P.a.xy);
-    let b = direction(P.a.zw);
-    // How far the direction is from the arc between the points: from the great circle through
-    // them, where it is between them; else from the nearer point.
-    let ends = acos(clamp(max(dot(d, a), dot(d, b)), -1.0, 1.0));
-    var angle = ends;
-    let n0 = cross(a, b);
-    if (length(n0) > 1e-5) {
-        let n = normalize(n0);
-        let s = dot(d, n);
-        let planar = d - n * s;
-        if (length(planar) > 1e-5) {
-            let q = normalize(planar);
-            if (dot(cross(a, q), n) >= 0.0 && dot(cross(q, b), n) >= 0.0) {
-                angle = asin(clamp(abs(s), 0.0, 1.0));
-            }
-        }
-    }
-    let x = tan(min(angle, 1.5)) / max(P.d.x, 1e-4);
+    // The tube: round about the line from one end to the other, in the scene. How near the ray
+    // from the middle along `d` passes its line: the nearest points of the two (the ray's never
+    // behind the middle, the line's between its ends), found again from each other.
+    let p1 = line_end(P.a.xy, P.e.y);
+    let e = line_end(P.a.zw, P.e.y) - p1;
+    let c = max(dot(e, e), 1e-8);
+    let b = dot(d, e);
+    let dp = dot(d, p1);
+    let pe = dot(p1, e);
+    var t = clamp((dp * b - pe) / max(c - b * b, 1e-8), 0.0, 1.0);
+    var s = max(dp + t * b, 0.0);
+    t = clamp((s * b - pe) / c, 0.0, 1.0);
+    s = max(dp + t * b, 0.0);
+    let x = length(d * s - (p1 + e * t)) / max(P.d.x, 1e-4);
     let aa = min(fwidth(x), 0.5);
     let cover = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, x);
     let light = P.color.rgb * P.b.z * across(P.e.x, x, P.b.y, aa);

@@ -333,7 +333,7 @@ impl Template {
             }
             Template::StudioPanorama => {
                 "An environment light of a studio, made of HDRI tools (a softbox overhead, a strip light, a large panel \
-                 behind, over the gray of the room): a panorama in 32-bit floats whose usage, Panorama, lights the 3D view."
+                 behind, in the dark of the room): a panorama in 32-bit floats whose usage, Panorama, lights the 3D view."
             }
             Template::Convolution => "A convolution filter of a grayscale image: each pixel the average of those around it, as far as a map says (a box blur that is not the same everywhere).",
             Template::Grid => "A grid of squares, as many across and down as its input values say, drawn by one FX-Map.",
@@ -401,33 +401,33 @@ impl Template {
         }
         match self {
             Template::StudioPanorama => {
-                // As Substance Designer's studio is made: the gray of the room, and over it a
-                // softbox overhead, a strip light to the right, a large panel behind.
+                // As Substance Designer's studio is made, as bright as a room is: its dark, and in
+                // it a softbox overhead, a strip light to the right, a large panel behind.
                 let room = g.add_node(NodeKind::HDRI_GRADIENT, [0.0, 0.0]);
-                set(&mut g, room, "top", ParamValue::Color([0.291, 0.296, 0.3, 1.0]));
-                set(&mut g, room, "bottom", ParamValue::Color([0.089, 0.09, 0.09, 1.0]));
+                set(&mut g, room, "top", ParamValue::Color([0.0394, 0.0394, 0.0394, 1.0]));
+                set(&mut g, room, "bottom", ParamValue::Color([0.0, 0.0, 0.0, 1.0]));
                 set(&mut g, room, "contrast", ParamValue::Float(0.5));
                 let softbox = g.add_node(NodeKind::HDRI_SHAPE_LIGHT, [300.0, 0.0]);
-                set(&mut g, softbox, "position", ParamValue::Vec2([0.5, 0.12]));
-                set(&mut g, softbox, "size", ParamValue::Vec2([0.5, 0.5]));
-                set(&mut g, softbox, "hardness", ParamValue::Float(0.62));
+                set(&mut g, softbox, "position", ParamValue::Vec2([0.5, 0.2]));
+                set(&mut g, softbox, "size", ParamValue::Vec2([0.4, 0.4]));
+                set(&mut g, softbox, "hardness", ParamValue::Float(0.0));
                 set(&mut g, softbox, "exposure", ParamValue::Float(2.0));
                 set(&mut g, softbox, "hotspot_exposure", ParamValue::Float(4.0));
                 set(&mut g, softbox, "hotspot_size", ParamValue::Float(1.0));
                 let _ = g.connect(room, "o:output", softbox, "i:background");
                 let strip = g.add_node(NodeKind::HDRI_LINE_LIGHT, [600.0, 0.0]);
-                set(&mut g, strip, "point_1", ParamValue::Vec2([0.6933, 0.0402]));
-                set(&mut g, strip, "point_2", ParamValue::Vec2([0.8515, 0.4598]));
-                set(&mut g, strip, "thickness", ParamValue::Float(0.085));
-                set(&mut g, strip, "pattern", ParamValue::Enum(3));
+                set(&mut g, strip, "point_1", ParamValue::Vec2([0.7, 0.0573]));
+                set(&mut g, strip, "point_2", ParamValue::Vec2([0.8096, 0.4555]));
+                set(&mut g, strip, "thickness", ParamValue::Float(0.025));
+                set(&mut g, strip, "pattern", ParamValue::Enum(2));
                 set(&mut g, strip, "color_mode", ParamValue::Enum(crate::nodes::LIGHT_COLOR_TEMPERATURE));
                 set(&mut g, strip, "temperature", ParamValue::Float(8500.0));
                 set(&mut g, strip, "exposure", ParamValue::Float(4.0));
                 let _ = g.connect(softbox, "o:output", strip, "i:background");
                 let panel = g.add_node(NodeKind::HDRI_PLANE_LIGHT, [900.0, 0.0]);
-                set(&mut g, panel, "position", ParamValue::Vec2([0.0194, 0.6257]));
-                set(&mut g, panel, "size", ParamValue::Vec2([2.0, 2.0]));
-                set(&mut g, panel, "hardness", ParamValue::Float(0.25));
+                set(&mut g, panel, "position", ParamValue::Vec2([0.0, 0.765]));
+                set(&mut g, panel, "size", ParamValue::Vec2([0.5, 0.65]));
+                set(&mut g, panel, "hardness", ParamValue::Float(0.628));
                 set(&mut g, panel, "color_mode", ParamValue::Enum(crate::nodes::LIGHT_COLOR_TEMPERATURE));
                 set(&mut g, panel, "temperature", ParamValue::Float(8205.0));
                 set(&mut g, panel, "exposure", ParamValue::Float(0.5));
@@ -439,7 +439,7 @@ impl Template {
                 let _ = g.connect(panel, "o:output", panorama, "i:input");
                 let said = "An environment light is a panorama: across, once round; down, from straight up to straight down \
                             (square here, as Substance Designer makes it). The HDRI tools draw a studio in it, each over the one before: \
-                            Gradient Linear (HDRI) the gray of the room, a Shape Light the softbox overhead with its hotspot, \
+                            Gradient Linear (HDRI) the dark of the room, a Shape Light the softbox overhead with its hotspot, \
                             a Line Light the strip light to the right, a Plane Light the large panel behind (across the seam: \
                             on both edges of the panorama). Their light is far brighter than white, kept in 32-bit floats. The \
                             Output's usage is Panorama: the 3D view is lit by it (the sun button: The Graph's Panorama).";

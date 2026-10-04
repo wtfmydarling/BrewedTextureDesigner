@@ -782,7 +782,7 @@ fn hdri_line_light(cx: &mut ExecCtx) -> Result<Option<String>, String> {
         b: [0.0, p.f("hardness"), exposure(p.f("exposure")), 0.0],
         color: light_color(p),
         d: [p.f("thickness").max(0.0), 0.0, 0.0, 0.0],
-        e: [p.u("pattern"), 0, 0, 0],
+        e: [p.u("pattern"), p.u("position_mode"), 0, 0],
         ..HdriU::default()
     };
     let background = input(cx.inputs, 0, &cx.gpu.black);

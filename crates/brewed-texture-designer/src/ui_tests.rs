@@ -3774,24 +3774,27 @@ fn the_graphs_panorama_lights_the_3d_view_when_asked() {
     assert!(w.app.panorama_node().is_none() && w.app.environment_shown().is_none());
 }
 
-/// Help → Third-Party Notices says whose work the program is made with, and under what: the
-/// Matball's model (its author, where it is, its license, what was changed of it), the font,
-/// Rust's standard library and every crate; searched, the work found is shown. About says no
-/// more of what the program is built with, but opens this window.
+/// Help → Third-Party Notices lists, as programs list them, each work of others the program is
+/// made with, its license, and a link to where it is: Matball's model (its author), the font,
+/// Rust's standard library and every crate; searched, only what is found. A click on one opens
+/// its link (not in the tests). About says no more of what the program is built with, but opens
+/// this window.
 #[test]
 fn the_third_party_notices_say_whose_work_is_used() {
     use crate::app::NoticesMessage;
     let mut w = harness!(view::root, 1680.0, 1000.0);
     let shown = |w: &mut Harness, text: &str| !texts(w, text).is_empty();
     w.send(Message::Dialog(Some(Dialog::Notices(Default::default()))));
-    for text in ["Third-Party Notices", "Matball: Shader Ball JL 01", "Craneo", "https://skfb.ly/ozVxI", "CC BY 4.0", "Inter", "Rust standard library"] {
+    for text in ["Third-Party Notices", "Shader Ball JL 01 by Craneo (the Matball, changed)", "[CC BY 4.0]", "Inter", "Rust standard library"] {
         assert!(shown(&mut w, text), "{text} is in the window");
     }
     w.send(Message::Notices(NoticesMessage::Search("wgpu".into())));
-    let Some(Dialog::Notices(dialog)) = &w.app.ui.dialog else { panic!("the window is open") };
-    let found = &crate::third_party::notices().works[dialog.chosen];
-    assert!((found.name.contains("wgpu") || found.note.contains("wgpu ")) && !found.texts.is_empty(), "what the search finds: {}", found.name);
-    assert!(shown(&mut w, &found.name) && !shown(&mut w, "Matball: Shader Ball JL 01"), "only what the search finds");
+    assert!(shown(&mut w, "wgpu") && !shown(&mut w, "Shader Ball JL 01 by Craneo (the Matball, changed)"), "only what the search finds");
+    let wgpu = crate::third_party::works().iter().find(|work| work.name == "wgpu").expect("wgpu");
+    assert!(wgpu.link.contains("github.com/gfx-rs/wgpu"), "{}", wgpu.link);
+    let row = *texts(&mut w, "wgpu").first().expect("its row");
+    click(&mut w, row.center());
+    assert!(matches!(w.app.ui.dialog, Some(Dialog::Notices(_))), "a link opened, the window stays");
     w.snapshot("third_party_notices");
     w.send(Message::Dialog(Some(Dialog::About)));
     assert!(!shown(&mut w, "Rust · wgpu · iced"), "About says no more of what the program is built with");
