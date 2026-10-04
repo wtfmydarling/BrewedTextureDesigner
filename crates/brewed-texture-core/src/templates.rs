@@ -193,12 +193,14 @@ const COMPLETE: &[Map] = &[
 ];
 
 /// Whether a map of `usage` holds values past 1 (an index of refraction, a distance, a
-/// luminance, an Abbe number): its Output writes floats, which keep them; eight bits would
-/// cut them to 1.
+/// luminance, an Abbe number) or under 0 (which way light scattered inside goes on, -1 to 1):
+/// its Output writes floats, which keep them; eight bits would hold them between 0 and 1.
 fn past_one(usage: Usage) -> bool {
     matches!(
         usage,
         Usage::SpecularWeight
+            | Usage::TransmissionScatterAnisotropy
+            | Usage::SubsurfaceScatterAnisotropy
             | Usage::SpecularIor
             | Usage::TransmissionDepth
             | Usage::TransmissionDispersionAbbeNumber

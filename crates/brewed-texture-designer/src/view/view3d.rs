@@ -1341,6 +1341,184 @@ mod tests {
         assert!(colorful(&film) > colorful(&silver) + 5.0, "{} against {}", colorful(&film), colorful(&silver));
     }
 
+    /// Every usage does on the model what it says: an Output of each usage the 3D view shows
+    /// changes the picture of the sphere, given what it needs to be seen (a coat for the coat's
+    /// roughness, glass for its color …), values under 0 too where a usage has them. One whose
+    /// place another usage takes (a diffuse color where there is a base color …) changes
+    /// nothing, nor one the view does not show (a mask, the maps of older engines, none), nor a
+    /// panorama, which is no map of the material (it lights the view when asked).
+    #[test]
+    fn every_usage_does_on_the_model_what_it_says() {
+        use brewed_texture_core::graph::{Graph, Precision};
+        use brewed_texture_core::nodes::DEPTH_16F;
+        use brewed_texture_core::types::ParamValue;
+        let Ok(gpu) = brewed_texture_engine::Gpu::headless() else { return };
+        let (device, queue) = (gpu.device.clone(), gpu.queue.clone());
+        let mut engine = brewed_texture_engine::Engine::new(gpu);
+        let mut pipeline = None;
+        const SIDE: u32 = 96;
+        /// What an Output is fed: a value all over, or a pattern (a bump needs one).
+        #[derive(Clone, Copy, Debug)]
+        enum Feed {
+            Value([f32; 4]),
+            Noise,
+        }
+        use Feed::{Noise, Value};
+        // An Output of each usage, fed what it is given, written in floats.
+        let graph = |maps: &[(Usage, Feed)]| -> Graph {
+            let mut g = Graph { resolution: [64, 64], precision: Precision::Half, ..Graph::default() };
+            for (i, (usage, feed)) in maps.iter().enumerate() {
+                let y = i as f32 * 240.0;
+                let from = match feed {
+                    Value(color) => {
+                        let id = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, y]);
+                        g.node_mut(id).and_then(|n| n.param_mut("color")).expect("its color").value = ParamValue::Color(*color);
+                        id
+                    }
+                    Noise => g.add_node(NodeKind::NOISE, [0.0, y]),
+                };
+                let out = g.add_node(NodeKind::OUTPUT, [340.0, y]);
+                for (key, value) in [
+                    ("name", ParamValue::Text(usage.id().into())),
+                    ("usage", ParamValue::Enum(usage.index())),
+                    ("bit_depth", ParamValue::Enum(DEPTH_16F)),
+                ] {
+                    g.node_mut(out).and_then(|n| n.param_mut(key)).expect(key).value = value;
+                }
+                assert!(g.connect(from, "o:output", out, "i:input").is_ok());
+            }
+            g
+        };
+        let mut draw = |maps: &[(Usage, Feed)]| -> ::image::RgbaImage {
+            let g = graph(maps);
+            let outputs: Vec<_> = g.nodes_of(NodeKind::OUTPUT).map(|n| n.id).collect();
+            let _ = engine.prepare_materials(&[]);
+            engine.set_materials(&outputs);
+            brewed_texture_engine::engine::evaluate_blocking(&mut engine, &g);
+            // (None where there are no maps at all, as there were none before.)
+            let shown = engine.prepare_materials(&outputs).unwrap_or_default();
+            let found: Vec<(Usage, &brewed_texture_engine::DisplayImage)> = shown
+                .iter()
+                .filter_map(|img| Usage::of(g.node(img.node)?.enum_value("usage")).filter(|u| u.shown_in_3d()).map(|u| (u, img)))
+                .collect();
+            let maps = shading::of(found.iter().map(|(u, img)| (*u, *img)));
+            let camera = picture_camera(Camera { shape: Shape::Sphere, ..Camera::default() }, 1.0);
+            let primitive = Primitive { camera, maps, environment: None, exposure: 1.0, background: None };
+            render(&primitive, &mut pipeline, &device, &queue, [SIDE, SIDE]).expect("a picture")
+        };
+        let differ = |a: &::image::RgbaImage, b: &::image::RgbaImage| {
+            a.pixels().zip(b.pixels()).map(|(p, q)| (0..3).map(|c| (f32::from(p[c]) - f32::from(q[c])).abs()).sum::<f32>()).sum::<f32>()
+                / (SIDE * SIDE) as f32
+        };
+        let gray = |v: f32| Value([v, v, v, 1.0]);
+        let red = Value([0.9, 0.12, 0.08, 1.0]);
+        let green = Value([0.1, 0.8, 0.2, 1.0]);
+        // A normal leaning right and up; a tangent up the texture.
+        let leaning = Value([0.8, 0.65, 0.85, 1.0]);
+        let up = Value([0.5, 1.0, 0.5, 1.0]);
+        use Usage as U;
+        // Each usage: what it needs to be seen, and what it is given.
+        let glass = (U::TransmissionWeight, gray(1.0));
+        let under = (U::SubsurfaceWeight, gray(1.0));
+        let coat = (U::CoatWeight, gray(1.0));
+        // (A usage, the maps it needs to be seen, what it is given.)
+        type Case = (Usage, Vec<(Usage, Feed)>, Feed);
+        let cases: Vec<Case> = vec![
+            (U::BaseWeight, vec![], gray(0.2)),
+            (U::BaseColor, vec![], red),
+            (U::Metallic, vec![], gray(1.0)),
+            (U::BaseDiffuseRoughness, vec![], gray(1.0)),
+            (U::SpecularWeight, vec![], gray(0.0)),
+            (U::SpecularColor, vec![], Value([0.1, 0.3, 1.0, 1.0])),
+            (U::Roughness, vec![], gray(0.05)),
+            (U::SpecularRoughnessAnisotropy, vec![(U::Roughness, gray(0.4))], gray(1.0)),
+            (U::AnisotropyAngle, vec![(U::Roughness, gray(0.4)), (U::SpecularRoughnessAnisotropy, gray(1.0))], gray(0.25)),
+            (U::SpecularIor, vec![], gray(3.0)),
+            (U::TransmissionWeight, vec![], gray(1.0)),
+            (U::TransmissionColor, vec![glass], red),
+            (U::TransmissionDepth, vec![glass, (U::TransmissionColor, red)], gray(0.3)),
+            (U::TransmissionScatter, vec![glass], gray(0.9)),
+            (U::TransmissionScatterAnisotropy, vec![glass, (U::TransmissionScatter, gray(0.9))], gray(0.8)),
+            (U::TransmissionScatterAnisotropy, vec![glass, (U::TransmissionScatter, gray(0.9))], gray(-0.8)),
+            (U::TransmissionDispersionScale, vec![glass, (U::TransmissionDispersionAbbeNumber, gray(2.0))], gray(1.0)),
+            (U::TransmissionDispersionAbbeNumber, vec![glass, (U::TransmissionDispersionScale, gray(1.0))], gray(2.0)),
+            (U::SubsurfaceWeight, vec![], gray(1.0)),
+            (U::SubsurfaceColor, vec![under], red),
+            (U::SubsurfaceRadius, vec![under], gray(0.1)),
+            (U::SubsurfaceRadiusScale, vec![under], Value([0.1, 1.0, 0.1, 1.0])),
+            (U::SubsurfaceScatterAnisotropy, vec![under], gray(0.8)),
+            (U::SubsurfaceScatterAnisotropy, vec![under], gray(-0.8)),
+            (U::CoatWeight, vec![], gray(1.0)),
+            (U::CoatColor, vec![coat], red),
+            (U::CoatRoughness, vec![coat], gray(0.5)),
+            (U::CoatRoughnessAnisotropy, vec![coat, (U::CoatRoughness, gray(0.4))], gray(1.0)),
+            (U::CoatIor, vec![coat], gray(3.0)),
+            (U::CoatDarkening, vec![coat, (U::BaseColor, red)], gray(0.0)),
+            (U::CoatNormal, vec![coat], leaning),
+            (U::CoatTangent, vec![coat, (U::CoatRoughness, gray(0.4)), (U::CoatRoughnessAnisotropy, gray(1.0))], up),
+            (U::FuzzWeight, vec![], gray(1.0)),
+            (U::FuzzColor, vec![(U::FuzzWeight, gray(1.0))], red),
+            (U::FuzzRoughness, vec![(U::FuzzWeight, gray(1.0))], gray(0.1)),
+            (U::EmissionLuminance, vec![], gray(1000.0)),
+            (U::Emissive, vec![], red),
+            (U::ThinFilmWeight, vec![(U::Metallic, gray(1.0))], gray(1.0)),
+            (U::ThinFilmThickness, vec![(U::Metallic, gray(1.0)), (U::ThinFilmWeight, gray(1.0))], gray(0.25)),
+            (U::ThinFilmIor, vec![(U::Metallic, gray(1.0)), (U::ThinFilmWeight, gray(1.0))], gray(2.0)),
+            (U::Opacity, vec![], gray(0.3)),
+            (U::ThinWalled, vec![glass], gray(1.0)),
+            (U::Normal, vec![], leaning),
+            (U::Tangent, vec![(U::Roughness, gray(0.4)), (U::SpecularRoughnessAnisotropy, gray(1.0))], up),
+            (U::AmbientOcclusion, vec![], gray(0.2)),
+            (U::Height, vec![], gray(1.0)),
+            (U::Displacement, vec![], gray(1.0)),
+            (U::Bump, vec![], Noise),
+            (U::DetailNormal, vec![], leaning),
+            (U::Diffuse, vec![], red),
+            (U::Specular, vec![], Value([0.9, 0.8, 0.2, 1.0])),
+            (U::Glossiness, vec![], gray(0.95)),
+            (U::SpecularLevel, vec![], gray(0.0)),
+            (U::Mask, vec![], red),
+            (U::Ambient, vec![], red),
+            (U::Reflection, vec![], red),
+            (U::Refraction, vec![], red),
+            (U::Custom, vec![], red),
+            (U::Panorama, vec![], red),
+        ];
+        for u in Usage::ALL {
+            assert!(cases.iter().any(|(c, ..)| *c == u), "{u:?} has no case");
+        }
+        // Where another usage takes its place: nothing.
+        let overridden: Vec<Case> = vec![
+            (U::Diffuse, vec![(U::BaseColor, green)], red),
+            (U::Glossiness, vec![(U::Roughness, gray(0.3))], gray(0.95)),
+            (U::SpecularLevel, vec![(U::SpecularWeight, gray(1.0))], gray(0.0)),
+            (U::Displacement, vec![(U::Height, gray(0.5))], gray(1.0)),
+        ];
+        let keep = |name: &str, img: &::image::RgbaImage| {
+            if let Ok(dir) = std::env::var("BREWED_3D_PICTURES") {
+                img.save(std::path::Path::new(&dir).join(format!("{name}.png"))).expect("saved");
+            }
+        };
+        let mut seen = Vec::new();
+        for (shows, list) in [(true, &cases), (false, &overridden)] {
+            for (usage, needs, given) in list {
+                let without = draw(needs);
+                let mut maps = needs.clone();
+                maps.push((*usage, *given));
+                let with = draw(&maps);
+                keep(&format!("usage-{}-{}", usage.id(), seen.len()), &with);
+                let d = differ(&with, &without);
+                seen.push(format!("{usage:?} {given:?}: {d:.2}"));
+                if shows && usage.shown_in_3d() && *usage != U::Panorama {
+                    assert!(d > 1.0, "{usage:?} given {given:?} changes the picture: {d}");
+                } else {
+                    assert_eq!(d, 0.0, "{usage:?} given {given:?} changes nothing");
+                }
+            }
+        }
+        eprintln!("{}", seen.join("\n"));
+    }
+
     /// The view's background where there is no model, as `render` puts it under the picture.
     fn draw_background(side: u32) -> ::image::RgbaImage {
         ::image::RgbaImage::from_fn(side, side, |_, y| {

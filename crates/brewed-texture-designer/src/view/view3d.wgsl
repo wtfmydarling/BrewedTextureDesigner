@@ -358,6 +358,15 @@ fn wrapped(nl: f32, w: vec3<f32>) -> vec3<f32> {
     return max(vec3<f32>(nl) + w, vec3<f32>(0.0)) / ((1.0 + w) * (1.0 + w)) / PI;
 }
 
+// How much of the light scattered inside a material goes on toward the eye, as a part of what
+// scattering it evenly would send there: Henyey and Greenstein's phase, `g` forward (above 0),
+// even (0) or back (below), `cos` the cosine of the light's way on and the eye's (1: the light
+// comes from behind, through the material), held under 4.
+fn phase(cos: f32, g: f32) -> f32 {
+    let g2 = g * g;
+    return min((1.0 - g2) / pow(max(1.0 + g2 - 2.0 * g * cos, 1e-4), 1.5), 4.0);
+}
+
 // ---------------------------------------------------------------------------- the light
 
 // The studio's sky.
@@ -442,11 +451,15 @@ struct Surface {
     trans_color: vec3<f32>,
     trans_depth: f32,
     trans_scatter: vec3<f32>,
+    // Which way light scattered in the glass goes on: forward (above 0), evenly, or back.
+    trans_g: f32,
     dispersion: f32,
     abbe: f32,
     sss: f32,
     sss_color: vec3<f32>,
     sss_reach: vec3<f32>,
+    // Which way light scattered under the surface goes on: forward (above 0), evenly, or back.
+    sss_g: f32,
     coat: f32,
     coat_color: vec3<f32>,
     coat_rough: f32,
@@ -560,14 +573,19 @@ fn surface_of(i: VOut, front: bool) -> Surface {
     s.trans_color = clamp(color(IN_TRANSMISSION_COLOR), vec3<f32>(0.0), vec3<f32>(1.0));
     s.trans_depth = max(value(IN_TRANSMISSION_DEPTH), 0.0);
     s.trans_scatter = max(color(IN_TRANSMISSION_SCATTER), vec3<f32>(0.0));
+    s.trans_g = clamp(value(IN_TRANSMISSION_SCATTER_ANISOTROPY), -0.9, 0.9);
     s.dispersion = max(value(IN_DISPERSION_SCALE), 0.0);
     s.abbe = max(value(IN_ABBE_NUMBER), 1.0);
 
     s.sss = clamp(value(IN_SUBSURFACE_WEIGHT), 0.0, 1.0);
     s.sss_color = darkened(clamp(color(IN_SUBSURFACE_COLOR), vec3<f32>(0.0), vec3<f32>(1.0)), s.coat, darkening, coat_ior);
     // How far round the light wraps: the radius, in the model's units (about a meter
-    // across), scaled for each channel.
-    s.sss_reach = clamp(max(value(IN_SUBSURFACE_RADIUS), 0.0) * max(color(IN_SUBSURFACE_RADIUS_SCALE), vec3<f32>(0.0)) * 0.6, vec3<f32>(0.0), vec3<f32>(1.0));
+    // across), scaled for each channel; further where light scattered under the surface goes
+    // on forward (deeper before it turns: its transport mean free path is 1 / (1 - g) of
+    // even scattering's), less far where it turns back.
+    s.sss_g = clamp(value(IN_SUBSURFACE_ANISOTROPY), -0.9, 0.9);
+    let reach = max(value(IN_SUBSURFACE_RADIUS), 0.0) * max(color(IN_SUBSURFACE_RADIUS_SCALE), vec3<f32>(0.0)) * 0.6;
+    s.sss_reach = clamp(reach / (1.0 - 0.5 * s.sss_g), vec3<f32>(0.0), vec3<f32>(1.0));
 
     s.coat_color = clamp(color(IN_COAT_COLOR), vec3<f32>(0.0), vec3<f32>(1.0));
     s.coat_rough = clamp(value(IN_COAT_ROUGHNESS), 0.02, 1.0);
@@ -634,7 +652,9 @@ fn reflected(s: Surface, v: vec3<f32>, l: vec3<f32>) -> vec3<f32> {
     let f = dielectric_fresnel(s, vh);
     let under = (1.0 - f);
     let matte_part = s.base * matte(s.n, v, l, s.sigma);
-    let sss_part = s.sss_color * wrapped(nl, s.sss_reach);
+    // (Light that scatters many times under the surface goes on every way: of the phase, only
+    // as much as scatters once.)
+    let sss_part = s.sss_color * wrapped(nl, s.sss_reach) * mix(1.0, phase(dot(-l, v), s.sss_g), 0.35);
     let body = mix(matte_part, sss_part, s.sss) * (1.0 - s.trans);
     let dielectric = f * lobe + under * body;
     var base = mix(dielectric, metal, s.metal);
@@ -680,8 +700,17 @@ fn transmitted(s: Surface, v: vec3<f32>) -> vec3<f32> {
     if (s.trans_depth > 0.0) {
         tint = pow(max(s.trans_color, vec3<f32>(1e-4)), vec3<f32>(path / s.trans_depth));
     }
-    let cloud = 1.0 - exp(-s.trans_scatter * path / max(s.trans_depth, 0.2));
-    let scattered = around(-s.n) / PI;
+    // Scattered on forward, light clouds the glass less (its transport mean free path is longer)
+    // and what clouds it is more of what is seen through it, blurred; turned back, more, and
+    // of the light on the eye's side.
+    let cloud = 1.0 - exp(-s.trans_scatter * path * (1.0 - 0.5 * s.trans_g) / max(s.trans_depth, 0.2));
+    var scattered = around(-s.n) / PI;
+    if (s.trans_g > 0.0) {
+        let ahead = select(refract(-v, s.n, 1.0 / s.ior), -v, s.thin);
+        scattered = mix(scattered, from_around(ahead, 0.6), s.trans_g);
+    } else if (s.trans_g < 0.0) {
+        scattered = mix(scattered, around(s.n) / PI, -s.trans_g);
+    }
     return mix(seen, scattered, clamp(cloud, vec3<f32>(0.0), vec3<f32>(1.0))) * tint;
 }
 
@@ -711,7 +740,11 @@ fn reflected_around(s: Surface, v: vec3<f32>) -> vec3<f32> {
     }
     let matte_e = s.base * around(s.n) / PI;
     let reach = s.sss_reach;
-    let sss_e = s.sss_color * mix(around(s.n), around_mean(), reach * 0.7) / PI;
+    // Scattered on forward, the light behind comes through toward the eye; turned back, the
+    // light on the eye's side comes back to it.
+    let lit = mix(around(s.n), around_mean(), reach * 0.7);
+    let way = select(around(v), around(-v), s.sss_g > 0.0);
+    let sss_e = s.sss_color * mix(lit, way, abs(s.sss_g) * reach * 0.5) / PI;
     let body = mix(mix(matte_e, sss_e, s.sss), transmitted(s, v), s.trans);
     let dielectric = glossy * spec_e + (1.0 - spec_e) * body;
     var out = mix(dielectric, metal, s.metal) * s.ao;
@@ -719,7 +752,13 @@ fn reflected_around(s: Surface, v: vec3<f32>) -> vec3<f32> {
         let cnv = max(dot(s.cn, v), 1e-4);
         let cdfg = lut_at(cnv, s.coat_rough).xy;
         let coat_e = s.coat * (s.coat_f0 * cdfg.x + cdfg.y);
-        let coat = from_around(reflect(-v, s.cn), s.coat_rough) * coat_e;
+        // Anisotropic: bent across its tangent, as the base's reflection is.
+        var cbent = s.cn;
+        if (s.coat_aniso > 0.0) {
+            let across = cross(cross(s.cb, v), s.cb);
+            cbent = normalize(mix(s.cn, across, s.coat_aniso * 0.8));
+        }
+        let coat = from_around(reflect(-v, cbent), s.coat_rough) * coat_e;
         out = out * (1.0 - coat_e) * mix(vec3<f32>(1.0), pow(s.coat_color, vec3<f32>(1.0 / max(cnv, 0.1))), s.coat) + coat * s.ao;
     }
     if (s.fuzz > 0.0) {

@@ -146,7 +146,7 @@ usages! {
         "OpenPBR transmission_scatter: the color light is scattered with inside: milky, cloudy glass.";
     TransmissionScatterAnisotropy = 19, "transmission_scatter_anisotropy", "Transmission Anisotropy", Transmission,
         "transmissionscatteranisotropy",
-        "OpenPBR transmission_scatter_anisotropy: whether light scattered inside goes on forward (1) or back (-1).";
+        "OpenPBR transmission_scatter_anisotropy: whether light scattered inside goes on forward (1: the glass clouds less, with what is behind it), evenly (0) or back (-1: milkier). Below 0, its Output writes floats.";
     TransmissionDispersionScale = 20, "transmission_dispersion_scale", "Dispersion Scale", Transmission,
         "transmissiondispersionscale rainbow prism",
         "OpenPBR transmission_dispersion_scale: how much light going through splits into its colors.";
@@ -164,7 +164,7 @@ usages! {
         "OpenPBR subsurface_radius_scale: how far each of red, green and blue goes, of the radius (skin: red the farthest).";
     SubsurfaceScatterAnisotropy = 26, "subsurface_scatter_anisotropy", "Subsurface Anisotropy", Subsurface,
         "subsurfacescatteranisotropy",
-        "OpenPBR subsurface_scatter_anisotropy: whether light scattered under the surface goes on forward (1) or back (-1).";
+        "OpenPBR subsurface_scatter_anisotropy: whether light scattered under the surface goes on forward (1: deeper, glowing through where lit from behind), evenly (0) or back (-1). Below 0, its Output writes floats.";
     CoatWeight = 27, "coat_weight", "Coat Weight", Coat, "coatweight coatopacity clearcoat clear coat varnish",
         "OpenPBR coat_weight: how much of a clear coat lies over the surface: varnish, car paint.";
     CoatColor = 28, "coat_color", "Coat Color", Coat, "coatcolor",
@@ -224,7 +224,7 @@ usages! {
     Refraction = 55, "refraction", "Refraction", Other, "refraction",
         "A refraction map of older engines; the 3D view does not show it.";
     Panorama = 56, "panorama", "Panorama", Environment, "panorama hdri hdr environment equirectangular latlong latitude longitude light",
-        "An environment: a panorama of all around, twice as wide as high (latitude and longitude). The 3D view lights the model with it, as with an environment image.";
+        "An environment: a panorama of all around (across, once round; down, from straight up to straight down). The 3D view is lit by it when its Output node or the lighting menu asks for it, as by an environment image.";
 }
 
 impl Usage {
