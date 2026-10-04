@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The picture of the HDRi template (studio-panorama.jpg is drawn of it: compose.rs, `svg`): the
+     sign of HDR, its letters drawn as lines, in a frame. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <g fill="none" stroke="#ececec" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="26" y="80" width="204" height="96" rx="20" stroke-width="8"/>
+    <g stroke-width="11">
+      <path d="M54,104 V152 M88,104 V152 M54,128 H88"/>
+      <path d="M104,104 V152 H114 A24,24 0 0 0 114,104 Z"/>
+      <path d="M154,152 V104 H170 A12,12 0 0 1 170,128 H154 M168,128 L186,152"/>
+      <path d="M202,104 V152"/>
+    </g>
+  </g>
+</svg>

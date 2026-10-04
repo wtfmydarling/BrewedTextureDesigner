@@ -131,7 +131,7 @@ usages! {
         "OpenPBR specular_color: the tint of the reflection; of a metal, the color at its edges.";
     SpecularRoughnessAnisotropy = 12, "specular_roughness_anisotropy", "Anisotropy", Specular,
         "specularroughnessanisotropy anisotropylevel anisotropy_level brushed",
-        "OpenPBR specular_roughness_anisotropy: how much rougher the surface is across its tangent than along it: brushed metal.";
+        "OpenPBR specular_roughness_anisotropy: how much rougher the surface is along its tangent than across it, its highlights drawn out along the tangent: brushed metal (brushed across it).";
     AnisotropyAngle = 13, "anisotropy_angle", "Anisotropy Angle", Specular, "anisotropyangle rotation",
         "Which way the anisotropy runs: the tangent turned by this much, black to white once round.";
     SpecularIor = 14, "specular_ior", "Specular IOR", Specular, "specularior ior index refraction",

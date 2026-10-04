@@ -24,8 +24,8 @@ pub struct DevOptions {
     pub picture: Option<PathBuf>,
     /// How large the picture is, wide and high (512 square by default).
     pub picture_size: Option<[u32; 2]>,
-    /// The picture in the light of the 3D view (its environment image, behind the model too),
-    /// not the studio's a package's picture has.
+    /// The picture in the light of the 3D view (its environment image, behind the model where
+    /// the view shows it there), not the studio's a package's picture has.
     pub picture_lit: bool,
     /// Export every output of the graph into this folder once everything is computed, as File
     /// → Export writes them, then quit (or take the screenshot or the picture).
@@ -207,6 +207,21 @@ impl App {
                     self.ui.preview.node = Some(id);
                 }
             }
+            // A parameter of the first node of a kind (by its id or name), as the properties would
+            // set it: param:fx_map.depth=2, param:noise.type=weave, param:uniform_color.color=1,0,0.
+            other if other.starts_with("param:") => {
+                let set = other["param:".len()..].split_once('=').and_then(|(target, value)| {
+                    let (kind, key) = target.split_once('.')?;
+                    let id = find_kind(&graph, kind)?;
+                    Some((id, key.to_string(), param_value(graph.node(id)?.def().param(key)?, value)?))
+                });
+                match set {
+                    Some((node, key, value)) => {
+                        let _ = self.doc.apply(Edit::SetParam { node, key, value });
+                    }
+                    None => log::warn!("{other}: no such node, parameter or value"),
+                }
+            }
             // A node of the graph (as a template made it) chosen and shown: its gizmo, if it has one.
             other if other.starts_with("show:") => {
                 if let Some(id) = find_kind(&graph, &other["show:".len()..]) {
@@ -345,6 +360,16 @@ impl App {
             // The 3D view lit by an environment image, as bright and as blurred behind the model
             // as said.
             other if other.starts_with("environment:") => return self.choose_environment(Some(other["environment:".len()..].to_string())),
+            // The light the pictures of the templates' materials are made in (see `preview_light`).
+            // (light:preview-right: the same light from the right of the camera.)
+            "light:preview" | "light:preview-right" => {
+                let (yaw, pitch) = PREVIEW_KEY;
+                let yaw = if scenario.ends_with("-right") { -yaw } else { yaw };
+                let camera = &mut self.ui.preview.view3d;
+                (camera.light_yaw, camera.light_pitch) = (yaw, pitch);
+                let l = &mut self.ui.preview.lighting;
+                (l.file, l.shown, l.key) = (None, Some(std::sync::Arc::new(preview_light(yaw, pitch))), true);
+            }
             other if other.starts_with("exposure:") => self.ui.preview.lighting.exposure = other["exposure:".len()..].parse().unwrap_or(0.0),
             other if other.starts_with("blur:") => self.ui.preview.lighting.blur = other["blur:".len()..].parse().unwrap_or(0.25),
             other => log::warn!("unknown scenario '{other}'"),
@@ -425,6 +450,79 @@ impl App {
 }
 
 /// The first node of a type, by its id or its name ("levels", "tile-sampler").
+/// Where the light of the pictures of the templates' materials comes from: the left of the
+/// camera, a little above it and before the model (the 3D view's light turned: its yaw and its
+/// pitch).
+const PREVIEW_KEY: (f32, f32) = (-1.33, 0.37);
+
+/// The light the pictures of the templates' materials are made in: a dark room and one softbox to
+/// the left of the camera, a little above it and before the model, the studio's key light in it
+/// (the 3D view adds it, see `Lighting::key`), so half of a sphere is lit and half is in
+/// shadow, and a coat or a metal reflects the softbox and the dark around it (not a bright sky
+/// all round, in which the edge of a coat glows as fuzz does).
+fn preview_light(yaw: f32, pitch: f32) -> crate::environment::Hdri {
+    use std::f32::consts::{PI, TAU};
+    const W: usize = 1024;
+    const H: usize = 512;
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let normalize = |a: [f32; 3]| {
+        let l = dot(a, a).sqrt();
+        [a[0] / l, a[1] / l, a[2] / l]
+    };
+    let smoothstep = |a: f32, b: f32, x: f32| {
+        let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    // The softbox: where the key light is (the camera looks along -z), facing the model, its
+    // axes and how large it is (half, as far as it is).
+    let key = [pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()];
+    let right = normalize([key[2], 0.0, -key[0]]);
+    let up = [right[1] * key[2] - right[2] * key[1], right[2] * key[0] - right[0] * key[2], right[0] * key[1] - right[1] * key[0]];
+    let half = [0.45, 0.6];
+    // The 3D view turns its environment by the light's turn.
+    let (s, c) = yaw.sin_cos();
+    let mut rgb = Vec::with_capacity(W * H * 3);
+    for y in 0..H {
+        for x in 0..W {
+            let (phi, theta) = (((x as f32 + 0.5) / W as f32 - 0.5) * TAU, (y as f32 + 0.5) / H as f32 * PI);
+            let p = [theta.sin() * phi.sin(), theta.cos(), -theta.sin() * phi.cos()];
+            // The direction in the scene: the panorama's turned back.
+            let d = [c * p[0] - s * p[2], p[1], c * p[2] + s * p[0]];
+            // The room: dark, a little lighter above.
+            let room = 0.01 + 0.012 * (d[1] * 0.5 + 0.5);
+            let facing = dot(d, key);
+            let mut light = 0.0;
+            if facing > 0.05 {
+                let q = [d[0] / facing - key[0], d[1] / facing - key[1], d[2] / facing - key[2]];
+                let edge = (dot(q, right) / half[0]).abs().max((dot(q, up) / half[1]).abs());
+                light = 3.0 * (1.0 - smoothstep(0.85, 1.0, edge));
+            }
+            rgb.extend([room * 0.9 + light, room * 0.95 + light * 0.97, room + light * 0.93]);
+        }
+    }
+    crate::environment::Hdri::new("the pictures' light".into(), W, H, rgb)
+}
+
+/// `text` as a value of `param`: a number, numbers apart by commas (a vector, a color), an
+/// option by its id or its place, true or false, or words.
+fn param_value(param: &brewed_texture_core::nodes::ParamDef<'_>, text: &str) -> Option<ParamValue> {
+    use brewed_texture_core::nodes::ParamKind;
+    let numbers: Vec<f32> = text.split(',').map(|n| n.trim().parse::<f32>()).collect::<Result<_, _>>().unwrap_or_default();
+    Some(match param.kind {
+        ParamKind::Float { .. } => ParamValue::Float(*numbers.first()?),
+        ParamKind::Int { .. } => ParamValue::Int(text.trim().parse().ok()?),
+        ParamKind::Bool { .. } => ParamValue::Bool(text.trim().parse().ok()?),
+        ParamKind::Vec2 { .. } => ParamValue::Vec2([*numbers.first()?, *numbers.get(1).or(numbers.first())?]),
+        ParamKind::Color { .. } => {
+            let c = |i: usize| numbers.get(i).or(numbers.first()).copied();
+            ParamValue::Color([c(0)?, c(1)?, c(2)?, numbers.get(3).copied().unwrap_or(1.0)])
+        }
+        ParamKind::Enum { ids, .. } => ParamValue::Enum(ids.iter().position(|id| *id == text.trim()).map(|i| i as u32).or_else(|| text.trim().parse().ok())?),
+        ParamKind::Text { .. } | ParamKind::Expression { .. } | ParamKind::File { .. } => ParamValue::Text(text.into()),
+        _ => return None,
+    })
+}
+
 fn find_kind(graph: &Graph, name: &str) -> Option<NodeId> {
     let name = name.to_lowercase().replace([' ', '-'], "_");
     graph

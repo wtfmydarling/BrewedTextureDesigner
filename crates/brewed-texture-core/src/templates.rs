@@ -85,9 +85,11 @@ struct Map(&'static str, [f32; 4], bool, Usage);
 const fn gray(v: f32) -> [f32; 4] {
     [v, v, v, 1.0]
 }
-/// A normal straight out of the surface, and a tangent along u, as their maps say them.
+/// A normal straight out of the surface, and a tangent along u, as their maps say them; a
+/// tangent up the texture (along v), which draws the highlights of a sphere out up and down.
 const FLAT: [f32; 4] = [0.5, 0.5, 1.0, 1.0];
 const ALONG: [f32; 4] = [1.0, 0.5, 0.5, 1.0];
+const UPWARD: [f32; 4] = [0.5, 1.0, 0.5, 1.0];
 
 /// The maps of each OpenPBR template, in the order Substance Designer lists them, of the values
 /// its templates have: the base of each is of a material its layer is for (brushed metal, car
@@ -104,11 +106,13 @@ const BASE: &[Map] = &[
 const ANISOTROPY: &[Map] = &[
     Map("base_color", gray(0.8), false, Usage::BaseColor),
     Map("base_metalness", gray(1.0), true, Usage::Metallic),
-    Map("specular_roughness", gray(0.25), true, Usage::Roughness),
-    Map("specular_roughness_anisotropy", gray(0.95), true, Usage::SpecularRoughnessAnisotropy),
+    // (Drawn out, not to a hairline: a hairline along the sphere looks like a seam.)
+    Map("specular_roughness", gray(0.3), true, Usage::Roughness),
+    Map("specular_roughness_anisotropy", gray(0.7), true, Usage::SpecularRoughnessAnisotropy),
     Map("height", gray(0.5), true, Usage::Height),
     Map("normal", FLAT, false, Usage::Normal),
-    Map("tangent", ALONG, false, Usage::Tangent),
+    // (Up the texture: its highlights stand up and down, where they are seen best.)
+    Map("tangent", UPWARD, false, Usage::Tangent),
     Map("ambient_occlusion", gray(1.0), true, Usage::AmbientOcclusion),
 ];
 const COAT: &[Map] = &[
@@ -125,12 +129,14 @@ const COAT: &[Map] = &[
     Map("coat_roughness_anisotropy", gray(0.0), true, Usage::CoatRoughnessAnisotropy),
     Map("coat_tangent", ALONG, false, Usage::CoatTangent),
 ];
+// Skin: its color, light going farther under it the redder it is.
 const SUBSURFACE: &[Map] = &[
-    Map("base_color", gray(0.9), false, Usage::BaseColor),
-    Map("specular_roughness", gray(0.5), true, Usage::Roughness),
+    Map("base_color", [0.8, 0.56, 0.46, 1.0], false, Usage::BaseColor),
+    Map("specular_roughness", gray(0.45), true, Usage::Roughness),
     Map("subsurface_weight", gray(1.0), true, Usage::SubsurfaceWeight),
-    Map("subsurface_color", gray(0.9), false, Usage::SubsurfaceColor),
-    Map("subsurface_radius_scale", [1.0, 0.5, 0.5, 1.0], false, Usage::SubsurfaceRadiusScale),
+    Map("subsurface_color", [0.85, 0.58, 0.47, 1.0], false, Usage::SubsurfaceColor),
+    Map("subsurface_radius", gray(0.6), true, Usage::SubsurfaceRadius),
+    Map("subsurface_radius_scale", [1.0, 0.35, 0.2, 1.0], false, Usage::SubsurfaceRadiusScale),
     Map("height", gray(0.5), true, Usage::Height),
     Map("normal", FLAT, false, Usage::Normal),
     Map("ambient_occlusion", gray(1.0), true, Usage::AmbientOcclusion),
@@ -139,9 +145,11 @@ const FUZZ: &[Map] = &[
     Map("base_color", [0.0, 0.28, 0.4, 1.0], false, Usage::BaseColor),
     Map("base_metalness", gray(0.0), true, Usage::Metallic),
     Map("specular_roughness", gray(0.8), true, Usage::Roughness),
-    Map("fuzz_weight", gray(1.0), true, Usage::FuzzWeight),
+    // A fine fuzz, as a peach's or a kiwi's: a little of it, its fibers spread, a haze over the
+    // color more than a glow at the edges.
+    Map("fuzz_weight", gray(0.35), true, Usage::FuzzWeight),
     Map("fuzz_color", gray(1.0), false, Usage::FuzzColor),
-    Map("fuzz_roughness", gray(0.5), true, Usage::FuzzRoughness),
+    Map("fuzz_roughness", gray(0.6), true, Usage::FuzzRoughness),
     Map("height", gray(0.5), true, Usage::Height),
     Map("normal", FLAT, false, Usage::Normal),
     Map("ambient_occlusion", gray(1.0), true, Usage::AmbientOcclusion),
@@ -494,6 +502,7 @@ impl Template {
                 );
                 set(&mut g, fx, "count", ParamValue::Int(256));
                 set(&mut g, fx, "pattern", ParamValue::Enum(2));
+                set(&mut g, fx, "depth", ParamValue::Int(2));
                 let _ = g.connect(across, "o:value", fx, &crate::graph::var_socket_key("x_amount"));
                 let _ = g.connect(down, "o:value", fx, &crate::graph::var_socket_key("y_amount"));
                 let out = output(&mut g, "output", 0, [400.0, 0.0]);

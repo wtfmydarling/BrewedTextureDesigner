@@ -329,7 +329,9 @@ fn fuzz_lobe(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, alpha: f32) -> f32 {
     let h = normalize(v + l);
     let nh = dot(n, h);
     let d = (2.0 + 1.0 / alpha) * pow(max(1.0 - nh * nh, 0.0), 0.5 / alpha) / (2.0 * PI);
-    return d / (4.0 * (nl + nv - nl * nv)) * nl;
+    // (Fading out as the light comes ever more along them, as the fibers shade one another: the
+    // visibility alone would keep their sheen up to the edge, seen edge on.)
+    return d / (4.0 * (nl + nv - nl * nv)) * nl * smoothstep(0.0, 0.35, nl);
 }
 
 // How much of the light around a lobe of `rough` reflects, seen at cosine `nv` (shading.rs:
@@ -715,17 +717,32 @@ fn transmitted(s: Surface, v: vec3<f32>) -> vec3<f32> {
 }
 
 // The light all around reflected toward the eye, each layer of the material.
+// The light around a lobe of roughness `rough` about `n` reflects toward the eye: as blurred as
+// it is rough; anisotropic, drawn out along the tangent `t` as far as the lobe is rougher that
+// way: the light read at points along it, the normal leaning as far each way as the lobe
+// reaches along the tangent, less toward the ends, each as blurred as the lobe is across (and
+// enough that the points run into one another).
+fn glossy_around(n: vec3<f32>, t: vec3<f32>, v: vec3<f32>, rough: f32, aniso: f32) -> vec3<f32> {
+    if (aniso <= 0.0) {
+        return from_around(reflect(-v, n), rough);
+    }
+    let a = alphas(rough, aniso);
+    let blur = max(sqrt(a.y), sqrt(a.x) * 0.6);
+    var sum = vec3<f32>(0.0);
+    var weights = 0.0;
+    for (var k = 0; k < 16; k = k + 1) {
+        let along = (f32(k) + 0.5) / 16.0 * 2.0 - 1.0;
+        let w = 1.0 - along * along;
+        sum = sum + from_around(reflect(-v, normalize(n + t * along * a.x * 1.5)), blur) * w;
+        weights = weights + w;
+    }
+    return sum / weights;
+}
+
 fn reflected_around(s: Surface, v: vec3<f32>) -> vec3<f32> {
     let nv = max(dot(s.n, v), 1e-4);
     let dfg = lut_at(nv, s.rough).xy;
-    // Anisotropic: the reflection bent across the tangent, as stretched as the lobe (Filament).
-    var bent = s.n;
-    if (s.aniso > 0.0) {
-        let across = cross(cross(s.b, v), s.b);
-        bent = normalize(mix(s.n, across, s.aniso * 0.8));
-    }
-    let r = reflect(-v, bent);
-    let glossy = from_around(r, s.rough);
+    let glossy = glossy_around(s.n, s.t, v, s.rough, s.aniso);
     // Metal: its color head on, the tint toward its edges.
     var metal_e = s.base * dfg.x + s.spec_color * dfg.y;
     if (s.film > 0.0) {
@@ -752,18 +769,18 @@ fn reflected_around(s: Surface, v: vec3<f32>) -> vec3<f32> {
         let cnv = max(dot(s.cn, v), 1e-4);
         let cdfg = lut_at(cnv, s.coat_rough).xy;
         let coat_e = s.coat * (s.coat_f0 * cdfg.x + cdfg.y);
-        // Anisotropic: bent across its tangent, as the base's reflection is.
-        var cbent = s.cn;
-        if (s.coat_aniso > 0.0) {
-            let across = cross(cross(s.cb, v), s.cb);
-            cbent = normalize(mix(s.cn, across, s.coat_aniso * 0.8));
-        }
-        let coat = from_around(reflect(-v, cbent), s.coat_rough) * coat_e;
+        // (Anisotropic, drawn out along its tangent, as the base's reflection is.)
+        let coat = glossy_around(s.cn, s.ct, v, s.coat_rough, s.coat_aniso) * coat_e;
         out = out * (1.0 - coat_e) * mix(vec3<f32>(1.0), pow(s.coat_color, vec3<f32>(1.0 / max(cnv, 0.1))), s.coat) + coat * s.ao;
     }
     if (s.fuzz > 0.0) {
         let e = lut_at(nv, s.fuzz_rough).z;
-        let fuzz = s.fuzz * s.fuzz_color * e * 0.5 * (around(s.n) / PI + from_around(reflect(-v, s.n), s.fuzz_rough));
+        // Fibers catch light that comes along the surface, not as a mirror does whatever their
+        // roughness: the light around, and the light toward the surface's horizon past the
+        // reflection, blurred all the way.
+        let r = reflect(-v, s.n);
+        let skim = normalize(r - s.n * dot(r, s.n) * 0.8);
+        let fuzz = s.fuzz * s.fuzz_color * e * 0.5 * (around(s.n) / PI + from_around(skim, 1.0));
         out = out * (1.0 - s.fuzz * max(s.fuzz_color.r, max(s.fuzz_color.g, s.fuzz_color.b)) * e) + fuzz * s.ao;
     }
     return out;
@@ -803,12 +820,15 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let s = surface_of(i, front);
     let v = normalize(u.eye.xyz - i.world);
     var color = reflected_around(s, v);
-    if (!lit_by_image()) {
-        // The studio's key light and the fill light opposite it.
+    // The studio's key light, and the fill light opposite it; over an environment image, the
+    // key light only where it is asked for too (u.flags.x).
+    if (!lit_by_image() || u.flags.x != 0u) {
         let key = normalize(u.light.xyz);
-        let fill = normalize(vec3<f32>(-key.x, 0.3, -key.z));
         color = color + reflected(s, v, key) * vec3<f32>(3.2, 3.05, 2.85);
-        color = color + reflected(s, v, fill) * vec3<f32>(0.45, 0.5, 0.6);
+        if (!lit_by_image()) {
+            let fill = normalize(vec3<f32>(-key.x, 0.3, -key.z));
+            color = color + reflected(s, v, fill) * vec3<f32>(0.45, 0.5, 0.6);
+        }
     }
     color = color + glow(s, v);
     return on_screen(color * u.params.z, s.opacity);

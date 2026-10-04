@@ -76,9 +76,9 @@ tools for developing the program:
                    learn, home-about, example:ID (brick-wall, fx-maps, pixel-math), gradient, math, levels, inputs, transform, tiling, dialog, tile,
                    choices, usage, lighting-menu, tile-sampler, shape:NAME (matball …),
                    settings, settings:PAGE, shortcuts, about, notices, new-graph, export, versions,
-                   template:ID (pbr, studio-panorama, scan-processing …), show:KIND, graph:NAME,
+                   template:ID (pbr, studio-panorama, scan-processing …), show:KIND, param:KIND.KEY=VALUE, graph:NAME,
                    picture:INPUT=FILE, uniform:OUTPUT=V[,G,B], size:N,
-                   environment:FILE, exposure:EV, blur:0..1; several joined by ';'
+                   environment:FILE, light:preview(-right), exposure:EV, blur:0..1; several joined by ';'
   --select KIND    select the first node of this type (e.g. math, levels)
   --preview KIND   show the first node of this type in the 2D view
   --contact-sheet  render every node type (or the demo graph) into one image

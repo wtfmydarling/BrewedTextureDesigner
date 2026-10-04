@@ -161,6 +161,10 @@ pub struct Lighting {
     /// node or the menu asked: none at first (a panorama being made is not what one wants to see
     /// a material in), and none again once the studio or an image is chosen.
     pub panorama: Option<brewed_texture_core::graph::NodeId>,
+    /// Whether the studio's key light lights the model over an environment image too: the
+    /// pictures of the templates' materials are made so (see `app::dev`), their softbox's
+    /// highlights drawn out by an anisotropy, a fuzz's sheen along its edges.
+    pub key: bool,
 }
 
 /// How many environment images the menu offers again.
@@ -180,6 +184,7 @@ impl Default for Lighting {
             blur: 0.25,
             menu: false,
             panorama: None,
+            key: false,
         }
     }
 }
@@ -453,7 +458,8 @@ fn projected(camera: &Camera, aspect: f32, points: impl Iterator<Item = [f32; 3]
 
 /// A picture of the model the 3D view shows, `size` pixels wide and high, framed as
 /// [`picture_camera`] frames it; in the light of the view (`lit`: its environment image, behind
-/// the model too, and its exposure) or as the view starts: from
+/// the model where the view shows it there, its exposure, and its light where it is turned) or
+/// as the view starts: from
 /// its first camera (see [`picture_camera`]), in the studio's light as bright as it is made,
 /// on the studio's background: what lists of packages show of one (see `app::home`), the same
 /// whatever the view was left at. None when the model wears no map of the graph's (nothing of
@@ -464,17 +470,21 @@ pub fn picture(app: &App, pipeline: &mut Option<Pipeline>, gpu: &crate::gpu::Gpu
     if maps.is_empty() {
         return None;
     }
-    let camera = picture_camera(app.ui.preview.view3d, size[0] as f32 / size[1].max(1) as f32);
+    let mut camera = picture_camera(app.ui.preview.view3d, size[0] as f32 / size[1].max(1) as f32);
     let l = &app.ui.preview.lighting;
     let primitive = match lit {
-        true => Primitive {
-            camera,
-            maps,
-            environment: app.environment_shown(),
-            exposure: l.exposure.clamp(-12.0, 12.0).exp2(),
-            background: Some(l.blur.clamp(0.0, 1.0)),
-        },
-        false => Primitive { camera, maps, environment: None, exposure: 1.0, background: None },
+        true => {
+            (camera.light_yaw, camera.light_pitch) = (app.ui.preview.view3d.light_yaw, app.ui.preview.view3d.light_pitch);
+            Primitive {
+                camera,
+                maps,
+                environment: app.environment_shown(),
+                exposure: l.exposure.clamp(-12.0, 12.0).exp2(),
+                background: l.background.then(|| l.blur.clamp(0.0, 1.0)),
+                key: l.key,
+            }
+        }
+        false => Primitive { camera, maps, environment: None, exposure: 1.0, background: None, key: false },
     };
     render(&primitive, pipeline, &gpu.device, &gpu.queue, size)
 }
@@ -567,6 +577,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         environment: app.environment_shown(),
         exposure: l.exposure.clamp(-12.0, 12.0).exp2(),
         background: l.background.then_some(l.blur.clamp(0.0, 1.0)),
+        key: l.key,
     };
     let mut layers: Vec<Element<'_, Message>> = vec![shader_widget(scene).width(Length::Fill).height(Length::Fill).into()];
     if missing {
@@ -610,6 +621,8 @@ pub struct Scene {
     exposure: f32,
     /// How blurred the environment image shows behind the model; `None`, it does not.
     background: Option<f32>,
+    /// The studio's key light over the environment image too (see `Lighting::key`).
+    key: bool,
 }
 
 #[derive(Default)]
@@ -698,6 +711,7 @@ impl shader::Program<Message> for Scene {
             environment: self.environment.clone(),
             exposure: self.exposure,
             background: self.background,
+            key: self.key,
         }
     }
 
@@ -719,6 +733,7 @@ pub struct Primitive {
     environment: Option<Arc<Hdri>>,
     exposure: f32,
     background: Option<f32>,
+    key: bool,
 }
 
 // ---------------------------------------------------------------------------- math
@@ -1078,7 +1093,7 @@ impl shader::Primitive for Primitive {
             eye: [eye[0], eye[1], eye[2], 1.0],
             light: [light[0], light[1], light[2], 1.0],
             params: [c.displacement, c.tiling, self.exposure, 0.0],
-            flags: [0, u32::from(pipeline.srgb), 0, u32::from(env.is_some())],
+            flags: [u32::from(self.key), u32::from(pipeline.srgb), 0, u32::from(env.is_some())],
             turn: [c.light_yaw.cos(), c.light_yaw.sin(), 0.0, 0.0],
             levels: [background.unwrap_or_default(), glossy_top as f32, 0.0, 0.0],
             right: [right[0] * half * aspect, right[1] * half * aspect, right[2] * half * aspect, 0.0],
@@ -1219,7 +1234,7 @@ mod tests {
                 .collect();
             let maps = shading::of(found.iter().map(|(u, img)| (*u, *img)));
             let camera = picture_camera(Camera { shape: Shape::Sphere, ..Camera::default() }, 1.0);
-            let primitive = Primitive { camera, maps, environment: None, exposure: 1.0, background: None };
+            let primitive = Primitive { camera, maps, environment: None, exposure: 1.0, background: None, key: false };
             render(&primitive, &mut pipeline, &device, &queue, [SIDE, SIDE]).expect("a picture")
         };
         // The template, with the Output named `name` fed `value` instead.
@@ -1293,19 +1308,23 @@ mod tests {
         keep("fuzz-off", &no_fuzz);
         assert!(rim(&fuzz) > rim(&no_fuzz) + 8.0, "the fuzz at the edges: {} over {}", rim(&fuzz), rim(&no_fuzz));
 
-        // The anisotropy: its highlight is drawn out one way more than the other.
-        let spread = |img: &::image::RgbaImage| {
+        // The anisotropy: its highlight is drawn out up and down (the template's tangent runs up
+        // the texture), as far as it is across: the bright pixels about the brightest (not those
+        // of the fill light's highlight, far off), how much higher than wide they reach.
+        let tall = |img: &::image::RgbaImage| {
             let top = peak(img) * 0.85;
-            let bright: Vec<(u32, u32)> = img.enumerate_pixels().filter(|(_, _, p)| lum(p) >= top).map(|(x, y, _)| (x, y)).collect();
+            let (px, py, _) = img.enumerate_pixels().max_by(|a, b| lum(a.2).total_cmp(&lum(b.2))).expect("pixels");
+            let near = |x: u32, y: u32| (x.abs_diff(px).pow(2) + y.abs_diff(py).pow(2)) as f32 <= (SIDE as f32 / 4.0).powi(2);
+            let bright: Vec<(u32, u32)> = img.enumerate_pixels().filter(|(x, y, p)| lum(p) >= top && near(*x, *y)).map(|(x, y, _)| (x, y)).collect();
             let w = bright.iter().map(|b| b.0).max().unwrap_or(0) - bright.iter().map(|b| b.0).min().unwrap_or(0) + 1;
             let h = bright.iter().map(|b| b.1).max().unwrap_or(0) - bright.iter().map(|b| b.1).min().unwrap_or(0) + 1;
-            (w.max(h) as f32) / (w.min(h) as f32)
+            h as f32 / w as f32
         };
         let brushed = draw(&with(Template::Anisotropy, &[]));
         let round = draw(&with(Template::Anisotropy, &[("specular_roughness_anisotropy", gray(0.0))]));
         keep("anisotropy", &brushed);
         keep("anisotropy-off", &round);
-        assert!(spread(&brushed) > spread(&round) * 1.4, "drawn out: {} against {}", spread(&brushed), spread(&round));
+        assert!(tall(&brushed) > tall(&round) * 1.4, "drawn out up and down: {} against {}", tall(&brushed), tall(&round));
 
         // Under the surface: light reaches into the shadow, red the farthest.
         let shade = |img: &::image::RgbaImage| {
@@ -1403,7 +1422,7 @@ mod tests {
                 .collect();
             let maps = shading::of(found.iter().map(|(u, img)| (*u, *img)));
             let camera = picture_camera(Camera { shape: Shape::Sphere, ..Camera::default() }, 1.0);
-            let primitive = Primitive { camera, maps, environment: None, exposure: 1.0, background: None };
+            let primitive = Primitive { camera, maps, environment: None, exposure: 1.0, background: None, key: false };
             render(&primitive, &mut pipeline, &device, &queue, [SIDE, SIDE]).expect("a picture")
         };
         let differ = |a: &::image::RgbaImage, b: &::image::RgbaImage| {
@@ -1432,7 +1451,8 @@ mod tests {
             (U::SpecularColor, vec![], Value([0.1, 0.3, 1.0, 1.0])),
             (U::Roughness, vec![], gray(0.05)),
             (U::SpecularRoughnessAnisotropy, vec![(U::Roughness, gray(0.4))], gray(1.0)),
-            (U::AnisotropyAngle, vec![(U::Roughness, gray(0.4)), (U::SpecularRoughnessAnisotropy, gray(1.0))], gray(0.25)),
+            // (Not all the way anisotropic: a highlight drawn out to a hairline is little turned.)
+            (U::AnisotropyAngle, vec![(U::Roughness, gray(0.4)), (U::SpecularRoughnessAnisotropy, gray(0.7))], gray(0.25)),
             (U::SpecularIor, vec![], gray(3.0)),
             (U::TransmissionWeight, vec![], gray(1.0)),
             (U::TransmissionColor, vec![glass], red),
@@ -1455,7 +1475,7 @@ mod tests {
             (U::CoatIor, vec![coat], gray(3.0)),
             (U::CoatDarkening, vec![coat, (U::BaseColor, red)], gray(0.0)),
             (U::CoatNormal, vec![coat], leaning),
-            (U::CoatTangent, vec![coat, (U::CoatRoughness, gray(0.4)), (U::CoatRoughnessAnisotropy, gray(1.0))], up),
+            (U::CoatTangent, vec![coat, (U::CoatRoughness, gray(0.4)), (U::CoatRoughnessAnisotropy, gray(0.7))], up),
             (U::FuzzWeight, vec![], gray(1.0)),
             (U::FuzzColor, vec![(U::FuzzWeight, gray(1.0))], red),
             (U::FuzzRoughness, vec![(U::FuzzWeight, gray(1.0))], gray(0.1)),
@@ -1467,7 +1487,7 @@ mod tests {
             (U::Opacity, vec![], gray(0.3)),
             (U::ThinWalled, vec![glass], gray(1.0)),
             (U::Normal, vec![], leaning),
-            (U::Tangent, vec![(U::Roughness, gray(0.4)), (U::SpecularRoughnessAnisotropy, gray(1.0))], up),
+            (U::Tangent, vec![(U::Roughness, gray(0.4)), (U::SpecularRoughnessAnisotropy, gray(0.7))], up),
             (U::AmbientOcclusion, vec![], gray(0.2)),
             (U::Height, vec![], gray(1.0)),
             (U::Displacement, vec![], gray(1.0)),
