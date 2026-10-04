@@ -37,8 +37,10 @@ pub struct Camera {
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
-    /// Where the key light of the studio is, around the camera; how far an environment image
-    /// is turned.
+    /// Where the key light of the studio is, in the scene, whichever way the camera looks: how
+    /// far round the vertical axis (which also turns an environment image), and how high
+    /// above the horizon, from on it to straight overhead (never below: a light from under
+    /// the floor is no studio's).
     pub light_yaw: f32,
     pub light_pitch: f32,
     pub shape: Shape,
@@ -93,7 +95,7 @@ impl Camera {
             Move::Light(d) => Camera {
                 // Round and round, never so far that a turn of it is lost in the digits.
                 light_yaw: wrapped(self.light_yaw + d.x * 0.01),
-                light_pitch: (self.light_pitch - d.y * 0.01).clamp(-1.4, 1.5),
+                light_pitch: (self.light_pitch - d.y * 0.01).clamp(0.0, LIGHT_TOP),
                 ..self
             },
             Move::Pan(d) => {
@@ -110,6 +112,16 @@ impl Camera {
             Move::Zoom(f) => Camera { distance: (self.distance * f).clamp(1.6, 14.0), ..self },
         }
     }
+}
+
+/// How high the key light goes: all but straight overhead, where turning it would turn nothing.
+const LIGHT_TOP: f32 = 1.5;
+
+/// Which way the key light of the studio shines from, in the scene: where the camera's light
+/// says, whichever way the camera looks (a light that went round with the camera lit every
+/// face it was turned to).
+fn light_direction(c: &Camera) -> [f32; 3] {
+    spherical(c.light_yaw, c.light_pitch.clamp(0.0, LIGHT_TOP))
 }
 
 /// An angle in radians, from -π to π.
@@ -254,7 +266,9 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
     items.push(choice(
         l.file.is_none(),
         "Studio".into(),
-        "A key light and a fill light, turned with the camera, under a sky".into(),
+        "A key light and a fill light under a sky. They stay where they are in the scene while the camera goes round, \
+         so each side of the model is seen lit as it is; right drag turns them, or Turn and Height below"
+            .into(),
         send(PreviewMessage::Environment(None)),
     ));
     for f in &l.recent {
@@ -302,6 +316,18 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
             .on_change(move |v| send(PreviewMessage::Camera(Camera { light_yaw: (v as f32).to_radians(), ..cam })))
             .into(),
     ));
+    if l.file.is_none() {
+        // How high the key light is above the horizon.
+        items.push(field(
+            "Height",
+            number(f64::from(cam.light_pitch.to_degrees()), 0.0, f64::from(LIGHT_TOP.to_degrees()))
+                .limits(0.0, f64::from(LIGHT_TOP.to_degrees()))
+                .decimals(1)
+                .suffix("°")
+                .on_change(move |v| send(PreviewMessage::Camera(Camera { light_pitch: (v as f32).to_radians().clamp(0.0, LIGHT_TOP), ..cam })))
+                .into(),
+        ));
+    }
     if l.file.is_some() {
         items.push(choice(
             l.background,
@@ -984,7 +1010,7 @@ impl shader::Primitive for Primitive {
         let eye = c.eye();
         let aspect = (bounds.width / bounds.height.max(1.0)).max(0.01);
         let view_proj = mul(&perspective(FOV, aspect, 0.05, 50.0), &look_at(eye, c.target, [0.0, 1.0, 0.0]));
-        let light = spherical(c.light_yaw + c.yaw, c.light_pitch);
+        let light = light_direction(c);
         let mut present = 0u32;
         for (i, m) in self.maps.iter().enumerate() {
             if m.is_some() {
@@ -1135,6 +1161,32 @@ mod tests {
         assert!(clip[0].abs() < 1e-5 && clip[1].abs() < 1e-5);
         let depth = clip[2] / clip[3];
         assert!(depth > 0.0 && depth < 1.0, "{depth}");
+    }
+
+    /// The studio's light stays where it is in the scene however the camera goes round, up or
+    /// down: each face of a cube is lit as it is, not whichever one is looked at. Turning the
+    /// light turns it, and it never goes under the horizon.
+    #[test]
+    fn the_light_stays_in_the_scene_when_the_camera_moves() {
+        let start = Camera::default();
+        let light = light_direction(&start);
+        for m in [Move::Orbit(Vector::new(300.0, 0.0)), Move::Orbit(Vector::new(-120.0, 90.0)), Move::Pan(Vector::new(0.4, -0.2)), Move::Zoom(1.7)] {
+            let moved = start.moved(m);
+            assert_ne!((moved.yaw, moved.pitch, moved.target, moved.distance), (start.yaw, start.pitch, start.target, start.distance));
+            assert_eq!(light_direction(&moved), light, "{m:?}");
+        }
+        let turned = start.moved(Move::Light(Vector::new(80.0, 0.0)));
+        assert!(dot(light_direction(&turned), light) < 0.9, "turning the light turns it");
+        let mut low = start;
+        for _ in 0..100 {
+            low = low.moved(Move::Light(Vector::new(0.0, 50.0)));
+        }
+        assert!(light_direction(&low)[1] >= 0.0, "never under the horizon");
+        let mut high = start;
+        for _ in 0..100 {
+            high = high.moved(Move::Light(Vector::new(0.0, -50.0)));
+        }
+        assert!(light_direction(&high)[1] < 1.0, "never straight overhead, where turning would turn nothing");
     }
 
     #[test]
