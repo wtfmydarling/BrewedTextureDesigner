@@ -5,6 +5,7 @@
 //! - `fit IN OUT SIZE`: whole in a square of SIZE pixels, on the views' dark;
 //! - `crop IN OUT X Y W H SIZE`: the part of it at X, Y, W × H, SIZE pixels a side;
 //! - `collage OUT W H IN…`: W × H, a slice of each, cut slanting as `/`;
+//! - `grid OUT SIZE IN…`: a square of SIZE pixels, the pictures in rows and columns of it;
 //! - `gradient OUT SIZE`: from black on the left to white on the right;
 //! - `sheet OUT COLUMNS SIZE IN…`: all of them side by side, to look at at once.
 //!
@@ -42,7 +43,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
             save(&ramp, &path(1)?)
         }
         Some("sheet") => save(&sheet(&rest(4).iter().map(|p| load(p)).collect::<Result<Vec<_>, _>>()?, number(2)?, number(3)?), &path(1)?),
-        _ => Err("--compose square|fit|crop|collage|gradient|sheet … (see compose.rs)".into()),
+        Some("grid") => save(&grid(&rest(3).iter().map(|p| load(p)).collect::<Result<Vec<_>, _>>()?, number(2)?), &path(1)?),
+        _ => Err("--compose square|fit|crop|collage|grid|gradient|sheet … (see compose.rs)".into()),
     }
 }
 
@@ -72,6 +74,20 @@ fn cover(picture: &RgbaImage, w: u32, h: u32) -> RgbaImage {
     let [sw, sh] = [(picture.width() as f32 * scale).ceil() as u32, (picture.height() as f32 * scale).ceil() as u32];
     let scaled = image::imageops::resize(picture, sw.max(w), sh.max(h), FilterType::Lanczos3);
     image::imageops::crop_imm(&scaled, (scaled.width() - w) / 2, (scaled.height() - h) / 2, w, h).to_image()
+}
+
+/// `pictures` in a square `side` pixels a side, as many rows as columns (two for four), each
+/// covering its cell, the cells a line of the dark apart.
+fn grid(pictures: &[RgbaImage], side: u32) -> RgbaImage {
+    let n = (pictures.len().max(1) as f32).sqrt().ceil() as u32;
+    let cell = side / n;
+    let mut out = RgbaImage::from_pixel(side, side, DARK);
+    for (i, p) in pictures.iter().enumerate() {
+        let (col, row) = (i as u32 % n, i as u32 / n);
+        let covered = cover(p, cell - 2, cell - 2);
+        image::imageops::overlay(&mut out, &covered, i64::from(col * cell + 1), i64::from(row * cell + 1));
+    }
+    out
 }
 
 /// The middle of `picture`, square, `side` pixels a side.
