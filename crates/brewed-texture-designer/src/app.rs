@@ -1382,13 +1382,15 @@ impl App {
         }
     }
 
-    /// Output nodes the 3D view uses (one per usage). The 3D view is always on screen, so
-    /// the maps it shows are always kept up to date.
+    /// Output nodes the 3D view uses (one per usage, of those it shows). The 3D view is
+    /// always on screen, so the maps it shows are always kept up to date.
     pub fn material_nodes(&self) -> Vec<NodeId> {
         let mut seen = HashSet::new();
         self.graph()
             .nodes_of(NodeKind::OUTPUT)
-            .filter(|n| n.enum_value("usage") != 0 && seen.insert(n.enum_value("usage")))
+            .filter(|n| {
+                brewed_texture_core::nodes::Usage::of(n.enum_value("usage")).is_some_and(|u| u.shown_in_3d()) && seen.insert(n.enum_value("usage"))
+            })
             .map(|n| n.id)
             .collect()
     }
@@ -1487,7 +1489,7 @@ impl App {
         let Some((current, searched)) = self
             .graph()
             .node(node)
-            .map(|n| (n.enum_value(key) as usize, n.def().param(key).is_some_and(view::choices::searched)))
+            .map(|n| (n.enum_value(key) as usize, n.def().param(key).is_some_and(|pd| view::choices::searched(pd) || !pd.groups.is_empty())))
         else {
             return Task::none();
         };
@@ -1502,7 +1504,7 @@ impl App {
     fn choice_menu_options(&self) -> Option<(Vec<usize>, usize)> {
         let menu = self.ui.choice_menu.as_ref()?;
         let pd = self.graph().node(menu.node)?.def().param(menu.key)?;
-        Some((view::choices::shown(pd, &menu.query), view::choices::columns(pd.enum_options().len())))
+        Some((view::choices::shown(pd, &menu.query), view::choices::columns_of(pd)))
     }
 
     /// Put the keyboard of the open menu on the option `at` of those its search leaves, and

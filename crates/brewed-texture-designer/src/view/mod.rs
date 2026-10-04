@@ -19,6 +19,7 @@ pub mod preview;
 pub mod properties;
 pub mod settings;
 pub mod toolbar;
+pub mod shading;
 pub mod view3d;
 
 use iced::widget::{column, container, mouse_area, opaque, pane_grid, pin, row, space, stack, text, tooltip};

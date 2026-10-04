@@ -5,7 +5,7 @@
 //! opens, made here rather than kept as files: they are what the program makes of them now.
 
 use crate::graph::{Graph, NodeId, Precision};
-use crate::nodes::{NodeKind, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL, USAGE_ROUGHNESS};
+use crate::nodes::{DEPTH_16F, NodeKind, USAGE_BASE_COLOR, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL, USAGE_ROUGHNESS, Usage};
 use crate::package::Package;
 use crate::types::{ParamValue, Value};
 
@@ -77,10 +77,10 @@ pub enum Template {
     Empty,
 }
 
-/// A map of a material template: the Output's name (its file's), the uniform value it is fed
-/// (the standard's default), whether that is gray, and what the 3D view takes it for (none: the
-/// map is written for renderers that read it, the view here shows no such thing).
-struct Map(&'static str, [f32; 4], bool, u32);
+/// A map of a material template: the Output's name (its file's), the uniform value it is fed,
+/// whether that is gray, and its usage (the parameter of OpenPBR it fills, as Substance
+/// Designer's templates give it).
+struct Map(&'static str, [f32; 4], bool, Usage);
 
 const fn gray(v: f32) -> [f32; 4] {
     [v, v, v, 1.0]
@@ -88,110 +88,127 @@ const fn gray(v: f32) -> [f32; 4] {
 /// A normal straight out of the surface, and a tangent along u, as their maps say them.
 const FLAT: [f32; 4] = [0.5, 0.5, 1.0, 1.0];
 const ALONG: [f32; 4] = [1.0, 0.5, 0.5, 1.0];
-const NONE: u32 = 0;
 
-/// The maps of each OpenPBR template, in the order Substance Designer lists them. Each layer's
-/// maps hold the standard's defaults; the base of each template is of a material that layer is
-/// for (brushed metal, car paint, skin, velvet), so that the templates look as what they are.
+/// The maps of each OpenPBR template, in the order Substance Designer lists them, of the values
+/// its templates have: the base of each is of a material its layer is for (brushed metal, car
+/// paint, wax, velvet), the layer on all the way, so that the template is what it is named;
+/// Complete has the standard's defaults (every layer off but the base).
 const BASE: &[Map] = &[
-    Map("base_color", gray(0.8), false, USAGE_BASE_COLOR),
-    Map("base_metalness", gray(0.0), true, USAGE_METALLIC),
-    Map("specular_roughness", gray(0.3), true, USAGE_ROUGHNESS),
-    Map("height", gray(0.5), true, USAGE_HEIGHT),
-    Map("normal", FLAT, false, USAGE_NORMAL),
-    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
+    Map("base_color", gray(0.75), false, Usage::BaseColor),
+    Map("base_metalness", gray(0.0), true, Usage::Metallic),
+    Map("specular_roughness", gray(0.25), true, Usage::Roughness),
+    Map("height", gray(0.5), true, Usage::Height),
+    Map("normal", FLAT, false, Usage::Normal),
+    Map("ambient_occlusion", gray(1.0), true, Usage::AmbientOcclusion),
 ];
 const ANISOTROPY: &[Map] = &[
-    Map("base_color", [0.92, 0.92, 0.95, 1.0], false, USAGE_BASE_COLOR),
-    Map("base_metalness", gray(1.0), true, USAGE_METALLIC),
-    Map("specular_roughness", gray(0.35), true, USAGE_ROUGHNESS),
-    Map("specular_roughness_anisotropy", gray(0.6), true, NONE),
-    Map("height", gray(0.5), true, USAGE_HEIGHT),
-    Map("normal", FLAT, false, USAGE_NORMAL),
-    Map("tangent", ALONG, false, NONE),
-    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
+    Map("base_color", gray(0.8), false, Usage::BaseColor),
+    Map("base_metalness", gray(1.0), true, Usage::Metallic),
+    Map("specular_roughness", gray(0.25), true, Usage::Roughness),
+    Map("specular_roughness_anisotropy", gray(0.95), true, Usage::SpecularRoughnessAnisotropy),
+    Map("height", gray(0.5), true, Usage::Height),
+    Map("normal", FLAT, false, Usage::Normal),
+    Map("tangent", ALONG, false, Usage::Tangent),
+    Map("ambient_occlusion", gray(1.0), true, Usage::AmbientOcclusion),
 ];
 const COAT: &[Map] = &[
-    Map("base_color", [0.55, 0.04, 0.05, 1.0], false, USAGE_BASE_COLOR),
-    Map("base_metalness", gray(0.0), true, USAGE_METALLIC),
-    Map("specular_roughness", gray(0.45), true, USAGE_ROUGHNESS),
-    Map("coat_weight", gray(1.0), true, NONE),
-    Map("coat_color", gray(1.0), false, NONE),
-    Map("coat_roughness", gray(0.0), true, NONE),
-    Map("height", gray(0.5), true, USAGE_HEIGHT),
-    Map("normal", FLAT, false, USAGE_NORMAL),
-    Map("coat_normal", FLAT, false, NONE),
-    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
-    Map("coat_roughness_anisotropy", gray(0.0), true, NONE),
-    Map("coat_tangent", ALONG, false, NONE),
+    Map("base_color", [0.5, 0.13, 0.13, 1.0], false, Usage::BaseColor),
+    Map("base_metalness", gray(1.0), true, Usage::Metallic),
+    Map("specular_roughness", gray(0.5), true, Usage::Roughness),
+    Map("coat_weight", gray(1.0), true, Usage::CoatWeight),
+    Map("coat_color", gray(1.0), false, Usage::CoatColor),
+    Map("coat_roughness", gray(0.05), true, Usage::CoatRoughness),
+    Map("height", gray(0.5), true, Usage::Height),
+    Map("normal", FLAT, false, Usage::Normal),
+    Map("coat_normal", FLAT, false, Usage::CoatNormal),
+    Map("ambient_occlusion", gray(1.0), true, Usage::AmbientOcclusion),
+    Map("coat_roughness_anisotropy", gray(0.0), true, Usage::CoatRoughnessAnisotropy),
+    Map("coat_tangent", ALONG, false, Usage::CoatTangent),
 ];
 const SUBSURFACE: &[Map] = &[
-    Map("base_color", [0.82, 0.58, 0.47, 1.0], false, USAGE_BASE_COLOR),
-    Map("specular_roughness", gray(0.5), true, USAGE_ROUGHNESS),
-    Map("subsurface_weight", gray(1.0), true, NONE),
-    Map("subsurface_color", [0.9, 0.45, 0.35, 1.0], false, NONE),
-    Map("subsurface_radius_scale", [1.0, 0.5, 0.25, 1.0], false, NONE),
-    Map("height", gray(0.5), true, USAGE_HEIGHT),
-    Map("normal", FLAT, false, USAGE_NORMAL),
-    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
+    Map("base_color", gray(0.9), false, Usage::BaseColor),
+    Map("specular_roughness", gray(0.5), true, Usage::Roughness),
+    Map("subsurface_weight", gray(1.0), true, Usage::SubsurfaceWeight),
+    Map("subsurface_color", gray(0.9), false, Usage::SubsurfaceColor),
+    Map("subsurface_radius_scale", [1.0, 0.5, 0.5, 1.0], false, Usage::SubsurfaceRadiusScale),
+    Map("height", gray(0.5), true, Usage::Height),
+    Map("normal", FLAT, false, Usage::Normal),
+    Map("ambient_occlusion", gray(1.0), true, Usage::AmbientOcclusion),
 ];
 const FUZZ: &[Map] = &[
-    Map("base_color", [0.28, 0.07, 0.36, 1.0], false, USAGE_BASE_COLOR),
-    Map("base_metalness", gray(0.0), true, USAGE_METALLIC),
-    Map("specular_roughness", gray(0.8), true, USAGE_ROUGHNESS),
-    Map("fuzz_weight", gray(1.0), true, NONE),
-    Map("fuzz_color", gray(1.0), false, NONE),
-    Map("fuzz_roughness", gray(0.5), true, NONE),
-    Map("height", gray(0.5), true, USAGE_HEIGHT),
-    Map("normal", FLAT, false, USAGE_NORMAL),
-    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
+    Map("base_color", [0.0, 0.28, 0.4, 1.0], false, Usage::BaseColor),
+    Map("base_metalness", gray(0.0), true, Usage::Metallic),
+    Map("specular_roughness", gray(0.8), true, Usage::Roughness),
+    Map("fuzz_weight", gray(1.0), true, Usage::FuzzWeight),
+    Map("fuzz_color", gray(1.0), false, Usage::FuzzColor),
+    Map("fuzz_roughness", gray(0.5), true, Usage::FuzzRoughness),
+    Map("height", gray(0.5), true, Usage::Height),
+    Map("normal", FLAT, false, Usage::Normal),
+    Map("ambient_occlusion", gray(1.0), true, Usage::AmbientOcclusion),
 ];
 const COMPLETE: &[Map] = &[
-    Map("base_weight", gray(1.0), true, NONE),
-    Map("base_color", [0.55, 0.66, 0.78, 1.0], false, USAGE_BASE_COLOR),
-    Map("base_metalness", gray(0.0), true, USAGE_METALLIC),
-    Map("base_diffuse_roughness", gray(0.0), true, NONE),
-    Map("specular_weight", gray(1.0), true, NONE),
-    Map("specular_color", gray(1.0), false, NONE),
-    Map("specular_roughness", gray(0.2), true, USAGE_ROUGHNESS),
-    Map("specular_roughness_anisotropy", gray(0.0), true, NONE),
-    Map("specular_ior", gray(1.5), true, NONE),
-    Map("transmission_weight", gray(0.0), true, NONE),
-    Map("transmission_color", gray(1.0), false, NONE),
-    Map("transmission_depth", gray(0.0), true, NONE),
-    Map("transmission_scatter", gray(0.0), false, NONE),
-    Map("transmission_scatter_anisotropy", gray(0.0), true, NONE),
-    Map("transmission_dispersion_scale", gray(0.0), true, NONE),
-    Map("transmission_dispersion_abbe_number", gray(20.0), true, NONE),
-    Map("subsurface_weight", gray(0.0), true, NONE),
-    Map("subsurface_color", gray(0.8), false, NONE),
-    Map("subsurface_radius", gray(1.0), true, NONE),
-    Map("subsurface_radius_scale", [1.0, 0.5, 0.25, 1.0], false, NONE),
-    Map("subsurface_scatter_anisotropy", gray(0.0), true, NONE),
-    Map("coat_weight", gray(0.0), true, NONE),
-    Map("coat_color", gray(1.0), false, NONE),
-    Map("coat_roughness", gray(0.0), true, NONE),
-    Map("coat_roughness_anisotropy", gray(0.0), true, NONE),
-    Map("coat_ior", gray(1.6), true, NONE),
-    Map("coat_darkening", gray(1.0), true, NONE),
-    Map("fuzz_weight", gray(0.0), true, NONE),
-    Map("fuzz_color", gray(1.0), false, NONE),
-    Map("fuzz_roughness", gray(0.5), true, NONE),
-    Map("emission_luminance", gray(0.0), true, NONE),
-    // (Black: what the 3D view shows of it glows as bright as its color, whatever the luminance.)
-    Map("emission_color", gray(0.0), false, USAGE_EMISSIVE),
-    Map("thin_film_weight", gray(0.0), true, NONE),
-    Map("thin_film_thickness", gray(0.5), true, NONE),
-    Map("thin_film_ior", gray(1.4), true, NONE),
-    Map("opacity", gray(1.0), true, NONE),
-    Map("thin_walled", gray(0.0), true, NONE),
-    Map("height", gray(0.5), true, USAGE_HEIGHT),
-    Map("normal", FLAT, false, USAGE_NORMAL),
-    Map("tangent", ALONG, false, NONE),
-    Map("coat_normal", FLAT, false, NONE),
-    Map("coat_tangent", ALONG, false, NONE),
-    Map("ambient_occlusion", gray(1.0), true, USAGE_AO),
+    Map("base_weight", gray(1.0), true, Usage::BaseWeight),
+    Map("base_color", gray(0.8), false, Usage::BaseColor),
+    Map("base_metalness", gray(0.0), true, Usage::Metallic),
+    Map("base_diffuse_roughness", gray(0.0), true, Usage::BaseDiffuseRoughness),
+    Map("specular_weight", gray(1.0), true, Usage::SpecularWeight),
+    Map("specular_color", gray(1.0), false, Usage::SpecularColor),
+    Map("specular_roughness", gray(0.3), true, Usage::Roughness),
+    Map("specular_roughness_anisotropy", gray(0.0), true, Usage::SpecularRoughnessAnisotropy),
+    Map("specular_ior", gray(1.5), true, Usage::SpecularIor),
+    Map("transmission_weight", gray(0.0), true, Usage::TransmissionWeight),
+    Map("transmission_color", gray(1.0), false, Usage::TransmissionColor),
+    Map("transmission_depth", gray(0.0), true, Usage::TransmissionDepth),
+    Map("transmission_scatter", gray(0.0), false, Usage::TransmissionScatter),
+    Map("transmission_scatter_anisotropy", gray(0.0), true, Usage::TransmissionScatterAnisotropy),
+    Map("transmission_dispersion_scale", gray(0.0), true, Usage::TransmissionDispersionScale),
+    Map("transmission_dispersion_abbe_number", gray(20.0), true, Usage::TransmissionDispersionAbbeNumber),
+    Map("subsurface_weight", gray(0.0), true, Usage::SubsurfaceWeight),
+    Map("subsurface_color", gray(0.8), false, Usage::SubsurfaceColor),
+    Map("subsurface_radius", gray(1.0), true, Usage::SubsurfaceRadius),
+    Map("subsurface_radius_scale", [1.0, 0.5, 0.25, 1.0], false, Usage::SubsurfaceRadiusScale),
+    Map("subsurface_scatter_anisotropy", gray(0.0), true, Usage::SubsurfaceScatterAnisotropy),
+    Map("coat_weight", gray(0.0), true, Usage::CoatWeight),
+    Map("coat_color", gray(1.0), false, Usage::CoatColor),
+    Map("coat_roughness", gray(0.0), true, Usage::CoatRoughness),
+    Map("coat_roughness_anisotropy", gray(0.0), true, Usage::CoatRoughnessAnisotropy),
+    Map("coat_ior", gray(1.6), true, Usage::CoatIor),
+    Map("coat_darkening", gray(1.0), true, Usage::CoatDarkening),
+    Map("fuzz_weight", gray(0.0), true, Usage::FuzzWeight),
+    Map("fuzz_color", gray(1.0), false, Usage::FuzzColor),
+    Map("fuzz_roughness", gray(0.5), true, Usage::FuzzRoughness),
+    Map("emission_luminance", gray(0.0), true, Usage::EmissionLuminance),
+    Map("emission_color", gray(1.0), false, Usage::Emissive),
+    Map("thin_film_weight", gray(0.0), true, Usage::ThinFilmWeight),
+    Map("thin_film_thickness", gray(0.5), true, Usage::ThinFilmThickness),
+    Map("thin_film_ior", gray(1.4), true, Usage::ThinFilmIor),
+    Map("opacity", gray(1.0), true, Usage::Opacity),
+    Map("thin_walled", gray(0.0), true, Usage::ThinWalled),
+    Map("height", gray(0.5), true, Usage::Height),
+    Map("normal", FLAT, false, Usage::Normal),
+    Map("tangent", ALONG, false, Usage::Tangent),
+    Map("coat_normal", FLAT, false, Usage::CoatNormal),
+    Map("coat_tangent", ALONG, false, Usage::CoatTangent),
+    Map("ambient_occlusion", gray(1.0), true, Usage::AmbientOcclusion),
 ];
+
+/// Whether a map of `usage` holds values past 1 (an index of refraction, a distance, a
+/// luminance, an Abbe number): its Output writes floats, which keep them; eight bits would
+/// cut them to 1.
+fn past_one(usage: Usage) -> bool {
+    matches!(
+        usage,
+        Usage::SpecularWeight
+            | Usage::SpecularIor
+            | Usage::TransmissionDepth
+            | Usage::TransmissionDispersionAbbeNumber
+            | Usage::SubsurfaceRadius
+            | Usage::CoatIor
+            | Usage::EmissionLuminance
+            | Usage::ThinFilmThickness
+            | Usage::ThinFilmIor
+    )
+}
 
 impl Template {
     pub const ALL: [Template; 14] = [
@@ -392,7 +409,7 @@ impl Template {
                             .into(),
                     ),
                 );
-                let panorama = output(&mut g, "output", 0, [340.0, 0.0]);
+                let panorama = output(&mut g, "output", Usage::Panorama.index(), [340.0, 0.0]);
                 // Its three channels, in 32-bit floats: an EXR.
                 set(&mut g, panorama, "format", ParamValue::Enum(1));
                 set(&mut g, panorama, "bit_depth", ParamValue::Enum(crate::nodes::DEPTH_32F));
@@ -546,19 +563,22 @@ fn material(g: &mut Graph, template: Template, maps: &[Map]) {
         let uniform = g.add_node(NodeKind::UNIFORM_COLOR, [x, y]);
         set(g, uniform, "color", ParamValue::Color(*value));
         set(g, uniform, "output", ParamValue::Enum(u32::from(*is_gray)));
-        let out = output(g, name, *usage, [x + 340.0, y]);
+        let out = output(g, name, usage.index(), [x + 340.0, y]);
+        if past_one(*usage) {
+            set(g, out, "bit_depth", ParamValue::Enum(DEPTH_16F));
+        }
         let _ = g.connect(uniform, "o:output", out, "i:input");
     }
     let rows = maps.len().div_ceil(columns) as f32;
-    let shown = if template == Template::Pbr {
-        ""
-    } else {
-        " The 3D view here shows the base of the material (color, metalness, roughness, normal, height, occlusion); \
-         the other maps are written for renderers that read OpenPBR."
+    let layer = match template {
+        Template::Complete => " Every layer is off but the base: give a layer its weight to see it.",
+        Template::Pbr => "",
+        _ => " The layer is on all the way: its weight is 1.",
     };
     let said = format!(
-        "Each Output is one map of an OpenPBR material, named as the standard names it, fed the value the standard \
-         has by default. The uniform colors only hold that value: connect what makes each map in their place.{shown}"
+        "Each Output is one map of an OpenPBR material, named as the standard names it and of the usage of its \
+         parameter, which the 3D view shows it by. The uniform colors only hold a value: connect what makes each \
+         map in their place.{layer}"
     );
     let width = (columns as f32 - 1.0) * PAIR + 568.0;
     let top = said_height(&said, width);

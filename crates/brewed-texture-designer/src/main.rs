@@ -71,7 +71,7 @@ tools for developing the program:
   --compose ...    pictures made of pictures, for the templates and lessons (--compose help)
   --scenario       UI state for the screenshot: add-menu, file-menu, context-menu, home,
                    learn, home-about, example:ID (brick-wall, fx-maps, pixel-math), gradient, math, levels, inputs, transform, tiling, dialog, tile,
-                   choices, lighting-menu, tile-sampler, shape:NAME (mat-ball …),
+                   choices, usage, lighting-menu, tile-sampler, shape:NAME (mat-ball …),
                    settings, settings:PAGE, shortcuts, about, new-graph, export, versions,
                    template:ID (pbr, studio-panorama, scan-processing …), graph:NAME,
                    picture:INPUT=FILE, uniform:OUTPUT=V[,G,B], size:N,

@@ -12,6 +12,7 @@ mod effects;
 mod filters;
 mod generators;
 mod output;
+mod usage;
 mod values;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -36,6 +37,7 @@ pub use output::{
     OUTPUT_FORMATS, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL,
     USAGE_ROUGHNESS, output_format_channels,
 };
+pub use usage::{USAGE_GROUPS, Usage, UsageGroup};
 pub use values::DEFAULT_MATH_EXPRESSION;
 
 // ---------------------------------------------------------------------------- categories
@@ -251,6 +253,11 @@ pub struct ParamDef<'a> {
     /// Words each option is found by in its menu's search besides its name, one string of
     /// words per option (or none).
     pub words: &'static [&'static str],
+    /// The options under headings, in the order their menu shows them: each heading with
+    /// the options under it (none: the options as they are, in their order).
+    pub groups: &'static [(&'static str, &'static [u32])],
+    /// What each option is, said where it is pointed at in its menu (or none).
+    pub tips: &'static [&'static str],
 }
 
 impl<'a> ParamDef<'a> {
@@ -276,6 +283,8 @@ impl<'a> ParamDef<'a> {
             limits: None,
             pictured: false,
             words: &[],
+            groups: &[],
+            tips: &[],
         }
     }
     /// Hold the value to the range of the slider: outside it the parameter means nothing.
@@ -306,6 +315,16 @@ impl<'a> ParamDef<'a> {
     /// Words each option is found by besides its name (one string of words per option).
     pub(crate) const fn searched(mut self, words: &'static [&'static str]) -> Self {
         self.words = words;
+        self
+    }
+    /// Show the options under headings: each heading with the options under it, in order.
+    pub(crate) const fn grouped(mut self, groups: &'static [(&'static str, &'static [u32])]) -> Self {
+        self.groups = groups;
+        self
+    }
+    /// Say what each option is where it is pointed at (one tip per option).
+    pub(crate) const fn explained(mut self, tips: &'static [&'static str]) -> Self {
+        self.tips = tips;
         self
     }
 

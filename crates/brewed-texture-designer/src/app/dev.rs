@@ -222,6 +222,14 @@ impl App {
                     let _ = self.open_choice_menu(id, "type");
                 }
             }
+            // The menu of an Output's usage, under its headings.
+            "usage" => {
+                if let Some(id) = first(NodeKind::OUTPUT) {
+                    self.ui.selection = [id].into_iter().collect();
+                    self.ui.preview.node = Some(id);
+                    let _ = self.open_choice_menu(id, "usage");
+                }
+            }
             "dialog" => {
                 let _ = self.doc.apply(Edit::SetResolution([1024, 1024]));
                 self.ui.dialog = Some(Dialog::Unsaved(PendingAction::Quit));
@@ -348,9 +356,11 @@ impl App {
             && self.res.materials.len() >= self.material_nodes().len()
             // ...and is lit by its environment image.
             && self.ui.preview.lighting.reading.is_none()
-            // An open menu of pictures shows all of them.
+            // An open menu of pictures shows all of them (one of names has none to wait for).
             && self.ui.choice_menu.as_ref().is_none_or(|m| {
-                self.graph().node(m.node).is_some_and(|n| self.res.choices.contains_key(&(n.kind.id(), m.key)))
+                self.graph().node(m.node).is_some_and(|n| {
+                    n.def().param(m.key).is_none_or(|pd| !pd.pictured) || self.res.choices.contains_key(&(n.kind.id(), m.key))
+                })
             });
         if !settled || self.started.elapsed() < Duration::from_secs(3) {
             if self.started.elapsed() > Duration::from_secs(30) {

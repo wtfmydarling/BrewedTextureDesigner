@@ -669,6 +669,10 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
         (ParamKind::Enum { .. }, ParamValue::Enum(v)) if pd.pictured && node.def().param(key).is_some() => {
             crate::view::choices::field(app, node, node.def().param(key).expect("checked"), *v)
         }
+        // (Only a node type's choices are under headings.)
+        (ParamKind::Enum { .. }, ParamValue::Enum(v)) if !pd.groups.is_empty() && node.def().param(key).is_some() => {
+            crate::view::choices::grouped_field(app, node, node.def().param(key).expect("checked"), *v)
+        }
         (ParamKind::Enum { options, .. }, ParamValue::Enum(v)) => {
             let choices: Vec<Choice> = options.iter().enumerate().map(|(i, l)| Choice { index: i as u32, label: l }).collect();
             let selected = choices.get(*v as usize).cloned();

@@ -1,6 +1,7 @@
 //! Graph outputs.
 
 use super::*;
+use super::usage::{USAGE_GROUPS, USAGE_IDS, USAGE_NAMES, USAGE_TIPS, USAGE_WORDS, Usage};
 
 pub const OUTPUT_FORMATS: &[&str] = &["RGBA", "RGB", "RG", "R", "G", "B", "A"];
 const OUTPUT_FORMAT_IDS: &[&str] = &["rgba", "rgb", "rg", "r", "g", "b", "a"];
@@ -60,24 +61,26 @@ pub static OUTPUT: NodeDef = NodeDef {
              compressed as game engines read textures, with its mipmaps. The output keeps its image as it writes it, \
              as the 2D and 3D views show it.",
         ),
-        choice(
-            "usage",
-            "Usage",
-            0,
-            &["Custom", "Base Color", "Normal", "Height", "Roughness", "Metallic", "Ambient Occlusion", "Emissive"],
-            &["custom", "base_color", "normal", "height", "roughness", "metallic", "ambient_occlusion", "emissive"],
-        )
-        .fixed()
-        .tip("What the texture is used for in the 3D view."),
+        choice("usage", "Usage", 0, &USAGE_NAMES, &USAGE_IDS)
+            .fixed()
+            .searched(&USAGE_WORDS)
+            .grouped(USAGE_GROUPS)
+            .explained(&USAGE_TIPS)
+            .tip(
+                "What the map is for, as Substance Designer's usages: the parameter of OpenPBR it fills, the map an older \
+                 workflow reads, or the panorama that lights the scene. The 3D view puts each where it goes; export \
+                 presets find their maps by it.",
+            ),
     ],
     role: Role::Output,
 };
 
-/// Output usages known to the 3D view, in the order of the "usage" parameter.
-pub const USAGE_BASE_COLOR: u32 = 1;
-pub const USAGE_NORMAL: u32 = 2;
-pub const USAGE_HEIGHT: u32 = 3;
-pub const USAGE_ROUGHNESS: u32 = 4;
-pub const USAGE_METALLIC: u32 = 5;
-pub const USAGE_AO: u32 = 6;
-pub const USAGE_EMISSIVE: u32 = 7;
+/// The options of the "usage" parameter the export presets and templates name most (see
+/// [`Usage`] for them all).
+pub const USAGE_BASE_COLOR: u32 = Usage::BaseColor.index();
+pub const USAGE_NORMAL: u32 = Usage::Normal.index();
+pub const USAGE_HEIGHT: u32 = Usage::Height.index();
+pub const USAGE_ROUGHNESS: u32 = Usage::Roughness.index();
+pub const USAGE_METALLIC: u32 = Usage::Metallic.index();
+pub const USAGE_AO: u32 = Usage::AmbientOcclusion.index();
+pub const USAGE_EMISSIVE: u32 = Usage::Emissive.index();
