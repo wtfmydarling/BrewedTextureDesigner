@@ -1,5 +1,6 @@
 //! The two views of the result: the model on the left, the image on the right.
 
+pub mod lights;
 pub mod overlay;
 pub mod render;
 

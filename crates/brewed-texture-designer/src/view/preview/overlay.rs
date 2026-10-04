@@ -1,4 +1,5 @@
-//! Interaction layer of the 2D view: zoom and pan, pixel probe and the Transform 2D gizmo.
+//! Interaction layer of the 2D view: zoom and pan, pixel probe, the Transform 2D gizmo and the
+//! points of the lights of a panorama (lights.rs).
 
 use iced::advanced::mouse;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
@@ -6,6 +7,7 @@ use iced::{Color, Point, Rectangle, Size, Vector, keyboard};
 use brewed_texture_core::graph::NodeId;
 use brewed_texture_core::{Edit, NodeKind, ParamValue};
 
+use super::lights::Points;
 use crate::app::{App, Message, PreviewMessage};
 use crate::style;
 
@@ -54,12 +56,16 @@ enum Handle {
     Rotate,
     /// Source-space point being dragged, and which axes it scales.
     Scale { src: [f32; 2], x: bool, y: bool },
+    /// A point of a light of a panorama.
+    Point(usize),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Drag {
     Pan { last: Point },
     Gizmo { handle: Handle, start_uv: Vector, start_screen: Point, start: Xform },
+    /// A point of a light: which, where it was taken, and the points as they were then.
+    Point { index: usize, start_uv: Vector, start: Points },
 }
 
 #[derive(Default)]
@@ -100,6 +106,11 @@ impl Overlay<'_> {
     fn tiling(&self) -> bool {
         let Some(id) = self.app.ui.preview.node else { return false };
         self.app.ui.preview.show_tiling && self.app.eval.params(id).map_or(0, |x| x.tiling()) != 0
+    }
+
+    /// The points of the light of a panorama shown.
+    fn points(&self) -> Option<Points> {
+        Points::of(self.app, self.app.ui.preview.node?)
     }
 
     fn gizmo_node(&self) -> Option<NodeId> {
@@ -229,6 +240,7 @@ impl canvas::Program<Message> for Overlay<'_> {
         let uv_of = |q: Point| Vector::new((q.x - rect.x) / rect.width, (q.y - rect.y) / rect.height);
         let aspect = image[0] as f32 / image[1] as f32;
         let gizmo = self.gizmo_node().and_then(|id| self.xform(id).map(|x| (id, x)));
+        let points = self.points();
 
         match event {
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -250,6 +262,12 @@ impl canvas::Program<Message> for Overlay<'_> {
                                 state.drag = Some(Drag::Gizmo { handle: h, start_uv: uv_of(q), start_screen: q, start: *xf });
                                 return Some(canvas::Action::capture());
                             }
+                        }
+                        if let Some(ps) = &points
+                            && let Some(index) = point_hit(ps, q, rect)
+                        {
+                            state.drag = Some(Drag::Point { index, start_uv: uv_of(q), start: ps.clone() });
+                            return Some(canvas::Action::capture());
                         }
                         if matches!(click.kind(), mouse::click::Kind::Double) {
                             return Some(canvas::Action::publish(Message::Preview(PreviewMessage::Fit)).and_capture());
@@ -281,13 +299,22 @@ impl canvas::Program<Message> for Overlay<'_> {
                             Some(canvas::Action::publish(Message::Edits(edits)))
                         }
                     }
+                    Some(Drag::Point { index, start_uv, start }) => {
+                        let edits = start.edits(*index, *start_uv, uv_of(q), state.modifiers.shift());
+                        if edits.is_empty() {
+                            None
+                        } else {
+                            Some(canvas::Action::publish(Message::Edits(edits)))
+                        }
+                    }
                     None => {
                         // Hover: gizmo highlight and pixel probe.
-                        let hovered = match (&gizmo, local) {
-                            (Some((_, (xf, _))), Some(q)) => {
+                        let hovered = match (&gizmo, &points, local) {
+                            (Some((_, (xf, _))), _, Some(q)) => {
                                 let (center, handles, _) = self.handles(xf, rect, aspect);
                                 self.hit(q, center, &handles)
                             }
+                            (None, Some(ps), Some(q)) => point_hit(ps, q, rect).map(Handle::Point),
                             _ => None,
                         };
                         let redraw = hovered != state.hovered;
@@ -309,7 +336,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(_)) => match state.drag.take() {
-                Some(Drag::Gizmo { .. }) => Some(canvas::Action::publish(Message::Seal)),
+                Some(Drag::Gizmo { .. } | Drag::Point { .. }) => Some(canvas::Action::publish(Message::Seal)),
                 Some(Drag::Pan { .. }) => None,
                 None => None,
             },
@@ -319,7 +346,7 @@ impl canvas::Program<Message> for Overlay<'_> {
 
     fn mouse_interaction(&self, state: &State, _bounds: Rectangle, _cursor: mouse::Cursor) -> mouse::Interaction {
         match state.drag {
-            Some(Drag::Pan { .. }) | Some(Drag::Gizmo { .. }) => mouse::Interaction::Grabbing,
+            Some(Drag::Pan { .. } | Drag::Gizmo { .. } | Drag::Point { .. }) => mouse::Interaction::Grabbing,
             None if state.hovered.is_some() => mouse::Interaction::Grab,
             None => mouse::Interaction::default(),
         }
@@ -389,7 +416,51 @@ impl canvas::Program<Message> for Overlay<'_> {
             frame.stroke(&Path::circle(center, 6.0), Stroke::default().with_width(2.0).with_color(col(Handle::Move, locked[0])));
         }
 
+        if let Some(points) = self.points() {
+            let active = match &state.drag {
+                Some(Drag::Point { index, .. }) => Some(*index),
+                _ => match state.hovered {
+                    Some(Handle::Point(i)) => Some(i),
+                    _ => None,
+                },
+            };
+            draw_points(&mut frame, &points, rect, active);
+        }
+
         vec![frame.into_geometry()]
+    }
+}
+
+/// Where a point of the image (0 to 1 across and down) is in the view.
+fn on_screen(rect: Rectangle, uv: Vector) -> Point {
+    Point::new(rect.x + uv.x * rect.width, rect.y + uv.y * rect.height)
+}
+
+/// The point of a light under `p`: the nearest of those it is on.
+fn point_hit(points: &Points, p: Point, rect: Rectangle) -> Option<usize> {
+    points
+        .points()
+        .enumerate()
+        .map(|(i, uv)| (i, on_screen(rect, uv).distance(p)))
+        .filter(|(_, d)| *d < 10.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+/// The points of a light, drawn as the Transform 2D's center is: white while held or under the
+/// mouse, gray where a socket gives them.
+fn draw_points(frame: &mut Frame, points: &Points, rect: Rectangle, active: Option<usize>) {
+    for (i, uv) in points.points().enumerate() {
+        let at = on_screen(rect, uv);
+        let color = if points.locked(i) {
+            style::gray(112)
+        } else if active == Some(i) {
+            Color::WHITE
+        } else {
+            style::ACCENT
+        };
+        frame.fill(&Path::circle(at, 6.0), Color::from_rgba(0.0, 0.0, 0.0, 0.6));
+        frame.stroke(&Path::circle(at, 6.0), Stroke::default().with_width(2.0).with_color(color));
     }
 }
 
@@ -419,4 +490,85 @@ mod tests {
         assert_eq!(tile_uv(Vector::new(0.5, 0.5), [false, false]), Some(Vector::new(0.5, 0.5)));
     }
 
+    /// The points of the nodes of panoramas are dragged in the 2D view, as Substance Designer's
+    /// HDRI tools are placed: as far as the mouse goes, round and round across, in one step of
+    /// the history; Shift keeps a point to one axis; one that takes its value from a socket stays.
+    #[test]
+    fn the_points_of_the_lights_are_dragged_in_the_2d_view() {
+        use crate::app::StartupOptions;
+        let (mut app, _) = App::boot(StartupOptions::default());
+        let (bounds, image) = (Rectangle::new(Point::ORIGIN, Size::new(800.0, 800.0)), [1024, 1024]);
+        let p = &mut app.ui.preview;
+        (p.zoom, p.pan, p.fit) = (0.75, Vector::ZERO, false);
+        let rect = image_rect(bounds.size(), image, 0.75, Vector::ZERO);
+        let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3;
+        // A step of its own in the history.
+        let edit = |app: &mut App, e: Edit| {
+            let _ = app.update(Message::Edit(e));
+            let _ = app.update(Message::Seal);
+        };
+        // Drags the point `i` of the node shown by `by` pixels (a pixel is 1/768 of the
+        // panorama), Shift held or not.
+        let drag = |app: &mut App, i: usize, by: Vector, shift: bool| {
+            let points = Points::of(app, app.ui.preview.node.expect("a node shown")).expect("its points");
+            let at = on_screen(rect, points.points().nth(i).expect("the point"));
+            let mut state = State { bounds, ..State::default() };
+            if shift {
+                state.modifiers = keyboard::Modifiers::SHIFT;
+            }
+            let moves = |q: Point| iced::Event::Mouse(mouse::Event::CursorMoved { position: q });
+            for (event, q) in [
+                (moves(at), at),
+                (iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)), at),
+                (moves(at + by * 0.5), at + by * 0.5),
+                (moves(at + by), at + by),
+                (iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)), at + by),
+            ] {
+                let overlay = Overlay { app: &*app, image: Some(image) };
+                let action = canvas::Program::update(&overlay, &mut state, &event, bounds, mouse::Cursor::Available(q));
+                if let Some(m) = action.and_then(|a| a.into_inner().0) {
+                    let _ = app.update(m);
+                }
+            }
+        };
+        let add = |app: &mut App, kind: NodeKind| {
+            edit(app, Edit::AddNode { kind, pos: [0.0, 0.0] });
+            let id = app.graph().nodes_of(kind).last().expect("the node").id;
+            app.ui.preview.node = Some(id);
+            id
+        };
+        let v2 = |app: &App, id: NodeId, key: &str| app.eval.params(id).expect("its parameters").v2(key);
+
+        // A softbox's point: as far as the mouse goes, one step back.
+        let softbox = add(&mut app, NodeKind::HDRI_SHAPE_LIGHT);
+        drag(&mut app, 0, Vector::new(76.8, 38.4), false);
+        assert!(near(v2(&app, softbox, "position"), [0.6, 0.3]), "{:?}", v2(&app, softbox, "position"));
+        let _ = app.update(Message::Undo);
+        assert!(near(v2(&app, softbox, "position"), [0.5, 0.25]), "a drag is one step back");
+        // With Shift, along one axis.
+        drag(&mut app, 0, Vector::new(76.8, 20.0), true);
+        assert!(near(v2(&app, softbox, "position"), [0.6, 0.25]), "{:?}", v2(&app, softbox, "position"));
+        // Taking its value from a socket, it stays.
+        edit(&mut app, Edit::SetExposed { node: softbox, key: "position".into(), exposed: true });
+        let held = v2(&app, softbox, "position");
+        drag(&mut app, 0, Vector::new(50.0, 0.0), false);
+        assert_eq!(v2(&app, softbox, "position"), held);
+
+        // A tube's two points, each on its own.
+        let tube = add(&mut app, NodeKind::HDRI_LINE_LIGHT);
+        drag(&mut app, 1, Vector::new(0.0, 76.8), false);
+        assert!(near(v2(&app, tube, "point_1"), [0.4, 0.3]) && near(v2(&app, tube, "point_2"), [0.6, 0.4]));
+        drag(&mut app, 0, Vector::new(-76.8, 0.0), false);
+        assert!(near(v2(&app, tube, "point_1"), [0.3, 0.3]) && near(v2(&app, tube, "point_2"), [0.6, 0.4]));
+
+        // A gradient's point: round the edge of the panorama, and no lower than its bottom.
+        let gradient = add(&mut app, NodeKind::HDRI_GRADIENT);
+        drag(&mut app, 0, Vector::new(-460.8, 1000.0), false);
+        assert!(near(v2(&app, gradient, "point"), [0.9, 1.0]), "{:?}", v2(&app, gradient, "point"));
+
+        // A panel's point.
+        let panel = add(&mut app, NodeKind::HDRI_PLANE_LIGHT);
+        drag(&mut app, 0, Vector::new(38.4, -76.8), false);
+        assert!(near(v2(&app, panel, "position"), [0.55, 0.3]), "{:?}", v2(&app, panel, "position"));
+    }
 }

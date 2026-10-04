@@ -207,6 +207,13 @@ impl App {
                     self.ui.preview.node = Some(id);
                 }
             }
+            // A node of the graph (as a template made it) chosen and shown: its gizmo, if it has one.
+            other if other.starts_with("show:") => {
+                if let Some(id) = find_kind(&graph, &other["show:".len()..]) {
+                    self.ui.selection = [id].into_iter().collect();
+                    self.ui.preview.node = Some(id);
+                }
+            }
             "tiling" => {
                 // The wall repeated: no seams.
                 if let Some(id) = first(NodeKind::OUTPUT) {

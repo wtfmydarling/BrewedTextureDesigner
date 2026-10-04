@@ -378,6 +378,20 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
             .collect::<Vec<_>>();
         col = col.push(button(text("Reset transform").size(style::SMALL)).padding([4, 10]).style(style::button).on_press(Message::Edits(reset)));
     }
+    // The lights of a panorama are placed by their points in the 2D view.
+    let hint = if node.kind == NodeKind::HDRI_GRADIENT {
+        Some("Drag its point in the 2D view: the Top Color is there, the Bottom Color opposite it. Shift keeps it to one axis.")
+    } else if node.kind == NodeKind::HDRI_LINE_LIGHT {
+        Some("Drag its two points in the 2D view: where it begins and where it ends. Shift keeps a point to one axis.")
+    } else if node.kind == NodeKind::HDRI_SHAPE_LIGHT || node.kind == NodeKind::HDRI_PLANE_LIGHT {
+        Some("Drag its point in the 2D view: where it is. Shift keeps it to one axis.")
+    } else {
+        None
+    };
+    if let Some(hint) = hint {
+        col = col.push(section("In the 2D View"));
+        col = col.push(text(hint).size(style::SMALL).color(style::TEXT_DIM));
+    }
     col.into()
 }
 

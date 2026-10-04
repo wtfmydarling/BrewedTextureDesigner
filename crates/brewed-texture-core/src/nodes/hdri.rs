@@ -44,8 +44,9 @@ pub static HDRI_GRADIENT: NodeDef = NodeDef {
     params: &[
         vec2("point", "Point", [0.5, 0.0], 0.0, 1.0)
             .tip("Where the Top Color is: across, once round (0.5 straight ahead); down, from straight up (0) to straight down (1)."),
-        color("top", "Top Color", [0.3, 0.3, 0.3, 1.0]).tip("The color at the point."),
-        color("bottom", "Bottom Color", [0.09, 0.09, 0.09, 1.0]).tip("The color opposite it."),
+        // (White to black: which color is where is plain to see.)
+        color("top", "Top Color", [1.0, 1.0, 1.0, 1.0]).tip("The color at the point."),
+        color("bottom", "Bottom Color", [0.0, 0.0, 0.0, 1.0]).tip("The color opposite it."),
         float("contrast", "Contrast", 0.5, 0.0, 1.0).bounded().tip("How sharply one color turns into the other: 0 all the way round, 1 at once, at the middle."),
         float("exposure", "Exposure (EV)", 0.0, -10.0, 10.0).tip("How bright both colors are: each step doubles them."),
     ],

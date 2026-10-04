@@ -53,6 +53,7 @@ const MOUSE: &[(&str, &str)] = &[
     ("Eyedropper", "Click it, then click anywhere on the screen; for a gradient, drag across the colors"),
     ("Number fields", "Drag to change (Shift fine, Ctrl snaps), click to type; expressions like 2*pi work"),
     ("Transform 2D gizmo", "Center moves, ring rotates, handles scale; Shift snaps / keeps proportions"),
+    ("Points of HDRI lights", "In the 2D view: drag a light's point (a Line Light's two, a gradient's one) to place it; Shift keeps it to one axis"),
     ("3D view", "Left drag orbits, middle drag moves the camera, right drag turns the light"),
 ];
 
