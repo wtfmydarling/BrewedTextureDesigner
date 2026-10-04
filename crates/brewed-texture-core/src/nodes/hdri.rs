@@ -1,5 +1,5 @@
-//! Nodes that make environments: panoramas of all around (twice as wide as high: across, once
-//! round; down, from straight up to straight down), as Substance Designer's HDRI tools make
+//! Nodes that make environments: panoramas of all around (across, once round; down, from
+//! straight up to straight down, whatever the image's shape), as Substance Designer's HDRI tools make
 //! them: a gradient from the sky to the floor, and lights — a softbox, a tube, a panel — each
 //! drawn where it is in the scene, as the panorama sees it (round where it is far off its
 //! middle), over the panorama it is given. Light is in exposure values (each one doubles it)

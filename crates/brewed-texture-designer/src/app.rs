@@ -394,6 +394,9 @@ pub struct Ui {
     /// Where the color picker floats: where it was opened from.
     pub color_picker_at: Point,
     pub choice_menu: Option<ChoiceMenu>,
+    /// The headings of the menus of choices under headings (an Output's usage) that are
+    /// closed: their options hidden. Kept from one session to the next.
+    pub closed_headings: std::collections::BTreeSet<String>,
     /// The 3D view draws frame after frame, rather than only when something changes.
     pub realtime: bool,
     /// The main window is on screen: on Windows, not until it has drawn a frame (see
@@ -632,9 +635,9 @@ pub enum PreviewMessage {
     EnvironmentPicked(Option<PathBuf>),
     /// An environment image was read from its file, or could not be.
     EnvironmentRead(String, Result<Arc<crate::environment::Hdri>, String>),
-    /// Light the 3D view by the graph's panorama (its Output of usage Panorama), where it has
-    /// one.
-    UsePanorama,
+    /// Light the 3D view by the panorama of this Output of the graph (its usage is Panorama), or
+    /// no more by one.
+    LightBy(Option<NodeId>),
     /// The graph's panorama was made an environment: of the document (its key) and the node.
     PanoramaRead(u64, NodeId, Option<Arc<crate::environment::Hdri>>),
     /// The 3D view's brightness, in stops.
@@ -860,6 +863,8 @@ pub enum Message {
     ChoiceMenu(Option<(NodeId, &'static str)>),
     /// Something was typed in the search field of such a menu.
     ChoiceSearch(String),
+    /// A heading of a menu of choices under headings was opened or closed.
+    ToggleHeading(String),
     /// An option of such a choice was picked.
     PickChoice(NodeId, &'static str, u32),
     // status bar
@@ -1091,6 +1096,7 @@ impl App {
                 color_picker: None,
                 color_picker_at: Point::ORIGIN,
                 choice_menu: None,
+                closed_headings: opts.workspace.as_ref().map(|w| w.closed_headings.iter().cloned().collect()).unwrap_or_default(),
                 realtime: opts.workspace.as_ref().and_then(|w| w.realtime).unwrap_or(true),
                 shown: !cfg!(windows),
                 cloaked: None,
@@ -1383,30 +1389,32 @@ impl App {
         self.ask_for_choices();
     }
 
-    /// The Output of the open graph whose image lights the 3D view: the first of usage
-    /// Panorama.
-    pub fn panorama_node(&self) -> Option<NodeId> {
+    /// The Outputs of the open graph whose usage is Panorama.
+    pub fn panorama_outputs(&self) -> Vec<NodeId> {
         let panorama = brewed_texture_core::nodes::Usage::Panorama.index();
-        self.graph().nodes_of(NodeKind::OUTPUT).find(|n| n.enum_value("usage") == panorama).map(|n| n.id)
+        self.graph().nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") == panorama).map(|n| n.id).collect()
     }
 
-    /// What lights the 3D view: the graph's panorama, where the graph has one and it is
-    /// chosen (as it is until the studio or an image is); else the image chosen, or the
-    /// studio (none).
+    /// The Output of the open graph whose panorama lights the 3D view: the one its node or the
+    /// lighting menu asked for, while it is one of usage Panorama.
+    pub fn panorama_node(&self) -> Option<NodeId> {
+        self.ui.preview.lighting.panorama.filter(|id| self.panorama_outputs().contains(id))
+    }
+
+    /// What lights the 3D view: the graph's panorama, where one was asked for (once the engine
+    /// has it); else the image chosen, or the studio (none).
     pub fn environment_shown(&self) -> Option<Arc<crate::environment::Hdri>> {
-        let l = &self.ui.preview.lighting;
-        if l.use_panorama
-            && let Some((node, hdri)) = &self.res.panorama
+        if let Some((node, hdri)) = &self.res.panorama
             && self.panorama_node() == Some(*node)
         {
             return Some(hdri.clone());
         }
-        l.shown.clone()
+        self.ui.preview.lighting.shown.clone()
     }
 
     /// Whether the graph's panorama lights the 3D view now.
     pub fn lit_by_panorama(&self) -> bool {
-        self.ui.preview.lighting.use_panorama && self.panorama_node().is_some()
+        self.panorama_node().is_some()
     }
 
     /// Have the engine draw the pictures of the choices of the kinds of nodes the graph has,
@@ -1552,7 +1560,7 @@ impl App {
     fn choice_menu_options(&self) -> Option<(Vec<usize>, usize)> {
         let menu = self.ui.choice_menu.as_ref()?;
         let pd = self.graph().node(menu.node)?.def().param(menu.key)?;
-        Some((view::choices::shown(pd, &menu.query), view::choices::columns_of(pd)))
+        Some((view::choices::shown(pd, &menu.query, &self.ui.closed_headings), view::choices::columns_of(pd)))
     }
 
     /// Put the keyboard of the open menu on the option `at` of those its search leaves, and
@@ -1989,6 +1997,7 @@ impl App {
             home_layout: Some(home::layout_said(self.ui.home_layout).into()),
             home_sort: Some(home::sort_said(self.ui.home_sort)),
             template_layout: Some(home::layout_said(self.ui.template_layout).into()),
+            closed_headings: self.ui.closed_headings.iter().cloned().collect(),
             last_folder: self.ui.last_folder.as_ref().map(|f| f.display().to_string()),
             ..Workspace::default()
         }
@@ -2405,6 +2414,11 @@ impl App {
             Message::ChoiceMenu(Some((node, key))) => return self.open_choice_menu(node, key),
             Message::ChoiceMenu(None) => self.ui.choice_menu = None,
             Message::ChoiceSearch(query) => return self.search_choice_menu(query),
+            Message::ToggleHeading(heading) => {
+                if !self.ui.closed_headings.remove(&heading) {
+                    self.ui.closed_headings.insert(heading);
+                }
+            }
             Message::PickChoice(node, key, option) => {
                 self.ui.choice_menu = None;
                 // A pick is a step of its own in the history.
@@ -3267,9 +3281,10 @@ impl App {
             PreviewMessage::EnvironmentPicked(Some(path)) => return self.choose_environment(Some(path.display().to_string())),
             PreviewMessage::EnvironmentPicked(None) => {}
             PreviewMessage::EnvironmentRead(file, result) => self.environment_read(file, result),
-            PreviewMessage::UsePanorama => {
+            PreviewMessage::LightBy(output) => {
                 self.close_popups();
-                self.ui.preview.lighting.use_panorama = true;
+                self.ui.preview.lighting.panorama = output;
+                self.send(Request::Panorama(self.panorama_node()));
             }
             PreviewMessage::PanoramaRead(doc, node, Some(hdri)) => {
                 // (Of the document and the graph still open.)
@@ -3299,7 +3314,7 @@ impl App {
     fn choose_environment(&mut self, file: Option<String>) -> Task<Message> {
         let l = &mut self.ui.preview.lighting;
         // Chosen over the graph's panorama.
-        l.use_panorama = false;
+        l.panorama = None;
         l.file = file.clone();
         let Some(file) = file else {
             l.shown = None;

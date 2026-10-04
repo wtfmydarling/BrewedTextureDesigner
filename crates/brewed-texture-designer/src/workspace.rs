@@ -25,8 +25,10 @@ pub struct Workspace {
     pub environments: Vec<String>,
     /// The 3D view's brightness, in stops.
     pub exposure: Option<f32>,
-    /// Whether the environment image showed behind the model, and how blurred.
-    pub background: Option<bool>,
+    /// Whether the environment image showed behind the model, and how blurred. (Kept under a
+    /// name of its own since it is off by default: what files said before, on by default, is
+    /// left behind.)
+    pub behind: Option<bool>,
     pub blur: Option<f32>,
     /// The package files opened or saved last, the latest first (see [`remember`]), and when
     /// each was, in seconds since 1970.
@@ -38,6 +40,9 @@ pub struct Workspace {
     pub home_sort: Option<String>,
     /// How the dialog of a new graph shows its templates ("grid" or "list").
     pub template_layout: Option<String>,
+    /// The headings of the menus of choices under headings that were closed.
+    #[serde(default)]
+    pub closed_headings: Vec<String>,
     /// The folder a file dialog was answered from last.
     pub last_folder: Option<String>,
 }
@@ -68,7 +73,7 @@ impl Workspace {
             file: self.environment.clone(),
             recent: self.environments.iter().take(RECENT).cloned().collect(),
             exposure: finite(self.exposure).map_or(default.exposure, |e| e.clamp(-12.0, 12.0)),
-            background: self.background.unwrap_or(default.background),
+            background: self.behind.unwrap_or(default.background),
             blur: finite(self.blur).map_or(default.blur, |b| b.clamp(0.0, 1.0)),
             ..default
         };
@@ -84,7 +89,7 @@ impl Workspace {
             environment: lighting.file.clone(),
             environments: lighting.recent.clone(),
             exposure: Some(lighting.exposure),
-            background: Some(lighting.background),
+            behind: Some(lighting.background),
             blur: Some(lighting.blur),
             ..self
         }
@@ -144,13 +149,14 @@ mod tests {
             environment: Some("C:/skies/noon.hdr".into()),
             environments: vec!["C:/skies/noon.hdr".into(), "/home/me/dusk.exr".into()],
             exposure: Some(-1.5),
-            background: Some(false),
+            behind: Some(true),
             blur: Some(0.6),
             recent: vec!["C:/work/walls.brewtex".into()],
             opened: [("C:/work/walls.brewtex".to_string(), 1_790_000_000)].into_iter().collect(),
             home_layout: Some("list".into()),
             home_sort: Some("name-desc".into()),
             template_layout: Some("grid".into()),
+            closed_headings: vec!["Transmission".into()],
             last_folder: Some("C:/work".into()),
         };
         let json = serde_json::to_string(&w).unwrap();

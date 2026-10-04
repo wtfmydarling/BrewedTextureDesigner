@@ -296,7 +296,15 @@ impl App {
         match message {
             NewGraphMessage::Open(_) => {}
             NewGraphMessage::Name(name) => dialog.name = name,
-            NewGraphMessage::Template(template) => dialog.choose(template),
+            NewGraphMessage::Template(template) => {
+                let again = dialog.clicked.is_some_and(|(t, at)| t == template && at.elapsed() < DOUBLE_CLICK);
+                dialog.choose(template);
+                dialog.clicked = Some((template, std::time::Instant::now()));
+                // A double click on a template makes it at once.
+                if again {
+                    return self.new_graph_message(NewGraphMessage::Create);
+                }
+            }
             NewGraphMessage::Into(into) => dialog.into = into,
             NewGraphMessage::Width(width) => {
                 // What is set by hand stays, whatever template is chosen after.
@@ -429,13 +437,18 @@ pub struct NewGraphDialog {
     /// What the size, its link and the precision were before the template chosen set them
     /// (a panorama's): they come back when another is chosen.
     pub before: Option<([u32; 2], bool, Precision)>,
+    /// The template clicked last, and when: clicked again at once (a double click), it is made.
+    pub clicked: Option<(Template, std::time::Instant)>,
 }
+
+/// How soon a second click on a template makes it (a double click).
+pub const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(450);
 
 impl NewGraphDialog {
     /// The dialog of a graph of `template` (into the package open as `into`, or a new one), its
     /// images `size` and `precision` unless the template needs others.
     pub fn new(into: Option<u64>, template: Template, size: [u32; 2], precision: Precision) -> NewGraphDialog {
-        let mut dialog = NewGraphDialog { into, name: "Graph".into(), template, size, linked: size[0] == size[1], precision, before: None };
+        let mut dialog = NewGraphDialog { into, name: "Graph".into(), template, size, linked: size[0] == size[1], precision, before: None, clicked: None };
         dialog.choose(template);
         dialog
     }

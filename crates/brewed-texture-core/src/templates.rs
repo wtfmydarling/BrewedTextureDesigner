@@ -58,7 +58,7 @@ pub enum Template {
     Fuzz,
     /// Every parameter of OpenPBR, each a map.
     Complete,
-    /// An environment light: a studio, as a panorama twice as wide as high, in floats.
+    /// An environment light: a studio, as a panorama (square, as Substance Designer's), in floats.
     StudioPanorama,
     /// A filter of Pixel Math: a box blur as wide as a map says.
     Convolution,
@@ -369,11 +369,13 @@ impl Template {
         }
     }
 
-    /// The size and the precision of its graph, of those asked: a panorama is twice as wide as
-    /// high (as wide as asked), and keeps its light, far above white, in 32-bit floats.
+    /// The size and the precision of its graph, of those asked: a panorama is square, as Substance
+    /// Designer makes it (as wide as asked; the 3D view reads it across once round and down from
+    /// straight up to straight down, whatever its shape), and keeps its light, far above white, in
+    /// 32-bit floats.
     pub fn fit(self, size: [u32; 2], precision: Precision) -> ([u32; 2], Precision) {
         match self {
-            Template::StudioPanorama => ([size[0].max(32), (size[0] / 2).max(16)], Precision::Full),
+            Template::StudioPanorama => ([size[0].max(32), size[0].max(32)], Precision::Full),
             _ => (size, precision),
         }
     }
@@ -425,8 +427,8 @@ impl Template {
                 set(&mut g, panorama, "format", ParamValue::Enum(1));
                 set(&mut g, panorama, "bit_depth", ParamValue::Enum(crate::nodes::DEPTH_32F));
                 let _ = g.connect(panel, "o:output", panorama, "i:input");
-                let said = "An environment light is a panorama: across, once round; down, from straight up to straight down, \
-                            so it is twice as wide as high. The HDRI tools draw a studio in it, each over the one before: \
+                let said = "An environment light is a panorama: across, once round; down, from straight up to straight down \
+                            (square here, as Substance Designer makes it). The HDRI tools draw a studio in it, each over the one before: \
                             Gradient Linear (HDRI) the gray of the room, a Shape Light the softbox overhead with its hotspot, \
                             a Line Light the strip light to the right, a Plane Light the large panel behind (across the seam: \
                             on both edges of the panorama). Their light is far brighter than white, kept in 32-bit floats. The \
@@ -1019,9 +1021,9 @@ mod tests {
     fn templates_and_examples_are_whole() {
         let pbr = Template::Pbr.graph([512, 256], Precision::Full);
         assert_eq!((pbr.resolution, pbr.precision), ([512, 256], Precision::Full));
-        // A panorama: twice as wide as high, as wide as asked, its light in 32-bit floats.
-        let panorama = Template::StudioPanorama.graph([1024, 1024], Precision::Half);
-        assert_eq!((panorama.resolution, panorama.precision), ([1024, 512], Precision::Full));
+        // A panorama: square, as wide as asked, its light in 32-bit floats.
+        let panorama = Template::StudioPanorama.graph([1024, 512], Precision::Half);
+        assert_eq!((panorama.resolution, panorama.precision), ([1024, 1024], Precision::Full));
         assert!(Template::STARTERS.iter().all(|t| Template::ALL.contains(t)));
         assert!(Template::Empty.graph([2048, 2048], Precision::Half).nodes.is_empty());
         let mut graphs = Vec::new();

@@ -336,6 +336,27 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
     if node.kind == NodeKind::LEVELS {
         col = col.push(levels::view(app, node));
     }
+    // A panorama lights the 3D view only when asked to, here.
+    if node.kind == NodeKind::OUTPUT && node.enum_value("usage") == brewed_texture_core::nodes::Usage::Panorama.index() {
+        let lights = app.panorama_node() == Some(id);
+        col = col.push(section("3D View"));
+        col = col.push(
+            row![
+                toggler(lights)
+                    .on_toggle(move |on| Message::Preview(crate::app::PreviewMessage::LightBy(on.then_some(id))))
+                    .size(16)
+                    .style(style::toggler),
+                text("Light the 3D view with this panorama").size(style::SMALL),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        );
+        col = col.push(
+            text("Off, the view is lit as its sun button says. On, by this image, brought up to date as the graph changes; it shows behind the model only where the sun button says so.")
+                .size(style::SMALL)
+                .color(style::TEXT_DIM),
+        );
+    }
     if node.kind == NodeKind::OUTPUT {
         col = col.push(section("Export"));
         col = col.push(

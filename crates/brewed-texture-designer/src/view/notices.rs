@@ -17,9 +17,10 @@ pub struct NoticesDialog {
     pub query: String,
 }
 
-/// Whether `work` is found by `query`: each of its words in the work's name, license or makers.
+/// Whether `work` is found by `query`: each of its words in the work's name, license, makers or
+/// what it says of itself (the crates an entry is of).
 pub fn matches(work: &Work, query: &str) -> bool {
-    let said = format!("{} {} {}", work.name, work.license, work.by).to_lowercase();
+    let said = format!("{} {} {} {}", work.name, work.license, work.by, work.note).to_lowercase();
     query.split_whitespace().all(|q| said.contains(&q.to_lowercase()))
 }
 

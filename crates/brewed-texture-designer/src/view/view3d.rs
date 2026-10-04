@@ -157,10 +157,10 @@ pub struct Lighting {
     pub blur: f32,
     /// Whether the menu of the lighting is open.
     pub menu: bool,
-    /// Whether the graph's panorama (its Output of usage Panorama) lights the model, where the
-    /// graph has one: so it does, as Substance Designer puts an output in the 3D view by its
-    /// usage, until the studio or an image is chosen in its place.
-    pub use_panorama: bool,
+    /// The Output of the graph whose panorama (its usage is Panorama) lights the model, as its
+    /// node or the menu asked: none at first (a panorama being made is not what one wants to see
+    /// a material in), and none again once the studio or an image is chosen.
+    pub panorama: Option<brewed_texture_core::graph::NodeId>,
 }
 
 /// How many environment images the menu offers again.
@@ -175,10 +175,11 @@ impl Default for Lighting {
             kept: None,
             reading: None,
             exposure: 0.0,
-            background: true,
+            // (Not behind the model unless asked: what one looks at is the material.)
+            background: false,
             blur: 0.25,
             menu: false,
-            use_panorama: true,
+            panorama: None,
         }
     }
 }
@@ -284,14 +285,15 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
         vec![container(text("Environment").size(style::SMALL).color(style::TEXT_DIM)).padding([4, 10]).into()];
     // The graph's own light first, where it has one.
     let panorama = app.lit_by_panorama();
-    if let Some(node) = app.panorama_node().and_then(|id| app.graph().node(id)) {
+    for id in app.panorama_outputs() {
+        let Some(node) = app.graph().node(id) else { continue };
         items.push(choice(
-            panorama,
+            app.panorama_node() == Some(id),
             format!("The Graph's Panorama: {}", node.text("name")),
             "The image of the graph's Output whose usage is Panorama: the light all around, as the graph makes it, \
-             brought up to date as the graph changes"
+             brought up to date as the graph changes (its Output node turns it on and off too)"
                 .into(),
-            send(PreviewMessage::UsePanorama),
+            send(PreviewMessage::LightBy(Some(id))),
         ));
     }
     items.push(choice(

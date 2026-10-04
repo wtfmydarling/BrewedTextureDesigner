@@ -398,12 +398,11 @@ fn the_program_starts_on_the_home_screen() {
     w.snapshot("new_graph_list");
     w.send(Message::NewGraph(NewGraphMessage::Layout(home_screen::Layout::Grid)));
     w.send(Message::NewGraph(NewGraphMessage::Name("Rusty Metal".into())));
-    // A panorama: twice as wide as high, in 32-bit floats; another template gives back what
-    // was set before.
+    // A panorama: square, in 32-bit floats; another template gives back what was set before.
     let before = w.app.ui.dialog.clone();
     w.send(Message::NewGraph(NewGraphMessage::Template(Template::StudioPanorama)));
     let Some(Dialog::NewGraph(panorama)) = w.app.ui.dialog.clone() else { panic!("the dialog") };
-    assert_eq!((panorama.size[0], panorama.size[1] * 2, panorama.precision), (panorama.size[0], panorama.size[0], brewed_texture_core::Precision::Full));
+    assert_eq!((panorama.size[1], panorama.precision), (panorama.size[0], brewed_texture_core::Precision::Full));
     w.send(Message::NewGraph(NewGraphMessage::Template(Template::Pbr)));
     let (Some(Dialog::NewGraph(a)), Some(Dialog::NewGraph(b))) = (before, w.app.ui.dialog.clone()) else { panic!("the dialog") };
     assert_eq!((a.size, a.linked, a.precision), (b.size, b.linked, b.precision));
@@ -1672,7 +1671,8 @@ fn the_3d_view_is_lit_by_an_environment_image() {
     assert_eq!(l.shown.as_ref().map(|h| h.path.as_str()), Some(sky.as_str()));
     assert_eq!((l.shown.as_ref().map(|h| h.width), l.reading.as_deref()), (Some(64), None));
     w.send(Message::Preview(P::LightingMenu(true)));
-    for text in ["○  Studio", "●  sky.hdr", "●  Show It Behind the Model", "Blur"] {
+    // (Nothing behind the model until asked.)
+    for text in ["○  Studio", "●  sky.hdr", "○  Show It Behind the Model", "Blur"] {
         assert!(shown(&mut w, text), "{text} is in the menu");
     }
     w.snapshot("lighting_menu");
@@ -1693,8 +1693,8 @@ fn the_3d_view_is_lit_by_an_environment_image() {
     }
     let l = &w.app.ui.preview.lighting;
     assert_eq!((l.exposure, l.blur), (12.0, 0.0));
-    w.send(Message::Preview(P::Background(false)));
-    assert!(!w.app.ui.preview.lighting.background);
+    w.send(Message::Preview(P::Background(true)));
+    assert!(w.app.ui.preview.lighting.background);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3729,38 +3729,46 @@ fn nothing_under_an_open_menu_takes_the_cursor() {
     assert_eq!(w.app.ui.menu, Some(MenuId::File), "under an open menu, it does not");
 }
 
-/// An Output whose usage is Panorama lights the 3D view, as Substance Designer puts an output
-/// where its usage says: its image, made an environment, once the engine has it; the lighting
-/// menu offers it first. The studio or an image chosen in its place light the view; the
-/// panorama chosen again, it does. Of another graph, or once the Output has another usage, it
-/// lights nothing.
+/// An Output whose usage is Panorama lights the 3D view only when asked to: by its node (or the
+/// lighting menu, which offers it first). Asked, its image lights the view once the engine has
+/// it; the studio or an image chosen in its place light the view; the panorama asked again, it
+/// does. Of another document, or once the Output has another usage, it lights nothing. And an
+/// environment shows behind the model only when asked to.
 #[test]
-fn the_graphs_panorama_lights_the_3d_view() {
+fn the_graphs_panorama_lights_the_3d_view_when_asked() {
     use crate::app::PreviewMessage as P;
     use brewed_texture_core::nodes::Usage;
     let mut w = harness!(view::root, 1680.0, 1000.0);
     let shown = |w: &mut Harness, text: &str| !texts(w, text).is_empty();
-    assert!(w.app.panorama_node().is_none() && w.app.environment_shown().is_none(), "the demo has none: the studio");
+    assert!(!w.app.ui.preview.lighting.background, "nothing behind the model at first");
     let out = w.app.graph().nodes_of(NodeKind::OUTPUT).map(|n| n.id).next().expect("an output");
     let name = w.app.graph().node(out).unwrap().text("name").to_string();
     w.send(Message::PickChoice(out, "usage", Usage::Panorama.index()));
+    assert_eq!(w.app.panorama_outputs(), vec![out]);
+    assert!(w.app.panorama_node().is_none() && w.app.environment_shown().is_none(), "not until asked");
+    // Asked on its node.
+    w.app.ui.selection = [out].into_iter().collect();
+    w.send(Message::Preview(P::LightBy(Some(out))));
     assert_eq!(w.app.panorama_node(), Some(out));
-    // Until the engine has it, the view is lit as it was; then by it.
-    assert!(w.app.environment_shown().is_none());
-    let sky = std::sync::Arc::new(crate::environment::Hdri::new("panorama".into(), 8, 4, vec![2.0; 8 * 4 * 3]));
+    assert!(w.app.environment_shown().is_none(), "until the engine has it");
+    let sky = std::sync::Arc::new(crate::environment::Hdri::new("panorama".into(), 8, 8, vec![2.0; 8 * 8 * 3]));
     let doc = w.app.doc_key;
     w.send(Message::Preview(P::PanoramaRead(doc, out, Some(sky.clone()))));
     assert!(w.app.environment_shown().is_some_and(|h| std::sync::Arc::ptr_eq(&h, &sky)), "lit by the graph's panorama");
+    assert!(shown(&mut w, "Light the 3D view with this panorama"), "its node says so");
     w.send(Message::Preview(P::LightingMenu(true)));
-    for text in [format!("●  The Graph's Panorama: {name}"), "○  Studio".to_string(), "●  Show It Behind the Model".to_string()] {
+    for text in [format!("●  The Graph's Panorama: {name}"), "○  Studio".to_string(), "○  Show It Behind the Model".to_string()] {
         assert!(shown(&mut w, &text), "{text} is in the menu");
     }
     // The studio in its place; the panorama again.
     w.send(Message::Preview(P::Environment(None)));
     assert!(w.app.environment_shown().is_none() && !w.app.lit_by_panorama(), "the studio, chosen");
-    w.send(Message::Preview(P::UsePanorama));
+    w.send(Message::Preview(P::LightBy(Some(out))));
     assert!(w.app.lit_by_panorama() && w.app.environment_shown().is_some());
+    w.send(Message::Preview(P::LightBy(None)));
+    assert!(!w.app.lit_by_panorama(), "turned off on its node");
     // Of an older document, nothing; once the Output is of another usage, nothing.
+    w.send(Message::Preview(P::LightBy(Some(out))));
     w.send(Message::Preview(P::PanoramaRead(doc + 1, out, Some(sky.clone()))));
     w.send(Message::PickChoice(out, "usage", Usage::BaseColor.index()));
     assert!(w.app.panorama_node().is_none() && w.app.environment_shown().is_none());
@@ -3782,7 +3790,7 @@ fn the_third_party_notices_say_whose_work_is_used() {
     w.send(Message::Notices(NoticesMessage::Search("wgpu".into())));
     let Some(Dialog::Notices(dialog)) = &w.app.ui.dialog else { panic!("the window is open") };
     let found = &crate::third_party::notices().works[dialog.chosen];
-    assert!(found.name.starts_with("wgpu") && !found.texts.is_empty(), "the first work the search finds: {}", found.name);
+    assert!((found.name.contains("wgpu") || found.note.contains("wgpu ")) && !found.texts.is_empty(), "what the search finds: {}", found.name);
     assert!(shown(&mut w, &found.name) && !shown(&mut w, "Matball: Shader Ball JL 01"), "only what the search finds");
     w.snapshot("third_party_notices");
     w.send(Message::Dialog(Some(Dialog::About)));
@@ -3790,4 +3798,52 @@ fn the_third_party_notices_say_whose_work_is_used() {
     let notices = *texts(&mut w, "Third-Party Notices…").last().expect("About opens the notices");
     click(&mut w, notices.center());
     assert!(matches!(w.app.ui.dialog, Some(Dialog::Notices(_))));
+}
+
+/// The menu of an Output's usage is one list under headings: a click on a heading closes what is
+/// under it (and opens it again), and goes no further than the menu, as no click on it does;
+/// a closed heading stays closed when the menu opens again; a search finds what is under it
+/// all the same.
+#[test]
+fn the_usage_menu_opens_and_closes_its_headings() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let shown = |w: &mut Harness, text: &str| !texts(w, text).is_empty();
+    let out = w.app.graph().nodes_of(NodeKind::OUTPUT).map(|n| n.id).next().expect("an output");
+    w.app.ui.selection = [out].into_iter().collect();
+    w.send(Message::ChoiceMenu(Some((out, "usage"))));
+    assert!(shown(&mut w, "Base Weight") && shown(&mut w, "Coat Weight"), "everything is open at first");
+    let selection = w.app.ui.selection.clone();
+    let base = *texts(&mut w, "Base").last().expect("the heading Base");
+    click(&mut w, base.center());
+    assert!(w.app.ui.choice_menu.is_some(), "the menu stays open");
+    assert_eq!(w.app.ui.selection, selection, "the click went no further than the menu");
+    assert!(w.app.ui.closed_headings.contains("Base") && !shown(&mut w, "Base Weight") && shown(&mut w, "Coat Weight"));
+    // Closed when it opens again; searched, what is under it is found.
+    w.send(Message::ChoiceMenu(None));
+    w.send(Message::ChoiceMenu(Some((out, "usage"))));
+    assert!(!shown(&mut w, "Base Weight"), "still closed");
+    w.send(Message::ChoiceSearch("weight".into()));
+    assert!(shown(&mut w, "Base Weight") && shown(&mut w, "Coat Weight") && !shown(&mut w, "Roughness"));
+    w.send(Message::ChoiceSearch(String::new()));
+    let base = *texts(&mut w, "Base").last().expect("the heading Base");
+    click(&mut w, base.center());
+    assert!(!w.app.ui.closed_headings.contains("Base") && shown(&mut w, "Base Weight"), "open again");
+    w.snapshot("usage_menu");
+}
+
+/// A double click on a template in the window of a new graph makes it at once; one click
+/// chooses it.
+#[test]
+fn a_double_click_on_a_template_makes_it() {
+    use crate::app::home::NewGraphMessage;
+    use brewed_texture_core::templates::Template;
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let before = w.app.packages().len();
+    w.send(Message::NewGraph(NewGraphMessage::Open(None)));
+    w.send(Message::NewGraph(NewGraphMessage::Template(Template::Coat)));
+    assert!(matches!(w.app.ui.dialog, Some(Dialog::NewGraph(_))), "one click chooses it");
+    w.send(Message::NewGraph(NewGraphMessage::Template(Template::Coat)));
+    assert!(w.app.ui.dialog.is_none(), "a second at once makes it");
+    assert!(w.app.packages().len() >= before);
+    assert!(w.app.graph().nodes_of(NodeKind::OUTPUT).any(|n| n.text("name") == "coat_weight"), "the graph of the template");
 }

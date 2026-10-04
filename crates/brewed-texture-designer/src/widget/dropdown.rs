@@ -210,6 +210,13 @@ impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer> for 
             return;
         }
         self.menu.as_widget_mut().update(self.tree, event, layout, cursor, renderer, clipboard, shell, &layout.bounds());
+        // A menu is opaque: what is under it takes no click or turn of the wheel on it, even on
+        // what of it takes none itself (a heading, the space between its items).
+        if let Event::Mouse(mouse::Event::ButtonPressed(_) | mouse::Event::ButtonReleased(_) | mouse::Event::WheelScrolled { .. }) = event
+            && cursor.is_over(layout.bounds())
+        {
+            shell.capture_event();
+        }
     }
 
     fn mouse_interaction(&self, layout: Layout<'_>, cursor: mouse::Cursor, renderer: &iced::Renderer) -> mouse::Interaction {
