@@ -3172,8 +3172,22 @@ impl App {
                 _ => Task::none(),
             };
         }
-        // A dialog takes the keyboard: nothing reaches what is under it.
-        if self.ui.dialog.is_some() {
+        // A dialog takes the keyboard: nothing reaches what is under it. Enter answers it as its
+        // first button does, where it has one that is safe to press so (a field that took the
+        // key keeps it; a dialog with a search, settings or choices of its own waits for a click).
+        if let Some(dialog) = &self.ui.dialog {
+            if key == Key::Named(Named::Enter) && status != iced::event::Status::Captured {
+                let answer = match dialog {
+                    Dialog::Unsaved(action) => Some(Message::SaveThen(action.clone())),
+                    Dialog::NewGraph(_) => Some(Message::NewGraph(home::NewGraphMessage::Create)),
+                    Dialog::Export(dialog) if dialog.folder.is_some() => Some(Message::Export(export_dialog::ExportMessage::Export)),
+                    Dialog::About | Dialog::Shortcuts | Dialog::Versions(_) => Some(Message::Dialog(None)),
+                    _ => None,
+                };
+                if let Some(answer) = answer {
+                    return self.update_nested(answer);
+                }
+            }
             return Task::none();
         }
         let Some(chord) = Chord::of(&key, physical, m) else { return Task::none() };

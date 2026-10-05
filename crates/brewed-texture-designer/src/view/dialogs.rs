@@ -117,6 +117,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
                 }
             }
             keyboard = keyboard.push(line("Esc".into(), "Close menus and dialogs, cancel picking from the screen or a rename".into()));
+            keyboard = keyboard.push(line("Enter".into(), "In a dialog, what its first button does: Save, Create, Export, Close".into()));
             let mut mouse = column![line_between, heading("Mouse")].spacing(4);
             for (what, does) in MOUSE {
                 mouse = mouse.push(line(what.to_string(), does.to_string()));

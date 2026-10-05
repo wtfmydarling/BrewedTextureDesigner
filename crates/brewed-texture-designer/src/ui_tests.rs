@@ -216,6 +216,7 @@ macro_rules! harness {
 }
 
 // (After the macro: the tests of each part of the window, which use it.)
+mod dialogs;
 mod graph_canvas;
 mod text_fits;
 mod title_bar;
@@ -2436,6 +2437,9 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
                     .unwrap_or_default()
             )),
             Ok(Some(state)) => Some(format!("BROKEN: {state}")),
+            // Every thousand steps: what is saved reads back as it was, and every step undone
+            // then redone gives the package back as it was.
+            Ok(None) if step % 1000 == 999 => round_trips(&mut w, &files),
             // Every few hundred steps, in whatever state and size the window is then: no line
             // of text cut short.
             Ok(None) if step % 250 == 249 => {
@@ -2465,6 +2469,47 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
         w.app.graph().links.len()
     );
     Ok(steps)
+}
+
+/// What goes wrong when the package being edited is saved and read back, or when every step of
+/// it is undone and then redone: each must give the package back as it was.
+fn round_trips(w: &mut Harness, folder: &std::path::Path) -> Option<String> {
+    use brewed_texture_core::project;
+    let package = w.app.doc.package().clone();
+    let path = folder.join("round-trip.brewtex");
+    if let Err(e) = project::save(&path, &package, &std::collections::HashMap::new(), w.app.doc.current()) {
+        return Some(format!("the package could not be saved: {e}"));
+    }
+    match project::load(&path) {
+        Ok(loaded) if loaded.package == package => {}
+        Ok(loaded) => {
+            let differs: Vec<String> = package
+                .graphs
+                .iter()
+                .zip(&loaded.package.graphs)
+                .filter(|(a, b)| a != b)
+                .map(|(a, b)| {
+                    let nodes = a.graph.nodes.iter().zip(&b.graph.nodes).find(|(x, y)| x != y).map(|(x, y)| format!("{x:?}\nread back as\n{y:?}"));
+                    format!("graph '{}': {}", a.name, nodes.unwrap_or_else(|| "not its nodes".into()))
+                })
+                .collect();
+            return Some(format!("the package read back is not what was saved: {}", if differs.is_empty() { "not its graphs".into() } else { differs.join("; ") }));
+        }
+        Err(e) => return Some(format!("the package saved cannot be read: {e}")),
+    }
+    let _ = std::fs::remove_file(&path);
+    let mut undone = 0;
+    while w.app.doc.can_undo() && undone < 2000 {
+        w.send(Message::Undo);
+        undone += 1;
+    }
+    // (As many redone as were undone: what was undone before is still to be redone after.)
+    let mut redone = 0;
+    while w.app.doc.can_redo() && redone < undone {
+        w.send(Message::Redo);
+        redone += 1;
+    }
+    (*w.app.doc.package() != package).then(|| format!("{undone} steps undone and {redone} redone do not give the package back"))
 }
 
 /// The monkey on a few seeds (see `monkey`).
