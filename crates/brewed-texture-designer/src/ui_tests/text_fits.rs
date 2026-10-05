@@ -46,7 +46,7 @@ fn narrowest(text: &str, size: f32) -> f32 {
 /// The lines of text the window shows cut short: each with how wide it is drawn, and how wide it
 /// is laid out. (Lines that wrap are as wide as they are let be: only lines of one line count,
 /// known by their height.)
-fn cut_short(w: &mut Harness) -> Vec<String> {
+pub(super) fn cut_short(w: &mut Harness) -> Vec<String> {
     let mut lines = Lines(Vec::new());
     w.input(&[]);
     w.frame(|ui, renderer| ui.operate(renderer, &mut lines));
@@ -55,7 +55,36 @@ fn cut_short(w: &mut Harness) -> Vec<String> {
     // says it whole).
     let shown = w.app.ui.preview.node.and_then(|id| w.app.graph().node(id)).map(crate::view::graph::node_title);
     let files: Vec<String> = w.app.doc.package().resources.iter().map(|r| w.app.doc.package().file_label(&r.path)).collect();
-    let meant = |text: &String| Some(text) == shown.as_ref() || files.contains(text) || FILE_FIELDS.contains(&text.as_str());
+    // (And the name of an Output's usage, in its field in a narrow Properties: its menu says it
+    // whole.)
+    let usages = NodeKind::OUTPUT.def().param("usage").map(|p| p.enum_options()).unwrap_or_default();
+    // (And the option chosen in a field of a choice, a value driven by a link: their fields cut
+    // them at their edge; the menu, the node they come from, say them whole.)
+    let mut chosen: Vec<String> = Vec::new();
+    for node in w.app.ui.selection.iter().filter_map(|id| w.app.graph().node(*id)) {
+        for pd in node.def().params {
+            chosen.extend(pd.enum_options().iter().map(|o| o.to_string()));
+            if let Some(v) = w.app.eval.node(node.id).and_then(|e| e.driven.get(pd.key)) {
+                chosen.push(v.as_value().map_or_else(String::new, |x| x.display()));
+            }
+        }
+    }
+    // (And what the status bar says, on its one line beside its readings; what the 2D view's
+    // header says with no node shown, as its name would be.)
+    let status = w.app.ui.status.as_ref().map(|s| s.text.clone());
+    // (And the names of the input values, cut at the edge of their column, their tips saying them whole; changed, with a star.)
+    let names: Vec<String> = w.app.graph().variables.iter().flat_map(|v| [v.name.clone(), format!("{}*", v.name)]).collect();
+    let meant = |text: &String| {
+        Some(text) == shown.as_ref()
+            || Some(text) == status.as_ref()
+            || text == "double-click a node to show it here"
+            || text.starts_with("Set the Usage of Output nodes")
+            || names.contains(text)
+            || files.contains(text)
+            || FILE_FIELDS.contains(&text.as_str())
+            || usages.contains(&text.as_str())
+            || chosen.contains(text)
+    };
     lines
         .0
         .into_iter()
@@ -64,6 +93,30 @@ fn cut_short(w: &mut Harness) -> Vec<String> {
             let size = SIZES.into_iter().find(|s| (bounds.height - s * 1.3).abs() < 0.6)?;
             let wide = narrowest(&text, size);
             (wide > bounds.width + 1.0).then(|| format!("{text:?} at {size} px: {wide:.1} px wide, laid out {:.1} at {:.0},{:.0}", bounds.width, bounds.x, bounds.y))
+        })
+        .collect()
+}
+
+/// The short texts of the window (a name, a button's word or two) that are cut in two lines: each
+/// with how wide it is drawn on one, and how wide it is laid out. (Known by being as high as two
+/// lines of a size, and wider than its room at that size.)
+fn wrapped(w: &mut Harness) -> Vec<String> {
+    let mut lines = Lines(Vec::new());
+    w.input(&[]);
+    w.frame(|ui, renderer| ui.operate(renderer, &mut lines));
+    // (The names of the rows of Properties are as wide as their column: a long one goes on two
+    // lines there, as it is meant to.)
+    let names = view::properties::label_width(view::pane_width(&w.app, crate::app::Pane::Properties));
+    // (Nor is the title of the node: a long name of one word goes on in a second line.)
+    let titles: Vec<String> = w.app.ui.selection.iter().filter_map(|id| w.app.graph().node(*id)).map(crate::view::graph::node_title).collect();
+    lines
+        .0
+        .into_iter()
+        .filter(|(text, bounds)| (bounds.width - names).abs() > 0.5 && !titles.contains(text))
+        .filter(|(text, _)| !text.trim().is_empty() && text.split_whitespace().count() <= 3 && text.chars().count() <= 32)
+        .filter_map(|(text, bounds)| {
+            let size = SIZES.into_iter().find(|s| (bounds.height - 2.0 * s * 1.3).abs() < 0.6 && narrowest(&text, *s) > bounds.width + 1.0)?;
+            Some(format!("{text:?} at {size} px in two lines: {:.1} px wide, laid out {:.1} at {:.0},{:.0}", narrowest(&text, size), bounds.width, bounds.x, bounds.y))
         })
         .collect()
 }
@@ -86,7 +139,8 @@ fn first(w: &Harness, kind: NodeKind) -> brewed_texture_core::graph::NodeId {
 
 /// The window shows its names and fields whole at every size it is let be: the side columns as
 /// wide as their names need, the fields of Properties left their room, the headers of the views
-/// in their own room.
+/// in their own room; above the smallest size, no short name is cut in two lines (an input
+/// value opened, its buttons too).
 #[test]
 fn the_window_shows_its_names_whole_at_every_size() {
     let mut found = Vec::new();
@@ -97,6 +151,17 @@ fn the_window_shows_its_names_whole_at_every_size() {
         for line in cut_short(&mut w) {
             found.push(format!("{width}×{height}: {line}"));
         }
+        let mortar = w.app.graph().variables.iter().find(|v| v.name == "mortar").map(|v| v.name.clone()).expect("the demo's mortar");
+        w.send(Message::ToggleVariable(mortar.clone()));
+        for line in cut_short(&mut w) {
+            found.push(format!("{width}×{height}, {mortar} open: {line}"));
+        }
+        if width > 1000.0 {
+            for line in wrapped(&mut w) {
+                found.push(format!("{width}×{height}, {mortar} open: {line}"));
+            }
+        }
+        w.send(Message::ToggleVariable(mortar));
         // Each column as wide as it is let be at the least (where the window has room; the
         // panels keep a few pixels between them).
         let column = |which| view::pane_width(&w.app, which);
@@ -173,6 +238,23 @@ fn the_properties_of_every_node_show_whole() {
         let Some(id) = w.app.graph().nodes_of(kind).last().map(|n| n.id) else { continue };
         w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
         newly_cut(&mut w, &before, &format!("{kind:?}"), &mut found);
+        w.send(Message::Delete);
+    }
+    // Where Properties has a little more room (a television at 300 %), no short name of them is
+    // cut in two lines.
+    let mut w = harness!(view::root, 1280.0, 720.0);
+    w.send(Message::Graph(GraphMessage::ClearSelection));
+    let before = wrapped(&mut w);
+    for &kind in NodeKind::ALL {
+        w.send(Message::Edit(Edit::AddNode { kind, pos: [2600.0, -900.0] }));
+        w.send(Message::Seal);
+        let Some(id) = w.app.graph().nodes_of(kind).last().map(|n| n.id) else { continue };
+        w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+        for line in wrapped(&mut w) {
+            if !before.contains(&line) {
+                found.push(format!("{kind:?} at 1280×720: {line}"));
+            }
+        }
         w.send(Message::Delete);
     }
     assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
@@ -258,4 +340,90 @@ fn context_menus_open_at_the_cursor_where_they_fit() {
     // At the right edge too.
     let (first, _) = menu_at(&mut w, Point::new(width - 5.0, 200.0));
     assert!(first.x < width - 100.0, "moved in from the right edge: {first:?}");
+}
+
+/// Every template and every example of Learn, made or opened in the window: their graphs say no
+/// errors, and the properties of each of their nodes show whole, their short names on one line
+/// (on a television at 300 %).
+#[test]
+fn templates_and_examples_show_whole() {
+    use brewed_texture_core::templates::{Example, Template};
+    let mut found = Vec::new();
+    let mut w = harness!(view::root, 1280.0, 720.0);
+    let made: Vec<(String, Message)> = Template::ALL
+        .into_iter()
+        .map(|t| (format!("{t:?}"), Message::NewGraph(NewGraphMessage::Template(t))))
+        .chain(Example::ALL.into_iter().map(|e| (format!("{e:?}"), Message::Home(HomeMessage::Example(e)))))
+        .collect();
+    for (name, message) in made {
+        if matches!(message, Message::NewGraph(_)) {
+            w.send(Message::NewGraph(NewGraphMessage::Open(None)));
+            w.send(message);
+            w.send(Message::NewGraph(NewGraphMessage::Create));
+        } else {
+            w.send(message);
+        }
+        w.send(Message::Home(HomeMessage::Show(HomePage::Home)));
+        w.app.ui.home = None;
+        w.send(Message::Graph(GraphMessage::ClearSelection));
+        let before = (cut_short(&mut w), wrapped(&mut w));
+        let ids: Vec<_> = w.app.graph().nodes.iter().map(|n| n.id).collect();
+        for id in ids {
+            if let Some(e) = w.app.eval.node(id).filter(|e| !e.errors.is_empty()) {
+                found.push(format!("{name}: node {} says {:?}", id.0, e.errors));
+            }
+            w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+            let kind = w.app.graph().node(id).map(|n| n.def().name).unwrap_or_default();
+            for line in cut_short(&mut w).into_iter().filter(|l| !before.0.contains(l)) {
+                found.push(format!("{name}, {kind}: {line}"));
+            }
+            for line in wrapped(&mut w).into_iter().filter(|l| !before.1.contains(l)) {
+                found.push(format!("{name}, {kind}: {line}"));
+            }
+        }
+    }
+    found.dedup();
+    assert!(found.is_empty(), "{}", found.join("\n"));
+}
+
+/// The headers of the 3D and 2D views show their words whole however the split between the
+/// views is dragged: narrower, they put their fields or channels on a line under the others.
+#[test]
+fn the_headers_of_the_views_fit_wherever_they_are_split() {
+    let mut found = Vec::new();
+    let mut w = harness!(view::root, 1280.0, 720.0);
+    let levels = first(&w, NodeKind::LEVELS);
+    w.send(Message::Graph(GraphMessage::Preview(levels)));
+    for i in 0..=40 {
+        let split = 0.02 + 0.96 * i as f32 / 40.0;
+        let mut splits = crate::app::splits_of(&w.app.ui.panes);
+        splits[4] = split;
+        w.app.ui.panes = crate::app::panes(&splits);
+        w.app.ui.side_splits = [splits[0], splits[2]];
+        w.app.fit_columns();
+        let (a, b) = (view::pane_width(&w.app, crate::app::Pane::View3D), view::pane_width(&w.app, crate::app::Pane::View2D));
+        for line in cut_short(&mut w) {
+            found.push(format!("3D {a:.0} px, 2D {b:.0} px: {line}"));
+        }
+    }
+    found.dedup();
+    assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
+}
+
+/// The side columns are fitted to every width the window may have, whatever their splits say
+/// (dragged as far as they go), and none of it panics: at the narrowest the bounds meet.
+#[test]
+fn the_columns_fit_any_window_and_any_split() {
+    let mut w = harness!(view::root, 1000.0, 640.0);
+    for width in [880.0, 880.5, 999.0, 1000.0, 1280.0, 1680.0, 3840.0] {
+        for (left, right) in [(0.0, 0.0), (0.99, 0.99), (0.99, 0.01), (0.01, 0.99), (0.5, 0.5)] {
+            w.app.ui.window_size = Size::new(width, 900.0);
+            w.app.ui.side_splits = [left, right];
+            w.app.fit_columns();
+            let column = |which| view::pane_width(&w.app, which);
+            let least = view::PANE_SPACING + 1.0;
+            assert!(column(crate::app::Pane::Explorer) >= crate::app::LEFT_MIN - least, "{width} {left} {right}: the Explorer {}", column(crate::app::Pane::Explorer));
+            assert!(column(crate::app::Pane::Properties) >= crate::app::RIGHT_MIN - least, "{width} {left} {right}: Properties {}", column(crate::app::Pane::Properties));
+        }
+    }
 }

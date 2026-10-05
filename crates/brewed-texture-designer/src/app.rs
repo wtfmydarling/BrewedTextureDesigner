@@ -1462,8 +1462,24 @@ impl App {
         if self.ui.selected_link.as_ref().is_some_and(|l| !graph.links.contains(l)) {
             self.ui.selected_link = None;
         }
+        // (An undo takes a comment away as well as a node: it was still selected, and Delete
+        // offered to take it away.)
+        if self.ui.selected_comment.is_some_and(|id| graph.comment(id).is_none()) {
+            self.ui.selected_comment = None;
+        }
         if self.ui.preview.node.is_some_and(|id| !graph.contains(id)) {
             self.ui.preview.node = None;
+        }
+        // A color picker open for what an edit took away closes (shown for nothing, it kept the
+        // next Esc).
+        let gone = match &self.ui.color_picker {
+            Some(ColorTarget::Param(id, _) | ColorTarget::GradientStop(id, _)) => !graph.contains(*id),
+            Some(ColorTarget::Comment(id)) => graph.comment(*id).is_none(),
+            Some(ColorTarget::Variable(name, _)) => !graph.variables.iter().any(|v| v.name == *name),
+            None => false,
+        };
+        if gone {
+            self.ui.color_picker = None;
         }
         self.res.thumbs.retain(|id, _| graph.contains(*id));
         // A menu of pictures belongs to a choice that is still there to be made.
@@ -2927,8 +2943,15 @@ impl App {
         let [mut left, mut right] = self.ui.side_splits;
         let width = self.ui.window_size.width;
         if width >= LEFT_MIN + RIGHT_MIN + MIDDLE_MIN {
-            left = left.max(LEFT_MIN / width);
-            right = right.min(1.0 - RIGHT_MIN / (width * (1.0 - left)));
+            // Each side column as wide as it must be, and no wider than leaves the graph and the
+            // views their room (a column dragged across the window squeezed them, and the other
+            // column with them).
+            // (Bounds that cannot cross: at the narrowest the two meet, a rounding apart, and a
+            // clamp between them would panic.)
+            let between = |v: f32, lo: f32, hi: f32| v.min(hi.max(lo)).max(lo);
+            left = between(left, LEFT_MIN / width, 1.0 - (MIDDLE_MIN + RIGHT_MIN) / width);
+            let rest = width * (1.0 - left);
+            right = between(right, MIDDLE_MIN / rest, 1.0 - RIGHT_MIN / rest);
         }
         self.ui.panes.resize(outer, left);
         self.ui.panes.resize(inner, right);

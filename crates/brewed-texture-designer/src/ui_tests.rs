@@ -216,6 +216,7 @@ macro_rules! harness {
 }
 
 // (After the macro: the tests of each part of the window, which use it.)
+mod graph_canvas;
 mod text_fits;
 mod title_bar;
 
@@ -2000,6 +2001,8 @@ fn stays_inside(message: &Message) -> bool {
         | Message::Pick(_)
         | Message::Host(_)
         | Message::Quit
+        // (The window's own close button quits as Quit does.)
+        | Message::Window(crate::app::WindowAction::Close)
         | Message::SaveThen(_)
         | Message::Proceed(PendingAction::Quit)
         | Message::Preview(PreviewMessage::BrowseEnvironment)
@@ -2152,6 +2155,35 @@ fn broken(app: &App) -> Option<String> {
     let v = app.ui.graph_view;
     if !(v.zoom.is_finite() && v.zoom > 0.0 && v.pan.x.is_finite() && v.pan.y.is_finite()) {
         return Some(format!("the graph view is at {:?} × {}", v.pan, v.zoom));
+    }
+    // What the interface points at is in the graph: what an edit took away, it lets go of.
+    let ui = &app.ui;
+    if let Some(id) = ui.selection.iter().find(|id| !g.contains(**id)) {
+        return Some(format!("node {} is selected, and not in the graph", id.0));
+    }
+    if ui.selected_link.as_ref().is_some_and(|l| !g.links.contains(l)) {
+        return Some("a link that is not in the graph is selected".into());
+    }
+    if let Some(id) = ui.selected_comment.filter(|id| g.comment(*id).is_none()) {
+        return Some(format!("comment {id:?} is selected, and not in the graph"));
+    }
+    if let Some(id) = ui.preview.node.filter(|id| !g.contains(*id)) {
+        return Some(format!("the 2D view shows node {}, which is not in the graph", id.0));
+    }
+    if let Some((id, _)) = ui.expression.as_ref().filter(|(id, _)| !g.contains(*id)) {
+        return Some(format!("the expression edited is of node {}, which is not in the graph", id.0));
+    }
+    let variable = |name: &str| g.variables.iter().any(|v| v.name == name);
+    match &ui.color_picker {
+        Some(ColorTarget::Param(id, _) | ColorTarget::GradientStop(id, _)) if !g.contains(*id) => {
+            return Some(format!("a color picker is open for node {}, which is not in the graph", id.0));
+        }
+        Some(ColorTarget::Comment(id)) if g.comment(*id).is_none() => return Some(format!("a color picker is open for comment {id:?}, which is not in the graph")),
+        Some(ColorTarget::Variable(name, _)) if !variable(name) => return Some(format!("a color picker is open for the input value {name}, which the graph has not")),
+        _ => {}
+    }
+    if let Some((name, _)) = ui.renaming_var.as_ref().filter(|(name, _)| !variable(name)) {
+        return Some(format!("the input value {name} is being renamed, which the graph has not"));
     }
     None
 }
@@ -2404,12 +2436,20 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
                     .unwrap_or_default()
             )),
             Ok(Some(state)) => Some(format!("BROKEN: {state}")),
+            // Every few hundred steps, in whatever state and size the window is then: no line
+            // of text cut short.
+            Ok(None) if step % 250 == 249 => {
+                let cut = text_fits::cut_short(&mut w);
+                (!cut.is_empty()).then(|| format!("CUT SHORT at {}×{}: {}", w.size.width, w.size.height, cut.join("; ")))
+            }
             Ok(None) => None,
         };
         if step % 5000 == 4999 {
             w.snapshot(&format!("monkey_{seed}_{step}"));
         }
         if let Some(failure) = failure {
+            // (What the window showed then, when snapshots are asked for.)
+            w.snapshot(&format!("monkey_{seed}_failed"));
             let _ = std::fs::remove_dir_all(&files);
             return Err(format!(
                 "seed {seed}, step {step}: {failure}\nlast steps:\n{}",

@@ -328,6 +328,10 @@ impl canvas::Program<Message> for Plot {
             frame.stroke(&Path::line(Point::new(x, 0.0), Point::new(x, h)), Stroke::default().with_width(1.0).with_color(style::gray(170)));
         }
         let label = |frame: &mut Frame, s: String, p: Point, v: Vertical| {
+            // On a patch of the field: the curve passes under the number, not through it.
+            let (wide, tall) = (crate::view::text_width_in(&s, 10.5, style::mono()) + 4.0, 10.5 * 1.3);
+            let top = if v == Vertical::Bottom { p.y - tall } else { p.y };
+            frame.fill_rectangle(Point::new(p.x - 2.0, top), iced::Size::new(wide, tall), style::alpha(style::FIELD, 0.85));
             frame.fill_text(Text {
                 content: s,
                 position: p,

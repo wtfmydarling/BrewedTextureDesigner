@@ -176,20 +176,26 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
         col = col.push(field_row("Max", max_editor));
     }
     let at_default = var.is_default();
-    col = col.push(
-        row![
-            space().width(Length::Fixed(78.0)),
-            button(row![icon(Icon::Reset, 13.0, style::TEXT_DIM), text("Reset to default").size(style::SMALL)].spacing(5).align_y(Alignment::Center))
-                .padding([3, 8])
-                .style(style::button)
-                .on_press_maybe((!at_default).then(|| Message::Edit(Edit::ResetVariable(name.clone())))),
-            button(text("Set as default").size(style::SMALL))
-                .padding([3, 8])
-                .style(style::button)
-                .on_press_maybe((!at_default).then(|| Message::Edit(Edit::MakeVariableDefault(name.clone())))),
-        ]
-        .spacing(6),
-    );
+    // Where the two do not fit side by side, the second goes under the first (its name was cut
+    // in two in its button).
+    let buttons = row![
+        button(
+            row![icon(Icon::Reset, 13.0, style::TEXT_DIM), text("Reset to default").size(style::SMALL).wrapping(text::Wrapping::None)]
+                .spacing(5)
+                .align_y(Alignment::Center)
+        )
+        .padding([3, 8])
+        .style(style::button)
+        .on_press_maybe((!at_default).then(|| Message::Edit(Edit::ResetVariable(name.clone())))),
+        button(text("Set as default").size(style::SMALL).wrapping(text::Wrapping::None))
+            .padding([3, 8])
+            .style(style::button)
+            .on_press_maybe((!at_default).then(|| Message::Edit(Edit::MakeVariableDefault(name.clone())))),
+    ]
+    .spacing(6)
+    .wrap()
+    .vertical_spacing(4);
+    col = col.push(row![space().width(Length::Fixed(78.0)), buttons]);
     let users = app.graph().variable_users(&var.name).count();
     let (what, node) = match &var.image {
         Some(image) => (format!("{} image", image.kind.name()), "Image Input node"),

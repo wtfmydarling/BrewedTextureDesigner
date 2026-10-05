@@ -31,14 +31,19 @@ fn toolbar_2d(app: &App) -> Element<'_, Message> {
     ]
     .spacing(6)
     .align_y(Alignment::Center);
-    // In a narrow view, the buttons closer together.
-    let narrow = crate::view::pane_width(app, crate::app::Pane::View2D) < NARROW_2D;
+    // In a narrow view, the buttons closer together; narrower, the channels on a line of their
+    // own under the others.
+    let room = crate::view::pane_width(app, crate::app::Pane::View2D);
+    let (narrow, under) = (room < NARROW_2D, room < TWO_LINES_2D);
     let pad = if narrow { 4.0 } else { 6.0 };
+    // (On their own line, as close as a strip of segments: it fits the narrowest view.)
+    let (channel_pad, channel_gap) = if under { (3.0, 0) } else if narrow { (pad, 2) } else { (pad, 6) };
+    let mut channels = row![].spacing(channel_gap).align_y(Alignment::Center);
     for (i, name) in CHANNELS.iter().enumerate() {
         let active = p.channel == i as u32;
-        bar = bar.push(
+        channels = channels.push(
             button(text(*name).size(style::SMALL))
-                .padding([3.0, pad])
+                .padding([3.0, channel_pad])
                 .style(style::toggle_button(active))
                 .on_press(Message::Preview(PreviewMessage::Channel(i as u32))),
         );
@@ -46,6 +51,12 @@ fn toolbar_2d(app: &App) -> Element<'_, Message> {
     if narrow {
         bar = bar.spacing(2);
     }
+    let channels = if under {
+        Some(channels)
+    } else {
+        bar = bar.push(channels);
+        None
+    };
     bar = bar.push(tip(
         button(icon(Icon::Grid, 15.0, if p.show_tiling { style::ACCENT_TEXT } else { style::TEXT_DIM }))
             .padding(4)
@@ -64,11 +75,18 @@ fn toolbar_2d(app: &App) -> Element<'_, Message> {
         "One image pixel per screen pixel",
         Position::Bottom,
     ));
+    if let Some(channels) = channels {
+        // (Its line padded less: it fits the narrowest view, whatever the system draws its letters with.)
+        let line = container(channels.height(Length::Fixed(crate::view::HEADER_H))).padding([0, 4]).width(Length::Fill).clip(true).style(style::header_bar);
+        return column![header(bar), line].into();
+    }
     header(bar)
 }
 
-/// How wide the 2D view is at least for its buttons to keep their room between them.
+/// How wide the 2D view is at least for its buttons to keep their room between them, and to have
+/// them all on one line (with the closer ones: the icon, the channels, three buttons and the gaps).
 const NARROW_2D: f32 = 340.0;
+const TWO_LINES_2D: f32 = 262.0;
 
 /// The header of the 3D view: how fast it draws, the shape and the light.
 fn toolbar_3d(app: &App) -> Element<'_, Message> {

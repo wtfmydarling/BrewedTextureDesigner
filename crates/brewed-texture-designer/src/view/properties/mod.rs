@@ -32,7 +32,7 @@ const LABEL_W: f32 = 118.0;
 const LABEL_MIN: f32 = 60.0;
 
 /// How wide the names of the rows are in a panel `width` wide.
-fn label_width(width: f32) -> f32 {
+pub(crate) fn label_width(width: f32) -> f32 {
     ((width - 50.0) * 0.42).clamp(LABEL_MIN, LABEL_W)
 }
 
@@ -269,7 +269,8 @@ fn node_view(app: &App, id: NodeId, label_w: f32) -> Element<'_, Message> {
     let title = crate::view::graph::node_title(node);
     let mut head = row![
         container(space().width(12).height(12)).style(style::chip(style::category_color(d.category))),
-        text(title).size(16).font(style::bold()),
+        // (A long name of one word, an Output's say, is cut in lines anywhere rather than run past the panel.)
+        text(title).size(16).font(style::bold()).wrapping(text::Wrapping::WordOrGlyph),
         space().width(Length::Fill),
     ]
     .spacing(8)
@@ -478,7 +479,7 @@ fn variable_section<'a>(app: &'a App, node: &'a Node, label_w: f32) -> Element<'
 /// "← node" text that selects the node a value comes from.
 fn source_link<'a>(from: NodeId, label: String) -> Element<'a, Message> {
     tip(
-        button(text(label).size(style::SMALL).color(style::TEXT_FAINT))
+        button(text(label).size(style::SMALL).color(style::TEXT_FAINT).wrapping(text::Wrapping::None))
             .padding([0, 3])
             .style(style::flat_button)
             .on_press(Message::SelectNode(from)),
@@ -527,9 +528,11 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value
             if let ParamValue::Color(c) = v {
                 r = r.push(container(space().width(Length::Fixed(22.0)).height(Length::Fixed(12.0))).style(style::chip(style::color_of(*c))));
             }
-            r = r.push(text(shown).size(style::SMALL).color(color));
+            // Where the field is narrow, the value gives way and the node it comes from stays
+            // whole (it was squeezed into two lines of three pixels).
+            r = r.push(container(text(shown).size(style::SMALL).color(color).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true));
             r = r.push(source_link(link.from, format!("← {from}")));
-            container(r).padding([4, 6]).width(Length::Fill).style(style::field_box).into()
+            container(r).padding([4, 6]).width(Length::Fill).clip(true).style(style::field_box).into()
         }
         _ => {
             let stored = match slot_value {
@@ -539,6 +542,7 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value
             container(
                 row![
                     socket_icon(ty, false, 12.0, style::WARNING),
+                    // (In a narrow field, on two lines.)
                     text(format!("not connected · uses {stored}")).size(style::SMALL).color(style::WARNING),
                 ]
                 .spacing(6)

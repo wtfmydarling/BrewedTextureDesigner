@@ -224,7 +224,7 @@ pub fn toolbar(app: &App, room: f32) -> (iced::widget::Row<'_, Message>, Option<
     // A list rather than a button each: the view next to it is the one that needs the room.
     // As wide as its longest shape where there is room: one line.
     let list = if named || under { 132.0 } else { 110.0 };
-    let mut r = row![
+    let r = row![
         pick_list(Shape::ALL, Some(cam.shape), move |shape| Message::Preview(PreviewMessage::Camera(Camera { shape, ..cam })))
             .text_size(style::SMALL)
             .padding([2, 6])
@@ -249,7 +249,10 @@ pub fn toolbar(app: &App, room: f32) -> (iced::widget::Row<'_, Message>, Option<
         Position::Bottom,
     );
     let label = |t: &'static str| text(t).size(style::SMALL).color(style::TEXT_DIM);
-    if named || under {
+    // (Under the tools in a view too narrow even for the fields with their names: as they are
+    // between, below.)
+    let named = named || (under && room >= NAMED_FIELDS);
+    if named {
         let fields = row![
             label("Height"),
             container(height).width(Length::Fixed(70.0)),
@@ -267,10 +270,21 @@ pub fn toolbar(app: &App, room: f32) -> (iced::widget::Row<'_, Message>, Option<
     let tip = |field: crate::widget::number::NumberField<'static, Message>, says: &'static str, width: f32| {
         crate::view::tip(container(field).width(Length::Fixed(width)), says, Position::Bottom)
     };
-    r = r.push(tip(height.prefix("h "), "Height: how far the model's surface is moved by the height map", 64.0));
-    r = r.push(tip(repeat.prefix("× "), "Repeat: how many times the maps tile across the model", 54.0));
-    (r.push(reset), None)
+    let fields = row![
+        tip(height.prefix("h "), "Height: how far the model's surface is moved by the height map", 64.0),
+        tip(repeat.prefix("× "), "Repeat: how many times the maps tile across the model", 54.0),
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center);
+    if under {
+        return (r.push(reset), Some(fields));
+    }
+    (r.push(fields).push(reset), None)
 }
+
+/// How wide the line of the fields with their names is (its padding, the names, the fields, the
+/// gaps).
+const NAMED_FIELDS: f32 = 16.0 + 40.0 + 4.0 + 70.0 + 4.0 + 42.0 + 4.0 + 60.0;
 
 /// The button of the lighting's menu, and the menu while it is open.
 fn lighting_button(app: &App) -> Element<'_, Message> {

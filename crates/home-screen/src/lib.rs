@@ -203,6 +203,65 @@ const SIDEBAR: f32 = 250.0;
 /// How large the picture of a card of what a new file starts from is, square.
 const CARD: f32 = 132.0;
 const PICTURE: f32 = 176.0;
+
+/// How wide a line of text is drawn at `size` in `font`.
+fn measure(content: &str, size: f32, font: iced::Font) -> f32 {
+    use iced::advanced::text::{self as core_text, Paragraph as _};
+    iced::advanced::graphics::text::Paragraph::with_text(core_text::Text {
+        content,
+        bounds: iced::Size::INFINITE,
+        size: iced::Pixels(size),
+        line_height: core_text::LineHeight::default(),
+        font,
+        align_x: core_text::Alignment::Default,
+        align_y: iced::alignment::Vertical::Top,
+        shaping: core_text::Shaping::default(),
+        wrapping: core_text::Wrapping::None,
+    })
+    .min_width()
+}
+
+/// As much of the end of `path` as fits `width` at `size` in `font`, its start given as "…":
+/// the end of a path is what tells files apart (their starts are the same for most). Cut where
+/// a folder starts, where the last folder fits; else within it. Each worked out once.
+fn tail_of(path: &str, width: f32, size: f32, font: iced::Font) -> String {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    type Tails = HashMap<(String, u32, u32, iced::Font), String>;
+    thread_local! {
+        static TAILS: RefCell<Tails> = RefCell::new(HashMap::new());
+    }
+    let key = (path.to_owned(), width.to_bits(), size.to_bits(), font);
+    if let Some(tail) = TAILS.with_borrow(|t| t.get(&key).cloned()) {
+        return tail;
+    }
+    let fits = |s: &str| measure(s, size, font) <= width;
+    let tail = if fits(path) {
+        path.to_owned()
+    } else {
+        let cut = |at: usize| format!("…{}", &path[at..]);
+        // The places a tail may start: after each separator; failing those, at each letter.
+        let separators: Vec<usize> = path.char_indices().filter(|(_, c)| *c == '/' || *c == '\\').map(|(i, _)| i).collect();
+        let letters: Vec<usize> = path.char_indices().map(|(i, _)| i).skip(1).collect();
+        // The first (longest) tail that fits: tails get narrower as they start further on.
+        let longest = |starts: &[usize]| {
+            let (mut lo, mut hi) = (0, starts.len());
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if fits(&cut(starts[mid])) { hi = mid } else { lo = mid + 1 }
+            }
+            starts.get(lo).map(|at| cut(*at))
+        };
+        longest(&separators).or_else(|| longest(&letters)).unwrap_or_else(|| "…".to_owned())
+    };
+    TAILS.with_borrow_mut(|t| {
+        if t.len() > 512 {
+            t.clear();
+        }
+        t.insert(key, tail.clone());
+    });
+    tail
+}
 /// The pictures of the lessons, and of the rows of the list.
 const LESSON: [f32; 2] = [180.0, 112.0];
 const THUMB: f32 = 64.0;
@@ -480,7 +539,8 @@ fn card<'a>(recent: &'a Recent, style: Style) -> Element<'a, Event> {
         container(picture).style(style.frame()).clip(true),
         space().height(4),
         text(recent.name.as_str()).size(style.text_size).font(style.semibold()).wrapping(text::Wrapping::None),
-        text(recent.folder.as_str()).size(style.small_size).color(style.faint).wrapping(text::Wrapping::None),
+        // The end of the folder (where it differs from the others), its start given as "…".
+        text(tail_of(&recent.folder, PICTURE, style.small_size, style.font)).size(style.small_size).color(style.faint).wrapping(text::Wrapping::None),
         text(said).size(style.small_size).color(if recent.there { style.dim } else { style.warning }),
     ]
     .spacing(3)
@@ -605,6 +665,23 @@ mod tests {
             there: true,
             picture: None,
         }
+    }
+
+    /// A folder too long for a card is shown by its end, its start given as "…": cut where a
+    /// folder starts while the last one fits, within it when it alone does not; a short one
+    /// whole.
+    #[test]
+    fn long_folders_are_shown_by_their_ends() {
+        let font = iced::Font::DEFAULT;
+        let long = r"C:\Users\someone\AppData\Local\Temp\brewed-monkey-312";
+        let tail = tail_of(long, PICTURE, 12.0, font);
+        assert!(tail.starts_with('…') && tail.ends_with(r"\brewed-monkey-312"), "{tail}");
+        assert!(measure(&tail, 12.0, font) <= PICTURE, "{tail} fits");
+        assert!(tail["…".len()..].starts_with('\\'), "cut where a folder starts: {tail}");
+        let one = "/a-folder-name-far-too-long-to-fit-in-a-card-whole-however-it-is-cut";
+        let tail = tail_of(one, PICTURE, 12.0, font);
+        assert!(tail.starts_with('…') && one.ends_with(&tail["…".len()..]) && measure(&tail, 12.0, font) <= PICTURE, "{tail}");
+        assert_eq!(tail_of("/home/me", PICTURE, 12.0, font), "/home/me");
     }
 
     /// The files opened last are the latest first; a column sorts them, again the other way.

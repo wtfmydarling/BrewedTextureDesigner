@@ -81,12 +81,12 @@ pub fn field<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, current: u
     let id = node.id;
     let open = app.ui.choice_menu.as_ref().is_some_and(|m| m.node == id && m.key == pd.key);
     let label = pd.enum_options().get(current as usize).copied().unwrap_or("?");
-    // The node's own thumbnail is what the current option makes.
+    // The node's own thumbnail is what the current option makes. (The name cut at the field's
+    // edge in a narrow Properties, not run under the arrow: the menu says it whole.)
     let face = button(
         row![
             picture(app.res.thumbs.get(&id), FIELD_PICTURE),
-            text(label).size(style::TEXT_SIZE).wrapping(text::Wrapping::None),
-            space().width(Length::Fill),
+            container(text(label).size(style::TEXT_SIZE).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true),
             icon(Icon::ChevronDown, 12.0, style::TEXT_DIM),
         ]
         .spacing(6)
@@ -155,22 +155,37 @@ fn menu<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, current: u32) -
 /// Width of a menu under headings.
 const GROUPED_W: f32 = 290.0;
 
+/// How wide the words of a field of options under headings may be in Properties: its editor's
+/// room, less the field's padding, its arrow and the gaps.
+fn grouped_room(app: &App) -> f32 {
+    let panel = crate::view::pane_width(app, crate::app::Pane::Properties);
+    let editor = panel - crate::view::properties::label_width(panel) - 50.0;
+    editor - 12.0 - 12.0 - 2.0 * 6.0
+}
+
 /// The field of a choice of options under headings, and its menu while it is open: the
 /// option's name, its heading before it.
 pub fn grouped_field<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, current: u32) -> Element<'a, Message> {
     let id = node.id;
     let open = app.ui.choice_menu.as_ref().is_some_and(|m| m.node == id && m.key == pd.key);
     let label = pd.enum_options().get(current as usize).copied().unwrap_or("?");
-    let heading = pd.groups.iter().find(|(_, of)| of.contains(&current)).map(|(h, _)| *h).filter(|h| *h != label);
+    // The heading before the name where it says something the name does not ("Specular" before
+    // "Roughness", not "Subsurface" before "Subsurface Weight"), and the field has room for both
+    // (in a narrow Properties the name comes first); the name cut at the field's edge.
+    let room = grouped_room(app);
+    let heading = pd
+        .groups
+        .iter()
+        .find(|(_, of)| of.contains(&current))
+        .map(|(h, _)| *h)
+        .filter(|h| *h != label && !label.starts_with(h))
+        .filter(|h| crate::view::text_width(h, style::SMALL) + 6.0 + crate::view::text_width(label, style::TEXT_SIZE) <= room);
     let mut face = row![].spacing(6).align_y(Alignment::Center);
     if let Some(h) = heading {
         face = face.push(text(h).size(style::SMALL).color(style::TEXT_DIM).wrapping(text::Wrapping::None));
     }
-    let face = face.push(text(label).size(style::TEXT_SIZE).wrapping(text::Wrapping::None)).push(space().width(Length::Fill)).push(icon(
-        Icon::ChevronDown,
-        12.0,
-        style::TEXT_DIM,
-    ));
+    let name = container(text(label).size(style::TEXT_SIZE).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true);
+    let face = face.push(name).push(icon(Icon::ChevronDown, 12.0, style::TEXT_DIM));
     let face = button(face).width(Length::Fill).padding([3, 6]).style(style::choice_field(open)).on_press(Message::ChoiceMenu(if open {
         None
     } else {

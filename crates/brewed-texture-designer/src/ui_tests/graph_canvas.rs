@@ -1,0 +1,401 @@
+//! The graph's canvas, driven as a hand drives it: what a click, a drag, a double click, the
+//! wheel and the keys do to its nodes and links.
+
+use iced::{Rectangle, Vector};
+use brewed_texture_core::graph::{NodeId, SocketRef};
+
+use super::*;
+use crate::app::AddMenuMessage;
+
+/// Where a node is in the window.
+fn node_rect(w: &Harness, node: NodeId) -> Rectangle {
+    let graph = w.app.graph();
+    let view = w.app.ui.graph_view;
+    let t = view::graph::layout::Transform { pan: view.pan, zoom: view.zoom };
+    let l = view::graph::layout::layout(graph, graph.node(node).expect("the node"), &t, Vector::ZERO);
+    l.rect + Vector::new(view.bounds.x, view.bounds.y)
+}
+
+/// Where a node's output socket is in the window.
+fn output_socket(w: &Harness, node: NodeId, key: &str) -> Point {
+    let graph = w.app.graph();
+    let view = w.app.ui.graph_view;
+    let t = view::graph::layout::Transform { pan: view.pan, zoom: view.zoom };
+    let l = view::graph::layout::layout(graph, graph.node(node).expect("the node"), &t, Vector::ZERO);
+    let (_, p) = l.outputs.iter().find(|(s, _)| s.key == key).expect("the socket");
+    *p + Vector::new(view.bounds.x, view.bounds.y)
+}
+
+/// A point of a node to take it by: in its body, under its sockets (not on a socket, not on
+/// its header's buttons).
+fn grip(w: &Harness, node: NodeId) -> Point {
+    let r = node_rect(w, node);
+    Point::new(r.center_x(), r.y + r.height * 0.75)
+}
+
+/// A click on a node, where it is taken by.
+fn click_on(w: &mut Harness, node: NodeId) {
+    let at = grip(w, node);
+    click(w, at);
+}
+
+/// A window with the demo in it, the canvas told where it is, everything framed.
+fn canvas() -> Option<Harness> {
+    let mut w = Harness::new(Box::new(view::root), Size::new(1680.0, 1000.0))?;
+    w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+    w.send(Message::Graph(GraphMessage::ClearSelection));
+    w.send(Message::Frame);
+    w.input(&[]);
+    Some(w)
+}
+
+macro_rules! canvas {
+    () => {
+        match canvas() {
+            Some(w) => w,
+            None => {
+                eprintln!("no GPU for the headless renderer: test skipped");
+                return;
+            }
+        }
+    };
+}
+
+/// Holds `modifiers` down, as the window says (the canvas reads them from it).
+fn hold(w: &mut Harness, modifiers: keyboard::Modifiers) {
+    w.input(&[iced::Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers))]);
+    let main = w.main_window();
+    w.window_event(main, iced::Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)));
+}
+
+/// A key pressed with the cursor at `at`, as the window says it: `typing` when a field took it.
+fn key_at(w: &mut Harness, at: Point, named: keyboard::key::Named, modifiers: keyboard::Modifiers, typing: bool) {
+    let main = w.main_window();
+    w.window_event(main, iced::Event::Mouse(mouse::Event::CursorMoved { position: at }));
+    let key = Key::Named(named);
+    let event = iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key: key.clone(),
+        modified_key: key,
+        physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+        location: keyboard::Location::Standard,
+        modifiers,
+        text: None,
+        repeat: false,
+    });
+    let status = if typing { iced::event::Status::Captured } else { iced::event::Status::Ignored };
+    w.send(Message::Runtime(event, status, main));
+}
+
+/// A letter key pressed with the cursor at `at` (Ctrl+D, …).
+fn letter_at(w: &mut Harness, at: Point, letter: &str, code: keyboard::key::Code, modifiers: keyboard::Modifiers) {
+    let main = w.main_window();
+    w.window_event(main, iced::Event::Mouse(mouse::Event::CursorMoved { position: at }));
+    key(w, letter, keyboard::key::Physical::Code(code), modifiers);
+}
+
+fn selected(w: &Harness) -> Vec<NodeId> {
+    let mut s: Vec<NodeId> = w.app.ui.selection.iter().copied().collect();
+    s.sort_by_key(|id| id.0);
+    s
+}
+
+fn first(w: &Harness, kind: NodeKind) -> NodeId {
+    w.app.graph().nodes_of(kind).next().unwrap_or_else(|| panic!("a {kind:?}")).id
+}
+
+/// A click selects a node in place of what was selected; with Shift it is added; with Ctrl it is
+/// taken away when it was selected, added when not. A click on the canvas lets every node go,
+/// but not with Shift or Ctrl held.
+#[test]
+fn clicks_select_nodes() {
+    let mut w = canvas!();
+    let (levels, blur, noise) = (first(&w, NodeKind::LEVELS), first(&w, NodeKind::BLUR), first(&w, NodeKind::NOISE));
+    click_on(&mut w, levels);
+    assert_eq!(selected(&w), vec![levels]);
+    click_on(&mut w, blur);
+    assert_eq!(selected(&w), vec![blur], "in place of what was selected");
+    hold(&mut w, keyboard::Modifiers::SHIFT);
+    click_on(&mut w, levels);
+    click_on(&mut w, noise);
+    let mut all = vec![levels, blur, noise];
+    all.sort_by_key(|id| id.0);
+    assert_eq!(selected(&w), all, "Shift adds");
+    // A click on the canvas with Shift held keeps them.
+    let empty = Point::new(w.app.ui.graph_view.bounds.x + 30.0, w.app.ui.graph_view.bounds.y + 60.0);
+    assert!(w.app.graph().nodes.iter().all(|n| !node_rect(&w, n.id).contains(empty)), "the corner is empty");
+    click(&mut w, empty);
+    assert_eq!(selected(&w).len(), 3, "Shift keeps them on a click beside them");
+    hold(&mut w, keyboard::Modifiers::CTRL);
+    click_on(&mut w, blur);
+    assert!(!w.app.ui.selection.contains(&blur) && w.app.ui.selection.len() == 2, "Ctrl takes it away");
+    // (Some pixels aside: within 6 of the first at once, it would be a double click, which
+    // shows the node.)
+    let aside = grip(&w, blur) + Vector::new(8.0, 0.0);
+    click(&mut w, aside);
+    assert!(w.app.ui.selection.contains(&blur), "and adds it back");
+    hold(&mut w, keyboard::Modifiers::default());
+    click(&mut w, empty);
+    assert!(w.app.ui.selection.is_empty(), "a click on the canvas lets them go");
+}
+
+/// A drag on the canvas selects the nodes its box touches; with Shift, beside those selected.
+#[test]
+fn a_box_selects_what_it_touches() {
+    let mut w = canvas!();
+    let (levels, blur) = (first(&w, NodeKind::LEVELS), first(&w, NodeKind::BLUR));
+    let r = node_rect(&w, levels);
+    // From just above-left of the Levels to its middle: it alone is touched.
+    let from = Point::new(r.x - 6.0, r.y - 6.0);
+    assert!(w.app.graph().nodes.iter().all(|n| !node_rect(&w, n.id).contains(from)), "the box starts on the canvas");
+    drag(&mut w, from, r.center());
+    assert!(w.app.ui.selection.contains(&levels), "{:?}", selected(&w));
+    let touched: Vec<NodeId> = w.app.graph().nodes.iter().filter(|n| node_rect(&w, n.id).intersects(&Rectangle::new(from, Size::new(r.center().x - from.x, r.center().y - from.y)))).map(|n| n.id).collect();
+    assert_eq!(selected(&w).len(), touched.len(), "what the box touches, no more");
+    // With Shift: the Blur's box adds it.
+    let b = node_rect(&w, blur);
+    let from = Point::new(b.x + b.width + 6.0, b.y + b.height + 6.0);
+    if w.app.graph().nodes.iter().all(|n| !node_rect(&w, n.id).contains(from)) {
+        hold(&mut w, keyboard::Modifiers::SHIFT);
+        drag(&mut w, from, b.center());
+        hold(&mut w, keyboard::Modifiers::default());
+        assert!(w.app.ui.selection.contains(&levels) && w.app.ui.selection.contains(&blur), "{:?}", selected(&w));
+    }
+}
+
+/// A dragged node moves, with the others selected with it, as far as the mouse went (at the
+/// zoom of the view); one undo puts them all back. A node not selected moves alone, and is
+/// selected.
+#[test]
+fn dragged_nodes_move_together_and_come_back_in_one_undo() {
+    let mut w = canvas!();
+    let (levels, blur, noise) = (first(&w, NodeKind::LEVELS), first(&w, NodeKind::BLUR), first(&w, NodeKind::NOISE));
+    let pos = |w: &Harness, id| w.app.graph().node(id).unwrap().pos;
+    let (l0, b0, n0) = (pos(&w, levels), pos(&w, blur), pos(&w, noise));
+    w.send(Message::Graph(GraphMessage::Select { node: levels, mode: SelectMode::Replace }));
+    w.send(Message::Graph(GraphMessage::Select { node: blur, mode: SelectMode::Add }));
+    let zoom = w.app.ui.graph_view.zoom;
+    let at = grip(&w, levels);
+    drag(&mut w, at, at + Vector::new(60.0, 30.0));
+    let moved = |a: [f32; 2], b: [f32; 2]| [b[0] - a[0], b[1] - a[1]];
+    let d = moved(l0, pos(&w, levels));
+    assert!((d[0] - 60.0 / zoom).abs() < 0.5 && (d[1] - 30.0 / zoom).abs() < 0.5, "as far as the mouse went: {d:?} at {zoom}");
+    assert_eq!(moved(b0, pos(&w, blur)), d, "the other one with it");
+    assert_eq!(pos(&w, noise), n0, "what was not selected stays");
+    w.send(Message::Undo);
+    assert_eq!((pos(&w, levels), pos(&w, blur)), (l0, b0), "one undo puts both back");
+    // Not selected: it alone, and selected.
+    let at = grip(&w, noise);
+    drag(&mut w, at, at + Vector::new(-40.0, 20.0));
+    assert_ne!(pos(&w, noise), n0);
+    assert_eq!((pos(&w, levels), pos(&w, blur)), (l0, b0));
+    assert_eq!(selected(&w), vec![noise]);
+}
+
+/// Delete takes the selected nodes away and their links with them, wherever the cursor is in the
+/// window (as Duplicate and Frame do); one undo brings both back. Typed in a field, the key is the
+/// field's: it takes nothing away.
+#[test]
+fn delete_takes_nodes_and_links_and_undo_brings_them_back() {
+    let mut w = canvas!();
+    let levels = first(&w, NodeKind::LEVELS);
+    let count = |w: &Harness| (w.app.graph().nodes.len(), w.app.graph().links.len());
+    let before = count(&w);
+    let links_of = |w: &Harness| w.app.graph().links.iter().filter(|l| l.from == levels || l.to == levels).count();
+    let linked = links_of(&w);
+    assert!(linked >= 2, "the Levels is linked both ways");
+    w.send(Message::Graph(GraphMessage::Select { node: levels, mode: SelectMode::Replace }));
+    let over = w.app.ui.graph_view.bounds.center();
+    key_at(&mut w, over, keyboard::key::Named::Delete, keyboard::Modifiers::default(), true);
+    assert_eq!(count(&w), before, "typed in a field, Delete is the field's");
+    let away = Point::new(20.0, w.app.ui.window_size.height - 60.0);
+    key_at(&mut w, away, keyboard::key::Named::Delete, keyboard::Modifiers::default(), false);
+    assert_eq!(count(&w), (before.0 - 1, before.1 - linked), "the node and its links, the cursor over the library too");
+    assert!(w.app.graph().node(levels).is_none() && w.app.ui.selection.is_empty());
+    w.send(Message::Undo);
+    assert_eq!(count(&w), before, "one undo brings both back");
+    assert_eq!(links_of(&w), linked);
+}
+
+/// Ctrl+D duplicates the selection beside it: the copies are selected, the originals not, and
+/// the links between the copies are copied with them (not those to what was not copied).
+#[test]
+fn duplicates_are_selected_beside_the_originals() {
+    let mut w = canvas!();
+    let (levels, blur) = (first(&w, NodeKind::LEVELS), first(&w, NodeKind::BLUR));
+    let linked = w.app.graph().links.iter().any(|l| (l.from == levels && l.to == blur) || (l.from == blur && l.to == levels));
+    w.send(Message::Graph(GraphMessage::Select { node: levels, mode: SelectMode::Replace }));
+    w.send(Message::Graph(GraphMessage::Select { node: blur, mode: SelectMode::Add }));
+    let (nodes, links) = (w.app.graph().nodes.len(), w.app.graph().links.len());
+    let over = w.app.ui.graph_view.bounds.center();
+    letter_at(&mut w, over, "d", keyboard::key::Code::KeyD, keyboard::Modifiers::CTRL);
+    assert_eq!(w.app.graph().nodes.len(), nodes + 2, "two copies");
+    let copies = selected(&w);
+    assert_eq!(copies.len(), 2);
+    assert!(!copies.contains(&levels) && !copies.contains(&blur), "the copies are selected, not the originals");
+    let between = w.app.graph().links.iter().filter(|l| copies.contains(&l.from) && copies.contains(&l.to)).count();
+    assert_eq!(between, usize::from(linked), "their link between them is copied");
+    assert_eq!(w.app.graph().links.len(), links + between, "and no other");
+    for copy in &copies {
+        let node = w.app.graph().node(*copy).unwrap();
+        let original = w.app.graph().nodes.iter().find(|n| n.kind == node.kind && !copies.contains(&n.id) && (n.id == levels || n.id == blur)).unwrap();
+        assert_ne!(node.pos, original.pos, "beside, not on top of it");
+    }
+    w.send(Message::Undo);
+    assert_eq!(w.app.graph().nodes.len(), nodes, "one undo takes both away");
+}
+
+/// A double click on the canvas opens the menu that adds a node at the cursor; what is typed
+/// narrows it, Enter adds the first it leaves, where the menu was opened, selected; Esc closes the
+/// menu, adding nothing.
+#[test]
+fn a_double_click_adds_a_node_where_it_is() {
+    let mut w = canvas!();
+    let b = w.app.ui.graph_view.bounds;
+    let empty = Point::new(b.x + 40.0, b.y + b.height - 50.0);
+    assert!(w.app.graph().nodes.iter().all(|n| !node_rect(&w, n.id).contains(empty)), "an empty place");
+    click(&mut w, empty);
+    click(&mut w, empty);
+    let menu = w.app.ui.add_menu.clone().expect("the menu opens");
+    assert!(menu.at.distance(empty) < 1.0, "at the cursor: {:?}", menu.at);
+    let at = w.app.ui.graph_view.to_graph(empty);
+    // Typed: narrowed to what is named so.
+    assert!(matches!(w.operate(focusable::focus::<()>(view::add_menu::search_id())), Outcome::None));
+    w.input(&typing("invert"));
+    assert_eq!(w.app.ui.add_menu.as_ref().map(|m| m.query.as_str()), Some("invert"));
+    let before = w.app.graph().nodes_of(NodeKind::INVERT).count();
+    let enter = Key::Named(keyboard::key::Named::Enter);
+    w.input(&[iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key: enter.clone(),
+        modified_key: enter,
+        physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::default(),
+        text: None,
+        repeat: false,
+    })]);
+    assert!(w.app.ui.add_menu.is_none(), "Enter adds it and closes the menu");
+    let added: Vec<_> = w.app.graph().nodes_of(NodeKind::INVERT).map(|n| (n.id, n.pos)).collect();
+    assert_eq!(added.len(), before + 1, "an Invert");
+    let (id, pos) = *added.last().unwrap();
+    assert!((pos[0] - (at[0] - 80.0)).abs() < 1.0 && (pos[1] - (at[1] - 12.0)).abs() < 1.0, "where the menu was opened: {pos:?} for {at:?}");
+    assert_eq!(selected(&w), vec![id], "selected");
+    // Esc: nothing. (Elsewhere: the Invert is where the menu was.)
+    let empty = Point::new(b.x + b.width - 40.0, b.y + 60.0);
+    assert!(w.app.graph().nodes.iter().all(|n| !node_rect(&w, n.id).contains(empty)), "an empty place");
+    click(&mut w, empty);
+    click(&mut w, empty);
+    assert!(w.app.ui.add_menu.is_some());
+    let nodes = w.app.graph().nodes.len();
+    press(&mut w, keyboard::key::Named::Escape);
+    assert!(w.app.ui.add_menu.is_none() && w.app.graph().nodes.len() == nodes, "Esc adds nothing");
+}
+
+/// A link dragged out of an output and dropped on the canvas opens the menu there; the node chosen
+/// comes connected to that output, in one undo step.
+#[test]
+fn a_link_dropped_on_the_canvas_adds_a_connected_node() {
+    let mut w = canvas!();
+    let noise = first(&w, NodeKind::NOISE);
+    let from = output_socket(&w, noise, "o:output");
+    let b = w.app.ui.graph_view.bounds;
+    let empty = Point::new(b.x + 40.0, b.y + b.height - 50.0);
+    drag(&mut w, from, empty);
+    let menu = w.app.ui.add_menu.clone().expect("the menu opens where the link was dropped");
+    assert_eq!(menu.pending.as_ref().map(|s| (s.node, s.key.as_str())), Some((noise, "o:output")));
+    let steps = w.app.doc.undo_label().map(str::to_string);
+    w.send(Message::AddMenu(AddMenuMessage::Choose(NodeKind::INVERT)));
+    let invert = w.app.graph().nodes_of(NodeKind::INVERT).last().map(|n| n.id).expect("an Invert");
+    assert_eq!(w.app.graph().link_into(invert, "i:input").map(|l| l.from), Some(noise), "connected to the output");
+    w.send(Message::Undo);
+    assert!(w.app.graph().node(invert).is_none(), "one undo takes node and link away");
+    assert_eq!(w.app.doc.undo_label().map(str::to_string), steps);
+    let _ = SocketRef { node: noise, key: String::new(), output: true };
+}
+
+/// The wheel zooms around the cursor: the point of the graph under it stays under it; no further
+/// than 12 % out and 300 % in.
+#[test]
+fn the_wheel_zooms_around_the_cursor_within_limits() {
+    let mut w = canvas!();
+    let b = w.app.ui.graph_view.bounds;
+    let at = Point::new(b.x + b.width * 0.3, b.y + b.height * 0.6);
+    let under = w.app.ui.graph_view.to_graph(at);
+    w.hover(at);
+    w.mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y: 2.0 } });
+    let zoom = w.app.ui.graph_view.zoom;
+    let still = w.app.ui.graph_view.to_graph(at);
+    assert!((still[0] - under[0]).abs() < 0.5 && (still[1] - under[1]).abs() < 0.5, "{still:?} under the cursor, was {under:?}");
+    for _ in 0..80 {
+        w.mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y: 3.0 } });
+    }
+    assert!((w.app.ui.graph_view.zoom - 3.0).abs() < 1e-3, "in to 300 %: {}", w.app.ui.graph_view.zoom);
+    for _ in 0..160 {
+        w.mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y: -3.0 } });
+    }
+    assert!((w.app.ui.graph_view.zoom - 0.12).abs() < 1e-3, "out to 12 %: {}", w.app.ui.graph_view.zoom);
+    let still = w.app.ui.graph_view.to_graph(at);
+    assert!((still[0] - under[0]).abs() < 1.0 && (still[1] - under[1]).abs() < 1.0, "still under the cursor at the limits");
+    assert!(zoom > 0.0);
+}
+
+/// Frame (F over the canvas) brings what is selected into view, or everything when nothing is.
+#[test]
+fn frame_shows_the_selection_or_everything() {
+    let mut w = canvas!();
+    let b = w.app.ui.graph_view.bounds;
+    let inside = |w: &Harness, id: NodeId| {
+        let r = node_rect(w, id);
+        r.x >= b.x - 0.5 && r.y >= b.y - 0.5 && r.x + r.width <= b.x + b.width + 0.5 && r.y + r.height <= b.y + b.height + 0.5
+    };
+    // Away from everything first.
+    w.send(Message::Graph(GraphMessage::PanBy(Vector::new(5000.0, 5000.0))));
+    let ids: Vec<NodeId> = w.app.graph().nodes.iter().map(|n| n.id).collect();
+    assert!(ids.iter().all(|id| !inside(&w, *id)), "nothing in view");
+    let over = b.center();
+    letter_at(&mut w, over, "f", keyboard::key::Code::KeyF, keyboard::Modifiers::default());
+    assert!(ids.iter().all(|id| inside(&w, *id)), "everything in view");
+    // One node, selected: it, large.
+    let levels = first(&w, NodeKind::LEVELS);
+    w.send(Message::Graph(GraphMessage::Select { node: levels, mode: SelectMode::Replace }));
+    let before = node_rect(&w, levels).width;
+    letter_at(&mut w, over, "f", keyboard::key::Code::KeyF, keyboard::Modifiers::default());
+    assert!(inside(&w, levels) && node_rect(&w, levels).width > before, "the selection, larger");
+}
+
+/// A comment added and taken away again by an undo is no longer selected: Delete has nothing to
+/// take away, and the Edit menu says so.
+#[test]
+fn an_undone_comment_is_not_selected() {
+    let mut w = canvas!();
+    let comments = w.app.graph().comments.len();
+    w.send(Message::AddComment);
+    assert_eq!(w.app.graph().comments.len(), comments + 1);
+    assert!(w.app.ui.selected_comment.is_some(), "the new comment is selected");
+    w.send(Message::Undo);
+    assert_eq!(w.app.graph().comments.len(), comments);
+    assert_eq!(w.app.ui.selected_comment, None, "it is not selected any more");
+    w.send(Message::Menu(Some(crate::app::MenuId::Edit)));
+    let delete = *texts(&mut w, "Delete").first().expect("Edit → Delete");
+    let asked = clicked(&mut w, delete.center());
+    assert!(!asked.iter().any(|m| matches!(m, Message::FromMenu(inner) if matches!(**inner, Message::Delete))), "Delete is not offered: {asked:?}");
+}
+
+/// A color picker open for a node that an undo takes away closes with it: the next Esc does what
+/// it does with nothing open (it was kept by the picker, shown for nothing).
+#[test]
+fn a_color_picker_closes_with_its_node() {
+    let mut w = canvas!();
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::UNIFORM_COLOR, pos: [2400.0, -800.0] }));
+    w.send(Message::Seal);
+    let color = w.app.graph().nodes_of(NodeKind::UNIFORM_COLOR).last().expect("the new Uniform Color").id;
+    let key = w.app.graph().node(color).unwrap().def().params.iter().find(|p| matches!(p.kind, brewed_texture_core::nodes::ParamKind::Color { .. })).expect("its color").key;
+    w.send(Message::ColorPicker(Some(ColorTarget::Param(color, key.into()))));
+    assert!(w.app.ui.color_picker.is_some());
+    w.send(Message::Undo);
+    assert!(w.app.graph().node(color).is_none());
+    assert_eq!(w.app.ui.color_picker, None, "closed with its node");
+    // The next Esc, from the Home screen, goes back to what is edited.
+    w.send(Message::Home(crate::app::home::HomeMessage::Show(crate::app::home::HomePage::Home)));
+    press(&mut w, keyboard::key::Named::Escape);
+    assert_eq!(w.app.ui.home, None, "Esc went back from the Home screen");
+}
