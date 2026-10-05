@@ -1848,6 +1848,43 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
         }),
     });
 
+    // Every template, made and computed: none of its nodes says the engine could not make it (a
+    // Bitmap or an SVG without its file says so, as it should).
+    let templates = brewed_texture_core::templates::Template::ALL;
+    let mut t = 0;
+    scenes.push(Scene {
+        name: "every template",
+        next: Box::new(move |app: &App, _: &mut Dice| {
+            if t == templates.len() {
+                t += 1;
+                // The packages the templates made, closed (taken as they are: nothing to keep).
+                let mut steps: Vec<Step> = app.packages().into_iter().map(|(key, _)| Step::Do(Message::Proceed(PendingAction::Close(key)))).collect();
+                steps.extend(back_home("every template"));
+                return Some(steps);
+            }
+            let template = *templates.get(t)?;
+            t += 1;
+            use crate::app::home::NewGraphMessage as N;
+            Some(vec![
+                Step::Do(Message::NewGraph(N::Open(None))),
+                Step::Do(Message::NewGraph(N::Template(template))),
+                Step::Do(Message::NewGraph(N::Create)),
+                Step::Wait,
+                Step::Note(format!("the template {template:?}")),
+                Step::Check(Box::new(move |app: &App| {
+                    let errors: Vec<String> = app
+                        .graph()
+                        .nodes
+                        .iter()
+                        .filter(|n| n.kind != NodeKind::BITMAP && n.kind != NodeKind::SVG)
+                        .filter_map(|n| app.res.reports.get(&n.id).and_then(|r| r.error.clone()).map(|e| format!("{}: {e}", n.def().name)))
+                        .collect();
+                    (!errors.is_empty()).then(|| format!("the template {template:?}: {}", errors.join("; ")))
+                })),
+            ])
+        }),
+    });
+
     // Quitting with changes not saved asks first; not quitting, the app goes on.
     let mut asked = 0;
     scenes.push(Scene {
