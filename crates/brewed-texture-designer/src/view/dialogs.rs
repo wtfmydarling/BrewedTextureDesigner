@@ -113,7 +113,14 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
                 for command in *commands {
                     let keys: Vec<String> = app.settings.shortcuts.of(*command).iter().map(|c| c.shown()).collect();
                     let keys = if keys.is_empty() { "—".to_string() } else { keys.join(" / ") };
-                    keyboard = keyboard.push(line(keys, command.label().to_string()));
+                    // Where a key is the command's only with the pointer there (Space is one
+                    // over the graph, another over the 2D view).
+                    let place = match command.place() {
+                        crate::shortcuts::Place::Graph => "  · over the graph",
+                        crate::shortcuts::Place::View2d => "  · over the 2D view",
+                        _ => "",
+                    };
+                    keyboard = keyboard.push(line(format!("{keys}{place}"), command.label().to_string()));
                 }
             }
             keyboard = keyboard.push(line("Esc".into(), "Close menus and dialogs, cancel picking from the screen or a rename".into()));

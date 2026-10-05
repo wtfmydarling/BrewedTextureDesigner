@@ -218,6 +218,7 @@ macro_rules! harness {
 // (After the macro: the tests of each part of the window, which use it.)
 mod dialogs;
 mod graph_canvas;
+mod panels;
 mod text_fits;
 mod title_bar;
 
