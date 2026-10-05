@@ -20,7 +20,7 @@ The reference implementation is `crates/brewed-texture-core` (`project.rs` for t
 walls.brewtex                          a ZIP archive
 ├── mimetype                           application/vnd.brewed-texture.package+zip (first, stored)
 ├── package.json                       the manifest: the graphs, the files and their names
-├── editor.json                        which graph was open, what each 2D view showed
+├── editor.json                        which graph was open, what each 2D and 3D view showed
 ├── thumbnail.png                      a picture of the package, for lists of packages
 ├── graphs/1.json                      a graph each, by its id
 ├── graphs/4.json
@@ -265,13 +265,21 @@ node that uses the graph.
 How the editor showed the package (optional: a package without it opens at its first graph):
 
 ```json
-{ "open": 1, "views": [{ "graph": 1, "preview": 22 }] }
+{ "open": 1, "views": [{ "graph": 1, "preview": 22, "model": "sphere", "relief": 0.04, "repeat": 1.0,
+                         "light": { "panorama": { "output": 5 } }, "exposure": 0.0 }] }
 ```
 
-`open` is the graph being edited; each view says the node a graph's 2D view showed (`preview`,
-optional). Where the graph view was, and how near, is not kept: a package opens with each graph
-shown whole, and moving the view is no change of the package (a `pan` or `zoom` of a file
-written before is not read).
+`open` is the graph being edited; each view says the node a graph's 2D view showed (`preview`)
+and the scene of its 3D view: the model (`model`: `rounded_cube`, `sphere`, `matball`, `cube`,
+`rounded_cylinder`, `cylinder`, `torus`, `plane` or `cloth`), how high the view raises it by its
+height (`relief`) and how many times the texture goes round it (`repeat`), what lights it
+(`light`: `"studio"`, `{ "image": { "file": "…" } }` — an environment image, relative to the
+package where it can be, as other paths — or `{ "panorama": { "output": 5 } }`, the image of an
+Output of the graph whose usage is Panorama) and how brightly, in stops (`exposure`). Each is
+optional: what a view does not say is left as the editor has it. Where the graph view was, and
+how near, is not kept, nor where the camera of the 3D view was: a package opens with each graph
+shown whole, and moving a view is no change of the package (a `pan` or `zoom` of a file written
+before is not read).
 
 ## `thumbnail.png`
 

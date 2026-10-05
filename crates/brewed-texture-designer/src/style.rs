@@ -277,6 +277,20 @@ pub fn setting_row(even: bool) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style { background: Some(if even { gray(33) } else { gray(36) }.into()), ..Default::default() }
 }
 
+/// A row of a list that is a link (the works of the third-party notices): as a row of a list of
+/// settings, every other one a little lighter, lit under the mouse.
+pub fn link_row(even: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
+    move |_, status| {
+        let background = match status {
+            button_w::Status::Hovered => HOVER,
+            button_w::Status::Pressed => RAISED,
+            _ if even => gray(33),
+            _ => gray(36),
+        };
+        button_w::Style { background: Some(background.into()), text_color: TEXT, border: Border::default(), shadow: Shadow::default(), snap: true }
+    }
+}
+
 /// The side of a dialog that lists its pages.
 pub fn sidebar(_: &Theme) -> container::Style {
     container::Style { background: Some(PANEL_DARK.into()), text_color: Some(TEXT), ..Default::default() }

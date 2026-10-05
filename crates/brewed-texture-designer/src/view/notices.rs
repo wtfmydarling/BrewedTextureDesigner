@@ -24,8 +24,9 @@ pub fn matches(work: &Work, query: &str) -> bool {
 
 pub fn view(dialog: &NoticesDialog) -> Element<'_, Message> {
     let works = works();
-    // The works the search leaves, under their kinds: each a link to where it is.
-    let mut list = column![].spacing(1).padding([4, 8]);
+    // The works the search leaves, under their kinds: each kind a list of rows in a frame, as
+    // the settings are, every other row a little lighter; each row a link to where it is.
+    let mut list = column![].padding(Padding { top: 0.0, right: 14.0, bottom: 14.0, left: 14.0 });
     let mut any = false;
     for kind in Kind::ALL {
         let found: Vec<&Work> = works.iter().filter(|w| w.kind == kind && matches(w, &dialog.query)).collect();
@@ -34,10 +35,11 @@ pub fn view(dialog: &NoticesDialog) -> Element<'_, Message> {
         }
         any = true;
         list = list.push(
-            container(text(format!("{} · {}", kind.heading(), found.len())).size(style::TEXT_SIZE).font(style::heavy()).color(style::TEXT_BRIGHT))
-                .padding(Padding { top: 10.0, right: 6.0, bottom: 4.0, left: 6.0 }),
+            container(text(format!("{} · {}", kind.heading(), found.len())).size(14).font(style::heavy()).color(style::TEXT_BRIGHT))
+                .padding(Padding { top: 16.0, right: 0.0, bottom: 8.0, left: 2.0 }),
         );
-        for w in found {
+        let mut rows = column![].spacing(1);
+        for (i, w) in found.into_iter().enumerate() {
             let label = row![
                 text(w.name.as_str()).size(style::TEXT_SIZE),
                 text(format!("[{}]", w.license)).size(style::TEXT_SIZE).color(style::TEXT_DIM),
@@ -46,12 +48,13 @@ pub fn view(dialog: &NoticesDialog) -> Element<'_, Message> {
             ]
             .spacing(8)
             .align_y(Alignment::Center);
-            let link = button(label).width(Length::Fill).padding([5, 10]).style(style::flat_button).on_press(Message::Notices(NoticesMessage::Open(w.link.clone())));
-            list = list.push(crate::view::tip(link, w.link.as_str(), iced::widget::tooltip::Position::Bottom));
+            let link = button(label).width(Length::Fill).padding([7, 12]).style(style::link_row(i % 2 == 0)).on_press(Message::Notices(NoticesMessage::Open(w.link.clone())));
+            rows = rows.push(crate::view::tip(link, w.link.as_str(), iced::widget::tooltip::Position::Bottom));
         }
+        list = list.push(container(rows).padding(1).width(Length::Fill).style(style::setting_list));
     }
     if !any {
-        list = list.push(container(text("Nothing matches").size(style::SMALL).color(style::TEXT_DIM)).padding(8));
+        list = list.push(container(text("Nothing matches").size(style::SMALL).color(style::TEXT_DIM)).padding(Padding { top: 16.0, ..Padding::ZERO }));
     }
     let search = text_input("Search…", &dialog.query)
         .on_input(|q| Message::Notices(NoticesMessage::Search(q)))
@@ -78,7 +81,8 @@ pub fn view(dialog: &NoticesDialog) -> Element<'_, Message> {
         head,
         container(search).padding(Padding { top: 0.0, right: 18.0, bottom: 8.0, left: 18.0 }),
         crate::view::hairline(),
-        scrollable(list).height(Length::Fill).style(style::scrollable),
+        // (A well darker than the window, the lists lighter than it.)
+        container(scrollable(list).height(Length::Fill).style(style::scrollable)).height(Length::Fill).style(style::panel_dark),
         crate::view::hairline(),
         footer,
     ];

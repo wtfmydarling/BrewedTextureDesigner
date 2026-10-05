@@ -1,8 +1,10 @@
 //! A widget that shows a card of its own beside itself while it is pointed at (an (i) that
 //! says what something is): not a tooltip of the system. The card stays while the mouse is
 //! over the widget or over the card, and a moment after it left both (so that the mouse can
-//! go from one to the other), then goes.
+//! go from one to the other), then goes. One card is shown at a time: pointing at another
+//! widget's (i) shows its card in place of the one shown, at once.
 
+use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use iced::advanced::layout::{self, Layout};
@@ -26,8 +28,16 @@ pub fn hover_card<'a, Message>(anchor: impl Into<Element<'a, Message>>, card: im
     HoverCard { anchor: anchor.into(), card: card.into() }
 }
 
-#[derive(Default)]
+thread_local! {
+    /// The card shown (of the widgets of this thread: the interface's), by its widget's number.
+    static SHOWN: Cell<u64> = const { Cell::new(0) };
+    /// The number the next widget gets.
+    static NEXT: Cell<u64> = const { Cell::new(1) };
+}
+
 struct State {
+    /// Which widget's state it is, for [`SHOWN`].
+    id: u64,
     over_anchor: bool,
     over_card: bool,
     shown: bool,
@@ -35,10 +45,31 @@ struct State {
     left: Option<Instant>,
 }
 
+impl Default for State {
+    fn default() -> Self {
+        let id = NEXT.with(|n| {
+            let id = n.get();
+            n.set(id + 1);
+            id
+        });
+        State { id, over_anchor: false, over_card: false, shown: false, left: None }
+    }
+}
+
 impl State {
-    /// Shown while pointed at; gone a moment after it is not.
+    /// Shown while pointed at; gone a moment after it is not, and at once when another widget's
+    /// card is shown in its place.
     fn settle(&mut self, now: Instant, shell_redraw: &mut dyn FnMut(Instant)) {
-        if self.over_anchor || self.over_card {
+        let others = SHOWN.with(|s| s.get()) != self.id;
+        if self.over_anchor {
+            SHOWN.with(|s| s.set(self.id));
+            self.shown = true;
+            self.left = None;
+        } else if others {
+            // (Another card was pointed at: this one goes, whatever is under the mouse; what the
+            // mouse was over of it, gone with it, is over no more.)
+            (self.shown, self.over_card, self.left) = (false, false, None);
+        } else if self.over_card {
             self.shown = true;
             self.left = None;
         } else if self.shown {
@@ -248,5 +279,30 @@ mod tests {
         assert!(state.shown);
         state.settle(off + GRACE, &mut |at| redraws.push(at));
         assert!(!state.shown);
+    }
+
+    /// One card at a time: pointing at another (i) while a card is shown (in the moment it waits,
+    /// or with the mouse where the cards overlap) shows the other in its place, at once.
+    #[test]
+    fn one_card_is_shown_at_a_time() {
+        let (mut first, mut second) = (State::default(), State::default());
+        let t0 = Instant::now();
+        let mut redraw = |_: Instant| {};
+        first.over_anchor = true;
+        first.settle(t0, &mut redraw);
+        // Off the first (i), onto the second, within the moment the first waits.
+        first.over_anchor = false;
+        first.settle(t0 + Duration::from_millis(50), &mut redraw);
+        second.over_anchor = true;
+        second.settle(t0 + Duration::from_millis(100), &mut redraw);
+        // The mouse where both cards would be: the first is gone, the second stays.
+        second.over_anchor = false;
+        (first.over_card, second.over_card) = (true, true);
+        for state in [&mut first, &mut second] {
+            state.settle(t0 + Duration::from_millis(150), &mut redraw);
+        }
+        assert!(!first.shown && second.shown);
+        first.settle(t0 + Duration::from_secs(3), &mut redraw);
+        assert!(!first.shown, "a card taken over stays gone over the other");
     }
 }

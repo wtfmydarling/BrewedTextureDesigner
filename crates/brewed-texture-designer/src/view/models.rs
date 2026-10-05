@@ -36,6 +36,26 @@ impl Shape {
         Shape::Cloth,
     ];
 
+    /// What a file calls it (the model of a graph's 3D view, see
+    /// `brewed_texture_core::project::ViewState`).
+    pub fn id(self) -> &'static str {
+        match self {
+            Shape::RoundedCube => "rounded_cube",
+            Shape::Sphere => "sphere",
+            Shape::MatBall => "matball",
+            Shape::Cube => "cube",
+            Shape::RoundedCylinder => "rounded_cylinder",
+            Shape::Cylinder => "cylinder",
+            Shape::Torus => "torus",
+            Shape::Plane => "plane",
+            Shape::Cloth => "cloth",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Shape> {
+        Shape::ALL.into_iter().find(|s| s.id() == id)
+    }
+
     fn label(self) -> &'static str {
         match self {
             Shape::RoundedCube => "Rounded Cube",

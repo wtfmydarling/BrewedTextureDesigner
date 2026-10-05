@@ -8,7 +8,8 @@
 //! - `graphs/<id>.json`: each graph (see [`Graph`]);
 //! - `files/<sha256>.<ext>`: each file the package holds, its bytes as they are (what the
 //!   package calls it is in `package.json`);
-//! - `editor.json`: how the editor showed it: the graph edited, where each graph's view was;
+//! - `editor.json`: how the editor showed it: the graph edited, what each graph's 2D view showed,
+//!   and its 3D view: the model, what lit it;
 //! - whatever else other programs put there, written back as it was.
 //!
 //! Paths to files outside are written relative to the package wherever they can be (see
@@ -65,14 +66,39 @@ const MAX_JSON: u64 = 256 << 20;
 const MAX_OTHER: u64 = 64 << 20;
 const MAX_OTHERS: u64 = 256 << 20;
 
-/// Where the editor showed a graph (not part of undo). A file keeps only the node the 2D view
-/// showed: where the graph view was, and how near, is the editor's while it runs (a package
-/// opens with its graph shown whole), and moving it is no change of the package.
+/// What lit the 3D view of a graph: the studio, an environment image (a file: relative to the
+/// package in its file, where it can be), or the graph's own panorama (its Output of usage
+/// Panorama).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Light {
+    Studio,
+    Image { file: String },
+    Panorama { output: NodeId },
+}
+
+/// How the editor showed a graph (not part of undo): the node the 2D view showed, and the scene
+/// of the 3D view: the model, how high it raised it by its height and how many times the texture
+/// went round it, what lit it and how brightly (EV). Where the graph view was, and how near, is the
+/// editor's while it runs (a package opens with its graph shown whole), and moving it is no change
+/// of the package; so is where the camera of the 3D view was. What a file does not say (one
+/// written before it said the scene) leaves the editor's as it is.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ViewState {
     /// The node the 2D view showed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<NodeId>,
+    /// The model of the 3D view, by its id (`sphere`, `matball` …).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    pub relief: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    pub repeat: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    pub light: Option<Light>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    pub exposure: Option<f32>,
     #[serde(skip)]
     pub graph_pan: Option<[f32; 2]>,
     #[serde(skip)]
@@ -287,6 +313,13 @@ fn write<W: Write>(
             .graphs
             .iter()
             .filter_map(|g| views.get(&g.id).filter(|v| **v != ViewState::default()).map(|v| GraphView { graph: g.id, view: v.clone() }))
+            .map(|mut v| {
+                // (An environment image where it is from the package.)
+                if let (Some(dir), Some(Light::Image { file })) = (dir, v.view.light.as_mut()) {
+                    *file = relative_path(file, dir);
+                }
+                v
+            })
             .collect(),
     };
     // The entries, in order; made ready on every core (the graphs written, what deflates
@@ -623,6 +656,16 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
             if let Some(entry) = package.graph(v.graph) {
                 let mut view = v.view;
                 view.preview = view.preview.filter(|n| entry.graph.contains(*n));
+                // (A panorama of an Output no more there lit nothing; an image, where it is.)
+                match &mut view.light {
+                    Some(Light::Panorama { output }) if !entry.graph.contains(*output) => view.light = None,
+                    Some(Light::Image { file }) => {
+                        if let Some(dir) = dir {
+                            *file = resolve_path(file, dir);
+                        }
+                    }
+                    _ => {}
+                }
                 views.insert(v.graph, view);
             }
         }
@@ -646,7 +689,7 @@ mod tests {
     fn demo() -> (Package, HashMap<GraphId, ViewState>, GraphId) {
         let (package, preview) = crate::demo::package();
         let open = package.first();
-        let views = [(open, ViewState { preview, graph_pan: Some([1.0, 2.0]), graph_zoom: Some(0.8) })].into_iter().collect();
+        let views = [(open, ViewState { preview, graph_pan: Some([1.0, 2.0]), graph_zoom: Some(0.8), ..ViewState::default() })].into_iter().collect();
         (package, views, open)
     }
 
@@ -672,6 +715,44 @@ mod tests {
     }
 
     /// A package is read as it was written: its graphs, the files it holds and those it links
+    /// The scene of a graph's 3D view is read as it was written: its model, its relief and
+    /// repeat, its light and exposure; an environment image is written relative to the package
+    /// and read where it is; a panorama of an Output the graph has no more lights nothing; what a
+    /// view does not say, it does not say.
+    #[test]
+    fn the_scenes_of_the_3d_views_are_kept() {
+        let (package, _, open) = demo();
+        let output = package.graph(open).unwrap().graph.nodes_of(crate::NodeKind::OUTPUT).next().unwrap().id;
+        let dir = std::env::temp_dir().join(format!("brewed-scene-{}", std::process::id()));
+        let image = dir.join("light").join("studio.hdr").display().to_string();
+        let scene = |light: Light| ViewState {
+            model: Some("matball".into()),
+            relief: Some(0.08),
+            repeat: Some(2.0),
+            light: Some(light),
+            exposure: Some(-1.5),
+            ..ViewState::default()
+        };
+        for light in [Light::Studio, Light::Panorama { output }, Light::Image { file: image.clone() }] {
+            let views = [(open, scene(light.clone()))].into_iter().collect();
+            let bytes = to_bytes(&package, &views, open, Some(&dir)).unwrap();
+            if matches!(light, Light::Image { .. }) {
+                let editor = String::from_utf8_lossy(&Archive::new(Cursor::new(&bytes)).unwrap().read(EDITOR, MAX_JSON).unwrap()).to_string();
+                assert!(editor.contains("light/studio.hdr") && !editor.contains(&*dir.display().to_string().replace('\\', "\\\\")), "{editor}");
+            }
+            let loaded = from_bytes(&bytes, Some(&dir)).unwrap();
+            assert_eq!(loaded.views[&open], scene(light));
+        }
+        // An Output no more there.
+        let gone = [(open, scene(Light::Panorama { output: NodeId(9999) }))].into_iter().collect();
+        let loaded = from_bytes(&to_bytes(&package, &gone, open, None).unwrap(), None).unwrap();
+        assert_eq!(loaded.views[&open].light, None);
+        // A file written before the scene was: the scene left as the editor has it.
+        let before = [(open, ViewState { preview: Some(output), ..ViewState::default() })].into_iter().collect();
+        let loaded = from_bytes(&to_bytes(&package, &before, open, None).unwrap(), None).unwrap();
+        assert_eq!(loaded.views[&open], ViewState { preview: Some(output), ..ViewState::default() });
+    }
+
     /// to, the node each view showed (not where the view was, nor how near: the editor's), the
     /// graph edited; written twice, it is the same bytes; its entries are those the format
     /// names, `mimetype` first.

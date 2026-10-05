@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use brewed_texture_core::project::{self, ViewState};
+use brewed_texture_core::project::{self, Light, ViewState};
 use brewed_texture_core::templates::{Category, Example, Template};
 use brewed_texture_core::{NodeKind, PackageEdit, Precision};
 use brewed_texture_core::package::Package;
@@ -347,14 +347,13 @@ impl App {
     fn create_graph(&mut self, dialog: NewGraphDialog) {
         let name = if dialog.name.trim().is_empty() { "Graph".to_string() } else { dialog.name.trim().to_string() };
         let graph = dialog.template.graph(dialog.size, dialog.precision);
-        // Shown in the 2D view: its first map.
-        let preview = graph.nodes_of(NodeKind::OUTPUT).next().map(|n| n.id);
+        let view = new_view(&graph);
         match dialog.into {
             None => {
                 self.ui.home = None;
                 let package = Package::new(&name, graph);
                 let open = package.first();
-                let views = [(open, ViewState { preview, ..ViewState::default() })].into_iter().collect();
+                let views = [(open, view)].into_iter().collect();
                 self.take_package(package, views, open);
             }
             Some(key) => {
@@ -362,7 +361,7 @@ impl App {
                 match doc.apply_package(PackageEdit::AddGraph { name, graph }) {
                     Ok(result) => {
                         if let Some(graph) = result.graph {
-                            self.views.insert((key, graph), ViewState { preview, ..ViewState::default() });
+                            self.views.insert((key, graph), view);
                             self.activate(key, Some(graph));
                         }
                     }
@@ -507,6 +506,16 @@ fn png(picture: &::image::RgbaImage) -> Option<Vec<u8>> {
     let mut png = Vec::new();
     picture.write_to(&mut std::io::Cursor::new(&mut png), ::image::ImageFormat::Png).ok()?;
     Some(png)
+}
+
+/// How a graph made of a template is shown at first: its first map in the 2D view; where it makes
+/// a panorama (an Output of usage Panorama), the 3D view lit by it, as what a panorama is made
+/// to be seen in.
+fn new_view(graph: &brewed_texture_core::Graph) -> ViewState {
+    let preview = graph.nodes_of(NodeKind::OUTPUT).next().map(|n| n.id);
+    let panorama = brewed_texture_core::nodes::Usage::Panorama.index();
+    let light = graph.nodes_of(NodeKind::OUTPUT).find(|n| n.enum_value("usage") == panorama).map(|n| Light::Panorama { output: n.id });
+    ViewState { preview, light, ..ViewState::default() }
 }
 
 #[cfg(test)]

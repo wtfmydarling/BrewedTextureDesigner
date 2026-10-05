@@ -3850,3 +3850,37 @@ fn a_double_click_on_a_template_makes_it() {
     assert!(w.app.packages().len() >= before);
     assert!(w.app.graph().nodes_of(NodeKind::OUTPUT).any(|n| n.text("name") == "coat_weight"), "the graph of the template");
 }
+
+/// A graph made of the HDRi template lights the 3D view with its own panorama at once. The scene
+/// of a graph's 3D view (its model, relief, repeat, light and exposure) is saved with its package
+/// and is what the view shows when the package is opened again.
+#[test]
+fn the_scene_of_the_3d_view_is_kept_with_the_package() {
+    use crate::app::home::NewGraphMessage;
+    use crate::app::{PendingAction, PreviewMessage};
+    use crate::view::view3d::{Camera, Shape};
+    use brewed_texture_core::templates::Template;
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    w.send(Message::NewGraph(NewGraphMessage::Open(None)));
+    w.send(Message::NewGraph(NewGraphMessage::Template(Template::StudioPanorama)));
+    w.send(Message::NewGraph(NewGraphMessage::Create));
+    let output = w.app.graph().nodes_of(NodeKind::OUTPUT).map(|n| n.id).next().expect("its output");
+    assert_eq!(w.app.panorama_node(), Some(output), "the template's panorama lights the 3D view");
+    // A scene of its own, saved; the view put back as it starts; the package opened again.
+    let camera = w.app.ui.preview.view3d;
+    w.send(Message::Preview(PreviewMessage::Camera(Camera { shape: Shape::Sphere, displacement: 0.1, tiling: 2.0, ..camera })));
+    w.app.ui.preview.lighting.exposure = -1.0;
+    let views = w.app.views_of(w.app.doc_key);
+    let path = std::env::temp_dir().join(format!("brewed-scene-{}.brewtex", std::process::id()));
+    brewed_texture_core::project::save(&path, w.app.doc.package(), &views, w.app.doc.current()).expect("a file");
+    w.send(Message::Preview(PreviewMessage::Camera(Camera::default())));
+    w.send(Message::Preview(PreviewMessage::LightBy(None)));
+    w.app.ui.preview.lighting.exposure = 0.0;
+    w.send(Message::Proceed(PendingAction::OpenPath(path.clone())));
+    let _ = std::fs::remove_file(&path);
+    let shown = w.app.ui.preview.view3d;
+    assert_eq!((shown.shape, shown.displacement, shown.tiling), (Shape::Sphere, 0.1, 2.0), "the model, its relief and repeat");
+    assert_eq!(w.app.ui.preview.lighting.exposure, -1.0);
+    let output = w.app.graph().nodes_of(NodeKind::OUTPUT).map(|n| n.id).next().expect("its output");
+    assert_eq!(w.app.panorama_node(), Some(output), "lit by its panorama, as it was");
+}

@@ -2050,7 +2050,11 @@ impl App {
         if let Some(folder) = answered_from(&message) {
             self.ui.last_folder = Some(folder);
         }
-        let task = self.handle(message);
+        let mut task = self.handle(message);
+        // An environment image a graph's view asked for as it was shown again: read now.
+        if let Some(file) = self.ui.preview.lighting.wanted.take() {
+            task = Task::batch([task, self.choose_environment(Some(file))]);
+        }
         self.refresh();
         self.sync_expression();
         self.sync_description();

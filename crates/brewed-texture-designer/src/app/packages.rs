@@ -16,7 +16,7 @@ use iced::{Task, Vector};
 
 use brewed_texture_core::files::Held;
 use brewed_texture_core::package::{self, Flat, Library, Missing, MissingKind, Package, PackageEdit, ResourceKind};
-use brewed_texture_core::project::{self, ViewState};
+use brewed_texture_core::project::{self, Light, ViewState};
 use brewed_texture_core::{
     Document, Edit, GraphId, GraphRef, Instance, Interface, NodeId, NodeKind, ParamKind, ParamValue,
 };
@@ -226,12 +226,25 @@ impl App {
         self.next_key
     }
 
-    /// Where the view of the graph being edited is.
+    /// Where the view of the graph being edited is, and the scene of its 3D view: the model, its
+    /// relief and repeat, what lights it (the graph's panorama, an image or the studio) and how
+    /// brightly.
     pub(super) fn view_state(&self) -> ViewState {
+        let (camera, l) = (&self.ui.preview.view3d, &self.ui.preview.lighting);
+        let light = match (self.panorama_node(), &l.file) {
+            (Some(output), _) => Light::Panorama { output },
+            (None, Some(file)) => Light::Image { file: file.clone() },
+            (None, None) => Light::Studio,
+        };
         ViewState {
             preview: self.ui.preview.node,
             graph_pan: Some([self.ui.graph_view.pan.x, self.ui.graph_view.pan.y]),
             graph_zoom: Some(self.ui.graph_view.zoom),
+            model: Some(camera.shape.id().into()),
+            relief: Some(camera.displacement),
+            repeat: Some(camera.tiling),
+            light: Some(light),
+            exposure: Some(l.exposure),
         }
     }
 
@@ -257,6 +270,40 @@ impl App {
             self.ui.graph_view.pan = Vector::new(pan[0], pan[1]);
             self.ui.graph_view.zoom = zoom.clamp(0.1, 3.0);
             self.ui.frame_request = false;
+        }
+        self.restore_scene(&view);
+    }
+
+    /// The scene of the 3D view as a view of a graph says it was: what it says of it (a package
+    /// written before the scene was said leaves it as it is), as far as the view's fields go.
+    fn restore_scene(&mut self, view: &ViewState) {
+        let camera = &mut self.ui.preview.view3d;
+        if let Some(shape) = view.model.as_deref().and_then(crate::view::view3d::Shape::from_id) {
+            camera.shape = shape;
+        }
+        if let Some(relief) = view.relief.filter(|r| r.is_finite()) {
+            camera.displacement = relief.clamp(0.0, 1.0);
+        }
+        if let Some(repeat) = view.repeat.filter(|r| r.is_finite()) {
+            camera.tiling = repeat.clamp(0.25, 32.0);
+        }
+        let l = &mut self.ui.preview.lighting;
+        if let Some(exposure) = view.exposure.filter(|e| e.is_finite()) {
+            l.exposure = exposure.clamp(-12.0, 12.0);
+        }
+        match &view.light {
+            Some(Light::Studio) => (l.panorama, l.file, l.shown, l.wanted) = (None, None, None, None),
+            Some(Light::Image { file }) => {
+                l.panorama = None;
+                if l.file.as_deref() != Some(file.as_str()) {
+                    l.wanted = Some(file.clone());
+                }
+            }
+            Some(Light::Panorama { output }) => {
+                (l.panorama, l.wanted) = (Some(*output), None);
+                self.send(brewed_texture_engine::Request::Panorama(self.panorama_node()));
+            }
+            None => {}
         }
     }
 
@@ -571,7 +618,7 @@ impl App {
     }
 
     /// Where the view of each graph of the package open as `key` is.
-    pub(super) fn views_of(&self, key: u64) -> HashMap<GraphId, ViewState> {
+    pub(crate) fn views_of(&self, key: u64) -> HashMap<GraphId, ViewState> {
         let mut views: HashMap<GraphId, ViewState> =
             self.views.iter().filter(|((k, _), _)| *k == key).map(|((_, g), v)| (*g, v.clone())).collect();
         if key == self.doc_key {

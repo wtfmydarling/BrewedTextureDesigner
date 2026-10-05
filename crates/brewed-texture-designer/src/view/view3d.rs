@@ -165,6 +165,9 @@ pub struct Lighting {
     /// pictures of the templates' materials are made so (see `app::dev`), their softbox's
     /// highlights drawn out by an anisotropy, a fuzz's sheen along its edges.
     pub key: bool,
+    /// An environment image a graph's view asked for as it was shown again (what its package
+    /// says lit it), to be read once the message that showed it is handled.
+    pub wanted: Option<String>,
 }
 
 /// How many environment images the menu offers again.
@@ -185,6 +188,7 @@ impl Default for Lighting {
             menu: false,
             panorama: None,
             key: false,
+            wanted: None,
         }
     }
 }
