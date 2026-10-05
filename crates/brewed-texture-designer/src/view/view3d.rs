@@ -327,7 +327,8 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
             .into()
     };
     let mut items: Vec<Element<'_, Message>> =
-        vec![container(text("Environment").size(style::SMALL).color(style::TEXT_DIM)).padding([4, 10]).into()];
+        // (A heading as the menus of choices have them: white and heavy.)
+        vec![container(text("Environment").size(style::TEXT_SIZE).font(style::heavy()).color(style::TEXT_BRIGHT)).padding([4, 10]).into()];
     // The graph's own light first, where it has one.
     let panorama = app.lit_by_panorama();
     for id in app.panorama_outputs() {

@@ -1194,6 +1194,9 @@ impl<L: Library> Builder<'_, L> {
         let graph = match values {
             Some(values) => {
                 let mut g = graph.clone();
+                // Used as a node, it is computed at the size of the graph that uses it: that is
+                // the size its Math reads as width and height (it read its own, as it was saved).
+                g.resolution = self.flat.resolution;
                 for var in &mut g.variables {
                     let given = values.get(&var.name);
                     match &mut var.image {
@@ -1803,6 +1806,34 @@ mod tests {
         assert!(
             at(noise) < at(gray.id) && at(gray.id) < at(blur.id) && at(blur.id) < at(out) && at(blur.id) < at(used)
         );
+    }
+
+    /// A graph used as a node is computed at the size of the graph that uses it, and that is the
+    /// size its Math reads as `width` and `height` (not the size it was saved with).
+    #[test]
+    fn a_graph_used_as_a_node_reads_the_size_it_is_computed_at() {
+        // Blurs by an eighth of the width of the texture: 2048 / 8 where it is edited alone.
+        let mut inner = blurring();
+        inner.resolution = [2048, 2048];
+        let math = inner.add_node(NodeKind::MATH, [0.0, 400.0]);
+        inner.node_mut(math).unwrap().param_mut("expression").unwrap().value = ParamValue::Text("width / 8".into());
+        let blur = inner.nodes_of(NodeKind::BLUR).next().unwrap().id;
+        let radius = inner.nodes_of(NodeKind::FLOAT_INPUT).next().unwrap().id;
+        inner.remove_nodes(&[radius]);
+        connect(&mut inner, math, "o:result", blur, "p:radius");
+        assert_eq!(eval::evaluate(&inner).node(blur).unwrap().params.f("radius"), 256.0, "alone, its own size");
+
+        let mut package = Package::new("Main", Graph { resolution: [512, 512], ..Graph::default() });
+        let used = package.add_graph("Blur it", inner);
+        let main = package.first();
+        let instance = instance_of(&package, used, None);
+        let g = Arc::make_mut(&mut package.graph_mut(main).unwrap().graph);
+        let node = g.add_instance(instance, [200.0, 0.0]);
+        let out = g.add_node(NodeKind::OUTPUT, [400.0, 0.0]);
+        connect(g, node, "o:output", out, "i:input");
+        let flat = flatten(&Shelf([(None, package)].into_iter().collect()), None, main).unwrap();
+        let laid = flat.graph.nodes_of(NodeKind::BLUR).next().expect("the blur, laid out");
+        assert_eq!(laid.value("radius"), Some(&ParamValue::Float(64.0)), "512 / 8: the size it is computed at");
     }
 
     #[test]
