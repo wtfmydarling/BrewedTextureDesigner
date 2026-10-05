@@ -234,10 +234,13 @@ fn strip<'a>(r: Row<'a>, even: bool) -> Element<'a, Message> {
 fn segmented<'a, T: Copy + PartialEq + 'a>(options: &[(T, &'a str)], chosen: T, enabled: bool, on: impl Fn(T) -> Setting) -> Element<'a, Message> {
     let mut segments = row![].spacing(2);
     for (value, label) in options {
+        // Each as wide as its name is, of the room there is (halves left a long name too little;
+        // as it is when chosen, the heavier).
+        let wide = crate::view::text_width_in(label, style::TEXT_SIZE, style::bold()).ceil().clamp(1.0, f32::from(u16::MAX)) as u16;
         let option = button(
             text(*label).size(style::TEXT_SIZE).font(style::chosen_font(*value == chosen)).width(Length::Fill).align_x(Alignment::Center).wrapping(text::Wrapping::None),
         )
-            .width(Length::Fill)
+            .width(Length::FillPortion(wide))
             .padding([4, 6])
             .style(style::segment(*value == chosen));
         segments = segments.push(if enabled { option.on_press(set(on(*value))) } else { option });

@@ -167,11 +167,19 @@ impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer> for 
         let top = self.anchor.y + self.anchor.height + GAP;
         let room_below = (bounds.height - top).max(0.0);
         let room_above = (self.anchor.y - GAP).max(0.0);
-        let full = self.menu.as_widget_mut().layout(self.tree, renderer, &layout::Limits::new(Size::ZERO, bounds)).size();
+        let whole = self.menu.as_widget_mut().layout(self.tree, renderer, &layout::Limits::new(Size::ZERO, bounds));
+        let full = whole.size();
         let below = full.height <= room_below || room_below >= room_above;
         let room = if below { room_below } else { room_above };
-        let limits = layout::Limits::new(Size::ZERO, Size::new(bounds.width, room));
-        let node = self.menu.as_widget_mut().layout(self.tree, renderer, &limits);
+        // Laid out again only to be cut to the room: laid out anew in other bounds, its texts are
+        // made anew, and what was drawn of them before is gone (a screenshot of the window, taken
+        // from what was drawn, showed the menu without its words).
+        let node = if full.height <= room {
+            whole
+        } else {
+            let limits = layout::Limits::new(Size::ZERO, Size::new(bounds.width, room));
+            self.menu.as_widget_mut().layout(self.tree, renderer, &limits)
+        };
         let size = node.size();
         let x = self.anchor.x.min(bounds.width - size.width).max(0.0);
         let y = if below { top } else { self.anchor.y - GAP - size.height };

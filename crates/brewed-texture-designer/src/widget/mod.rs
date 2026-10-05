@@ -8,6 +8,7 @@ pub mod gradient;
 pub mod layered;
 pub mod number;
 pub mod outside;
+pub mod placed;
 pub mod pressable;
 
 use iced::widget::{button, svg, tooltip};

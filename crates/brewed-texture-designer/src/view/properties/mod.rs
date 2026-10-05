@@ -26,7 +26,15 @@ use crate::widget::number::number;
 use crate::widget::outside::outside;
 use crate::widget::{expose_toggle, socket_icon};
 
+/// How wide the names of the rows are at most, and at least: as wide as the panel has room for
+/// between, so that a narrow panel still leaves their fields room.
 const LABEL_W: f32 = 118.0;
+const LABEL_MIN: f32 = 60.0;
+
+/// How wide the names of the rows are in a panel `width` wide.
+fn label_width(width: f32) -> f32 {
+    ((width - 50.0) * 0.42).clamp(LABEL_MIN, LABEL_W)
+}
 
 /// An enum entry for pick lists.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,22 +55,27 @@ fn set(node: NodeId, key: &str, value: ParamValue) -> Message {
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let header = crate::view::pane_header("Properties", space());
+    // The names of the rows as wide as the panel has room for.
+    let body = iced::widget::responsive(move |size| body(app, label_width(size.width)));
+    column![header, body].into()
+}
+
+fn body(app: &App, label_w: f32) -> Element<'_, Message> {
     let ids: Vec<NodeId> = app.ui.selection.iter().copied().filter(|id| app.graph().contains(*id)).collect();
-    let body: Element<'_, Message> = match ids.len() {
+    match ids.len() {
         0 if app.ui.selected_comment.is_some_and(|id| app.graph().comment(id).is_some()) => {
-            comment_view(app, app.ui.selected_comment.expect("a selected comment"))
+            comment_view(app, app.ui.selected_comment.expect("a selected comment"), label_w)
         }
-        0 => scrollable(container(graph_view(app)).padding(iced::Padding { top: 0.0, right: 12.0, bottom: 16.0, left: 10.0 }))
+        0 => scrollable(container(graph_view(app, label_w)).padding(iced::Padding { top: 0.0, right: 12.0, bottom: 16.0, left: 10.0 }))
             .height(Length::Fill)
             .style(style::scrollable)
             .into(),
-        1 => scrollable(container(node_view(app, ids[0])).padding(iced::Padding { top: 0.0, right: 12.0, bottom: 16.0, left: 10.0 }))
+        1 => scrollable(container(node_view(app, ids[0], label_w)).padding(iced::Padding { top: 0.0, right: 12.0, bottom: 16.0, left: 10.0 }))
             .height(Length::Fill)
             .style(style::scrollable)
             .into(),
         n => multi_view(app, &ids, n),
-    };
-    column![header, body].into()
+    }
 }
 
 /// Id of the text field of a comment (for focusing it from the graph).
@@ -73,7 +86,7 @@ pub fn comment_text_id() -> iced::widget::Id {
 /// The comment frame being worked on: what it says, and what color it is.
 /// The graph being edited, when nothing in it is chosen: what it holds, and what it says of
 /// itself for the Library of the packages that have it (Settings → Library).
-fn graph_view(app: &App) -> Element<'_, Message> {
+fn graph_view(app: &App, label_w: f32) -> Element<'_, Message> {
     let g = app.graph();
     let a = g.attributes.clone();
     let with = |change: fn(&mut GraphAttributes, String), a: GraphAttributes| {
@@ -83,7 +96,7 @@ fn graph_view(app: &App) -> Element<'_, Message> {
             Message::Edit(Edit::SetAttributes(a))
         }
     };
-    let label = |name: &'static str| text(name).size(style::TEXT_SIZE).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W));
+    let label = |name: &'static str| text(name).size(style::TEXT_SIZE).color(style::TEXT_DIM).width(Length::Fixed(label_w));
     let shown = {
         let a = a.clone();
         move |on: bool| Message::Edit(Edit::SetAttributes(GraphAttributes { hidden: !on, ..a.clone() }))
@@ -135,7 +148,7 @@ fn graph_view(app: &App) -> Element<'_, Message> {
     .into()
 }
 
-fn comment_view(app: &App, id: brewed_texture_core::CommentId) -> Element<'_, Message> {
+fn comment_view(app: &App, id: brewed_texture_core::CommentId, label_w: f32) -> Element<'_, Message> {
     let Some(comment) = app.graph().comment(id) else { return space().into() };
     let open = app.ui.color_picker == Some(ColorTarget::Comment(id));
     let description: Element<'_, Message> = match &app.ui.description {
@@ -169,7 +182,7 @@ fn comment_view(app: &App, id: brewed_texture_core::CommentId) -> Element<'_, Me
                 .style(style::text_input),
             column![text("Description").size(style::SMALL).color(style::TEXT_DIM), description].spacing(4),
             row![
-                text("Color").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W)),
+                text("Color").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)),
                 swatch(comment.color, open, Message::ColorPicker(Some(ColorTarget::Comment(id)))),
             ]
             .align_y(Alignment::Center),
@@ -250,7 +263,7 @@ fn messages(app: &App, node: &Node) -> Element<'static, Message> {
     container(list).width(Length::Fill).into()
 }
 
-fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
+fn node_view(app: &App, id: NodeId, label_w: f32) -> Element<'_, Message> {
     let Some(node) = app.graph().node(id) else { return space().into() };
     let d = node.def();
     let title = crate::view::graph::node_title(node);
@@ -313,7 +326,7 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
     }
 
     if node.variable_type().is_some() {
-        col = col.push(variable_section(app, node));
+        col = col.push(variable_section(app, node, label_w));
     }
 
     col = col.push(section("Parameters"));
@@ -322,7 +335,7 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
         if !node.param_visible(&pd) || matches!(pd.kind, ParamKind::Expression { .. }) {
             continue;
         }
-        col = col.push(param_row(app, node, pd, index));
+        col = col.push(param_row(app, node, pd, index, label_w));
         index += 1;
     }
     if index == 0 && node.instance.is_some() {
@@ -395,7 +408,7 @@ fn node_view(app: &App, id: NodeId) -> Element<'_, Message> {
     col.into()
 }
 
-fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
+fn variable_section<'a>(app: &'a App, node: &'a Node, label_w: f32) -> Element<'a, Message> {
     let id = node.id;
     let current = node.variable.clone().unwrap_or_default();
     let ty = node.variable_type();
@@ -405,7 +418,7 @@ fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
     let mut col = column![
         section("Input value"),
         row![
-            text("Name").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W)),
+            text("Name").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)),
             // A click anywhere else in the window takes the name as Enter does.
             outside(
                 text_input("variable name", editing.as_deref().unwrap_or(&current))
@@ -426,7 +439,7 @@ fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
     if !others.is_empty() {
         col = col.push(
             row![
-                text("Use existing").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W)),
+                text("Use existing").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)),
                 pick_list(others, None::<String>, move |name| Message::Edit(Edit::BindVariable { node: id, name }))
                     .placeholder("choose…")
                     .text_size(style::TEXT_SIZE)
@@ -455,7 +468,7 @@ fn variable_section<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                 Message::ColorPicker(Some(ColorTarget::Variable(var.name.clone(), crate::app::VarField::Value))),
             ),
         };
-        col = col.push(row![text("Value").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(LABEL_W)), editor].align_y(Alignment::Center));
+        col = col.push(row![text("Value").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)), editor].align_y(Alignment::Center));
         col = col.push(crate::view::inputs::details(app, var, false));
     }
     col.into()
@@ -573,7 +586,7 @@ fn shown(pd: &ParamDef<'_>, value: &ParamValue) -> String {
     }
 }
 
-fn param_row<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, index: usize) -> Element<'a, Message> {
+fn param_row<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, index: usize, label_w: f32) -> Element<'a, Message> {
     let id = node.id;
     let Some(slot) = node.param(pd.key) else { return space().into() };
     let d = node.def();
@@ -592,7 +605,7 @@ fn param_row<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, index: usize) -
     // Italics and a star: the name says the value is no longer the one it came with, and
     // so does the field itself.
     let name = if changed { format!("{}*", pd.label) } else { pd.label.to_string() };
-    let mut caption = text(name).size(style::TEXT_SIZE).color(label_color).width(Length::Fixed(LABEL_W));
+    let mut caption = text(name).size(style::TEXT_SIZE).color(label_color).width(Length::Fixed(label_w));
     if changed {
         caption = caption.font(style::italic());
     }

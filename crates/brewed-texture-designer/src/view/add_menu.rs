@@ -1,7 +1,7 @@
 //! Node search popup (Space, double-click on the canvas, or a link dropped on empty space).
 
 use iced::widget::{Id, column, container, row, scrollable, space, text, text_input};
-use iced::{Alignment, Element, Length, Size};
+use iced::{Alignment, Element, Length};
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::edit::accepts_link;
 
@@ -19,8 +19,6 @@ const MIN_ROWS: usize = 3;
 const MAX_ROWS: usize = 12;
 /// Up to five lines of description under the list (see `brewed_texture_core::nodes::MAX_DESCRIPTION`).
 const HINT_H: f32 = 80.0;
-/// Everything around the list: padding, title, search field, description, spacing.
-const CHROME_H: f32 = 8.0 + 18.0 + 6.0 + 28.0 + 6.0 + 6.0 + HINT_H + 8.0;
 
 pub fn search_id() -> Id {
     Id::new(SEARCH_ID)
@@ -117,12 +115,5 @@ pub fn view<'a>(app: &'a App, menu: &'a AddMenu) -> Element<'a, Message> {
         container(text(hint).size(style::SMALL).color(style::TEXT_DIM)).height(Length::Fixed(HINT_H)).clip(true),
     ]
     .spacing(6);
-    let size = Size::new(WIDTH, CHROME_H + list_height(kinds.len()));
-    crate::view::popup_layer(
-        container(body).padding(8).style(style::popup),
-        menu.at,
-        size,
-        crate::view::window_size(app),
-        Message::AddMenu(AddMenuMessage::Close),
-    )
+    crate::view::popup_layer(container(body).padding(8).style(style::popup), menu.at, WIDTH, Message::AddMenu(AddMenuMessage::Close))
 }

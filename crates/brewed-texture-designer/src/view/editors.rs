@@ -128,15 +128,16 @@ pub fn swatch<'a>(c: [f32; 4], open: bool, on_press: Message) -> Element<'a, Mes
         border: Border { color: style::BORDER, width: 1.0, radius: 2.0.into() },
         ..Default::default()
     });
+    // (Close enough together for the color's name to stay whole in the narrowest Input Values.)
     button(
         row![
-            container(chip).width(Length::Fixed(38.0)),
-            text(to_hex(c)).size(style::SMALL).font(style::mono()).color(style::TEXT_DIM),
+            container(chip).width(Length::Fixed(32.0)),
+            text(to_hex(c)).size(style::SMALL).font(style::mono()).color(style::TEXT_DIM).wrapping(iced::widget::text::Wrapping::None),
         ]
-        .spacing(8)
+        .spacing(6)
         .align_y(Alignment::Center),
     )
-    .padding([3, 6])
+    .padding([3, 4])
     .width(Length::Fill)
     .style(style::toggle_button(open))
     .on_press(on_press)
@@ -344,11 +345,5 @@ pub fn color_popup(app: &App) -> Option<Element<'_, Message>> {
             )
         }
     };
-    Some(crate::view::popup_layer(
-        content,
-        app.ui.color_picker_at,
-        iced::Size::new(236.0, 252.0),
-        crate::view::window_size(app),
-        Message::ColorPicker(None),
-    ))
+    Some(crate::view::popup_layer(content, app.ui.color_picker_at, 236.0, Message::ColorPicker(None)))
 }

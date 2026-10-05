@@ -29,8 +29,9 @@ pub enum VersionsMessage {
     /// Open the version kept as this file beside the package, untitled.
     Copy(PathBuf),
     /// A version was read: to be restored in place of the package open as `key` (saved as
-    /// `path`), or opened beside it; when it was kept.
-    Read { key: u64, path: PathBuf, restore: bool, time: u64, result: Result<Arc<Loaded>, String> },
+    /// `path`), as it was when it was asked for (`revision`), or opened beside it; when it was
+    /// kept.
+    Read { key: u64, path: PathBuf, restore: bool, revision: Option<u64>, time: u64, result: Result<Arc<Loaded>, String> },
 }
 
 impl App {
@@ -65,6 +66,12 @@ impl App {
                     .package_doc(key)
                     .filter(|d| restore && d.is_dirty())
                     .map(|d| (d.package().clone(), self.views_of(key), d.current()));
+                // (Changed while the version is read, the package is not replaced: what changed
+                // was not kept.)
+                let revision = self.package_doc(key).map(|d| d.revision());
+                // Read as a package being opened is: the file is not opened again meanwhile, and
+                // what waits for files to be read waits for it.
+                self.ui.opening.insert(super::packages::clean(&path));
                 self.set_status("Reading the version…", false);
                 let (to, time) = (path.clone(), version.time);
                 self.in_background(
@@ -79,11 +86,16 @@ impl App {
                     },
                     move |done| {
                         let result = done.unwrap_or_else(|| Err("The version was not read: what read it stopped".into()));
-                        Message::Versions(VersionsMessage::Read { key, path: path.clone(), restore, time, result })
+                        Message::Versions(VersionsMessage::Read { key, path: path.clone(), restore, revision, time, result })
                     },
                 )
             }
-            VersionsMessage::Read { key, path, restore, time, result } => {
+            VersionsMessage::Read { key, path, restore, revision, time, result } => {
+                self.ui.opening.remove(&super::packages::clean(&path));
+                if restore && revision.is_some() && self.package_doc(key).map(|d| d.revision()) != revision {
+                    self.set_status("Nothing was restored: the package changed while the version was read. Restore it again to put it in its place.", true);
+                    return Task::none();
+                }
                 let loaded = match result.map(Arc::try_unwrap) {
                     Ok(Ok(loaded)) => loaded,
                     Ok(Err(_)) => return Task::none(),

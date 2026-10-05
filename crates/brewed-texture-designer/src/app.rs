@@ -368,6 +368,10 @@ pub struct Ui {
     pub frame_request: bool,
     pub preview: PreviewState,
     pub panes: pane_grid::State<Pane>,
+    /// Where the side columns were split (by a drag, or the layout saved): a window too narrow
+    /// for them makes one wider than its split says, and gives it back its split when it grows
+    /// again (see [`LEFT_MIN`]).
+    pub side_splits: [f32; 2],
     pub library_search: String,
     pub library_collapsed: HashSet<Category>,
     /// The categories of the library folders' graphs folded in the Library.
@@ -1040,6 +1044,14 @@ fn main_window_settings(workspace: Option<&Workspace>) -> window::Settings {
 /// Where the panels are split at first.
 const SPLITS: [f32; 6] = [0.13, 0.5, 0.765, 0.6, 0.42, 0.34];
 
+/// The narrowest the column of the Explorer and the library, and the one of Input Values and
+/// Properties, are let be while the window has room for them and the graph: narrower, the names
+/// in them are cut short, and the fields of Properties left no room.
+pub(crate) const LEFT_MIN: f32 = 190.0;
+pub(crate) const RIGHT_MIN: f32 = 270.0;
+/// What the graph and the views keep between them, at the least.
+const MIDDLE_MIN: f32 = 420.0;
+
 /// The panels, split where `splits` says (in the order the splits are made), or where they
 /// are at first when it does not say that.
 pub(crate) fn panes(splits: &[f32]) -> pane_grid::State<Pane> {
@@ -1065,6 +1077,18 @@ pub(crate) fn panes(splits: &[f32]) -> pane_grid::State<Pane> {
 
 fn default_panes() -> pane_grid::State<Pane> {
     panes(&SPLITS)
+}
+
+/// The splits of the side columns, and where they are: the one that has the Explorer and the
+/// library on its left, the one that has Input Values and Properties on its right.
+fn side_splits(panes: &pane_grid::State<Pane>) -> [(pane_grid::Split, f32); 2] {
+    match panes.layout() {
+        pane_grid::Node::Split { id, ratio, b, .. } => match b.as_ref() {
+            pane_grid::Node::Split { id: inner, ratio: right, .. } => [(*id, *ratio), (*inner, *right)],
+            _ => unreachable!("the panels are split as `panes` splits them"),
+        },
+        _ => unreachable!("the panels are split as `panes` splits them"),
+    }
 }
 
 /// Where the panels are split now, in the order [`panes`] makes the splits in.
@@ -1134,6 +1158,7 @@ impl App {
                     lighting: opts.workspace.as_ref().map_or_else(view::view3d::Lighting::default, Workspace::lighting),
                 },
                 panes: opts.workspace.as_ref().map_or_else(default_panes, |w| panes(&w.splits)),
+                side_splits: [SPLITS[0], SPLITS[2]],
                 library_search: String::new(),
                 library_collapsed: HashSet::new(),
                 library_folded: HashSet::new(),
@@ -1210,6 +1235,8 @@ impl App {
             #[cfg(any(test, feature = "dev-tools"))]
             dev: dev::Dev::new(&opts.dev),
         };
+        // (The side columns as the saved layout split them.)
+        app.ui.side_splits = side_splits(&app.ui.panes).map(|(_, ratio)| ratio);
         let mut opened: Vec<Task<Message>> = opts.open.iter().map(|path| app.open_file(path.clone(), false)).collect();
         opened.push(app.look_at_library());
         if opts.home {
@@ -2057,7 +2084,13 @@ impl App {
         let Some(last) = &self.opts.workspace else { return };
         let size = self.ui.window_size;
         let workspace = Workspace {
-            splits: splits_of(&self.ui.panes),
+            // (Where the side columns were split, not how wide a narrow window made them.)
+            splits: {
+                let mut splits = splits_of(&self.ui.panes);
+                splits[0] = self.ui.side_splits[0];
+                splits[2] = self.ui.side_splits[1];
+                splits
+            },
             // Filling the screen, the window is as big as the screen: the size it has when it
             // does not is the one it had.
             size: if maximized { last.size } else { Some([size.width, size.height]) },
@@ -2428,8 +2461,18 @@ impl App {
                 self.apply(Edit::SetBypass { node: id, bypass });
                 self.doc.seal();
             }
-            Message::PaneResized(e) => self.ui.panes.resize(e.split, e.ratio),
-            Message::ResetLayout => self.ui.panes = default_panes(),
+            Message::PaneResized(e) => {
+                self.ui.panes.resize(e.split, e.ratio);
+                if let Some(side) = side_splits(&self.ui.panes).iter().position(|(id, _)| *id == e.split) {
+                    self.ui.side_splits[side] = e.ratio;
+                }
+                self.fit_columns();
+            }
+            Message::ResetLayout => {
+                self.ui.panes = default_panes();
+                self.ui.side_splits = [SPLITS[0], SPLITS[2]];
+                self.fit_columns();
+            }
             Message::LockSquare => {
                 self.ui.lock_square = !self.ui.lock_square;
                 let [w, h] = self.graph().resolution;
@@ -2877,6 +2920,20 @@ impl App {
 
     // ------------------------------------------------------------------ runtime events
 
+    /// The side columns as wide as they must be, where the window has room (see [`LEFT_MIN`]):
+    /// wider when the window gets smaller, or a split is dragged too far.
+    pub(crate) fn fit_columns(&mut self) {
+        let [(outer, _), (inner, _)] = side_splits(&self.ui.panes);
+        let [mut left, mut right] = self.ui.side_splits;
+        let width = self.ui.window_size.width;
+        if width >= LEFT_MIN + RIGHT_MIN + MIDDLE_MIN {
+            left = left.max(LEFT_MIN / width);
+            right = right.min(1.0 - RIGHT_MIN / (width * (1.0 - left)));
+        }
+        self.ui.panes.resize(outer, left);
+        self.ui.panes.resize(inner, right);
+    }
+
     /// The window is to close, as its button or the system says: a pick in progress ends first;
     /// each quit asks anew about every package with unsaved changes (one given up earlier may
     /// have changed since).
@@ -2947,6 +3004,7 @@ impl App {
             E::Window(window::Event::CloseRequested) => return self.close_requested(),
             E::Window(window::Event::Opened { size, .. } | window::Event::Resized(size)) => {
                 self.ui.window_size = size;
+                self.fit_columns();
                 // Whether it fills the screen now (the system, or a key, may have made it).
                 if OWN_TITLE_BAR {
                     return window::is_maximized(id).map(|m| Message::Window(WindowAction::Maximized(m)));

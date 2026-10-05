@@ -280,11 +280,14 @@ fn sidebar<'a>(content: &Content<'a>, state: State, style: Style) -> Element<'a,
     let mut resources = column![container(heading("Resources", 14.0, style)).padding(Padding { left: 12.0, bottom: 6.0, ..Padding::ZERO })].spacing(2);
     for resource in content.resources {
         let color = if resource.available { style.dim } else { style.faint };
-        let mut said = row![glyph(resource.glyph, 15.0, color), text(resource.label.as_str()).size(style.text_size).color(color)]
+        // As wide as the button, the name taking what "later" leaves it: "later" whole on the
+        // right (a row only as wide as it needed, a space before it, let that take its room).
+        let mut said = row![glyph(resource.glyph, 15.0, color), text(resource.label.as_str()).size(style.text_size).color(color).width(Length::Fill)]
+            .width(Length::Fill)
             .spacing(10)
             .align_y(Alignment::Center);
         if !resource.available {
-            said = said.push(space().width(Length::Fill)).push(text("later").size(11).color(style.faint));
+            said = said.push(text("later").size(11).color(style.faint));
         }
         resources = resources.push(
             button(said)

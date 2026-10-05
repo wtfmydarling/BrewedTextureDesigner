@@ -31,14 +31,20 @@ fn toolbar_2d(app: &App) -> Element<'_, Message> {
     ]
     .spacing(6)
     .align_y(Alignment::Center);
+    // In a narrow view, the buttons closer together.
+    let narrow = crate::view::pane_width(app, crate::app::Pane::View2D) < NARROW_2D;
+    let pad = if narrow { 4.0 } else { 6.0 };
     for (i, name) in CHANNELS.iter().enumerate() {
         let active = p.channel == i as u32;
         bar = bar.push(
             button(text(*name).size(style::SMALL))
-                .padding([3, 6])
+                .padding([3.0, pad])
                 .style(style::toggle_button(active))
                 .on_press(Message::Preview(PreviewMessage::Channel(i as u32))),
         );
+    }
+    if narrow {
+        bar = bar.spacing(2);
     }
     bar = bar.push(tip(
         button(icon(Icon::Grid, 15.0, if p.show_tiling { style::ACCENT_TEXT } else { style::TEXT_DIM }))
@@ -54,43 +60,34 @@ fn toolbar_2d(app: &App) -> Element<'_, Message> {
         Position::Bottom,
     ));
     bar = bar.push(tip(
-        button(text("1:1").size(style::SMALL)).padding([3, 6]).style(style::flat_button).on_press(Message::Preview(PreviewMessage::OneToOne)),
+        button(text("1:1").size(style::SMALL)).padding([3.0, pad]).style(style::flat_button).on_press(Message::Preview(PreviewMessage::OneToOne)),
         "One image pixel per screen pixel",
         Position::Bottom,
     ));
     header(bar)
 }
 
+/// How wide the 2D view is at least for its buttons to keep their room between them.
+const NARROW_2D: f32 = 340.0;
+
 /// The header of the 3D view: how fast it draws, the shape and the light.
 fn toolbar_3d(app: &App) -> Element<'_, Message> {
-    let rate = app.ui.frame_rate;
-    // Digits in the monospaced font: they change every quarter of a second.
-    let frames = crate::view::tip(
-        text(format!("{:.0} FPS · {:.1} ms", rate.fps, rate.frame_ms))
-            .size(style::SMALL)
-            .font(style::mono())
-            .color(style::TEXT_DIM)
-            .wrapping(text::Wrapping::None),
-        format!(
-            "Frames the 3D view drew in the last second, and how long a frame took on average (the \
-             longest {:.1} ms). View → Real-time Rendering draws it frame after frame; without it, it \
-             draws only when something changes.",
-            rate.worst_ms
-        ),
-        Position::Bottom,
-    );
-    // In a narrow view the reading is cut short, and the tools stay.
-    let frames = container(frames).width(Length::Fill).clip(true);
-    let bar = row![icon(Icon::Cube, 14.0, style::TEXT_DIM), frames, crate::view::view3d::toolbar(app)]
-        .spacing(6)
-        .align_y(Alignment::Center);
-    header(bar)
+    // In a narrow view the fields go under the tools. (How fast it draws is said in the view's
+    // corner, whole: cut short beside the tools, it read "0 F".)
+    let (tools, under) = crate::view::view3d::toolbar(app, crate::view::pane_width(app, crate::app::Pane::View3D));
+    let bar = row![icon(Icon::Cube, 14.0, style::TEXT_DIM), iced::widget::space().width(Length::Fill), tools].spacing(6).align_y(Alignment::Center);
+    match under {
+        Some(fields) => column![header(bar), header(fields)].into(),
+        None => header(bar),
+    }
 }
 
+/// The header of a view: one line, cut short at its edge (not drawn over the view beside it).
 fn header<'a>(bar: iced::widget::Row<'a, Message>) -> Element<'a, Message> {
     container(bar.align_y(Alignment::Center).height(Length::Fixed(crate::view::HEADER_H)))
         .padding([0, 8])
         .width(Length::Fill)
+        .clip(true)
         .style(style::header_bar)
         .into()
 }

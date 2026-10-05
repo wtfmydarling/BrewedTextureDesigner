@@ -52,6 +52,8 @@ impl Harness {
         let renderer = futures::executor::block_on(<iced::Renderer as Headless>::new(crate::style::ui_font(), Pixels(13.0), None))?;
         let (mut app, _) = App::boot(opts);
         app.ui.window_size = size;
+        // (As the window it opens in fits the side columns to its size.)
+        app.fit_columns();
         Some(Harness { app, view, renderer, cache: Cache::default(), size, cursor: mouse::Cursor::Unavailable })
     }
 
@@ -214,6 +216,7 @@ macro_rules! harness {
 }
 
 // (After the macro: the tests of each part of the window, which use it.)
+mod text_fits;
 mod title_bar;
 
 /// A Math node reads the size of the texture as Substance Designer's functions read `$size`:
@@ -739,6 +742,49 @@ fn saved_packages_keep_their_versions() {
     w.input(&[]);
     assert!(!texts(&mut w, "Earlier versions").is_empty());
     w.snapshot("settings-recovery");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A version is read in the background: the package changed meanwhile is not replaced by it (what
+/// changed would be lost, kept nowhere), and the status says why; unchanged, it is.
+#[test]
+fn a_package_changed_while_a_version_is_read_stays() {
+    use crate::app::versions::VersionsMessage as V;
+    use brewed_texture_core::versions::Versions;
+    let dir = scratch("versions-race");
+    let opts = StartupOptions { versions: Some(dir.join("History")), ..StartupOptions::default() };
+    let Some(mut w) = Harness::started(Box::new(view::root), Size::new(1280.0, 800.0), opts) else {
+        eprintln!("no GPU for the headless renderer: test skipped");
+        return;
+    };
+    let walls = dir.join("walls.brewtex");
+    w.send(Message::SavePicked(Some(walls.clone())));
+    let saved = w.app.graph().nodes.len();
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
+    w.send(Message::Save);
+    let versions = Versions::new(dir.join("History"));
+    let first = versions.of(&walls).last().cloned().expect("the first save, kept");
+    let read = |w: &Harness, revision| V::Read {
+        key: w.app.doc_key,
+        path: walls.clone(),
+        restore: true,
+        revision,
+        time: first.time,
+        result: versions.load(&first).map(std::sync::Arc::new).map_err(|e| e.to_string()),
+    };
+    // Asked for, then changed before it is read: it stays as it is.
+    let asked = Some(w.app.doc.revision());
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::LEVELS, pos: [60.0, 0.0] }));
+    let changed = w.app.graph().nodes.len();
+    w.send(Message::Versions(read(&w, asked)));
+    assert_eq!(w.app.graph().nodes.len(), changed, "not replaced");
+    let said = w.app.ui.status.as_ref().map(|s| (s.text.clone(), s.error));
+    assert!(said.as_ref().is_some_and(|(t, error)| t.starts_with("Nothing was restored") && *error), "{said:?}");
+    // Unchanged since it was asked for: restored.
+    let asked = Some(w.app.doc.revision());
+    w.send(Message::Versions(read(&w, asked)));
+    assert_eq!(w.app.graph().nodes.len(), saved, "as it was saved first");
+    assert!(w.app.ui.opening.is_empty(), "nothing is being read any more");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1520,6 +1566,34 @@ fn click(w: &mut Harness, at: Point) {
     drag(w, at, at);
 }
 
+/// Where the scrollable of `id` shows what it holds.
+fn scrollable_bounds(w: &mut Harness, id: &iced::widget::Id) -> Option<iced::Rectangle> {
+    struct Find<'a> {
+        id: &'a iced::widget::Id,
+        found: Option<iced::Rectangle>,
+    }
+    impl Operation for Find<'_> {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+            operate(self);
+        }
+        fn scrollable(
+            &mut self,
+            id: Option<&iced::widget::Id>,
+            bounds: iced::Rectangle,
+            _: iced::Rectangle,
+            _: iced::Vector,
+            _: &mut dyn iced::advanced::widget::operation::Scrollable,
+        ) {
+            if id == Some(self.id) {
+                self.found = Some(bounds);
+            }
+        }
+    }
+    let mut find = Find { id, found: None };
+    w.frame(|ui, renderer| ui.operate(renderer, &mut find));
+    find.found
+}
+
 /// What pressing the left button at `at` asks for (the cursor moved there first), not applied;
 /// the button is then let go (what that asks is not applied either).
 fn pressed(w: &mut Harness, at: Point) -> Vec<Message> {
@@ -1596,13 +1670,17 @@ fn choices_are_picked_by_their_pictures() {
         w.input(&[]);
         w.snapshot(&format!("choices_{width}x{height}"));
 
-        // Every type is in the menu, clear of the field; in a window too low for all of them
-        // the menu scrolls, and what of it shows is inside the window.
+        // Every type is in the menu, what shows of it clear of the field; in a window too low for
+        // all of them the menu scrolls, and what of it shows is inside the window.
         let window = iced::Rectangle::new(Point::ORIGIN, Size::new(width, height));
         let inside = |at: iced::Rectangle| at.x >= 0.0 && at.y >= 0.0 && at.x + at.width <= width && at.y + at.height <= height;
+        let list = scrollable_bounds(&mut w, &view::choices::list_id()).expect("the menu's list");
+        assert!(inside(list) && list.intersection(&field).is_none(), "the list {list:?}, the field {field:?} in {width}×{height}");
         for name in NOISE_TYPES {
             let at = *texts(&mut w, name).last().unwrap_or_else(|| panic!("{name} is not in the menu"));
-            assert!(at.intersection(&field).is_none(), "{name} covers the field");
+            if at.intersection(&list).is_some() {
+                assert!(at.intersection(&field).is_none(), "{name} covers the field: {at:?} over {field:?} in {width}×{height}");
+            }
             assert!(inside(at) || height < 1000.0, "{name} at {at:?}, outside {window:?}");
         }
         let first = *texts(&mut w, "Perlin").last().expect("Perlin in the menu");

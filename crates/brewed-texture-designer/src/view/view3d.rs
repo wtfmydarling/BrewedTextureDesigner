@@ -207,47 +207,69 @@ impl Lighting {
     }
 }
 
-pub fn toolbar(app: &App) -> Element<'_, Message> {
+/// How wide the 3D view is at least for its header to name its fields, and for them to be in the
+/// header at all (narrower, they go on a line under it): its padding, icon and the gaps beside
+/// the reading, then each tool and the gap after it.
+pub fn full_3d() -> f32 {
+    let label = |t: &str| crate::view::text_width(t, style::SMALL) + 4.0;
+    16.0 + 14.0 + 12.0 + (132.0 + 4.0) + (22.0 + 4.0) + label("Height") + (70.0 + 4.0) + label("Repeat") + (60.0 + 4.0) + 22.0 + 1.0
+}
+pub const COMPACT_3D: f32 = 16.0 + 14.0 + 12.0 + (110.0 + 4.0) + (22.0 + 4.0) + (64.0 + 4.0) + (54.0 + 4.0) + 22.0 + 1.0;
+
+/// The tools of the 3D view's header for a view `room` wide; and, in a narrow one, its fields on
+/// a line of their own under it.
+pub fn toolbar(app: &App, room: f32) -> (iced::widget::Row<'_, Message>, Option<iced::widget::Row<'_, Message>>) {
     let cam = app.ui.preview.view3d;
+    let (named, under) = (room >= full_3d(), room < COMPACT_3D);
     // A list rather than a button each: the view next to it is the one that needs the room.
+    // As wide as its longest shape where there is room: one line.
+    let list = if named || under { 132.0 } else { 110.0 };
     let mut r = row![
         pick_list(Shape::ALL, Some(cam.shape), move |shape| Message::Preview(PreviewMessage::Camera(Camera { shape, ..cam })))
             .text_size(style::SMALL)
             .padding([2, 6])
-            // As wide as its longest shape, however little room the view has: one line.
-            .width(Length::Fixed(132.0))
+            .width(Length::Fixed(list))
             .style(style::pick_list),
         lighting_button(app),
     ]
     .spacing(4)
     .align_y(Alignment::Center);
-    r = r.push(text("Height").size(style::SMALL).color(style::TEXT_DIM));
-    r = r.push(
-        container(
-            number(cam.displacement as f64, 0.0, 0.3)
-                .limits(0.0, 1.0)
-                .on_change(move |v| Message::Preview(PreviewMessage::Camera(Camera { displacement: v as f32, ..cam }))),
-        )
-        .width(Length::Fixed(70.0)),
-    );
-    r = r.push(text("Repeat").size(style::SMALL).color(style::TEXT_DIM));
-    r = r.push(
-        container(
-            number(cam.tiling as f64, 1.0, 8.0)
-                .limits(0.25, 32.0)
-                .on_change(move |v| Message::Preview(PreviewMessage::Camera(Camera { tiling: v as f32, ..cam }))),
-        )
-        .width(Length::Fixed(60.0)),
-    );
-    r = r.push(crate::view::tip(
+    let height = number(cam.displacement as f64, 0.0, 0.3)
+        .limits(0.0, 1.0)
+        .on_change(move |v| Message::Preview(PreviewMessage::Camera(Camera { displacement: v as f32, ..cam })));
+    let repeat = number(cam.tiling as f64, 1.0, 8.0)
+        .limits(0.25, 32.0)
+        .on_change(move |v| Message::Preview(PreviewMessage::Camera(Camera { tiling: v as f32, ..cam })));
+    let reset = crate::view::tip(
         button(icon(Icon::Reset, 14.0, style::TEXT_DIM))
             .padding(4)
             .style(style::flat_button)
             .on_press(Message::Preview(PreviewMessage::Camera(Camera { shape: cam.shape, ..Camera::default() }))),
         "Put the camera, the light and the height back where they started",
         Position::Bottom,
-    ));
-    r.into()
+    );
+    let label = |t: &'static str| text(t).size(style::SMALL).color(style::TEXT_DIM);
+    if named || under {
+        let fields = row![
+            label("Height"),
+            container(height).width(Length::Fixed(70.0)),
+            label("Repeat"),
+            container(repeat).width(Length::Fixed(60.0)),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center);
+        if under {
+            return (r.push(reset), Some(fields));
+        }
+        return (r.push(fields).push(reset), None);
+    }
+    // Between: the fields without their names, which their tips and their first letters give.
+    let tip = |field: crate::widget::number::NumberField<'static, Message>, says: &'static str, width: f32| {
+        crate::view::tip(container(field).width(Length::Fixed(width)), says, Position::Bottom)
+    };
+    r = r.push(tip(height.prefix("h "), "Height: how far the model's surface is moved by the height map", 64.0));
+    r = r.push(tip(repeat.prefix("× "), "Repeat: how many times the maps tile across the model", 54.0));
+    (r.push(reset), None)
 }
 
 /// The button of the lighting's menu, and the menu while it is open.
@@ -584,6 +606,24 @@ pub fn view(app: &App) -> Element<'_, Message> {
         key: l.key,
     };
     let mut layers: Vec<Element<'_, Message>> = vec![shader_widget(scene).width(Length::Fill).height(Length::Fill).into()];
+    // How fast it draws, in its corner. Digits in the monospaced font: they change every quarter
+    // of a second.
+    let rate = app.ui.frame_rate;
+    let frames = crate::view::tip(
+        text(format!("{:.0} FPS · {:.1} ms", rate.fps, rate.frame_ms))
+            .size(style::SMALL)
+            .font(style::mono())
+            .color(style::TEXT_DIM)
+            .wrapping(text::Wrapping::None),
+        format!(
+            "Frames the 3D view drew in the last second, and how long a frame took on average (the \
+             longest {:.1} ms). View → Real-time Rendering draws it frame after frame; without it, it \
+             draws only when something changes.",
+            rate.worst_ms
+        ),
+        Position::Top,
+    );
+    layers.push(container(frames).padding([6, 8]).width(Length::Fill).height(Length::Fill).align_right(Length::Fill).align_bottom(Length::Fill).into());
     if missing {
         layers.push(
             container(

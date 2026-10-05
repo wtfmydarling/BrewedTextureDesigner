@@ -19,58 +19,101 @@ pub(crate) const RESOLUTIONS: [u32; 7] = [128, 256, 512, 1024, 2048, 4096, 8192]
 pub(crate) const MENU_BAR_H: f32 = 30.0;
 /// How wide a button of the window's own title bar is (as the system's are).
 pub(crate) const WINDOW_BUTTON_W: f32 = 46.0;
-const STATUS_BAR_H: f32 = 24.0;
+pub(crate) const STATUS_BAR_H: f32 = 24.0;
 
-fn item<'a>(label: impl Into<String>, shortcut: impl Into<String>, message: Option<Message>) -> Element<'a, Message> {
+/// An item of a menu, and how wide the menu has to be to show it whole.
+pub(crate) struct Entry<'a> {
+    pub element: Element<'a, Message>,
+    pub width: f32,
+}
+
+impl<'a> Entry<'a> {
+    pub fn new(element: impl Into<Element<'a, Message>>, width: f32) -> Self {
+        Entry { element: element.into(), width }
+    }
+
+    /// The same item in what else it is (a row that closes a submenu when gone to, say).
+    fn map(self, f: impl FnOnce(Element<'a, Message>) -> Element<'a, Message>) -> Self {
+        Entry { element: f(self.element), width: self.width }
+    }
+}
+
+/// How far an item of a menu is padded on each side, and how far what is on its right (its
+/// keys, a folder) keeps from its label.
+pub(crate) const ITEM_PAD: f32 = 10.0;
+pub(crate) const ITEM_GAP: f32 = 16.0;
+
+/// How wide a row of a menu is: its label and, on its right, what goes with it (the space that
+/// pushes that to the right between them, a gap on each side of it; a pixel for the rounding).
+pub(crate) fn row_width(label: &str, right: &str) -> f32 {
+    let right = if right.is_empty() { 0.0 } else { crate::view::text_width(right, style::SMALL) };
+    2.0 * ITEM_PAD + crate::view::text_width(label, style::TEXT_SIZE) + 2.0 * ITEM_GAP + right + 1.0
+}
+
+/// How wide a menu of `items` is: as its widest item, and at least `width`.
+pub(crate) fn menu_width(items: &[Entry<'_>], width: f32) -> f32 {
+    items.iter().fold(width, |w, i| w.max(i.width.ceil()))
+}
+
+/// The items of a menu in a column as wide as the widest of them, and at least `width`.
+pub(crate) fn menu_column<'a>(items: Vec<Entry<'a>>, width: f32) -> iced::widget::Column<'a, Message> {
+    let width = menu_width(&items, width);
+    column(items.into_iter().map(|i| i.element)).spacing(1).width(Length::Fixed(width))
+}
+
+fn item<'a>(label: impl Into<String>, shortcut: impl Into<String>, message: Option<Message>) -> Entry<'a> {
+    let (label, shortcut) = (label.into(), shortcut.into());
+    let width = row_width(&label, &shortcut);
     let enabled = message.is_some();
     let color = if enabled { style::TEXT } else { style::TEXT_FAINT };
-    button(
+    let element = button(
         row![
-            text(label.into()).size(style::TEXT_SIZE).color(color),
+            text(label).size(style::TEXT_SIZE).color(color).wrapping(text::Wrapping::None),
             space().width(Length::Fill),
-            text(shortcut.into()).size(style::SMALL).color(if enabled { style::TEXT_DIM } else { style::TEXT_FAINT }),
+            text(shortcut).size(style::SMALL).color(if enabled { style::TEXT_DIM } else { style::TEXT_FAINT }).wrapping(text::Wrapping::None),
         ]
-        .spacing(16)
+        .spacing(ITEM_GAP)
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding([4, 10])
+    .padding([4.0, ITEM_PAD])
     .style(style::row_button(false))
-    .on_press_maybe(message.map(|m| Message::FromMenu(Box::new(m))))
-    .into()
+    .on_press_maybe(message.map(|m| Message::FromMenu(Box::new(m))));
+    Entry::new(element, width)
 }
 
-fn separator<'a>() -> Element<'a, Message> {
-    container(rule::horizontal(1).style(|_| rule::Style {
+pub(crate) fn separator<'a>() -> Entry<'a> {
+    let line = container(rule::horizontal(1).style(|_| rule::Style {
         color: style::LINE,
         radius: 0.0.into(),
         fill_mode: rule::FillMode::Full,
         snap: true,
     }))
-    .padding([3, 6])
-    .into()
+    .padding([3, 6]);
+    Entry::new(line, 0.0)
 }
 
-fn menu_body<'a>(items: Vec<Element<'a, Message>>) -> Element<'a, Message> {
+fn menu_body<'a>(items: Vec<Entry<'a>>) -> Element<'a, Message> {
     menu_of_width(items, 250.0)
 }
 
-fn menu_of_width<'a>(items: Vec<Element<'a, Message>>, width: f32) -> Element<'a, Message> {
-    container(column(items).spacing(1).width(Length::Fixed(width))).padding(4).style(style::popup).into()
+/// A menu at least `width` wide, and as wide as its widest item.
+fn menu_of_width<'a>(items: Vec<Entry<'a>>, width: f32) -> Element<'a, Message> {
+    container(menu_column(items, width)).padding(4).style(style::popup).into()
 }
 
 /// An item of a menu that has a submenu: gone to, it closes the submenu open.
-fn beside_submenu(item: Element<'_, Message>) -> Element<'_, Message> {
-    iced::widget::mouse_area(item).on_enter(Message::SubMenu(None)).into()
+fn beside_submenu(item: Entry<'_>) -> Entry<'_> {
+    item.map(|e| iced::widget::mouse_area(e).on_enter(Message::SubMenu(None)).into())
 }
 
 /// Open Recent Package ▸, whose submenu (open while the item is pointed at) lists the packages
 /// opened or saved last, as many as the settings say, each by its name and folder, then Clear
 /// Recent Packages; or says there are none.
-fn recent_packages(app: &App) -> Element<'_, Message> {
+fn recent_packages(app: &App) -> Entry<'_> {
     let open = app.ui.submenu == Some(SubMenu::Recent);
     let offered = app.settings.recent_packages as usize;
-    let mut items: Vec<Element<'_, Message>> = app
+    let mut items: Vec<Entry<'_>> = app
         .ui
         .recent
         .iter()
@@ -87,24 +130,25 @@ fn recent_packages(app: &App) -> Element<'_, Message> {
     } else {
         items.extend([separator(), item("Clear Recent Packages", "", Some(Message::ClearRecent))]);
     }
+    let (title, arrow) = ("Open Recent Package", "▸");
     let label = button(
         row![
-            text("Open Recent Package").size(style::TEXT_SIZE).color(style::TEXT),
+            text(title).size(style::TEXT_SIZE).color(style::TEXT),
             space().width(Length::Fill),
-            text("▸").size(style::SMALL).color(style::TEXT_DIM),
+            text(arrow).size(style::SMALL).color(style::TEXT_DIM),
         ]
-        .spacing(16)
+        .spacing(ITEM_GAP)
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding([4, 10])
+    .padding([4.0, ITEM_PAD])
     .style(style::row_button(open))
     .on_press(Message::SubMenu(Some(SubMenu::Recent)));
     let anchor = iced::widget::mouse_area(label).on_enter(Message::SubMenu(Some(SubMenu::Recent)));
-    dropdown(anchor, menu_of_width(items, 320.0), open).beside().on_dismiss(Message::Menu(None)).into()
+    Entry::new(dropdown(anchor, menu_of_width(items, 320.0), open).beside().on_dismiss(Message::Menu(None)), row_width(title, arrow))
 }
 
-fn menu<'a>(app: &'a App, id: MenuId, title: &'a str, items: Vec<Element<'a, Message>>) -> Element<'a, Message> {
+fn menu<'a>(app: &'a App, id: MenuId, title: &'a str, items: Vec<Entry<'a>>) -> Element<'a, Message> {
     let open = app.ui.menu == Some(id);
     let title_button = iced::widget::mouse_area(
         button(text(title).size(style::TEXT_SIZE)).padding([4, 10]).style(style::toggle_button(open)).on_press(Message::Menu(Some(id))),
@@ -113,7 +157,7 @@ fn menu<'a>(app: &'a App, id: MenuId, title: &'a str, items: Vec<Element<'a, Mes
     dropdown(title_button, menu_body(items), open).on_dismiss(Message::Menu(None)).into()
 }
 
-fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
+fn file_menu(app: &App) -> Vec<Entry<'_>> {
     let key = app.doc_key;
     let h = beside_submenu;
     let mut items = vec![
@@ -123,7 +167,7 @@ fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
         h(item("Open Package…", app.key_of(Command::Open), Some(Message::Open))),
         recent_packages(app),
     ];
-    let items_after: Vec<Element<'_, Message>> = vec![
+    let items_after: Vec<Entry<'_>> = vec![
         separator(),
         item("Link Files…", "", Some(Message::Explorer(ExplorerMessage::LinkFiles(key)))),
         item("Collect Files", "", Some(Message::Explorer(ExplorerMessage::CollectFiles(key)))),
@@ -147,25 +191,26 @@ fn file_menu(app: &App) -> Vec<Element<'_, Message>> {
 
 /// A package of the recent ones: its name, and on the right, the folder it is in (cut short
 /// to fit the menu).
-fn recent_item<'a>(name: String, folder: String, message: Message) -> Element<'a, Message> {
+fn recent_item<'a>(name: String, folder: String, message: Message) -> Entry<'a> {
     let folder: String = if folder.chars().count() > 18 { folder.chars().take(17).chain(['…']).collect() } else { folder };
-    button(
+    let width = row_width(&name, &folder);
+    let element = button(
         row![
             text(name).size(style::TEXT_SIZE).wrapping(text::Wrapping::None),
             space().width(Length::Fill),
             text(folder).size(style::SMALL).color(style::TEXT_DIM).wrapping(text::Wrapping::None),
         ]
-        .spacing(16)
+        .spacing(ITEM_GAP)
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding([4, 10])
+    .padding([4.0, ITEM_PAD])
     .style(style::row_button(false))
-    .on_press(Message::FromMenu(Box::new(message)))
-    .into()
+    .on_press(Message::FromMenu(Box::new(message)));
+    Entry::new(element, width)
 }
 
-fn edit_menu(app: &App) -> Vec<Element<'_, Message>> {
+fn edit_menu(app: &App) -> Vec<Entry<'_>> {
     let has_selection = !app.ui.selection.is_empty();
     let sel = |m: Message| has_selection.then_some(m);
     let undo = app.doc.undo_label().map_or_else(|| "Undo".to_string(), |l| format!("Undo {l}"));
@@ -207,7 +252,7 @@ fn edit_menu(app: &App) -> Vec<Element<'_, Message>> {
     ]
 }
 
-fn view_menu(app: &App) -> Vec<Element<'_, Message>> {
+fn view_menu(app: &App) -> Vec<Entry<'_>> {
     let p = &app.ui.preview;
     let check = |on: bool, label: &str| format!("{}  {label}", if on { "●" } else { "○" });
     vec![
@@ -219,7 +264,7 @@ fn view_menu(app: &App) -> Vec<Element<'_, Message>> {
     ]
 }
 
-fn help_menu(app: &App) -> Vec<Element<'_, Message>> {
+fn help_menu(app: &App) -> Vec<Entry<'_>> {
     vec![
         item("Keyboard Shortcuts", app.key_of(Command::Help), Some(Message::Dialog(Some(Dialog::Shortcuts)))),
         item("Third-Party Notices…", "", Some(Message::Dialog(Some(Dialog::Notices(Default::default()))))),

@@ -1,44 +1,37 @@
 //! Right-click menus of the graph canvas.
 
-use iced::widget::{button, column, container, row, rule, space, text};
-use iced::{Alignment, Element, Length, Size};
+use iced::widget::{button, container, row, space, text};
+use iced::{Alignment, Element, Length};
 use brewed_texture_core::{Edit, NodeKind};
 
 use crate::app::{App, ColorTarget, ContextMenu, ContextTarget, ExplorerMessage, GraphMessage, Message};
 use crate::shortcuts::Command;
 use crate::style;
+use crate::view::toolbar::{Entry, ITEM_GAP, ITEM_PAD, menu_column, menu_width, row_width, separator};
 
-fn item<'a>(label: impl Into<String>, shortcut: impl Into<String>, message: Option<Message>) -> Element<'a, Message> {
+fn item<'a>(label: impl Into<String>, shortcut: impl Into<String>, message: Option<Message>) -> Entry<'a> {
+    let (label, shortcut) = (label.into(), shortcut.into());
+    let width = row_width(&label, &shortcut);
     let enabled = message.is_some();
-    button(
+    let element = button(
         row![
-            text(label.into()).size(style::TEXT_SIZE).color(if enabled { style::TEXT } else { style::TEXT_FAINT }),
+            text(label).size(style::TEXT_SIZE).color(if enabled { style::TEXT } else { style::TEXT_FAINT }).wrapping(text::Wrapping::None),
             space().width(Length::Fill),
-            text(shortcut.into()).size(style::SMALL).color(style::TEXT_FAINT),
+            text(shortcut).size(style::SMALL).color(style::TEXT_FAINT).wrapping(text::Wrapping::None),
         ]
+        .spacing(ITEM_GAP)
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding([4, 10])
+    .padding([4.0, ITEM_PAD])
     .style(style::row_button(false))
-    .on_press_maybe(message.map(|m| Message::FromMenu(Box::new(m))))
-    .into()
-}
-
-fn separator<'a>() -> Element<'a, Message> {
-    container(rule::horizontal(1).style(|_| rule::Style {
-        color: style::LINE,
-        radius: 0.0.into(),
-        fill_mode: rule::FillMode::Full,
-        snap: true,
-    }))
-    .padding([3, 6])
-    .into()
+    .on_press_maybe(message.map(|m| Message::FromMenu(Box::new(m))));
+    Entry::new(element, width)
 }
 
 /// What is done to the files of a package: linked, imported (held in the package), those
 /// linked held in it, and those no node reads taken out.
-fn file_items<'a>(app: &App, key: u64) -> Vec<Element<'a, Message>> {
+fn file_items<'a>(app: &App, key: u64) -> Vec<Entry<'a>> {
     let package = app.package_doc(key).map(|d| d.package());
     let linked: Vec<String> = package
         .map(|p| {
@@ -60,7 +53,7 @@ fn file_items<'a>(app: &App, key: u64) -> Vec<Element<'a, Message>> {
 }
 
 pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
-    let items: Vec<Element<'a, Message>> = match &menu.target {
+    let items: Vec<Entry<'a>> = match &menu.target {
         ContextTarget::Node(id) => {
             let node = app.graph().node(*id);
             let can_bypass = node.is_some_and(|n| n.def().has_image() && !n.def().inputs.is_empty() && n.kind != NodeKind::OUTPUT);
@@ -169,13 +162,7 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
             item("Add Comment", app.key_of(Command::AddComment), Some(Message::AddComment)),
         ],
     };
-    let height = items.len() as f32 * 27.0 + 12.0;
-    let size = Size::new(230.0, height);
-    crate::view::popup_layer(
-        container(column(items).spacing(1)).padding(4).style(style::popup),
-        menu.at,
-        size,
-        crate::view::window_size(app),
-        Message::Context(None),
-    )
+    // As wide as its widest item.
+    let width = menu_width(&items, 222.0);
+    crate::view::popup_layer(container(menu_column(items, width)).padding(4).style(style::popup), menu.at, width + 8.0, Message::Context(None))
 }

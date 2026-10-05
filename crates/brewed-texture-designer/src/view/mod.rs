@@ -43,8 +43,8 @@ pub fn root(app: &App) -> Element<'_, Message> {
         };
         pane_grid::Content::new(container(body).width(Length::Fill).height(Length::Fill).style(style::panel))
     })
-    .spacing(3)
-    .min_size(140)
+    .spacing(PANE_SPACING)
+    .min_size(PANE_MIN)
     .on_resize(8, Message::PaneResized)
     .style(|_| pane_grid::Style {
         hovered_region: pane_grid::Highlight {
@@ -112,25 +112,57 @@ pub fn root(app: &App) -> Element<'_, Message> {
     stack(layers).into()
 }
 
-/// A popup at a window position: clicking anywhere else sends `dismiss`.
-pub fn popup_layer<'a>(
-    content: impl Into<Element<'a, Message>>,
-    at: Point,
-    size: iced::Size,
-    window: iced::Size,
-    dismiss: Message,
-) -> Element<'a, Message> {
-    let x = at.x.min(window.width - size.width - 4.0).max(4.0);
-    let y = at.y.min(window.height - size.height - 4.0).max(4.0);
+/// A popup `width` wide at a window position, kept inside the window as large as it is:
+/// clicking anywhere else sends `dismiss`.
+pub fn popup_layer<'a>(content: impl Into<Element<'a, Message>>, at: Point, width: f32, dismiss: Message) -> Element<'a, Message> {
     stack![
         mouse_area(space().width(Length::Fill).height(Length::Fill))
             .on_press(dismiss.clone())
             .on_right_press(dismiss)
             .on_middle_press(Message::Menu(None)),
-        pin(opaque(container(content).width(Length::Fixed(size.width)).max_height(size.height)))
-            .position(Point::new(x, y)),
+        crate::widget::placed::placed(opaque(container(content).width(Length::Fixed(width))), at),
     ]
     .into()
+}
+
+/// How wide a line of text is drawn at `size` in the interface's font: what a menu is as wide
+/// as, to show each of its items whole. Each is measured once (anew when fonts are loaded).
+pub fn text_width(content: &str, size: f32) -> f32 {
+    text_width_in(content, size, style::ui_font())
+}
+
+/// How wide a line of text is drawn at `size` in `font`.
+pub fn text_width_in(content: &str, size: f32, font: iced::Font) -> f32 {
+    use iced::advanced::graphics::text::{Paragraph, Version, font_system};
+    use iced::advanced::text::{self as core_text, Paragraph as _};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    type Widths = (Option<Version>, HashMap<(String, u32, iced::Font), f32>);
+    thread_local! {
+        static WIDTHS: RefCell<Widths> = RefCell::new((None, HashMap::new()));
+    }
+    let version = font_system().read().ok().map(|f| f.version());
+    WIDTHS.with_borrow_mut(|(known, widths)| {
+        // (Fonts loaded since, or too many kept: measured anew.)
+        if *known != version || widths.len() > 2048 {
+            widths.clear();
+            *known = version;
+        }
+        *widths.entry((content.to_owned(), size.to_bits(), font)).or_insert_with(|| {
+            Paragraph::with_text(core_text::Text {
+                content,
+                bounds: iced::Size::INFINITE,
+                size: iced::Pixels(size),
+                line_height: core_text::LineHeight::default(),
+                font,
+                align_x: core_text::Alignment::Default,
+                align_y: iced::alignment::Vertical::Top,
+                shaping: core_text::Shaping::default(),
+                wrapping: core_text::Wrapping::None,
+            })
+            .min_width()
+        })
+    })
 }
 
 /// Wrap an element in a tooltip with the app's style.
@@ -168,6 +200,19 @@ pub fn hairline<'a>() -> Element<'a, Message> {
 /// Height of pane headers.
 pub const HEADER_H: f32 = 30.0;
 
+/// How far apart the panels are, and how small one is let be.
+pub const PANE_SPACING: f32 = 3.0;
+pub const PANE_MIN: f32 = 140.0;
+
+/// How wide a panel is, as the size of the window and the splits say: what its header has room
+/// for (known before the panel is laid out).
+pub fn pane_width(app: &App, which: Pane) -> f32 {
+    let window = app.ui.window_size;
+    let grid = iced::Size::new(window.width, (window.height - toolbar::MENU_BAR_H - toolbar::STATUS_BAR_H).max(0.0));
+    let regions = app.ui.panes.layout().pane_regions(PANE_SPACING, PANE_MIN, grid);
+    app.ui.panes.iter().find(|(_, pane)| **pane == which).and_then(|(id, _)| regions.get(id)).map_or(grid.width, |r| r.width)
+}
+
 /// The strip at the top of a pane: its title, and tools on the right.
 pub fn pane_header<'a>(title: &str, tools: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(
@@ -183,10 +228,6 @@ pub fn pane_header<'a>(title: &str, tools: impl Into<Element<'a, Message>>) -> E
 }
 
 /// The size of the window (for keeping popups inside it).
-pub fn window_size(app: &App) -> iced::Size {
-    app.ui.window_size
-}
-
 /// How far the mouse wheel turned, in pixels (a line is 60), as the views zoom by it: the
 /// wheel pushed away zooms in, unless the settings say the other way.
 pub fn wheel(app: &App, delta: &iced::mouse::ScrollDelta) -> f32 {
