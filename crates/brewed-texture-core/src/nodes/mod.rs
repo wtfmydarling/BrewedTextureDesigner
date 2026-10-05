@@ -43,7 +43,7 @@ pub use hdri::{
     SHAPE_LIGHT_SHAPES, temperature_color,
 };
 pub use usage::{USAGE_GROUPS, Usage, UsageGroup};
-pub use values::DEFAULT_MATH_EXPRESSION;
+pub use values::{DEFAULT_MATH_EXPRESSION, MATH_BUILTINS};
 
 // ---------------------------------------------------------------------------- categories
 

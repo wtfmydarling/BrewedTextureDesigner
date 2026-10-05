@@ -10,7 +10,7 @@ use iced::{Alignment, Element, Length, Pixels, Point, Rectangle, mouse};
 use brewed_texture_core::eval::VarSource;
 use brewed_texture_core::expr::{self, Language, builtins};
 use brewed_texture_core::graph::Node;
-use brewed_texture_core::nodes::{FX_MAP_BUILTINS, FX_MAP_OUTPUTS, PIXEL_MATH_BUILTINS};
+use brewed_texture_core::nodes::{FX_MAP_BUILTINS, FX_MAP_OUTPUTS, MATH_BUILTINS, PIXEL_MATH_BUILTINS};
 use brewed_texture_core::{Edit, NodeKind, Value};
 
 use crate::app::{App, Message};
@@ -101,6 +101,13 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                 ]
                 .spacing(8)
                 .into(),
+                // (Of Math, the size of the texture: as much as it is now.)
+                VarSource::Builtin if node.kind == NodeKind::MATH => row![
+                    text(Value::Float(v.value as f32).display()).size(style::SMALL),
+                    text("the texture's size, in pixels (built in)").size(style::SMALL).color(style::TEXT_FAINT),
+                ]
+                .spacing(8)
+                .into(),
                 VarSource::Builtin => {
                     text(if script { "per splat (built in)" } else { "per pixel (built in)" }).size(style::SMALL).color(style::TEXT_FAINT).into()
                 }
@@ -165,6 +172,14 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
     );
     if open {
         let mut list = column![].spacing(2);
+        if node.kind == NodeKind::MATH {
+            list = list.push(text(format!("Built-ins: {}", MATH_BUILTINS.join(", "))).size(style::SMALL));
+            list = list.push(
+                text("width, height: the size of the texture the graph is computed at, in pixels (as $size in Substance Designer)")
+                    .size(style::SMALL)
+                    .color(style::TEXT_DIM),
+            );
+        }
         if node.kind == NodeKind::PIXEL_MATH {
             list = list.push(text(format!("Per-pixel built-ins: {}", PIXEL_MATH_BUILTINS.join(", "))).size(style::SMALL));
             list = list.push(

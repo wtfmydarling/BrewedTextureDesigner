@@ -101,7 +101,8 @@ pub enum VarSource {
     Variable(String),
     /// The node's own value for the variable.
     Local,
-    /// A per-pixel built-in of Pixel Math (u, v, px …).
+    /// A built-in: of Math, the size of the texture; of Pixel Math, a value of each pixel (u, v,
+    /// px …); of an FX-Map, of each splat.
     Builtin,
     /// A link from an image (Pixel Math).
     Image(NodeId),
@@ -295,7 +296,12 @@ fn evaluate_value(graph: &Graph, node: &Node, results: &Evaluation, e: &mut Node
                 Ok(program) => {
                     let mut args = Vec::with_capacity(program.vars.len());
                     for name in &program.vars {
-                        let (v, source) = scalar_var(graph, node, results, name);
+                        // The size of the texture, built in; what else it reads, from where it is.
+                        let (v, source) = match name.as_str() {
+                            "width" => (f64::from(graph.resolution[0]), VarSource::Builtin),
+                            "height" => (f64::from(graph.resolution[1]), VarSource::Builtin),
+                            _ => scalar_var(graph, node, results, name),
+                        };
                         args.push(v);
                         e.vars.push(VarInfo { name: name.clone(), value: v, source });
                     }
@@ -381,6 +387,44 @@ mod tests {
         assert_eq!(r.vars[1].source, VarSource::Local);
         assert_eq!(r.vars[2].source, VarSource::Variable("speed".into()));
         assert!(r.errors.is_empty());
+    }
+
+    /// Math reads the size of the texture the graph is computed at: width and height, built in (no
+    /// socket of their own, and no input value can be named so: it is named width_), the graph's
+    /// size, and another when the graph has another.
+    #[test]
+    fn math_reads_the_size_of_the_texture() {
+        let mut g = Graph { resolution: [1024, 256], ..Graph::default() };
+        let m = g.add_node(NodeKind::MATH, [0.0, 0.0]);
+        set(&mut g, m, "expression", ParamValue::Text("width / 4 + height + k".into()));
+        g.node_mut(m).unwrap().var_values.insert("k".into(), 1.0);
+        let named = g.add_node(NodeKind::FLOAT_INPUT, [0.0, 0.0]);
+        assert_eq!(g.bind_variable(named, "width").unwrap(), "width_");
+        g.variable_mut("width_").unwrap().value = Value::Float(7.0);
+        let ev = evaluate(&g);
+        let r = ev.node(m).unwrap();
+        assert_eq!(r.value, Some(Value::Float(513.0)), "{:?}", r.errors);
+        let sources: Vec<(&str, &VarSource)> = r.vars.iter().map(|v| (v.name.as_str(), &v.source)).collect();
+        assert_eq!(sources, [("width", &VarSource::Builtin), ("height", &VarSource::Builtin), ("k", &VarSource::Local)]);
+        assert_eq!(g.node(m).unwrap().expression_vars(), ["k"], "a socket for k only");
+        assert!(g.connect(named, "o:value", m, "v:width").is_err(), "no socket to connect to");
+        g.resolution = [512, 512];
+        assert_eq!(evaluate(&g).node(m).unwrap().value, Some(Value::Float(641.0)));
+        // A parameter driven by it is the size's too.
+        let blur = g.add_node(NodeKind::BLUR, [0.0, 0.0]);
+        g.set_exposed(blur, "radius", true).unwrap();
+        g.connect(m, "o:result", blur, "p:radius").unwrap();
+        set(&mut g, m, "expression", ParamValue::Text("width / 64".into()));
+        assert_eq!(evaluate(&g).node(blur).unwrap().params.f("radius"), 8.0);
+    }
+
+    /// An Output's usage is what its map is for, read as it is set: it cannot be given a socket.
+    #[test]
+    fn the_usage_of_an_output_is_set_not_driven() {
+        let mut g = Graph::default();
+        let out = g.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+        assert!(g.set_exposed(out, "usage", true).is_err());
+        assert!(!g.node(out).unwrap().is_exposed("usage"));
     }
 
     #[test]

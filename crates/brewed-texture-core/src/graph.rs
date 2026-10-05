@@ -888,7 +888,8 @@ pub fn sanitize_identifier(text: &str) -> String {
     if out.starts_with(|c: char| c.is_ascii_digit()) {
         out.insert(0, '_');
     }
-    if crate::expr::builtins::is_builtin(&out) || PIXEL_MATH_BUILTINS.contains(&out.as_str()) || FX_MAP_BUILTINS.contains(&out.as_str()) {
+    let reserved = [crate::nodes::MATH_BUILTINS, PIXEL_MATH_BUILTINS, FX_MAP_BUILTINS];
+    if crate::expr::builtins::is_builtin(&out) || reserved.iter().any(|names| names.contains(&out.as_str())) {
         out.push('_');
     }
     out

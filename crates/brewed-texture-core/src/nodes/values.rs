@@ -4,6 +4,11 @@ use super::*;
 
 pub const DEFAULT_MATH_EXPRESSION: &str = "(1+x)*sin(myVar)-2.4/cos(myVar2)";
 
+/// What a Math expression reads that is built in, as Substance Designer's functions read
+/// `$size`: the size of the texture the graph is computed at, in pixels, across and down (of a
+/// graph used as a node, the size it is computed at there).
+pub const MATH_BUILTINS: &[&str] = &["width", "height"];
+
 const fn input_node(
     id: &'static str,
     name: &'static str,
@@ -70,8 +75,8 @@ pub static MATH: NodeDef = NodeDef {
     id: "math",
     name: "Math",
     category: Category::Values,
-    description: "Evaluates a scalar expression. Every word that is not a function or a constant \
-                  becomes an input on the left.",
+    description: "Evaluates a scalar expression. Every word that is not a function, a constant or a built-in \
+                  (width and height: the size of the texture, in pixels) becomes an input on the left.",
     keywords: "expression formula calculate function scalar",
     inputs: NO_SOCKETS,
     outputs: &[value("result", "Result", DataType::Float)],

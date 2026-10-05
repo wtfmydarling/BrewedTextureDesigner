@@ -99,7 +99,9 @@ pub static HDRI_LINE_LIGHT: NodeDef = NodeDef {
     params: &[
         vec2("point_1", "Point 1", [0.4, 0.3], 0.0, 1.0).tip("Where it begins: across, once round; down, from straight up (0) to straight down (1)."),
         vec2("point_2", "Point 2", [0.6, 0.3], 0.0, 1.0).tip("Where it ends."),
-        choice("position_mode", "Position Mode", 0, LINE_LIGHT_POSITIONS, LINE_LIGHT_POSITION_IDS).tip(
+        // (A mode, as Color Mode is: what the other parameters mean, set rather than given by a
+        // socket.)
+        choice("position_mode", "Position Mode", 0, LINE_LIGHT_POSITIONS, LINE_LIGHT_POSITION_IDS).fixed().tip(
             "Where its ends are in the scene: on a ceiling a step above the middle of the scene (where they are seen above \
              the horizon) or on a floor a step below it, so that it is nearer and thicker overhead and thinner toward the \
              horizon, as a tube on a ceiling is; or both a step from the middle.",
@@ -130,7 +132,9 @@ pub static HDRI_PLANE_LIGHT: NodeDef = NodeDef {
     inputs: BACKGROUND,
     outputs: COLOR_OUT,
     params: &[
+        // (A mode, as Color Mode is.)
         choice("placement", "Placement", 0, PLANE_LIGHT_PLACEMENTS, PLANE_LIGHT_PLACEMENT_IDS)
+            .fixed()
             .tip("Facing the middle of the scene, wherever it is; or flat overhead (a ceiling) or underfoot (a floor)."),
         vec2("position", "Position", [0.5, 0.4], 0.0, 1.0)
             .tip("Where its middle is seen: across, once round; down, from straight up (0) to straight down (1). A ceiling is above the horizon, a floor below it."),
@@ -179,6 +183,19 @@ pub fn temperature_color(kelvin: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What decides what the other parameters of a light mean — how its color is given, where its
+    /// position is, what its points are — is set, not given by a socket; the rest of what a light
+    /// is (its shape and pattern too, as other nodes' are) can be.
+    #[test]
+    fn the_modes_of_the_lights_are_set_not_driven() {
+        let modes = ["color_mode", "placement", "position_mode"];
+        for def in [&HDRI_GRADIENT, &HDRI_SHAPE_LIGHT, &HDRI_LINE_LIGHT, &HDRI_PLANE_LIGHT] {
+            for p in def.params {
+                assert_eq!(p.can_expose(), !modes.contains(&p.key), "{} {}", def.name, p.key);
+            }
+        }
+    }
 
     /// A bulb is orange, daylight white, a blue sky blue; each as bright as white.
     #[test]

@@ -184,6 +184,103 @@ macro_rules! harness {
     };
 }
 
+/// A Math node reads the size of the texture as Substance Designer's functions read `$size`:
+/// `width` and `height` are built in. Typed into its expression in Properties, they take no
+/// socket on the node (the graph has none to connect), Properties says each is the texture's
+/// size and how large it is, and its list of functions names them; the value follows the
+/// graph's size, and so does a parameter it drives, at once.
+#[test]
+fn math_reads_the_size_of_the_texture() {
+    use brewed_texture_core::graph::SocketRef;
+    use brewed_texture_core::types::Value;
+    let mut panel = harness!(view::properties::view, 420.0, 1400.0);
+    panel.send(Message::Edit(Edit::SetResolution([2048, 1024])));
+    panel.send(Message::Edit(Edit::AddNode { kind: NodeKind::MATH, pos: [1600.0, -600.0] }));
+    let math = panel.app.graph().nodes_of(NodeKind::MATH).last().expect("the new Math").id;
+    panel.send(Message::Edit(Edit::SetParam { node: math, key: "expression".into(), value: ParamValue::Text("width / 8".into()) }));
+    panel.send(Message::Seal);
+    panel.send(Message::Graph(GraphMessage::Select { node: math, mode: SelectMode::Replace }));
+    panel.input(&[]);
+    // Typed on, in the editor.
+    assert!(matches!(panel.operate(focusable::focus::<()>(editor_id())), Outcome::None));
+    assert!(panel.input(&typing(" + height / 1024")) > 0, "the editor takes what is typed");
+    assert_eq!(panel.app.graph().node(math).unwrap().text("expression"), "width / 8 + height / 1024");
+    let value = |w: &Harness| w.app.eval.node(math).and_then(|e| e.value);
+    assert_eq!(value(&panel), Some(Value::Float(257.0)));
+    // No socket: nothing on the node to connect, and Properties says what each is.
+    let node = panel.app.graph().node(math).unwrap();
+    assert!(node.expression_vars().is_empty() && panel.app.graph().input_sockets(node).is_empty(), "no inputs on the node");
+    let said = texts(&mut panel, "the texture's size, in pixels (built in)");
+    assert_eq!(said.len(), 2, "width and height, each said built in");
+    assert!(!texts(&mut panel, "2048").is_empty() && !texts(&mut panel, "1024").is_empty(), "and how large it is");
+    if !panel.app.ui.show_functions {
+        panel.send(Message::ShowFunctions);
+    }
+    assert!(!texts(&mut panel, "Built-ins: width, height").is_empty(), "the list of functions names them");
+    // A parameter it drives: a blur's radius, as large as the size says.
+    panel.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [1900.0, -600.0] }));
+    let blur = panel.app.graph().nodes_of(NodeKind::BLUR).last().expect("the new Blur").id;
+    panel.send(Message::Edit(Edit::SetExposed { node: blur, key: "radius".into(), exposed: true }));
+    panel.send(Message::Edit(Edit::Connect {
+        a: SocketRef { node: math, key: "o:result".into(), output: true },
+        b: SocketRef { node: blur, key: "p:radius".into(), output: false },
+    }));
+    let radius = |w: &Harness| w.app.eval.params(blur).map(|p| p.f("radius"));
+    assert_eq!(radius(&panel), Some(257.0));
+    // Another size: another value, at once.
+    panel.send(Message::Edit(Edit::SetResolution([512, 512])));
+    assert_eq!((value(&panel), radius(&panel)), (Some(Value::Float(64.5)), Some(64.5)));
+    // Undone, the size it was.
+    panel.send(Message::Undo);
+    assert_eq!(value(&panel), Some(Value::Float(257.0)));
+}
+
+/// What decides what the other parameters of a light mean — a Plane Light's Placement, a Line
+/// Light's Position Mode, as Color Mode — has no toggle in Properties that exposes it, where the
+/// light's other rows have one at the same place (a click there exposes its hardness, and on its
+/// placement or position mode, nothing); no edit exposes it, nor an Output's usage.
+#[test]
+fn the_modes_of_the_lights_cannot_be_exposed() {
+    let mut panel = harness!(view::properties::view, 420.0, 1400.0);
+    let add = |w: &mut Harness, kind: NodeKind| {
+        w.send(Message::Edit(Edit::AddNode { kind, pos: [1900.0, -600.0] }));
+        w.send(Message::Seal);
+        let id = w.app.graph().nodes_of(kind).last().expect("the new node").id;
+        w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+        w.input(&[]);
+        id
+    };
+    let row = |w: &mut Harness, label: &str| *texts(w, label).first().unwrap_or_else(|| panic!("the {label} row"));
+    // Where a row's toggle is: from the right of the hardness row, the first place a click exposes it.
+    let panel_light = add(&mut panel, NodeKind::HDRI_PLANE_LIGHT);
+    let hardness = row(&mut panel, "Hardness");
+    let mut toggle = None;
+    for x in (300..420).rev().step_by(2) {
+        click(&mut panel, Point::new(x as f32, hardness.center_y()));
+        if panel.app.graph().node(panel_light).unwrap().is_exposed("hardness") {
+            toggle = Some(x as f32);
+            break;
+        }
+    }
+    let x = toggle.expect("a toggle exposes the hardness");
+    let tried = |w: &mut Harness, node, label: &str, key: &str| {
+        let at = row(w, label);
+        let before = w.app.doc.undo_label();
+        click(w, Point::new(x, at.center_y()));
+        assert!(!w.app.graph().node(node).unwrap().is_exposed(key), "no toggle exposes the {label}");
+        assert_eq!(w.app.doc.undo_label(), before, "nothing was done");
+        w.send(Message::Edit(Edit::SetExposed { node, key: key.into(), exposed: true }));
+        assert!(!w.app.graph().node(node).unwrap().is_exposed(key), "nor an edit");
+    };
+    tried(&mut panel, panel_light, "Placement", "placement");
+    tried(&mut panel, panel_light, "Color Mode", "color_mode");
+    let tube = add(&mut panel, NodeKind::HDRI_LINE_LIGHT);
+    tried(&mut panel, tube, "Position Mode", "position_mode");
+    let out = panel.app.graph().nodes_of(NodeKind::OUTPUT).map(|n| n.id).next().expect("an output");
+    panel.send(Message::Edit(Edit::SetExposed { node: out, key: "usage".into(), exposed: true }));
+    assert!(!panel.app.graph().node(out).unwrap().is_exposed("usage"), "an Output's usage is set");
+}
+
 /// Typing into the Math expression must never lose the focus, however often the
 /// expression turns incorrect and correct again (the error line appears and goes).
 #[test]

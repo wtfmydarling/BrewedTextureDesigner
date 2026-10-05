@@ -145,7 +145,7 @@ impl Language {
     /// The names the language gives an expression to read.
     pub fn builtins(self) -> &'static [&'static str] {
         match self {
-            Language::Math => &[],
+            Language::Math => crate::nodes::MATH_BUILTINS,
             Language::Pixel => crate::nodes::PIXEL_MATH_BUILTINS,
             Language::Splats => crate::nodes::FX_MAP_BUILTINS,
         }
