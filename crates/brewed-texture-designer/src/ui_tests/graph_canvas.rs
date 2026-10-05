@@ -437,3 +437,68 @@ fn a_comment_above_the_view_draws_nothing_over_the_menu_bar() {
     }
     assert_eq!(stray, 0, "pixels drawn over the menu bar");
 }
+
+/// The graph draws in its view only: wherever its nodes, links and comments are — across the
+/// top of the view, its bottom, its sides, large or small — every pixel of the window outside
+/// the view is what it is with the graph out of sight.
+#[test]
+fn the_graph_draws_in_its_view_only() {
+    let mut w = canvas!();
+    // Words in the comments too, at every zoom they are drawn at.
+    let comments: Vec<_> = w.app.graph().comments.iter().map(|c| c.id).collect();
+    for id in comments {
+        w.send(Message::Edit(Edit::SetCommentDescription { id, text: "What the nodes in the frame do, said at length. ".repeat(20) }));
+    }
+    w.send(Message::Seal);
+    w.input(&[]);
+    let b = w.app.ui.graph_view.bounds;
+    let width = w.size.width as usize;
+    let outside = |x: usize, y: usize| {
+        let (x, y) = (x as f32 + 0.5, y as f32 + 0.5);
+        // (A pixel of slack around the view: its edge is drawn by both.)
+        x < b.x - 1.0 || x > b.x + b.width + 1.0 || y < b.y - 1.0 || y > b.y + b.height + 1.0
+    };
+    let view_at = |w: &mut Harness, zoom: f32, pan: Vector| {
+        w.app.ui.graph_view.zoom = zoom;
+        w.app.ui.graph_view.pan = pan;
+        w.input(&[]);
+        w.pixels()
+    };
+    let empty = view_at(&mut w, 1.0, Vector::new(1.0e6, 1.0e6));
+    // The graph's middle at each edge and corner of the view, near and far.
+    let (lo, hi) = w.app.graph().nodes.iter().fold(([f32::MAX; 2], [f32::MIN; 2]), |(lo, hi), n| {
+        ([lo[0].min(n.pos[0]), lo[1].min(n.pos[1])], [hi[0].max(n.pos[0] + 160.0), hi[1].max(n.pos[1] + 200.0)])
+    });
+    let middle = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    let mut found = Vec::new();
+    let mut placements: Vec<(f32, Vector, String)> = Vec::new();
+    for zoom in [0.3, 1.0, 2.5] {
+        for (fx, fy) in [(0.5, 0.0), (0.5, 1.0), (0.0, 0.5), (1.0, 0.5), (0.0, 0.0), (1.0, 1.0)] {
+            placements.push((zoom, Vector::new(b.width * fx - middle[0] * zoom, b.height * fy - middle[1] * zoom), format!("the graph's middle at {fx},{fy} of it")));
+        }
+    }
+    // Each comment's words just past each edge: its top above the view, its left beside it, its
+    // words running past its bottom and its right.
+    let rects: Vec<[f32; 4]> = w.app.graph().comments.iter().map(|c| [c.pos[0], c.pos[1], c.size[0], c.size[1]]).collect();
+    for [x, y, _, _] in rects {
+        for (dx, dy, edge) in [(40.0, -60.0, "top"), (-60.0, 40.0, "left"), (40.0, b.height - 50.0, "bottom"), (b.width - 80.0, 40.0, "right")] {
+            placements.push((1.0, Vector::new(dx - x, dy - y), format!("a comment's words past the {edge}")));
+        }
+    }
+    for (zoom, at, said) in placements {
+        {
+            let drawn = view_at(&mut w, zoom, at);
+            let mut stray = 0;
+            for (i, (a, e)) in drawn.chunks(4).zip(empty.chunks(4)).enumerate() {
+                let (x, y) = (i % width, i / width);
+                if outside(x, y) && a.iter().zip(e).any(|(a, e)| (i32::from(*a) - i32::from(*e)).abs() > 2) {
+                    stray += 1;
+                }
+            }
+            if stray > 0 {
+                found.push(format!("{stray} pixels outside the view at zoom {zoom}, {said}"));
+            }
+        }
+    }
+    assert!(found.is_empty(), "{}", found.join("\n"));
+}
