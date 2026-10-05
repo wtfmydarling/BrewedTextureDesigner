@@ -92,11 +92,22 @@ pub fn root(app: &App) -> Element<'_, Message> {
         layers.push(picker);
     }
     if let Some(dialog) = &app.ui.dialog {
-        layers.push(dialogs::view(app, dialog));
+        // Where the program draws the window's title bar, a dialog covers what is under it, not
+        // it (see `toolbar::menu_bar`).
+        let dialog = dialogs::view(app, dialog);
+        layers.push(if crate::app::OWN_TITLE_BAR {
+            column![space().height(Length::Fixed(toolbar::MENU_BAR_H)), dialog].into()
+        } else {
+            dialog
+        });
     }
     // Over everything, the dialogs too (the settings dialog shows it itself).
     if app.ui.restart_offer && !matches!(app.ui.dialog, Some(crate::app::Dialog::Settings(_))) {
         layers.push(settings::restart_offer(app));
+    }
+    // The edges that size the window, over everything (not while it fills the screen).
+    if crate::app::OWN_TITLE_BAR && !app.ui.maximized {
+        layers.push(toolbar::window_edges());
     }
     stack(layers).into()
 }

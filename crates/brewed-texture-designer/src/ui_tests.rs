@@ -20,6 +20,7 @@ use crate::picker::{PickTarget, Shot};
 use crate::view;
 use crate::view::properties::expression::editor_id;
 
+
 type View = Box<dyn for<'a> Fn(&'a App) -> Element<'a, Message>>;
 
 /// A view of an app, rendered without a window.
@@ -81,6 +82,34 @@ impl Harness {
             self.send(m);
         }
         count
+    }
+
+    /// Feed input events; returns the messages the widgets produced, not applied to the app.
+    fn produced(&mut self, events: &[iced::Event]) -> Vec<Message> {
+        let mut messages = Vec::new();
+        let cursor = self.cursor;
+        self.frame(|ui, renderer| {
+            let _ = ui.update(events, cursor, renderer, &mut clipboard::Null, &mut messages);
+        });
+        messages
+    }
+
+    /// What the cursor looks like moved to `at` (what that move produces is applied).
+    fn interaction(&mut self, at: Point) -> mouse::Interaction {
+        self.cursor = mouse::Cursor::Available(at);
+        let mut messages = Vec::new();
+        let cursor = self.cursor;
+        let state = self.frame(|ui, renderer| {
+            let moved = iced::Event::Mouse(mouse::Event::CursorMoved { position: at });
+            ui.update(&[moved], cursor, renderer, &mut clipboard::Null, &mut messages).0
+        });
+        for m in messages {
+            self.send(m);
+        }
+        match state {
+            iced_runtime::user_interface::State::Updated { mouse_interaction, .. } => mouse_interaction,
+            iced_runtime::user_interface::State::Outdated => mouse::Interaction::None,
+        }
     }
 
     /// Move the mouse (the widgets see a CursorMoved event).
@@ -183,6 +212,9 @@ macro_rules! harness {
         }
     };
 }
+
+// (After the macro: the tests of each part of the window, which use it.)
+mod title_bar;
 
 /// A Math node reads the size of the texture as Substance Designer's functions read `$size`:
 /// `width` and `height` are built in. Typed into its expression in Properties, they take no
@@ -1486,6 +1518,32 @@ fn texts(w: &mut Harness, wanted: &str) -> Vec<iced::Rectangle> {
 
 fn click(w: &mut Harness, at: Point) {
     drag(w, at, at);
+}
+
+/// What pressing the left button at `at` asks for (the cursor moved there first), not applied;
+/// the button is then let go (what that asks is not applied either).
+fn pressed(w: &mut Harness, at: Point) -> Vec<Message> {
+    w.hover(at);
+    let asked = w.produced(&[iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))]);
+    let _ = w.produced(&[iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))]);
+    asked
+}
+
+/// What a click at `at` asks for, pressed and let go (the cursor moved there first), not applied.
+fn clicked(w: &mut Harness, at: Point) -> Vec<Message> {
+    clicked_with(w, at, mouse::Button::Left)
+}
+
+/// What a right click at `at` asks for, not applied.
+fn right_clicked(w: &mut Harness, at: Point) -> Vec<Message> {
+    clicked_with(w, at, mouse::Button::Right)
+}
+
+fn clicked_with(w: &mut Harness, at: Point, button: mouse::Button) -> Vec<Message> {
+    w.hover(at);
+    let mut asked = w.produced(&[iced::Event::Mouse(mouse::Event::ButtonPressed(button))]);
+    asked.extend(w.produced(&[iced::Event::Mouse(mouse::Event::ButtonReleased(button))]));
+    asked
 }
 
 /// Presses a key that types nothing (arrows, Enter…) as the window reports it.

@@ -32,6 +32,10 @@ pub enum Icon {
     Close,
     /// Lines of a list (the other way of showing what a grid shows).
     List,
+    /// The window's buttons: make it small, make it fill the screen, give it back its size.
+    Minimize,
+    Maximize,
+    Restore,
 }
 
 fn path(icon: Icon) -> &'static str {
@@ -58,6 +62,9 @@ fn path(icon: Icon) -> &'static str {
         Icon::Graph => r#"<rect x="3" y="4" width="7" height="6" rx="1.5"/><rect x="14" y="14" width="7" height="6" rx="1.5"/><path d="M10 7h2.5a2 2 0 0 1 2 2v5"/>"#,
         Icon::Plus => r#"<path d="M12 5v14M5 12h14"/>"#,
         Icon::Close => r#"<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>"#,
+        Icon::Minimize => r#"<path d="M6 12h12"/>"#,
+        Icon::Maximize => r#"<rect x="6" y="6" width="12" height="12" rx="1"/>"#,
+        Icon::Restore => r#"<rect x="5.5" y="8.5" width="10" height="10" rx="1"/><path d="M8.5 8.5V6.5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-2"/>"#,
         Icon::List => r#"<path d="M9 6.5h11M9 12h11M9 17.5h11M4.5 6.5h.5M4.5 12h.5M4.5 17.5h.5"/>"#,
         Icon::Font => r#"<path d="M5 19.5L11 4.5h2l6 15M7.4 13.5h9.2"/>"#,
         Icon::Vector => r#"<path d="M5 19C8 10 15 12 19 5"/><rect x="3" y="17" width="4" height="4" rx=".6"/><rect x="17" y="3" width="4" height="4" rx=".6"/>"#,

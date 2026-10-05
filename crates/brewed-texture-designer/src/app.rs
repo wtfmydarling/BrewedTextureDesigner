@@ -405,6 +405,10 @@ pub struct Ui {
     pub cursor: Point,
     pub modifiers: keyboard::Modifiers,
     pub window_size: Size,
+    /// Whether the window fills the screen (its title bar's button says what it does then).
+    pub maximized: bool,
+    /// When the title bar was last pressed: a second press soon after is a double click.
+    pub title_pressed: Option<Instant>,
     pub lock_square: bool,
     pub status: Option<Status>,
     pub clipboard: Option<Clipboard>,
@@ -800,6 +804,8 @@ pub enum Message {
     ExportNode(NodeId),
     ExportNodePicked(NodeId, Option<PathBuf>),
     Quit,
+    /// The window's own title bar (where the program draws it, see [`OWN_TITLE_BAR`]).
+    Window(WindowAction),
     Proceed(PendingAction),
     /// Save, then continue with the action (unsaved changes dialog).
     SaveThen(PendingAction),
@@ -968,6 +974,41 @@ fn answered_from(message: &Message) -> Option<PathBuf> {
 
 const MIN_WINDOW: Size = Size::new(1000.0, 640.0);
 
+/// Whether the program draws the window's title bar itself: its buttons at the right of the menu
+/// bar, the rest of the bar what moves the window, the edges what size it. Not on macOS, whose
+/// own (its buttons on the left, over the menu bar of the screen) programs keep.
+pub const OWN_TITLE_BAR: bool = !cfg!(target_os = "macos");
+
+/// What the window's own title bar does.
+#[derive(Clone, Copy, Debug)]
+pub enum WindowAction {
+    Minimize,
+    /// Fill the screen, or give the window back its size.
+    ToggleMaximize,
+    /// As closing a window does: unsaved changes asked about first.
+    Close,
+    /// The bar is pressed: it moves the window; pressed again at once, it fills the screen.
+    TitlePressed,
+    /// The bar is right-clicked: the system's menu of the window (on Windows and Wayland).
+    TitleMenu,
+    /// An edge or a corner is pressed: it sizes the window.
+    Resize(window::Direction),
+    /// What the system says of the window: whether it fills the screen.
+    Maximized(bool),
+}
+
+/// What the window is asked to do by its own title bar.
+#[derive(Clone, Copy, Debug)]
+pub enum WindowRequest {
+    Minimize,
+    ToggleMaximize,
+    /// Move with the cursor, the button held.
+    Drag,
+    /// The system's menu of the window (on Windows and Wayland; nothing elsewhere).
+    SystemMenu,
+    Resize(window::Direction),
+}
+
 fn main_window_settings(workspace: Option<&Workspace>) -> window::Settings {
     let size = workspace.and_then(|w| w.size).map_or(Size::new(1680.0, 1000.0), |[w, h]| {
         Size::new(w.max(MIN_WINDOW.width), h.max(MIN_WINDOW.height))
@@ -979,9 +1020,19 @@ fn main_window_settings(workspace: Option<&Workspace>) -> window::Settings {
         maximized: !cfg!(windows) && workspace.is_some_and(|w| w.maximized),
         min_size: Some(MIN_WINDOW),
         visible: !cfg!(windows),
+        // Its own title bar, where the program draws it (see `OWN_TITLE_BAR`).
+        decorations: !OWN_TITLE_BAR,
         // Closing asks about unsaved changes first.
         exit_on_close_request: false,
         icon: crate::brand::window_icon(),
+        // Without the system's frame, a window of Windows 11 still has its shadow and round
+        // corners.
+        #[cfg(windows)]
+        platform_specific: window::settings::PlatformSpecific {
+            undecorated_shadow: true,
+            corner_preference: window::settings::platform::CornerPreference::Round,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -1108,6 +1159,8 @@ impl App {
                 cursor: Point::ORIGIN,
                 modifiers: keyboard::Modifiers::default(),
                 window_size: Size::new(1680.0, 1000.0),
+                maximized: false,
+                title_pressed: None,
                 lock_square: true,
                 status: None,
                 clipboard: None,
@@ -2193,6 +2246,7 @@ impl App {
                 self.ui.discarded.clear();
                 return self.guarded(PendingAction::Quit);
             }
+            Message::Window(action) => return self.window_action(action),
             // "Don't Save": quitting, the next package with unsaved changes asks in its turn.
             Message::Proceed(PendingAction::Quit) => {
                 self.ui.discarded.insert(self.doc_key);
@@ -2823,6 +2877,56 @@ impl App {
 
     // ------------------------------------------------------------------ runtime events
 
+    /// The window is to close, as its button or the system says: a pick in progress ends first;
+    /// each quit asks anew about every package with unsaved changes (one given up earlier may
+    /// have changed since).
+    fn close_requested(&mut self) -> Task<Message> {
+        let cancel = self.pick_message(PickMessage::Cancel);
+        self.ui.discarded.clear();
+        Task::batch([cancel, self.guarded(PendingAction::Quit)])
+    }
+
+    /// What the window's own title bar does.
+    fn window_action(&mut self, action: WindowAction) -> Task<Message> {
+        if let WindowAction::Close = action {
+            return self.close_requested();
+        }
+        let (Some(id), Some(request)) = (self.window, self.window_request(action)) else { return Task::none() };
+        match request {
+            WindowRequest::Minimize => window::minimize(id, true),
+            WindowRequest::ToggleMaximize => window::toggle_maximize(id),
+            WindowRequest::Drag => window::drag(id),
+            WindowRequest::SystemMenu => window::show_system_menu(id),
+            WindowRequest::Resize(direction) => window::drag_resize(id, direction),
+        }
+    }
+
+    /// What the window is asked to do by its own title bar, and what the bar keeps of it: the bar
+    /// pressed moves the window, pressed again at once it fills the screen (or gives the window
+    /// back its size).
+    pub(crate) fn window_request(&mut self, action: WindowAction) -> Option<WindowRequest> {
+        // Only a press of the bar right after one is a double click.
+        let pressed = std::mem::take(&mut self.ui.title_pressed);
+        match action {
+            WindowAction::Minimize => Some(WindowRequest::Minimize),
+            WindowAction::ToggleMaximize => Some(WindowRequest::ToggleMaximize),
+            WindowAction::Close => None,
+            WindowAction::TitlePressed if pressed.is_some_and(|at| at.elapsed() < home::DOUBLE_CLICK) => Some(WindowRequest::ToggleMaximize),
+            WindowAction::TitlePressed => {
+                self.ui.title_pressed = Some(Instant::now());
+                Some(WindowRequest::Drag)
+            }
+            WindowAction::TitleMenu => Some(WindowRequest::SystemMenu),
+            WindowAction::Resize(direction) => Some(WindowRequest::Resize(direction)),
+            WindowAction::Maximized(on) => {
+                // (What the system says comes between the presses of a double click too.)
+                self.ui.title_pressed = pressed;
+                self.ui.maximized = on;
+                None
+            }
+        }
+    }
+
     fn runtime_event(&mut self, event: iced::Event, status: iced::event::Status, id: window::Id) -> Task<Message> {
         use iced::Event as E;
         if Some(id) != self.window {
@@ -2840,15 +2944,13 @@ impl App {
             return if cancel { self.pick_message(PickMessage::Cancel) } else { Task::none() };
         }
         match event {
-            E::Window(window::Event::CloseRequested) => {
-                // A pick in progress ends first. Each quit asks anew about every package with
-                // unsaved changes (one given up earlier may have changed since).
-                let cancel = self.pick_message(PickMessage::Cancel);
-                self.ui.discarded.clear();
-                return Task::batch([cancel, self.guarded(PendingAction::Quit)]);
-            }
+            E::Window(window::Event::CloseRequested) => return self.close_requested(),
             E::Window(window::Event::Opened { size, .. } | window::Event::Resized(size)) => {
                 self.ui.window_size = size;
+                // Whether it fills the screen now (the system, or a key, may have made it).
+                if OWN_TITLE_BAR {
+                    return window::is_maximized(id).map(|m| Message::Window(WindowAction::Maximized(m)));
+                }
             }
             E::Window(window::Event::FileDropped(path)) => return self.file_dropped(path),
             // Come back to: what was put in the library folders meanwhile shows.

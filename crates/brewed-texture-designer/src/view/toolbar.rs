@@ -3,11 +3,11 @@
 
 use std::time::Duration;
 
-use iced::widget::{button, column, container, image, pick_list, row, rule, space, text, tooltip};
-use iced::{Alignment, Element, Length};
+use iced::widget::{button, column, container, image, mouse_area, pick_list, row, rule, space, stack, text, tooltip};
+use iced::{Alignment, Element, Length, Padding};
 use brewed_texture_core::{Edit, Precision};
 
-use crate::app::{App, Dialog, ExplorerMessage, MenuId, Message, PreviewMessage, SettingsMessage, SubMenu};
+use crate::app::{App, Dialog, ExplorerMessage, MenuId, Message, OWN_TITLE_BAR, PreviewMessage, SettingsMessage, SubMenu, WindowAction};
 use crate::icons::{Icon, icon};
 use crate::shortcuts::Command;
 use crate::style;
@@ -16,7 +16,9 @@ use crate::widget::dropdown::dropdown;
 
 /// The texture sizes offered (a graph's, and a new graph's in the settings).
 pub(crate) const RESOLUTIONS: [u32; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
-const MENU_BAR_H: f32 = 30.0;
+pub(crate) const MENU_BAR_H: f32 = 30.0;
+/// How wide a button of the window's own title bar is (as the system's are).
+pub(crate) const WINDOW_BUTTON_W: f32 = 46.0;
 const STATUS_BAR_H: f32 = 24.0;
 
 fn item<'a>(label: impl Into<String>, shortcut: impl Into<String>, message: Option<Message>) -> Element<'a, Message> {
@@ -225,7 +227,10 @@ fn help_menu(app: &App) -> Vec<Element<'_, Message>> {
     ]
 }
 
-/// The menu bar across the top of the window: the menus and the document's name.
+/// The menu bar across the top of the window: the menus and the document's name. Where the
+/// program draws the window's title bar (see [`OWN_TITLE_BAR`]) the bar is that too: the rest of
+/// it moves the window (twice at once, it fills the screen), its buttons at the right make the
+/// window small, fill the screen or give it back its size, close it.
 pub fn menu_bar(app: &App) -> Element<'_, Message> {
     let logo = image(crate::brand::logo()).width(Length::Fixed(16.0)).height(Length::Fixed(16.0));
     let dirty = if app.doc.is_dirty() { "  •" } else { "" };
@@ -237,23 +242,115 @@ pub fn menu_bar(app: &App) -> Element<'_, Message> {
     // The logo goes to the Home screen, as Adobe's does.
     let home = crate::app::home::HomeMessage::Show(crate::app::home::HomePage::Home);
     let logo = tip(button(logo).padding([4, 6]).style(style::flat_button).on_press(Message::Home(home)), "Home Screen", tooltip::Position::Bottom);
-    container(
-        row![
-            logo,
-            menu(app, MenuId::File, "File", file_menu(app)),
-            menu(app, MenuId::Edit, "Edit", edit_menu(app)),
-            menu(app, MenuId::View, "View", view_menu(app)),
-            menu(app, MenuId::Help, "Help", help_menu(app)),
-            space().width(Length::Fill),
-            document,
+    let menus = row![
+        logo,
+        menu(app, MenuId::File, "File", file_menu(app)),
+        menu(app, MenuId::Edit, "Edit", edit_menu(app)),
+        menu(app, MenuId::View, "View", view_menu(app)),
+        menu(app, MenuId::Help, "Help", help_menu(app)),
+    ]
+    .spacing(2)
+    .align_y(Alignment::Center);
+    let title = row![space().width(Length::Fill), document].align_y(Alignment::Center).height(Length::Fill);
+    if !OWN_TITLE_BAR {
+        return container(row![menus, title].spacing(2).align_y(Alignment::Center).height(Length::Fixed(MENU_BAR_H)))
+            .padding([0, 8])
+            .width(Length::Fill)
+            .style(style::window_bar)
+            .into();
+    }
+    // A dialog open covers what is under the bar, not the bar: its menus are dimmed and take
+    // nothing then (the dialog is answered first); the window still moves, and its buttons work.
+    let dialog = app.ui.dialog.is_some();
+    let menus: Element<'_, Message> = if dialog {
+        let dim = container(space().width(Length::Fill).height(Length::Fill)).style(style::scrim);
+        crate::widget::blind::blind(stack![menus, dim], true).into()
+    } else {
+        menus.into()
+    };
+    let drag = mouse_area(container(title).width(Length::Fill).height(Length::Fill).padding([0, 12]))
+        .on_press(Message::Window(WindowAction::TitlePressed))
+        .on_right_press(Message::Window(WindowAction::TitleMenu));
+    container(row![menus, drag, window_buttons(app)].align_y(Alignment::Center).height(Length::Fixed(MENU_BAR_H)))
+        .padding(Padding { left: 8.0, ..Padding::ZERO })
+        .width(Length::Fill)
+        .style(style::window_bar)
+        .into()
+}
+
+/// The window's buttons, at the right of the menu bar: make it small, fill the screen or give it
+/// back its size, close it (see [`OWN_TITLE_BAR`]).
+fn window_buttons(app: &App) -> Element<'_, Message> {
+    let button_of = |glyph: Icon, action: WindowAction, close: bool, says: &'static str| {
+        tip(
+            button(container(icon(glyph, 16.0, style::TEXT)).center(Length::Fill))
+                .width(Length::Fixed(WINDOW_BUTTON_W))
+                .height(Length::Fill)
+                .padding(0)
+                .style(style::window_button(close))
+                .on_press(Message::Window(action)),
+            says,
+            tooltip::Position::Bottom,
+        )
+    };
+    let (glyph, says) = if app.ui.maximized { (Icon::Restore, "Restore Down") } else { (Icon::Maximize, "Maximize") };
+    row![
+        button_of(Icon::Minimize, WindowAction::Minimize, false, "Minimize"),
+        button_of(glyph, WindowAction::ToggleMaximize, false, says),
+        button_of(Icon::Close, WindowAction::Close, true, "Close"),
+    ]
+    .height(Length::Fill)
+    .into()
+}
+
+/// How thick the edges of the window are that size it, where the program draws its frame (see
+/// [`OWN_TITLE_BAR`]), and how far along them its corners reach.
+pub(crate) const WINDOW_EDGE: f32 = 4.0;
+pub(crate) const WINDOW_CORNER: f32 = 14.0;
+
+/// The edges and corners of the window, which size it where the program draws its frame (not
+/// while it fills the screen): over everything, a few pixels deep, the cursor saying which way.
+pub fn window_edges<'a>() -> Element<'a, Message> {
+    use iced::mouse::Interaction as I;
+    use iced::window::Direction as D;
+    let grip = |direction: D, interaction: I, width: Length, height: Length| -> Element<'a, Message> {
+        mouse_area(space().width(width).height(height))
+            .interaction(interaction)
+            .on_press(Message::Window(WindowAction::Resize(direction)))
+            .into()
+    };
+    let edge = Length::Fixed(WINDOW_EDGE);
+    let corner = Length::Fixed(WINDOW_CORNER);
+    let along = Length::Fixed(WINDOW_CORNER - WINDOW_EDGE);
+    // Each corner is an L: as far along the top or bottom as along the side.
+    let side = |top: D, middle: D, bottom: D, top_i: I, bottom_i: I| {
+        column![
+            grip(top, top_i, edge, along),
+            grip(middle, I::ResizingHorizontally, edge, Length::Fill),
+            grip(bottom, bottom_i, edge, along),
         ]
-        .spacing(2)
-        .align_y(Alignment::Center)
-        .height(Length::Fixed(MENU_BAR_H)),
-    )
-    .padding([0, 8])
+        .width(edge)
+    };
+    column![
+        row![
+            grip(D::NorthWest, I::ResizingDiagonallyDown, corner, edge),
+            grip(D::North, I::ResizingVertically, Length::Fill, edge),
+            grip(D::NorthEast, I::ResizingDiagonallyUp, corner, edge),
+        ],
+        row![
+            side(D::NorthWest, D::West, D::SouthWest, I::ResizingDiagonallyDown, I::ResizingDiagonallyUp),
+            space().width(Length::Fill).height(Length::Fill),
+            side(D::NorthEast, D::East, D::SouthEast, I::ResizingDiagonallyUp, I::ResizingDiagonallyDown),
+        ]
+        .height(Length::Fill),
+        row![
+            grip(D::SouthWest, I::ResizingDiagonallyUp, corner, edge),
+            grip(D::South, I::ResizingVertically, Length::Fill, edge),
+            grip(D::SouthEast, I::ResizingDiagonallyDown, corner, edge),
+        ],
+    ]
     .width(Length::Fill)
-    .style(style::window_bar)
+    .height(Length::Fill)
     .into()
 }
 

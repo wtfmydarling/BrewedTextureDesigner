@@ -291,6 +291,25 @@ pub fn link_row(even: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::St
     }
 }
 
+/// The red of a button that closes the window, as the system's is.
+pub const CLOSE_RED: Color = rgb(196, 43, 28);
+
+/// A button of the window's own title bar: lit while pointed at; the one that closes the window
+/// red then.
+pub fn window_button(close: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
+    move |_, status| {
+        let background = match status {
+            button_w::Status::Hovered if close => Some(CLOSE_RED),
+            button_w::Status::Pressed if close => Some(alpha(CLOSE_RED, 0.8)),
+            button_w::Status::Hovered => Some(HEADER),
+            button_w::Status::Pressed => Some(RAISED),
+            _ => None,
+        };
+        let text_color = if close && matches!(status, button_w::Status::Hovered | button_w::Status::Pressed) { TEXT_BRIGHT } else { TEXT };
+        button_w::Style { background: background.map(Into::into), text_color, border: Border::default(), shadow: Shadow::default(), snap: true }
+    }
+}
+
 /// The side of a dialog that lists its pages.
 pub fn sidebar(_: &Theme) -> container::Style {
     container::Style { background: Some(PANEL_DARK.into()), text_color: Some(TEXT), ..Default::default() }
