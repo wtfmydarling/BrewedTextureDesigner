@@ -134,7 +134,9 @@ fn status<'a>(warning: Option<String>, notes: Option<String>) -> Element<'a, Mes
     match (warning, notes) {
         (Some(w), n) => mark(Icon::Warning, style::WARNING, n.map_or(w.clone(), |n| format!("{w}\n\n{n}"))),
         (None, Some(n)) => mark(Icon::Info, style::TEXT_DIM, n),
-        (None, None) => space().width(MARK).into(),
+        // Nothing to say: the name takes the room (a mark is at the right edge either way, and
+        // a narrow Explorer cut names short beside room kept for one).
+        (None, None) => space().width(0).into(),
     }
 }
 

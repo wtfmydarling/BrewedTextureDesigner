@@ -522,7 +522,9 @@ fn draw_panel(frame: &mut Frame, panel: &Panel, rect: Rectangle, active: Option<
         }
     };
     let outline = panel.outline();
-    frame.with_clip(rect, |f| {
+    // (Clipped to the image and to the view: the image of a view zoomed in is larger than it.)
+    let region = rect.intersection(&Rectangle::with_size(frame.size())).unwrap_or(Rectangle::new(Point::ORIGIN, Size::ZERO));
+    frame.with_clip(region, |f| {
         for shift in [-1.0, 0.0, 1.0] {
             for line in &outline {
                 let path = Path::new(|b| {

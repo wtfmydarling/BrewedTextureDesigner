@@ -399,3 +399,41 @@ fn a_color_picker_closes_with_its_node() {
     press(&mut w, keyboard::key::Named::Escape);
     assert_eq!(w.app.ui.home, None, "Esc went back from the Home screen");
 }
+
+/// What a comment says is drawn in the canvas only: a comment that reaches above the top of the
+/// graph's view leaves the menu bar over it as it was (its words were drawn over the menus and
+/// the window's title).
+#[test]
+fn a_comment_above_the_view_draws_nothing_over_the_menu_bar() {
+    let mut w = canvas!();
+    let comment = w.app.graph().comments.first().map(|c| c.id).expect("a comment");
+    let long = "What the nodes in the frame do, said at length so that it runs on over many lines. ".repeat(12);
+    w.send(Message::Edit(Edit::SetCommentDescription { id: comment, text: long }));
+    w.send(Message::Seal);
+    // At 100 % (smaller, its words are too small to be drawn), the comment's top 80 pixels above
+    // the top of the view: its first words where the menu bar is, the rest running on below.
+    let c = w.app.graph().comment(comment).unwrap().clone();
+    w.app.ui.graph_view.zoom = 1.0;
+    w.app.ui.graph_view.pan = Vector::new(40.0 - c.pos[0], -80.0 - c.pos[1]);
+    w.input(&[]);
+    let top = w.app.ui.graph_view.bounds.y;
+    let r = comment_rect(&w, comment);
+    assert!(r.y < top && r.y + r.height > top, "the comment straddles the top of the view: {r:?}, the view from {top}");
+    // The menu bar between its menus and the document's name: the bar's color, unbroken.
+    let pixels = w.pixels();
+    let width = w.size.width as usize;
+    let bar = crate::style::WINDOW;
+    let expected = [(bar.r * 255.0).round() as i32, (bar.g * 255.0).round() as i32, (bar.b * 255.0).round() as i32];
+    let help = *texts(&mut w, "Help").first().expect("the Help menu");
+    let (from, to) = ((help.x + help.width + 40.0) as usize, (w.size.width * 0.55) as usize);
+    let mut stray = 0;
+    for y in 2..28usize {
+        for x in from..to {
+            let p = &pixels[(y * width + x) * 4..][..3];
+            if p.iter().zip(expected).any(|(v, e)| (i32::from(*v) - e).abs() > 2) {
+                stray += 1;
+            }
+        }
+    }
+    assert_eq!(stray, 0, "pixels drawn over the menu bar");
+}

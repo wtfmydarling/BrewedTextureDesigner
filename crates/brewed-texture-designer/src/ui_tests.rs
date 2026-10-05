@@ -145,6 +145,18 @@ impl Harness {
         self.app.main_window().expect("main window")
     }
 
+    /// What the view draws: its pixels, RGBA, row by row (`size` wide and high).
+    fn pixels(&mut self) -> Vec<u8> {
+        let (cursor, size) = (self.cursor, self.size);
+        let theme = crate::style::theme();
+        self.frame(|ui, renderer| {
+            let redraw = iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()));
+            let _ = ui.update(&[redraw], cursor, renderer, &mut clipboard::Null, &mut Vec::new());
+            ui.draw(renderer, &theme, &renderer::Style { text_color: Color::WHITE }, cursor);
+            Headless::screenshot(renderer, iced::Size::new(size.width as u32, size.height as u32), 1.0, crate::style::CANVAS)
+        })
+    }
+
     /// Save what the view draws, when snapshots are asked for.
     fn snapshot(&mut self, name: &str) {
         let Some(dir) = std::env::var_os("BREWED_UI_SNAPSHOTS") else { return };
@@ -2199,6 +2211,23 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     let Some(mut w) = Harness::new(Box::new(view::root), Size::new(1680.0, 1000.0)) else { return Ok(0) };
     let mut dice = Dice(seed.max(1));
+    // What it starts on: the demo for most seeds; for the others an example of Learn, or a
+    // template (FX-Maps, Pixel Math, HDRi lights, OpenPBR materials, graphs of graphs).
+    use brewed_texture_core::templates::{Example, Template};
+    let examples = Example::ALL;
+    let templates = Template::ALL;
+    let open = |w: &mut Harness, dice: &mut Dice| match dice.below(2) {
+        0 => w.send(Message::Home(crate::app::home::HomeMessage::Example(examples[dice.below(examples.len() as u64) as usize]))),
+        _ => {
+            w.send(Message::NewGraph(crate::app::home::NewGraphMessage::Open(None)));
+            w.send(Message::NewGraph(crate::app::home::NewGraphMessage::Template(templates[dice.below(templates.len() as u64) as usize])));
+            w.send(Message::NewGraph(crate::app::home::NewGraphMessage::Create));
+        }
+    };
+    if !seed.is_multiple_of(3) {
+        open(&mut w, &mut dice);
+        w.app.ui.home = None;
+    }
     let mut log: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     let files = std::env::temp_dir().join(format!("brewed-monkey-{seed}"));
     let _ = std::fs::create_dir_all(&files);
@@ -2394,13 +2423,30 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
                 }
             }
             985..=989 => {
-                let message = match dice.below(6) {
+                let key = w.app.doc_key;
+                let graphs: Vec<brewed_texture_core::GraphId> = w.app.doc.package().graphs.iter().map(|g| g.id).collect();
+                let graph = graphs[dice.below(graphs.len() as u64) as usize];
+                let message = match dice.below(11) {
                     0 => Message::Undo,
                     1 => Message::Redo,
                     2 => Message::Proceed(PendingAction::LoadDemo),
                     3 => Message::Proceed(PendingAction::New),
                     4 => Message::SavePicked(Some(graph_file.clone())),
-                    _ => Message::Proceed(PendingAction::OpenPath(graph_file.clone())),
+                    5 => Message::Proceed(PendingAction::OpenPath(graph_file.clone())),
+                    // Graphs of graphs: what is selected made a graph of its own, a graph
+                    // copied, another one edited, a graph dropped on the one edited as a node.
+                    6 => Message::GraphFromSelection,
+                    7 => Message::Explorer(ExplorerMessage::DuplicateGraph(key, graph)),
+                    8 => Message::Explorer(ExplorerMessage::OpenGraph(key, graph)),
+                    9 => Message::Graph(GraphMessage::Drop {
+                        payload: DragPayload::Graph { key, graph, name: "Graph".into() },
+                        graph_pos: [dice.float(-400.0, 400.0), dice.float(-400.0, 400.0)],
+                    }),
+                    _ => {
+                        open(&mut w, &mut dice);
+                        w.app.ui.home = None;
+                        Message::Seal
+                    }
                 };
                 what = format!("{message:?}");
                 direct.push(message);

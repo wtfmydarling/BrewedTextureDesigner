@@ -859,20 +859,25 @@ impl GraphCanvas<'_> {
                 Size::new(l.rect.width, (l.rect.height - l.header.height).max(0.0)),
             );
             let content = comment.description.clone();
-            frame.with_clip(body, |frame| {
-                frame.fill_text(Text {
-                    content,
-                    position: Point::new(body.x + layout::DESCRIPTION_PAD * z, body.y + layout::DESCRIPTION_PAD * z),
-                    color: style::alpha(style::mix(color, Color::WHITE, 0.85), 0.92),
-                    size: Pixels(small),
-                    font: style::ui_font(),
-                    align_x: TextAlign::Left,
-                    align_y: Vertical::Top,
-                    line_height: LineHeight::Relative(layout::DESCRIPTION_LINE),
-                    shaping: Shaping::Advanced,
-                    max_width: (body.width - 2.0 * layout::DESCRIPTION_PAD * z).max(1.0),
+            // Clipped to the comment and to the canvas: a part of the frame is clipped to what it
+            // is given only, and a comment reaching above the view drew its words over the menu
+            // bar.
+            if let Some(region) = body.intersection(&Rectangle::with_size(frame.size())) {
+                frame.with_clip(region, |frame| {
+                    frame.fill_text(Text {
+                        content,
+                        position: Point::new(body.x + layout::DESCRIPTION_PAD * z, body.y + layout::DESCRIPTION_PAD * z),
+                        color: style::alpha(style::mix(color, Color::WHITE, 0.85), 0.92),
+                        size: Pixels(small),
+                        font: style::ui_font(),
+                        align_x: TextAlign::Left,
+                        align_y: Vertical::Top,
+                        line_height: LineHeight::Relative(layout::DESCRIPTION_LINE),
+                        shaping: Shaping::Advanced,
+                        max_width: (body.width - 2.0 * layout::DESCRIPTION_PAD * z).max(1.0),
+                    });
                 });
-            });
+            }
         }
         // The corner: three lines, brighter when the mouse is on the comment.
         let grip = style::alpha(color, if hovered || selected { 0.95 } else { 0.6 });
