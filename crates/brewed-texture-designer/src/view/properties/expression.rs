@@ -92,12 +92,19 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                 }
                 VarSource::Link(from) => {
                     let title = app.graph().node(*from).map(crate::view::graph::node_title).unwrap_or_default();
-                    row![text(Value::Float(v.value as f32).display()).size(style::SMALL), super::source_link(*from, format!("← {title}"))]
-                        .spacing(8)
-                        .align_y(Alignment::Center)
-                        .wrap()
-                        .vertical_spacing(2)
-                        .into()
+                    let (from, value, label) = (*from, Value::Float(v.value as f32).display(), format!("← {title}"));
+                    // (Under the value where they are not both whole beside each other, and no
+                    // wider than the panel: a long name of a node ran out of it.)
+                    iced::widget::responsive(move |room| {
+                        row![text(value.clone()).size(style::SMALL), super::source_link_in(from, &label, room.width)]
+                            .spacing(8)
+                            .align_y(Alignment::Center)
+                            .wrap()
+                            .vertical_spacing(2)
+                            .into()
+                    })
+                    .height(Length::Shrink)
+                    .into()
                 }
                 VarSource::Variable(name) => row![
                     text(Value::Float(v.value as f32).display()).size(style::SMALL),
@@ -121,7 +128,8 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                 }
                 VarSource::Image(from) => {
                     let title = app.graph().node(*from).map(crate::view::graph::node_title).unwrap_or_default();
-                    super::source_link(*from, format!("image ← {title}"))
+                    let (from, label) = (*from, format!("image ← {title}"));
+                    iced::widget::responsive(move |room| super::source_link_in(from, &label, room.width)).height(Length::Shrink).into()
                 }
             };
             // (What it is goes under its field where the panel is narrow: squeezed beside it, it

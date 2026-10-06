@@ -261,6 +261,109 @@ fn the_properties_of_every_node_show_whole() {
     assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
 }
 
+/// A parameter a link drives says whole where it comes from, at the narrowest: from a node of
+/// each kind, by each of its outputs (seed 4322: "← Shape Light", into an image input of a node
+/// that uses a graph, was laid out narrower than it is drawn, cut in its button), and from an
+/// input whose name is longer than there is room for, shortened in its middle (its end tells
+/// inputs apart).
+#[test]
+fn driven_values_say_whole_where_they_come_from() {
+    use brewed_texture_core::graph::SocketRef;
+    use brewed_texture_core::{DataType, SocketKind, can_connect};
+
+    let mut w = harness!(view::root, 1000.0, 640.0);
+    let mut found = Vec::new();
+    // Properties as narrow as it is let be (as the monkey had made it).
+    let right = match w.app.ui.panes.layout() {
+        iced::widget::pane_grid::Node::Split { b, .. } => match b.as_ref() {
+            iced::widget::pane_grid::Node::Split { id, .. } => *id,
+            _ => panic!("the right column is split from the middle"),
+        },
+        _ => panic!("the panels are split"),
+    };
+    w.send(Message::PaneResized(iced::widget::pane_grid::ResizeEvent { split: right, ratio: 1.0 }));
+    w.send(Message::Graph(GraphMessage::ClearSelection));
+    let before = cut_short(&mut w);
+    let connect = |w: &mut Harness, from: SocketRef, to: SocketRef| {
+        w.send(Message::Edit(Edit::Connect { a: from.clone(), b: to.clone() }));
+        w.send(Message::Seal);
+        w.app.graph().link_into(to.node, &to.key).is_some_and(|l| l.from == from.node)
+    };
+    let output = |node| SocketRef { node, key: "o:output".into(), output: true };
+    // A node that uses a graph, with an image input: a Blur of a Blur put in a graph of its own.
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [4000.0, -1200.0] }));
+    let first = w.app.graph().nodes_of(NodeKind::BLUR).last().map(|n| n.id).expect("a blur");
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [4200.0, -1200.0] }));
+    let blur = w.app.graph().nodes_of(NodeKind::BLUR).last().map(|n| n.id).expect("a blur");
+    assert!(connect(&mut w, output(first), SocketRef { node: blur, key: "i:input".into(), output: false }));
+    w.send(Message::Graph(GraphMessage::Select { node: blur, mode: SelectMode::Replace }));
+    w.send(Message::GraphFromSelection);
+    let user = w.app.graph().instances().next().map(|n| n.id).expect("a node that uses the new graph");
+    w.send(Message::Graph(GraphMessage::Select { node: first, mode: SelectMode::Replace }));
+    w.send(Message::Delete);
+    // A node of each kind to be driven, with its parameters a link may drive.
+    let mut driven = Vec::new();
+    for &kind in NodeKind::ALL {
+        w.send(Message::Edit(Edit::AddNode { kind, pos: [4000.0, -900.0] }));
+        let Some(node) = w.app.graph().nodes_of(kind).last().map(|n| n.id) else { continue };
+        driven.push(node);
+    }
+    driven.push(user);
+    w.send(Message::Seal);
+    let params = |w: &Harness, node| {
+        let graph = w.app.graph();
+        graph.node(node).map(|n| graph.input_sockets(n)).unwrap_or_default().into_iter().filter(|s| s.kind == SocketKind::Param)
+    };
+    let images = params(&w, user).filter(|p| p.ty == DataType::Image).count();
+    assert_eq!(images, 1, "the node that uses the graph takes an image");
+    // Into the first parameter of each type a node can drive, by each output.
+    let mut tried = std::collections::HashSet::new();
+    let mut seen = std::collections::HashMap::new();
+    for &kind in NodeKind::ALL {
+        w.send(Message::Edit(Edit::AddNode { kind, pos: [2600.0, -900.0] }));
+        w.send(Message::Seal);
+        let Some(source) = w.app.graph().nodes_of(kind).last().map(|n| n.id) else { continue };
+        let outputs = w.app.graph().node(source).map(|n| w.app.graph().output_sockets(n)).unwrap_or_default();
+        for out in outputs {
+            let into = driven.iter().find_map(|node| params(&w, *node).find(|p| can_connect(out.ty, p.ty) && tried.insert((kind, p.ty))).map(|p| (*node, p.key)));
+            let Some((node, param)) = into else { continue };
+            if !connect(&mut w, SocketRef { node: source, key: out.key.clone(), output: true }, SocketRef { node, key: param.clone(), output: false }) {
+                continue;
+            }
+            *seen.entry(out.ty == DataType::Image).or_insert(0) += 1;
+            w.send(Message::Graph(GraphMessage::Select { node, mode: SelectMode::Replace }));
+            newly_cut(&mut w, &before, &format!("{kind:?}, {} → {param}", out.key), &mut found);
+        }
+        w.send(Message::Graph(GraphMessage::Select { node: source, mode: SelectMode::Replace }));
+        w.send(Message::Delete);
+    }
+    assert!(seen.get(&true).is_some_and(|n| *n > 30), "images drove so few: {seen:?}");
+    assert!(seen.get(&false).is_some_and(|n| *n > 3), "values drove so few: {seen:?}");
+
+    // Inputs of a long name: what is said of each is its beginning and its end.
+    for (kind, name) in [
+        (NodeKind::FLOAT_INPUT, "the_roughness_of_the_bricks_of_the_wall_on_the_left_when_it_rains_2"),
+        (NodeKind::IMAGE_INPUT, "the_picture_of_the_bricks_of_the_wall_on_the_left_when_it_rains_3"),
+    ] {
+        w.send(Message::Edit(Edit::AddNode { kind, pos: [2600.0, -900.0] }));
+        let input = w.app.graph().nodes_of(kind).last().map(|n| n.id).expect("an input");
+        w.send(Message::Edit(Edit::BindVariable { node: input, name: name.into() }));
+        w.send(Message::Seal);
+        let out = w.app.graph().node(input).map(|n| w.app.graph().output_sockets(n)).unwrap_or_default().remove(0);
+        let (node, param) = driven
+            .iter()
+            .find_map(|node| params(&w, *node).find(|p| can_connect(out.ty, p.ty)).map(|p| (*node, p.key)))
+            .expect("a parameter an input drives");
+        assert!(connect(&mut w, SocketRef { node: input, key: out.key, output: true }, SocketRef { node, key: param, output: false }));
+        w.send(Message::Graph(GraphMessage::Select { node, mode: SelectMode::Replace }));
+        newly_cut(&mut w, &before, &format!("{kind:?} of a long name"), &mut found);
+        let end = &name[name.len() - 2..];
+        let said = texts_where(&mut w, |t| t.starts_with("← t"));
+        assert!(said.iter().any(|(t, _)| t.contains('…') && t.ends_with(end)), "{kind:?}: said by its beginning and its end: {said:?}");
+    }
+    assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
+}
+
 /// Every dialog shows whole at the narrowest the window is let be: the settings, each of their
 /// pages, a new graph, the export, the shortcuts, about the program, the notices, a question
 /// about unsaved changes.

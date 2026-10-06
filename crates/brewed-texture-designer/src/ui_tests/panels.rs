@@ -952,3 +952,42 @@ fn paste_pastes_what_the_clipboard_holds_now() {
     w.send(Message::ClipboardText(None));
     assert_eq!(count(&w), before + 2, "pasted from what was copied here");
 }
+
+/// What is read in the background for a graph (a picture dropped on it, a file chosen for a
+/// field of one of its nodes) goes to that graph, edited again, whichever is edited when it is
+/// read: it went to the graph edited then, a Bitmap in another graph, the file to the node of the
+/// same number there.
+#[test]
+fn what_is_read_for_a_graph_goes_to_it() {
+    use crate::app::{Asked, FileTarget};
+    use std::sync::Arc;
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    let key = w.app.doc_key;
+    let wall = w.app.doc.current();
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BITMAP, pos: [0.0, 900.0] }));
+    w.send(Message::Seal);
+    let bitmap = w.app.graph().nodes_of(NodeKind::BITMAP).map(|n| n.id).max().expect("a Bitmap in the wall");
+    let asked = Asked { key, graph: wall };
+    // Another graph, with a node of the same number, edited by the time the files are read.
+    w.send(Message::Explorer(ExplorerMessage::NewGraph(key)));
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    let other = w.app.doc.current();
+    while w.app.graph().nodes.iter().all(|n| n.id < bitmap) {
+        w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BITMAP, pos: [0.0, 0.0] }));
+    }
+    w.send(Message::Seal);
+    let in_graph = |w: &Harness, graph| w.app.doc.package().graph(graph).map(|g| g.graph.clone()).expect("the graph");
+    let before = (in_graph(&w, wall), in_graph(&w, other));
+    let held = || Held::new("C:/tex/bricks.png", Arc::new(b"the bytes of bricks.png".to_vec()));
+    w.send(Message::Asked(asked, Box::new(Message::DropHeld(brewed_texture_core::ResourceKind::Bitmap, [300.0, 900.0], Ok(held())))));
+    assert_eq!(w.app.doc.current(), wall, "the wall edited again");
+    assert_eq!(in_graph(&w, wall).nodes_of(NodeKind::BITMAP).count(), before.0.nodes_of(NodeKind::BITMAP).count() + 1, "the picture's Bitmap in the wall");
+    assert_eq!(in_graph(&w, other), before.1, "nothing in the other graph");
+    // A file chosen for the wall's Bitmap, read while the other graph is edited.
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, other)));
+    let before = in_graph(&w, other);
+    w.send(Message::Asked(asked, Box::new(Message::FileHeld(FileTarget::Param(bitmap, "path".into()), Ok(held())))));
+    assert_eq!(w.app.doc.current(), wall);
+    assert!(in_graph(&w, wall).node(bitmap).is_some_and(|n| !n.text("path").is_empty()), "the file the wall's Bitmap reads");
+    assert_eq!(in_graph(&w, other), before, "the other graph's node of that number untouched");
+}

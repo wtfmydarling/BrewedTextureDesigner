@@ -2011,18 +2011,24 @@ impl App {
     /// edited when it comes. Closed meanwhile, the answer goes (and what was to follow a save);
     /// a dialog given up changes nothing.
     fn answered(&mut self, asked: Asked, answer: Message) -> Task<Message> {
+        // (And what was read in the background for the graph: a picture dropped on it, a file
+        // chosen for a field of one of its nodes, a graph of the Library; they went to the graph
+        // edited when they were read, the file to the node of its number there.)
         let given = matches!(
             answer,
             Message::SavePicked(Some(_))
                 | Message::ExportFolderPicked(Some(_))
                 | Message::ExportNodePicked(_, Some(_))
                 | Message::FilePicked(_, Some(_))
+                | Message::FileHeld(_, Ok(_))
+                | Message::DropHeld(_, _, Ok(_))
+                | Message::LibraryRead { result: Ok(_), .. }
         );
         if given {
             let there = self.package_doc(asked.key).is_some_and(|d| d.package().graph(asked.graph).is_some());
             if !there {
                 self.ui.after_save = None;
-                self.set_status("What the dialog was for is not open any more: nothing was done", true);
+                self.set_status("What it was asked for is not open any more: nothing was done", true);
                 return Task::none();
             }
             self.activate(asked.key, Some(asked.graph));

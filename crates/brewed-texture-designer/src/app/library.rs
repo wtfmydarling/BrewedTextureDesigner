@@ -213,14 +213,17 @@ impl App {
         self.set_status(format!("Reading {package}…"), false);
         let known = self.all_docs().filter_map(Document::key).chain(self.deps.keys().cloned()).collect();
         let file = package.clone();
+        // (Added where it was dropped, whichever graph is edited when the package is read.)
+        let here = self.here();
         self.in_background(move || super::packages::read_with_dependencies(&file, known), move |read| {
-            Message::LibraryRead {
+            let read = Message::LibraryRead {
                 package: package.clone(),
                 graph,
                 name: name.clone(),
                 pos,
                 result: read.unwrap_or_else(|| Err("The package could not be read".into())).map(Arc::new),
-            }
+            };
+            Message::Asked(here, Box::new(read))
         })
     }
 

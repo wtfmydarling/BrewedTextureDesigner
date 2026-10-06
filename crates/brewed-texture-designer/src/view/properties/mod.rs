@@ -496,6 +496,13 @@ fn source_link<'a>(from: NodeId, label: String) -> Element<'a, Message> {
     )
 }
 
+/// [`source_link`] in `room` pixels: its label shortened in its middle where it is longer (a long
+/// name of a node, a narrow panel: it was laid out narrower than it is drawn, cut in its button).
+fn source_link_in<'a>(from: NodeId, label: &str, room: f32) -> Element<'a, Message> {
+    // (Less the button's padding.)
+    source_link(from, crate::view::shortened(label, style::SMALL, style::ui_font(), (room - 6.0).max(0.0)))
+}
+
 fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value: &'a ParamValue) -> Element<'a, Message> {
     // An image input: the node images arrive from, or the picture it takes without one.
     if let ParamKind::Image { kind } = pd.kind {
@@ -503,10 +510,16 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value
         let says: Element<'a, Message> = match app.graph().link_into(node.id, &param_socket_key(pd.key)) {
             Some(link) => {
                 let from = app.graph().node(link.from).map(crate::view::graph::node_title).unwrap_or_default();
-                row![socket_icon(DataType::Image, true, 12.0, color), source_link(link.from, format!("← {from}"))]
-                    .spacing(6)
-                    .align_y(Alignment::Center)
-                    .into()
+                let (source, label) = (link.from, format!("← {from}"));
+                // (Beside the socket.)
+                iced::widget::responsive(move |room| {
+                    row![socket_icon(DataType::Image, true, 12.0, color), source_link_in(source, &label, room.width - 12.0 - 6.0)]
+                        .spacing(6)
+                        .align_y(Alignment::Center)
+                        .into()
+                })
+                .height(Length::Shrink)
+                .into()
             }
             None => row![
                 socket_icon(DataType::Image, false, 12.0, style::WARNING),
@@ -532,14 +545,23 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value
                 other => other.as_value().map_or_else(String::new, |x| x.display()),
             };
             let from = app.graph().node(link.from).map(crate::view::graph::node_title).unwrap_or_default();
-            let mut r = row![socket_icon(ty, true, 12.0, color)].spacing(6).align_y(Alignment::Center);
-            if let ParamValue::Color(c) = v {
-                r = r.push(container(space().width(Length::Fixed(22.0)).height(Length::Fixed(12.0))).style(style::chip(style::color_of(*c))));
-            }
+            let (source, chip) = (link.from, if let ParamValue::Color(c) = v { Some(*c) } else { None });
+            let label = format!("← {from}");
             // Where the field is narrow, the value gives way and the node it comes from stays
-            // whole (it was squeezed into two lines of three pixels).
-            r = r.push(container(text(shown).size(style::SMALL).color(color).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true));
-            r = r.push(source_link(link.from, format!("← {from}")));
+            // whole (it was squeezed into two lines of three pixels); narrower still, or a long
+            // name of a node, the name is shortened in its middle (it was cut at the field's edge).
+            let r = iced::widget::responsive(move |room| {
+                const VALUE: f32 = 24.0;
+                // (The socket, the chip and the gaps.)
+                let fixed = 12.0 + 6.0 + chip.map_or(0.0, |_| 22.0 + 6.0) + 6.0;
+                let mut r = row![socket_icon(ty, true, 12.0, color)].spacing(6).align_y(Alignment::Center);
+                if let Some(c) = chip {
+                    r = r.push(container(space().width(Length::Fixed(22.0)).height(Length::Fixed(12.0))).style(style::chip(style::color_of(c))));
+                }
+                r = r.push(container(text(shown.clone()).size(style::SMALL).color(color).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true));
+                r.push(source_link_in(source, &label, room.width - fixed - VALUE)).into()
+            })
+            .height(Length::Shrink);
             container(r).padding([4, 6]).width(Length::Fill).clip(true).style(style::field_box).into()
         }
         _ => {
