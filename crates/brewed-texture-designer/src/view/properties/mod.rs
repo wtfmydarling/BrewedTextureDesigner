@@ -67,20 +67,20 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
 fn body(app: &App, label_w: f32) -> Element<'_, Message> {
     let ids: Vec<NodeId> = app.ui.selection.iter().copied().filter(|id| app.graph().contains(*id)).collect();
-    match ids.len() {
+    let content = match ids.len() {
         0 if app.ui.selected_comment.is_some_and(|id| app.graph().comment(id).is_some()) => {
             comment_view(app, app.ui.selected_comment.expect("a selected comment"), label_w)
         }
-        0 => scrollable(container(graph_view(app, label_w)).padding(iced::Padding { top: 0.0, right: 12.0, bottom: 16.0, left: 10.0 }))
-            .height(Length::Fill)
-            .style(style::scrollable)
-            .into(),
-        1 => scrollable(container(node_view(app, ids[0], label_w)).padding(iced::Padding { top: 0.0, right: 12.0, bottom: 16.0, left: 10.0 }))
-            .height(Length::Fill)
-            .style(style::scrollable)
-            .into(),
+        0 => graph_view(app, label_w),
+        1 => node_view(app, ids[0], label_w),
         n => multi_view(app, &ids, n),
-    }
+    };
+    // Whatever it shows scrolls in a short panel (a comment's and several nodes' were cut at its
+    // bottom, their fields and buttons out of reach).
+    scrollable(container(content).padding(iced::Padding { top: 0.0, right: 12.0, bottom: 16.0, left: 10.0 }))
+        .height(Length::Fill)
+        .style(style::scrollable)
+        .into()
 }
 
 /// Id of the text field of a comment (for focusing it from the graph).
@@ -200,36 +200,32 @@ fn comment_view(app: &App, id: brewed_texture_core::CommentId, label_w: f32) -> 
         ]
         .spacing(10),
     )
-    .padding(10)
+    .padding(iced::Padding { top: 10.0, ..iced::Padding::ZERO })
     .into()
 }
 
 fn multi_view<'a>(app: &'a App, ids: &[NodeId], n: usize) -> Element<'a, Message> {
-    let images: Vec<NodeId> = ids.iter().copied().filter(|id| app.graph().node(*id).is_some_and(|n| n.def().has_image())).collect();
-    let mut tiling = row![].spacing(4);
-    for (i, label) in Tiling::LABELS.iter().enumerate() {
-        tiling = tiling.push(
-            button(text(*label).size(style::SMALL))
+    // The options of a parameter of the nodes selected that have it, as buttons: the one they
+    // all have stands out; on as many lines as the panel needs (they ran off its edge, the last
+    // one squeezed into two lines); each press a step of its own.
+    let options = |key: &'static str, labels: &'static [&'static str], has: fn(&Node) -> bool| {
+        let nodes: Vec<NodeId> = ids.iter().copied().filter(|id| app.graph().node(*id).is_some_and(has)).collect();
+        let values: std::collections::BTreeSet<u32> = nodes.iter().filter_map(|id| app.graph().node(*id)).map(|n| n.enum_value(key)).collect();
+        let all = (values.len() == 1).then(|| values.first().copied()).flatten();
+        let buttons = labels.iter().enumerate().map(|(i, label)| {
+            button(text(*label).size(style::SMALL).wrapping(text::Wrapping::None))
                 .padding([3, 7])
-                .style(style::button)
-                .on_press_maybe((!images.is_empty()).then(|| {
-                    Message::Edit(Edit::SetParamMany { nodes: images.clone(), key: "tiling".into(), value: ParamValue::Enum(i as u32) })
-                })),
-        );
-    }
+                .style(style::toggle_button(all == Some(i as u32)))
+                .on_press_maybe((!nodes.is_empty()).then(|| {
+                    step(Message::Edit(Edit::SetParamMany { nodes: nodes.clone(), key: key.into(), value: ParamValue::Enum(i as u32) }))
+                }))
+                .into()
+        });
+        iced::widget::Row::with_children(buttons).spacing(4).wrap().vertical_spacing(4)
+    };
+    let tiling = options("tiling", &Tiling::LABELS, |n| n.def().has_image());
     // The precision of those that keep an image of their own.
-    let own: Vec<NodeId> = ids.iter().copied().filter(|id| app.graph().node(*id).is_some_and(|n| n.def().has_precision())).collect();
-    let mut precision = row![].spacing(4);
-    for (i, label) in brewed_texture_core::nodes::PRECISION_LABELS.iter().enumerate() {
-        precision = precision.push(
-            button(text(*label).size(style::SMALL))
-                .padding([3, 7])
-                .style(style::button)
-                .on_press_maybe((!own.is_empty()).then(|| {
-                    Message::Edit(Edit::SetParamMany { nodes: own.clone(), key: "precision".into(), value: ParamValue::Enum(i as u32) })
-                })),
-        );
-    }
+    let precision = options("precision", &brewed_texture_core::nodes::PRECISION_LABELS, |n| n.def().has_precision());
     container(
         column![
             text(format!("{n} nodes selected")).size(style::TEXT_SIZE),
@@ -245,7 +241,7 @@ fn multi_view<'a>(app: &'a App, ids: &[NodeId], n: usize) -> Element<'a, Message
         ]
         .spacing(8),
     )
-    .padding(10)
+    .padding(iced::Padding { top: 10.0, ..iced::Padding::ZERO })
     .into()
 }
 

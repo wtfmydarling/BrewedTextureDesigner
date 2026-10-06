@@ -384,3 +384,126 @@ fn a_parameter_put_back_by_a_middle_click_is_a_step_of_its_own() {
     w.send(Message::Undo);
     assert_eq!(radius(&w), Some(ParamValue::Float(20.0)), "the middle click undone");
 }
+
+/// The split between the panels `a` (above or left of it) and `b`.
+fn split_between(w: &Harness, a: crate::app::Pane, b: crate::app::Pane) -> iced::widget::pane_grid::Split {
+    use iced::widget::pane_grid::Node;
+    fn panes_of(node: &Node, out: &mut Vec<iced::widget::pane_grid::Pane>) {
+        match node {
+            Node::Split { a, b, .. } => {
+                panes_of(a, out);
+                panes_of(b, out);
+            }
+            Node::Pane(p) => out.push(*p),
+        }
+    }
+    let panes = &w.app.ui.panes;
+    let has = |node: &Node, which: crate::app::Pane| {
+        let mut of = Vec::new();
+        panes_of(node, &mut of);
+        of.iter().any(|p| panes.get(*p) == Some(&which))
+    };
+    fn find(node: &Node, test: &dyn Fn(&Node, &Node) -> bool) -> Option<iced::widget::pane_grid::Split> {
+        match node {
+            Node::Split { id, a, b, .. } => (test(a, b)).then_some(*id).or_else(|| find(a, test).or_else(|| find(b, test))),
+            Node::Pane(_) => None,
+        }
+    }
+    find(panes.layout(), &|x, y| has(x, a) && has(y, b)).expect("the split between the panels")
+}
+
+/// The scrollables of the view whose middle is in `area`: where each is, how large its content
+/// is, and how far it is scrolled.
+fn scrollables_in(w: &mut Harness, area: iced::Rectangle) -> Vec<(iced::Rectangle, iced::Rectangle, iced::Vector)> {
+    struct Find(Vec<(iced::Rectangle, iced::Rectangle, iced::Vector)>);
+    impl Operation for Find {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+            operate(self);
+        }
+        fn scrollable(
+            &mut self,
+            _: Option<&iced::widget::Id>,
+            bounds: iced::Rectangle,
+            content: iced::Rectangle,
+            translation: iced::Vector,
+            _: &mut dyn iced::advanced::widget::operation::Scrollable,
+        ) {
+            self.0.push((bounds, content, translation));
+        }
+    }
+    let mut find = Find(Vec::new());
+    w.frame(|ui, renderer| ui.operate(renderer, &mut find));
+    find.0.into_iter().filter(|(bounds, ..)| area.contains(bounds.center())).collect()
+}
+
+/// Whatever Properties shows scrolls when the panel is short, down to its end: the graph, a node,
+/// a comment, several nodes. (A comment's and several nodes' were cut at its bottom: their fields
+/// and buttons out of reach.)
+#[test]
+fn a_short_properties_panel_scrolls_whatever_it_shows() {
+    use crate::app::Pane;
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let split = split_between(&w, Pane::Inputs, Pane::Properties);
+    w.send(Message::PaneResized(iced::widget::pane_grid::ResizeEvent { split, ratio: 0.86 }));
+    w.input(&[]);
+    let comment = w.app.graph().comments.first().map(|c| c.id).expect("a comment");
+    let levels = w.app.graph().nodes_of(NodeKind::LEVELS).next().expect("a Levels").id;
+    // What Properties is made to show.
+    type Show = Box<dyn Fn(&mut Harness)>;
+    let states: [(&str, Show); 4] = [
+        ("the graph", Box::new(|w: &mut Harness| w.send(Message::Graph(GraphMessage::ClearSelection)))),
+        ("a comment", Box::new(move |w: &mut Harness| w.send(Message::Graph(GraphMessage::SelectComment(comment))))),
+        ("several nodes", Box::new(|w: &mut Harness| w.send(Message::SelectAll))),
+        ("a node", Box::new(move |w: &mut Harness| w.send(Message::Graph(GraphMessage::Select { node: levels, mode: SelectMode::Replace })))),
+    ];
+    for (what, show) in states {
+        show(&mut w);
+        draw_frame(&mut w, std::time::Instant::now());
+        let header = *texts(&mut w, "PROPERTIES").first().expect("the panel");
+        let panel = iced::Rectangle::new(Point::new(header.x - 10.0, header.y), Size::new(w.size.width - header.x + 10.0, w.size.height - header.y));
+        let found = scrollables_in(&mut w, panel);
+        let &[(bounds, content, _)] = found.as_slice() else { panic!("{what}: one scrollable in Properties, not {found:?}") };
+        assert!(content.height > bounds.height + 40.0, "{what}: more than the short panel shows ({content:?} in {bounds:?})");
+        // The wheel takes it down to its end.
+        w.hover(bounds.center());
+        for _ in 0..20 {
+            w.mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 } });
+        }
+        let (bounds, content, scrolled) = scrollables_in(&mut w, panel)[0];
+        assert!((scrolled.y - (content.height - bounds.height)).abs() < 1.0, "{what}: scrolled to its end ({scrolled:?}, {content:?} in {bounds:?})");
+        // (Back up, for the next.)
+        for _ in 0..20 {
+            w.mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 } });
+        }
+    }
+}
+
+/// The options of the nodes selected, in a narrow Properties: every button whole, on as many
+/// lines as they take; the one all the nodes have stands out; each press a step of its own.
+#[test]
+fn the_options_of_the_nodes_selected_fit_and_are_steps_of_their_own() {
+    use brewed_texture_core::Tiling;
+    let mut w = harness!(view::root, 1000.0, 640.0);
+    w.send(Message::SelectAll);
+    draw_frame(&mut w, std::time::Instant::now());
+    w.snapshot("several_nodes_narrow");
+    for label in Tiling::LABELS.iter().chain(&brewed_texture_core::nodes::PRECISION_LABELS) {
+        assert_eq!(texts(&mut w, label).iter().filter(|r| r.x > 600.0).count(), 1, "{label} whole");
+    }
+    assert!(text_fits::cut_short(&mut w).is_empty(), "{:?}", text_fits::cut_short(&mut w));
+    // Pressed one after the other, at once: each undone on its own.
+    let tiling_of = |w: &Harness| -> std::collections::BTreeSet<u32> {
+        w.app.graph().nodes.iter().filter(|n| n.def().has_image()).map(|n| n.enum_value("tiling")).collect()
+    };
+    let before = tiling_of(&w);
+    let button = |w: &mut Harness, label: &str| *texts(w, label).iter().rfind(|r| r.x > 600.0).expect("the button");
+    let (none, horizontal) = (button(&mut w, Tiling::LABELS[0]), button(&mut w, Tiling::LABELS[1]));
+    click(&mut w, none.center());
+    assert_eq!(tiling_of(&w), [0].into());
+    click(&mut w, horizontal.center());
+    assert_eq!(tiling_of(&w), [1].into());
+    w.send(Message::Undo);
+    assert_eq!(tiling_of(&w), [0].into(), "the second press undone");
+    w.send(Message::Undo);
+    assert_eq!(tiling_of(&w), before, "the first");
+}

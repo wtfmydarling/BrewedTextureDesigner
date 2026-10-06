@@ -2216,6 +2216,48 @@ fn broken(app: &App) -> Option<String> {
     if let Some((name, _)) = ui.renaming_var.as_ref().filter(|(name, _)| !variable(name)) {
         return Some(format!("the input value {name} is being renamed, which the graph has not"));
     }
+    if let Some(m) = ui.choice_menu.as_ref().filter(|m| g.node(m.node).is_none_or(|n| n.param_def(m.key).is_none())) {
+        return Some(format!("the menu of the choice {} of node {} is open, which is not in the graph", m.key, m.node.0));
+    }
+    if let Some((id, _)) = ui.binding.as_ref().filter(|(id, _)| !g.contains(*id)) {
+        return Some(format!("the input value of node {} is being typed, which is not in the graph", id.0));
+    }
+    if let Some((id, _)) = ui.description.as_ref().filter(|(id, _)| g.comment(*id).is_none()) {
+        return Some(format!("the description of comment {id:?} is being typed, which is not in the graph"));
+    }
+    if let Some(socket) = ui.add_menu.as_ref().and_then(|m| m.pending.as_ref()).filter(|s| !g.contains(s.node)) {
+        return Some(format!("the menu that adds a node connects it to node {}, which is not in the graph", socket.node.0));
+    }
+    // Every package open edits a graph it has; what the Explorer and its menus point at is open.
+    let packages = app.packages();
+    let package = |key: u64| packages.iter().find(|(k, _)| *k == key).map(|(_, doc)| *doc);
+    for (key, doc) in &packages {
+        if doc.package().graph(doc.current()).is_none() {
+            return Some(format!("package {key} edits a graph it has not"));
+        }
+    }
+    let graph_of = |key: u64, graph: brewed_texture_core::GraphId| package(key).is_some_and(|doc| doc.package().graph(graph).is_some());
+    let file_of = |key: u64, path: &str| package(key).is_some_and(|doc| doc.package().resources.iter().any(|r| r.path == path));
+    if let Some((key, graph, _)) = ui.renaming_graph.as_ref().filter(|(key, graph, _)| !graph_of(*key, *graph)) {
+        return Some(format!("graph {graph:?} of package {key} is being renamed, which is not open"));
+    }
+    if let Some((key, path, _)) = ui.renaming_file.as_ref().filter(|(key, path, _)| !file_of(*key, path)) {
+        return Some(format!("the file {path} of package {key} is being renamed, which it has not"));
+    }
+    if let Some(menu) = &ui.context {
+        let there = match &menu.target {
+            ContextTarget::Node(id) => g.contains(*id),
+            ContextTarget::Link(l) => g.links.contains(l),
+            ContextTarget::Comment(id) => g.comment(*id).is_some(),
+            ContextTarget::Canvas { .. } => true,
+            ContextTarget::Package(key) | ContextTarget::ResourcesFolder(key) => package(*key).is_some(),
+            ContextTarget::GraphItem(key, graph) => graph_of(*key, *graph),
+            ContextTarget::ResourceItem(key, path) => file_of(*key, path),
+        };
+        if !there {
+            return Some(format!("a context menu is open for {:?}, which is not there", menu.target));
+        }
+    }
     None
 }
 
