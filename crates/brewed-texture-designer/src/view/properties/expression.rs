@@ -86,6 +86,8 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center)
+                    .wrap()
+                    .vertical_spacing(2)
                     .into()
                 }
                 VarSource::Link(from) => {
@@ -93,6 +95,8 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                     row![text(Value::Float(v.value as f32).display()).size(style::SMALL), super::source_link(*from, format!("← {title}"))]
                         .spacing(8)
                         .align_y(Alignment::Center)
+                        .wrap()
+                        .vertical_spacing(2)
                         .into()
                 }
                 VarSource::Variable(name) => row![
@@ -100,6 +104,8 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                     text(format!("input value '{name}'")).size(style::SMALL).color(style::TEXT_FAINT),
                 ]
                 .spacing(8)
+                .wrap()
+                .vertical_spacing(2)
                 .into(),
                 // (Of Math, the size of the texture: as much as it is now.)
                 VarSource::Builtin if node.kind == NodeKind::MATH => row![
@@ -107,6 +113,8 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                     text("the texture's size, in pixels (built in)").size(style::SMALL).color(style::TEXT_FAINT),
                 ]
                 .spacing(8)
+                .wrap()
+                .vertical_spacing(2)
                 .into(),
                 VarSource::Builtin => {
                     text(if script { "per splat (built in)" } else { "per pixel (built in)" }).size(style::SMALL).color(style::TEXT_FAINT).into()
@@ -116,6 +124,8 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                     super::source_link(*from, format!("image ← {title}"))
                 }
             };
+            // (What it is goes under its field where the panel is narrow: squeezed beside it, it
+            // stood a word a line.)
             col = col.push(row![name, detail].spacing(6).align_y(Alignment::Center));
         }
     }
@@ -129,23 +139,35 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
         let var = app.ui.plot_var.min(program.vars.len() - 1);
         let (lo, hi) = app.ui.plot_range;
         col = col.push(section("Plot"));
+        // (On as many lines as the panel needs, each part whole: in a narrow one the last field ran
+        // off its edge.)
+        let part = |r: iced::widget::Row<'a, Message>| r.spacing(6).align_y(Alignment::Center);
         col = col.push(
             row![
-                text("f(").size(style::SMALL),
-                pick_list(program.vars.clone(), Some(program.vars[var].clone()), {
-                    let names = program.vars.clone();
-                    move |n: String| Message::PlotVar(names.iter().position(|x| *x == n).unwrap_or(0))
-                })
-                .text_size(style::SMALL)
-                .padding([2, 6])
-                .style(style::pick_list),
-                text(") from").size(style::SMALL),
-                container(number(lo as f64, -100.0, 100.0).on_change(move |x| Message::PlotRange(x as f32, hi))).width(Length::Fixed(70.0)),
-                text("to").size(style::SMALL),
-                container(number(hi as f64, -100.0, 100.0).on_change(move |x| Message::PlotRange(lo, x as f32))).width(Length::Fixed(70.0)),
+                part(row![
+                    text("f(").size(style::SMALL),
+                    pick_list(program.vars.clone(), Some(program.vars[var].clone()), {
+                        let names = program.vars.clone();
+                        move |n: String| Message::PlotVar(names.iter().position(|x| *x == n).unwrap_or(0))
+                    })
+                    .text_size(style::SMALL)
+                    .padding([2, 6])
+                    .style(style::pick_list),
+                    text(")").size(style::SMALL),
+                ]),
+                part(row![
+                    text("from").size(style::SMALL),
+                    container(number(lo as f64, -100.0, 100.0).on_change(move |x| Message::PlotRange(x as f32, hi))).width(Length::Fixed(70.0)),
+                ]),
+                part(row![
+                    text("to").size(style::SMALL),
+                    container(number(hi as f64, -100.0, 100.0).on_change(move |x| Message::PlotRange(lo, x as f32))).width(Length::Fixed(70.0)),
+                ]),
             ]
             .spacing(6)
-            .align_y(Alignment::Center),
+            .align_y(Alignment::Center)
+            .wrap()
+            .vertical_spacing(4),
         );
         let args: Vec<f64> = app.eval.node(id).map(|e| e.vars.iter().map(|v| v.value).collect()).unwrap_or_default();
         col = col.push(

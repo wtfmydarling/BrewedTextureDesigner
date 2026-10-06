@@ -99,9 +99,32 @@ fn wrapped(w: &mut Harness) -> Vec<String> {
         .collect()
 }
 
-/// What `state` cuts short that the window did not before.
+/// The texts of the window squeezed into a column too narrow for them: four lines high or more
+/// in less than 80 pixels, a word or two a line (what a variable of a Math node is stood so,
+/// beside its field, ten lines high).
+pub(super) fn squeezed(w: &mut Harness) -> Vec<String> {
+    let mut lines = Lines(Vec::new());
+    w.input(&[]);
+    w.frame(|ui, renderer| ui.operate(renderer, &mut lines));
+    lines
+        .0
+        .into_iter()
+        .filter(|(text, bounds)| bounds.width < 80.0 && text.split_whitespace().count() >= 4)
+        .filter_map(|(text, bounds)| {
+            let size = [crate::style::SMALL, crate::style::TEXT_SIZE].into_iter().find(|s| {
+                let n = bounds.height / (s * 1.3);
+                (n - n.round()).abs() < 0.05 && n.round() >= 4.0
+            })?;
+            let lines = (bounds.height / (size * 1.3)).round();
+            Some(format!("{text:?} at {size} px in {lines} lines {:.1} px wide at {:.0},{:.0}", bounds.width, bounds.x, bounds.y))
+        })
+        .collect()
+}
+
+/// What `state` cuts short that the window did not before, and what it squeezes into a column a
+/// word a line.
 fn newly_cut(w: &mut Harness, before: &[String], state: &str, found: &mut Vec<String>) {
-    for line in cut_short(w) {
+    for line in cut_short(w).into_iter().chain(squeezed(w)) {
         if !before.contains(&line) {
             found.push(format!("{state}: {line}"));
         }

@@ -388,9 +388,12 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
     let mut files = column![].spacing(3);
     for (path, file) in &planned {
         let name = path.file_name().map_or_else(|| file.name.clone(), |n| n.to_string_lossy().into_owned());
-        let mut line = row![text(name).size(style::SMALL).font(style::mono()).width(Length::FillPortion(3))].spacing(10);
+        // (A name of a graph without spaces, made a file's, breaks where it has to: it ran into the
+        // column beside it.)
+        let wraps = text::Wrapping::WordOrGlyph;
+        let mut line = row![text(name).size(style::SMALL).font(style::mono()).wrapping(wraps).width(Length::FillPortion(3))].spacing(10);
         if !file.said.is_empty() {
-            line = line.push(text(format!("← {}", file.said)).size(style::SMALL).color(style::TEXT_DIM).width(Length::FillPortion(4)));
+            line = line.push(text(format!("← {}", file.said)).size(style::SMALL).color(style::TEXT_DIM).wrapping(wraps).width(Length::FillPortion(4)));
         }
         files = files.push(line);
     }

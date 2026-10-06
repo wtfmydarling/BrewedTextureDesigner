@@ -2550,7 +2550,12 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
             // of text cut short.
             Ok(None) if step % 250 == 249 => {
                 let cut = text_fits::cut_short(&mut w);
-                (!cut.is_empty()).then(|| format!("CUT SHORT at {}×{}: {}", w.size.width, w.size.height, cut.join("; ")))
+                let squeezed = text_fits::squeezed(&mut w);
+                if !cut.is_empty() {
+                    Some(format!("CUT SHORT at {}×{}: {}", w.size.width, w.size.height, cut.join("; ")))
+                } else {
+                    (!squeezed.is_empty()).then(|| format!("SQUEEZED at {}×{}: {}", w.size.width, w.size.height, squeezed.join("; ")))
+                }
             }
             Ok(None) => None,
         };

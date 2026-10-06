@@ -568,3 +568,55 @@ fn a_long_path_in_a_message_stays_in_its_box() {
         .count();
     assert_eq!(red, 0, "red pixels of the message past its box, right of x {from}");
 }
+
+/// A Math node in the narrowest Properties: what each variable is goes under its field, on a
+/// couple of lines (beside it, it stood a word a line, ten lines high), and the plot's fields go
+/// on as many lines as they need, each whole in the panel (the last one ran off its edge).
+#[test]
+fn the_variables_and_the_plot_of_a_math_node_fit_a_narrow_panel() {
+    let mut w = harness!(view::root, 1000.0, 1700.0);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::MATH, pos: [-400.0, 900.0] }));
+    let id = w.app.graph().nodes_of(NodeKind::MATH).map(|n| n.id).max().expect("the Math node");
+    w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+    draw_frame(&mut w, std::time::Instant::now());
+    w.snapshot("math_narrow");
+    let hints = texts(&mut w, "own value · connect or name a graph input");
+    assert!(!hints.is_empty(), "the variables of its expression");
+    for hint in &hints {
+        assert!(hint.height <= 3.0 * 12.0 * 1.3 + 1.0, "on a few lines: {hint:?}");
+    }
+    let to = *texts(&mut w, "to").iter().rfind(|r| r.x > 700.0).expect("the end of the plot's range");
+    // (Its field is 70 pixels wide, 6 after it; the panel is padded 12 at its right.)
+    assert!(to.x + to.width + 6.0 + 70.0 <= w.size.width - 12.0 + 0.5, "the field of the end in the panel: {to:?}");
+}
+
+/// A graph of a library folder with a long name, under a long category, in the narrowest Library:
+/// its name and its category shown whole (on as many lines as they take), nothing cut short.
+#[test]
+fn long_names_of_library_graphs_show_whole_in_a_narrow_library() {
+    use brewed_texture_core::project;
+    use brewed_texture_core::{Graph, GraphAttributes, package::Package};
+    let dir = std::env::temp_dir().join(format!("brewed-long-library-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (name, category) = ("Weathered Copper Roof Tiles With Moss", "Materials/Architecture/Roofs/Weathered Metal");
+    let mut roof = Graph::default();
+    roof.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+    roof.attributes = GraphAttributes { description: "Copper gone green".into(), category: category.into(), hidden: false };
+    let package = Package::new(name, roof);
+    let file = dir.join("roof.brewtex");
+    project::save(&file, &package, &std::collections::HashMap::new(), package.first()).unwrap();
+    let mut w = harness!(view::root, 1000.0, 640.0);
+    let mut settings = w.app.settings.clone();
+    settings.library_folders = vec![dir.display().to_string()];
+    w.app.set_settings(settings);
+    w.send(Message::LookAtLibrary);
+    // (Only it in the Library: what is searched for.)
+    w.send(Message::LibrarySearch("copper".into()));
+    draw_frame(&mut w, std::time::Instant::now());
+    w.snapshot("library_long_names");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!texts(&mut w, name).is_empty() && !texts(&mut w, &category.to_uppercase()).is_empty(), "the graph under its category");
+    let cut = text_fits::cut_short(&mut w);
+    let squeezed = text_fits::squeezed(&mut w);
+    assert!(cut.is_empty() && squeezed.is_empty(), "{cut:?} {squeezed:?}");
+}

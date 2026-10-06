@@ -93,7 +93,8 @@ impl Camera {
     /// The camera after a move of the mouse.
     pub fn moved(self, m: Move) -> Camera {
         match m {
-            Move::Orbit(d) => Camera { yaw: self.yaw - d.x * 0.01, pitch: (self.pitch + d.y * 0.01).clamp(-1.5, 1.5), ..self },
+            // (Round and round too, never so far that a turn is lost in the digits.)
+            Move::Orbit(d) => Camera { yaw: wrapped(self.yaw - d.x * 0.01), pitch: (self.pitch + d.y * 0.01).clamp(-1.5, 1.5), ..self },
             Move::Light(d) => Camera {
                 // Round and round, never so far that a turn of it is lost in the digits.
                 light_yaw: wrapped(self.light_yaw + d.x * 0.01),
@@ -1656,5 +1657,20 @@ mod tests {
         assert!((-std::f32::consts::PI..=std::f32::consts::PI).contains(&cam.light_yaw), "{}", cam.light_yaw);
         assert!((wrapped(3.0 * std::f32::consts::PI) - std::f32::consts::PI).abs() < 1e-4 || (wrapped(3.0 * std::f32::consts::PI) + std::f32::consts::PI).abs() < 1e-4);
         assert_eq!(wrapped(f32::NAN), 0.0);
+    }
+
+    /// The camera turns round the model round and round as well, looking where it would have
+    /// looked: its angle stays within a turn, never so far that a turn is lost in the digits.
+    #[test]
+    fn the_camera_turns_round_and_round() {
+        let (mut cam, mut turned) = (Camera::default(), 0.0f64);
+        for _ in 0..100_000 {
+            cam = cam.moved(Move::Orbit(Vector::new(-97.0, 0.0)));
+            turned += 0.97;
+        }
+        assert!((-std::f32::consts::PI..=std::f32::consts::PI).contains(&cam.yaw), "{}", cam.yaw);
+        let expected = (turned + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+        let off = (f64::from(cam.yaw) - expected).abs();
+        assert!(off.min(std::f64::consts::TAU - off) < 1e-2, "{} where {expected} was turned to", cam.yaw);
     }
 }
