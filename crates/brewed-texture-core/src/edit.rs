@@ -322,6 +322,10 @@ impl Edit {
                     if !pd.accepts(value) {
                         return Err(format!("Wrong value type for '{}'", pd.label));
                     }
+                    // (As a parameter set is: refused when the node was added already, it stayed.)
+                    if pd.exposed_by_default {
+                        return Err(format!("'{}' is exposed: its value comes from the node connected to its socket", pd.label));
+                    }
                 }
                 let id = graph.add_node(kind, pos);
                 for (key, value) in params {
@@ -723,7 +727,52 @@ mod tests {
             let s = sockets.get(roll(seed, sockets.len()))?;
             Some(SocketRef { node: n.id, key: s.key.clone(), output })
         };
-        match roll(seed, 30) {
+        let comment = |seed: &mut u64| g.comments.get(roll(seed, g.comments.len() + 1)).map_or(CommentId(998), |c| c.id);
+        const TEXTS: [&str; 6] = ["", "Bricks", "a long line\nand another", " \t ", "\u{7}bell", "名前"];
+        let text = |seed: &mut u64| TEXTS[roll(seed, TEXTS.len())].to_string();
+        let odd = |seed: &mut u64| [0.0, 0.5, 1.0, -1.0, 1e9, -1e9, f32::NAN, f32::INFINITY, f32::MIN_POSITIVE][roll(seed, 9)];
+        // An input value's value of its type, or of another.
+        let value_for = |seed: &mut u64, name: &str| {
+            let ty = g.variable(name).map_or(DataType::Float, |v| v.ty);
+            let shape = crate::instance::param_value(Value::default_for(if roll(seed, 5) == 0 { DataType::Color } else { ty }));
+            odd_value(seed, &shape).as_value().unwrap_or(Value::Float(0.5))
+        };
+        match roll(seed, 44) {
+            30 => {
+                let v = var(seed);
+                Edit::SetVariableRange { min: value_for(seed, &v), max: value_for(seed, &v), name: v }
+            }
+            31 => Edit::SetVariableDescription { name: var(seed), text: text(seed) },
+            32 => {
+                let v = var(seed);
+                Edit::SetVariableDefault { value: value_for(seed, &v), name: v }
+            }
+            33 => Edit::SetAttributes(GraphAttributes { description: text(seed), category: ["", "Noises/Grunge", "/", "a//b", " x "][roll(seed, 5)].into(), hidden: roll(seed, 2) == 0 }),
+            34 => Edit::SetPrecision([Precision::Bits8, Precision::Half, Precision::Full][roll(seed, 3)]),
+            35 => Edit::ResizeComment { id: comment(seed), pos: [odd(seed), 0.0], size: [odd(seed), odd(seed)] },
+            36 => Edit::MoveComment { id: comment(seed), delta: [odd(seed), 3.0], nodes: vec![node(seed), node(seed)] },
+            37 => Edit::SetCommentText { id: comment(seed), text: text(seed) },
+            38 => Edit::SetCommentDescription { id: comment(seed), text: text(seed) },
+            39 => Edit::SetCommentColor { id: comment(seed), color: [odd(seed), 0.5, odd(seed), 1.0] },
+            40 => Edit::RemoveComments(vec![comment(seed), comment(seed)]),
+            41 => match g.links.get(roll(seed, g.links.len() + 1)) {
+                Some(l) => Edit::RemoveLink(l.clone()),
+                None => Edit::RemoveLink(Link { from: node(seed), from_socket: "o:output".into(), to: node(seed), to_socket: "i:input".into() }),
+            },
+            42 => {
+                let kind = NodeKind::ALL[roll(seed, NodeKind::ALL.len())];
+                let mut params = Vec::new();
+                for p in kind.def().params {
+                    if roll(seed, 3) == 0 {
+                        params.push((p.key.to_string(), odd_value(seed, &p.default_value())));
+                    }
+                }
+                Edit::AddNodeWith { kind, pos, params }
+            }
+            43 => match roll(seed, 2) {
+                0 => Edit::MakeVariableDefault(var(seed)),
+                _ => Edit::ResetVariable(var(seed)),
+            },
             0..=3 => Edit::AddNode { kind: NodeKind::ALL[roll(seed, NodeKind::ALL.len())], pos },
             24 => {
                 let output = roll(seed, 2) == 0;
@@ -1099,6 +1148,13 @@ mod tests {
         let bad = Edit::AddNodeWith { kind: NodeKind::BITMAP, pos: [0.0, 0.0], params: vec![("path".into(), ParamValue::Float(1.0))] };
         assert!(bad.apply(&mut g).is_err());
         assert_eq!(g.nodes.len(), 1);
+        // Nor one that is exposed (its value comes from its socket): refused once the node was
+        // added, the node stayed.
+        let exposed = NodeKind::COMPOSE_COLOR.def().params.iter().find(|p| p.exposed_by_default).expect("an exposed parameter");
+        let bad = Edit::AddNodeWith { kind: NodeKind::COMPOSE_COLOR, pos: [0.0, 0.0], params: vec![(exposed.key.into(), ParamValue::Float(0.5))] };
+        let before = g.clone();
+        assert!(bad.apply(&mut g).is_err());
+        assert_eq!(g, before);
     }
 
     #[test]

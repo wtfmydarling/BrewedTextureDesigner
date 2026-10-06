@@ -254,23 +254,19 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                 .size(style::SMALL)
                 .color(style::TEXT_DIM),
         );
+        // What each does beside it, or under it where the panel is narrow (squeezed beside it,
+        // it stood a word a line, seventeen lines high).
+        let entry = |name: &'static str, doc: &'static str| {
+            row![text(name).size(style::SMALL).font(style::mono()).width(Length::Fixed(170.0)), text(doc).size(style::SMALL).color(style::TEXT_DIM)]
+                .spacing(8)
+                .wrap()
+                .vertical_spacing(2)
+        };
         for f in builtins::FUNCTIONS {
-            list = list.push(
-                row![
-                    text(f.signature).size(style::SMALL).font(style::mono()).width(Length::Fixed(170.0)),
-                    text(f.doc).size(style::SMALL).color(style::TEXT_DIM)
-                ]
-                .spacing(8),
-            );
+            list = list.push(entry(f.signature, f.doc));
         }
         for c in builtins::CONSTANTS {
-            list = list.push(
-                row![
-                    text(c.name).size(style::SMALL).font(style::mono()).width(Length::Fixed(170.0)),
-                    text(c.doc).size(style::SMALL).color(style::TEXT_DIM)
-                ]
-                .spacing(8),
-            );
+            list = list.push(entry(c.name, c.doc));
         }
         col = col.push(container(list).padding(6).style(style::field_box));
     }

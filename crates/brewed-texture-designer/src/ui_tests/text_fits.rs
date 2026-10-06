@@ -223,23 +223,42 @@ fn menus_show_their_items_whole() {
     assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
 }
 
+/// The column of Input Values and Properties made as narrow as it is let be.
+fn narrowest_properties(w: &mut Harness) {
+    let right = match w.app.ui.panes.layout() {
+        iced::widget::pane_grid::Node::Split { b, .. } => match b.as_ref() {
+            iced::widget::pane_grid::Node::Split { id, .. } => *id,
+            _ => panic!("the right column is split from the middle"),
+        },
+        _ => panic!("the panels are split"),
+    };
+    w.send(Message::PaneResized(iced::widget::pane_grid::ResizeEvent { split: right, ratio: 1.0 }));
+}
+
 /// The properties of every kind of node show whole in the narrowest Properties the window is let
 /// have: their names, their lists, their fields.
 #[test]
 fn the_properties_of_every_node_show_whole() {
-    let mut w = harness!(view::root, 1000.0, 640.0);
     let mut found = Vec::new();
-    w.send(Message::Graph(GraphMessage::ClearSelection));
-    let before = cut_short(&mut w);
-    for &kind in NodeKind::ALL {
-        w.send(Message::Edit(Edit::AddNode { kind, pos: [2600.0, -900.0] }));
-        w.send(Message::Seal);
-        let Some(id) = w.app.graph().nodes_of(kind).last().map(|n| n.id) else { continue };
-        w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
-        newly_cut(&mut w, &before, &format!("{kind:?}"), &mut found);
-        // (Nor its texts run into one another.)
-        found.extend(overlapping(&mut w).into_iter().map(|line| format!("{kind:?}: {line}")));
-        w.send(Message::Delete);
+    // In the smallest window, Properties as it opens and as narrow as it is let be.
+    for narrowed in [false, true] {
+        let mut w = harness!(view::root, 1000.0, 640.0);
+        if narrowed {
+            narrowest_properties(&mut w);
+        }
+        w.send(Message::Graph(GraphMessage::ClearSelection));
+        let before = cut_short(&mut w);
+        for &kind in NodeKind::ALL {
+            w.send(Message::Edit(Edit::AddNode { kind, pos: [2600.0, -900.0] }));
+            w.send(Message::Seal);
+            let Some(id) = w.app.graph().nodes_of(kind).last().map(|n| n.id) else { continue };
+            w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+            let state = format!("{kind:?}{}", if narrowed { ", narrowest" } else { "" });
+            newly_cut(&mut w, &before, &state, &mut found);
+            // (Nor its texts run into one another.)
+            found.extend(overlapping(&mut w).into_iter().map(|line| format!("{state}: {line}")));
+            w.send(Message::Delete);
+        }
     }
     // Where Properties has a little more room (a television at 300 %), no short name of them is
     // cut in two lines.
@@ -274,14 +293,7 @@ fn driven_values_say_whole_where_they_come_from() {
     let mut w = harness!(view::root, 1000.0, 640.0);
     let mut found = Vec::new();
     // Properties as narrow as it is let be (as the monkey had made it).
-    let right = match w.app.ui.panes.layout() {
-        iced::widget::pane_grid::Node::Split { b, .. } => match b.as_ref() {
-            iced::widget::pane_grid::Node::Split { id, .. } => *id,
-            _ => panic!("the right column is split from the middle"),
-        },
-        _ => panic!("the panels are split"),
-    };
-    w.send(Message::PaneResized(iced::widget::pane_grid::ResizeEvent { split: right, ratio: 1.0 }));
+    narrowest_properties(&mut w);
     w.send(Message::Graph(GraphMessage::ClearSelection));
     let before = cut_short(&mut w);
     let connect = |w: &mut Harness, from: SocketRef, to: SocketRef| {
@@ -360,6 +372,71 @@ fn driven_values_say_whole_where_they_come_from() {
         let end = &name[name.len() - 2..];
         let said = texts_where(&mut w, |t| t.starts_with("← t"));
         assert!(said.iter().any(|(t, _)| t.contains('…') && t.ends_with(end)), "{kind:?}: said by its beginning and its end: {said:?}");
+    }
+    assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
+}
+
+/// The list of the functions and constants of expressions shows whole in Properties at its
+/// narrowest, of Math, Pixel Math and FX-Map: what each does under it where it is not whole
+/// beside it (seed 4604: squeezed beside it, a word a line).
+#[test]
+fn the_list_of_functions_shows_whole() {
+    let mut w = harness!(view::root, 1000.0, 640.0);
+    narrowest_properties(&mut w);
+    w.send(Message::Graph(GraphMessage::ClearSelection));
+    let before = cut_short(&mut w);
+    if !w.app.ui.show_functions {
+        w.send(Message::ShowFunctions);
+    }
+    let mut found = Vec::new();
+    for kind in [NodeKind::MATH, NodeKind::PIXEL_MATH, NodeKind::FX_MAP] {
+        w.send(Message::Edit(Edit::AddNode { kind, pos: [2600.0, -900.0] }));
+        w.send(Message::Seal);
+        let id = w.app.graph().nodes_of(kind).last().map(|n| n.id).expect("the node");
+        w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+        assert!(!texts(&mut w, "Dot product of two vectors").is_empty(), "{kind:?}: the list is open");
+        newly_cut(&mut w, &before, &format!("{kind:?}"), &mut found);
+    }
+    assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
+}
+
+/// What Properties shows besides a node shows whole at its narrowest: the graph's, with a long
+/// description and category; a comment's, with a long title and description; several nodes
+/// selected, of one kind and of several.
+#[test]
+fn the_properties_of_a_graph_a_comment_and_a_selection_show_whole() {
+    use brewed_texture_core::GraphAttributes;
+    let mut w = harness!(view::root, 1000.0, 640.0);
+    narrowest_properties(&mut w);
+    w.send(Message::Graph(GraphMessage::ClearSelection));
+    let mut found = Vec::new();
+    let before = cut_short(&mut w);
+    let long = "What it makes, in a sentence or two: bricks of a wall in rows, each a little apart from the others";
+    let attributes = GraphAttributes { description: long.into(), category: "Materials/Walls/Bricks and Stones/Old".into(), hidden: true };
+    w.send(Message::Edit(Edit::SetAttributes(attributes)));
+    w.send(Message::Seal);
+    newly_cut(&mut w, &before, "the graph", &mut found);
+    found.extend(overlapping(&mut w).into_iter().map(|line| format!("the graph: {line}")));
+    // A comment.
+    w.send(Message::Edit(Edit::AddComment { text: "The bricks of the left wall, and the mortar between them".into(), pos: [2600.0, -900.0], size: [400.0, 300.0] }));
+    let comment = w.app.graph().comments.last().map(|c| c.id).expect("a comment");
+    w.send(Message::Edit(Edit::SetCommentDescription { id: comment, text: long.into() }));
+    w.send(Message::Seal);
+    w.send(Message::Graph(GraphMessage::SelectComment(comment)));
+    newly_cut(&mut w, &before, "a comment", &mut found);
+    found.extend(overlapping(&mut w).into_iter().map(|line| format!("a comment: {line}")));
+    // Several nodes: of one kind, of several.
+    for kinds in [[NodeKind::BLUR, NodeKind::BLUR], [NodeKind::BLUR, NodeKind::OUTPUT], [NodeKind::MATH, NodeKind::NOISE]] {
+        let mut ids = Vec::new();
+        for kind in kinds {
+            w.send(Message::Edit(Edit::AddNode { kind, pos: [2600.0, -900.0] }));
+            ids.push(w.app.graph().nodes_of(kind).last().map(|n| n.id).expect("the node"));
+        }
+        w.send(Message::Seal);
+        w.send(Message::Graph(GraphMessage::SelectBox { ids: ids.clone(), additive: false }));
+        newly_cut(&mut w, &before, &format!("{kinds:?}"), &mut found);
+        found.extend(overlapping(&mut w).into_iter().map(|line| format!("{kinds:?}: {line}")));
+        w.send(Message::Delete);
     }
     assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
 }

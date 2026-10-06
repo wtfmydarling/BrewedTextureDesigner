@@ -165,12 +165,18 @@ fn comment_view(app: &App, id: brewed_texture_core::CommentId, label_w: f32) -> 
             .placeholder("What do they do? Said under the title.")
             .on_action(move |a| Message::Description(id, a))
             .size(style::TEXT_SIZE)
+            .wrapping(text::Wrapping::WordOrGlyph)
             .padding(6)
             .min_height(64)
             .max_height(240)
             .style(style::text_editor)
             .into(),
-        _ => container(text(comment.description.as_str()).size(style::TEXT_SIZE)).padding(6).style(style::field_box).into(),
+        // (A long word, a path or a link, broken where it meets the edge: it ran out of the box.)
+        _ => container(text(comment.description.as_str()).size(style::TEXT_SIZE).wrapping(text::Wrapping::WordOrGlyph))
+            .padding(6)
+            .width(Length::Fill)
+            .style(style::field_box)
+            .into(),
     };
     container(
         column![

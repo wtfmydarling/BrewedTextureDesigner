@@ -101,7 +101,9 @@ impl InstanceParam {
     pub fn start_value(&self) -> ParamValue {
         match self.image {
             Some(_) => ParamValue::Text(String::new()),
-            None => param_value(self.value),
+            // (Held to the parameter's range, as a value read back from a file is: the range of
+            // a pair is one for both, and a pair outside it was another when read back.)
+            None => self.def().sanitize(param_value(self.value)),
         }
     }
 
@@ -271,5 +273,25 @@ mod tests {
         assert_eq!(def.key, "brick_width");
         assert_eq!(def.limits, Some((0.0, 1.0)), "held to the range of the input value");
         assert!(def.can_expose());
+    }
+
+    /// A node that starts using a graph starts with the graph's value held to the range of its
+    /// parameter, as it is when read back: a pair has one range for both (the widest of its
+    /// own), and a pair out of it, of a range turned over across, was another when read back.
+    #[test]
+    fn a_node_starts_with_a_value_in_its_range() {
+        let mut g = Graph::default();
+        let input = g.add_node(NodeKind::VEC2_INPUT, [0.0, 0.0]);
+        g.bind_variable(input, "offset").unwrap();
+        let v = g.variable_mut("offset").unwrap();
+        (v.value, v.default, v.min, v.max) = (Value::Vec2([0.0, 0.5]), Value::Vec2([0.0, 0.5]), Value::Vec2([3.7, 0.5]), Value::Vec2([1.0, 1.0]));
+        let interface = Interface::of(&g);
+        let param = interface.param("offset").unwrap();
+        let start = param.start_value();
+        assert_eq!(param.def().sanitize(start.clone()), start, "held to its range already");
+        let mut node = Node::of_graph(crate::graph::NodeId(1), Instance::new(GraphRef { package: None, graph: GraphId(1), name: "A".into() }, interface), [0.0, 0.0]);
+        let made = node.clone();
+        node.normalize();
+        assert_eq!(node, made, "as it is read back");
     }
 }
