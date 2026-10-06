@@ -2482,7 +2482,12 @@ impl App {
                 return iced::clipboard::read().map(Message::ClipboardText);
             }
             Message::ClipboardText(text) => {
-                let clip = text.as_deref().and_then(Clipboard::from_text).or_else(|| self.ui.clipboard.clone());
+                // What the clipboard holds now; the nodes copied here last only where it cannot be
+                // read at all (a word copied in another program since, they were pasted all the same).
+                let clip = match text.as_deref() {
+                    Some(text) => Clipboard::from_text(text),
+                    None => self.ui.clipboard.clone(),
+                };
                 match clip {
                     Some(clip) => self.paste_clipboard(clip),
                     None => self.set_status("The clipboard holds no nodes", false),
@@ -3119,6 +3124,13 @@ impl App {
     /// A file dropped on the window: a package is opened in the Explorer, an image becomes a
     /// Bitmap node, vector graphics and fonts are linked to the package.
     fn file_dropped(&mut self, path: PathBuf) -> Task<Message> {
+        // A dialog open takes what comes to the window first, as it takes the keyboard: a file
+        // dropped then is nothing to what is under it (a picture became a node of the graph
+        // hidden behind the dialog, a package was opened from under it).
+        if self.ui.dialog.is_some() {
+            self.set_status(format!("'{}' is not taken while a dialog is open: close it first", path.display()), true);
+            return Task::none();
+        }
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
         if ext == project::FILE_EXTENSION {
             self.close_popups();

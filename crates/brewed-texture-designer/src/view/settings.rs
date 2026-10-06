@@ -590,11 +590,11 @@ fn key_slots<'a>(command: Command, keys: &[Chord], capturing: Option<(Command, u
             .style(move |theme, status| if waiting { style::toggle_button(true)(theme, status) } else { style::choice_field(false)(theme, status) })
             .on_press(say(if waiting { SettingsMessage::StopCapture } else { SettingsMessage::Capture(command, slot) }));
         let clear: Element<'a, Message> = match key {
-            Some(_) if !waiting => button(icon(Icon::Close, 11.0, style::TEXT_DIM))
-                .padding(4)
-                .style(style::flat_button)
-                .on_press(say(SettingsMessage::ClearKey(command, slot)))
-                .into(),
+            Some(_) if !waiting => crate::view::tip(
+                button(icon(Icon::Close, 11.0, style::TEXT_DIM)).padding(4).style(style::flat_button).on_press(say(SettingsMessage::ClearKey(command, slot))),
+                "Take the key away",
+                iced::widget::tooltip::Position::Top,
+            ),
             _ => space().width(Length::Fixed(19.0)).into(),
         };
         slots = slots.push(row![field, clear].spacing(2).align_y(Alignment::Center));

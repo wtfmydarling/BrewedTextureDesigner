@@ -119,7 +119,7 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
     }
     col = col.push(field_row(
         "Description",
-        text_input("what this value controls", &var.description)
+        text_input("what it controls", &var.description)
             .on_input({
                 let name = name.clone();
                 move |t| Message::Edit(Edit::SetVariableDescription { name: name.clone(), text: t })

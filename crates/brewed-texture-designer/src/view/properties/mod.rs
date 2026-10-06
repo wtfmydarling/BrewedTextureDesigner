@@ -119,7 +119,11 @@ fn graph_view(app: &App, label_w: f32) -> Element<'_, Message> {
         .size(style::SMALL)
         .color(style::TEXT_FAINT),
         section("Attributes"),
-        text("What the graph says of itself: in the Library, where its package is in a library folder (Settings → Library), and in the tips of the nodes that use it.")
+        // (What a Category of none is, said here: in the field's placeholder it was cut at its edge.)
+        text(
+            "What the graph says of itself: in the Library, where its package is in a library folder (Settings → Library), \
+             under its Category (none: under its package's name), and in the tips of the nodes that use it."
+        )
             .size(style::SMALL)
             .color(style::TEXT_DIM),
         row![
@@ -133,7 +137,7 @@ fn graph_view(app: &App, label_w: f32) -> Element<'_, Message> {
         .align_y(Alignment::Center),
         row![
             label("Category"),
-            text_input("Noises/Grunge (none: the package's name)", &a.category)
+            text_input("Noises/Grunge", &a.category)
                 .on_input(with(|a, v| a.category = v, a.clone()))
                 .size(style::TEXT_SIZE)
                 .padding([4, 6])

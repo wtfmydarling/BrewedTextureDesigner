@@ -212,9 +212,12 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
     let layout = app.ui.template_layout;
 
     // The templates.
+    // (Said on hover, as the same toggle of the Home screen says it.)
     let toggle = |this: Layout, glyph: Icon| {
         let chosen = layout == this;
-        button(icon(glyph, 14.0, if chosen { style::TEXT_BRIGHT } else { style::TEXT_DIM })).padding([4, 7]).style(style::segment(chosen)).on_press(say(N::Layout(this)))
+        let said = if this == Layout::Grid { "As pictures" } else { "As a list" };
+        let toggle = button(icon(glyph, 14.0, if chosen { style::TEXT_BRIGHT } else { style::TEXT_DIM })).padding([4, 7]).style(style::segment(chosen)).on_press(say(N::Layout(this)));
+        crate::view::tip(toggle, said, iced::widget::tooltip::Position::Bottom)
     };
     let mut templates = column![
         row![

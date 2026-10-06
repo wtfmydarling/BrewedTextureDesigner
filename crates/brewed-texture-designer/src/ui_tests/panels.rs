@@ -878,3 +878,77 @@ fn mangled_packages_open_in_the_window() {
     }
     assert!(pasted > 30, "{pasted} of 150 pasted");
 }
+
+/// A file dropped on the window while a dialog is open is not taken (the dialog takes what comes
+/// to the window first, as it takes the keyboard), and the status bar says so; closed, the window
+/// takes it again.
+#[test]
+fn a_file_dropped_while_a_dialog_is_open_waits_for_it() {
+    let dir = scratch("drop-dialog");
+    let picture = dir.join("bricks.png");
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 80, 40, 255])).save(&picture).unwrap();
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    // (Linked, as the settings may say: taken at once, not read in the background first.)
+    w.app.settings.new_files = crate::settings::NewFiles::Link;
+    let window = w.main_window();
+    let bitmaps = |w: &Harness| w.app.graph().nodes_of(NodeKind::BITMAP).count();
+    let before = bitmaps(&w);
+    for dialog in [Dialog::About, Dialog::Shortcuts] {
+        w.send(Message::Dialog(Some(dialog)));
+        w.window_event(window, iced::Event::Window(window::Event::FileDropped(picture.clone())));
+        assert_eq!(bitmaps(&w), before, "nothing added under the dialog");
+        assert!(w.app.ui.status.as_ref().is_some_and(|s| s.error && s.text.contains("close it first")), "said: {:?}", w.app.ui.status);
+        w.send(Message::Dialog(None));
+    }
+    w.window_event(window, iced::Event::Window(window::Event::FileDropped(picture.clone())));
+    assert_eq!(bitmaps(&w), before + 1, "taken with no dialog open");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The buttons of the 2D view's header, clicked: each channel shows that channel (the one shown
+/// stands out), and 1:1 puts a pixel of the image on a pixel of the screen, in the middle.
+#[test]
+fn the_buttons_of_the_2d_view_show_what_they_say() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    w.input(&[]);
+    // (Right of the 3D view's header: the 2D view's.)
+    let button = |w: &mut Harness, label: &str| -> Point {
+        let found = texts(w, label);
+        found.iter().rfind(|r| r.x > 700.0 && r.y > 500.0).map(|r| r.center()).unwrap_or_else(|| panic!("{label} in the 2D view's header: {found:?}"))
+    };
+    for (label, channel) in [("R", 2), ("G", 3), ("B", 4), ("A", 5), ("RGB", 1), ("RGBA", 0)] {
+        let at = button(&mut w, label);
+        click(&mut w, at);
+        assert_eq!(w.app.ui.preview.channel, channel, "{label}");
+    }
+    let p = &mut w.app.ui.preview;
+    (p.zoom, p.pan, p.fit) = (3.0, iced::Vector::new(40.0, -20.0), false);
+    let at = button(&mut w, "1:1");
+    click(&mut w, at);
+    let p = &w.app.ui.preview;
+    assert_eq!((p.zoom, p.pan, p.fit), (1.0, iced::Vector::ZERO, false), "a pixel a pixel, in the middle");
+}
+
+/// What is pasted is what the clipboard holds: nodes copied, then a word copied in another
+/// program, and Paste pastes no nodes (it pasted the nodes copied before); where the clipboard
+/// cannot be read at all, the nodes copied here last are pasted.
+#[test]
+fn paste_pastes_what_the_clipboard_holds_now() {
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    let levels = w.app.graph().nodes_of(NodeKind::LEVELS).next().expect("a Levels").id;
+    w.send(Message::Graph(GraphMessage::Select { node: levels, mode: SelectMode::Replace }));
+    let _ = w.app.update(Message::Copy);
+    let count = |w: &Harness| w.app.graph().nodes_of(NodeKind::LEVELS).count();
+    let before = count(&w);
+    // A word, copied in another program since.
+    w.send(Message::ClipboardText(Some("bricks".into())));
+    assert_eq!(count(&w), before, "no nodes pasted");
+    assert!(w.app.ui.status.as_ref().is_some_and(|s| s.text.contains("no nodes")), "said: {:?}", w.app.ui.status);
+    // What was copied here, in the clipboard: pasted.
+    let copied = w.app.ui.clipboard.as_ref().expect("copied").to_text();
+    w.send(Message::ClipboardText(Some(copied)));
+    assert_eq!(count(&w), before + 1, "the Levels pasted");
+    // The clipboard not read: the nodes copied here last.
+    w.send(Message::ClipboardText(None));
+    assert_eq!(count(&w), before + 2, "pasted from what was copied here");
+}
