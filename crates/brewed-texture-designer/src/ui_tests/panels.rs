@@ -1169,3 +1169,61 @@ fn a_reversed_gradient_keeps_its_stop_selected() {
     assert_eq!(gradient(&w).stops[selected].color, [0.1, 0.1, 0.1, 1.0], "the darkest, now the last");
     assert!(!texts(&mut w, "Stop 3 of 3").is_empty(), "said so");
 }
+
+/// A graph another open package uses, renamed and deleted from the Explorer while that package
+/// is edited, and put back in its own package: the node that uses it is called as it is now at
+/// each step, says it cannot be found once it is gone, and works again once an undo puts it
+/// back (renamed or taken away so, the graph edited went on drawing it as it was, until it
+/// changed itself); and the other package's undo is its own.
+#[test]
+fn a_graph_another_package_uses_is_followed_through_rename_delete_and_undo() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let dir = scratch("followed");
+    let wall = dir.join("wall.brewtex");
+    w.send(Message::SavePicked(Some(wall.clone())));
+    let (a, graph) = (w.app.doc_key, w.app.doc.current());
+    // A second graph, so that the wall may go.
+    w.send(Message::Explorer(ExplorerMessage::NewGraph(a)));
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    // Another package uses the wall.
+    w.send(Message::New);
+    let b = w.app.doc_key;
+    let name = w.app.package_doc(a).unwrap().package().graph(graph).unwrap().name.clone();
+    w.send(Message::Graph(GraphMessage::Drop { payload: DragPayload::Graph { key: a, graph, name: name.clone() }, graph_pos: [0.0, 0.0] }));
+    let node = w.app.graph().instances().next().map(|n| n.id).expect("a node that uses the wall");
+    let user = |w: &Harness| -> (String, bool) {
+        let doc = w.app.package_doc(b).expect("the other package");
+        let n = doc.graph().node(node).expect("the node");
+        let works = if w.app.doc_key == b { w.app.eval.node(node).is_some_and(|e| e.errors.is_empty()) } else { true };
+        (crate::view::graph::node_title(n), works)
+    };
+    assert_eq!(user(&w), (name.clone(), true));
+    // Renamed in its package, from the Explorer: the node is called so.
+    w.send(Message::Explorer(ExplorerMessage::StartRename(a, graph)));
+    w.send(Message::Explorer(ExplorerMessage::RenameText("Old Walls".into())));
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    assert_eq!(w.app.package_doc(a).unwrap().package().graph(graph).unwrap().name, "Old Walls");
+    assert_eq!(w.app.doc_key, b, "the other package still edited");
+    assert_eq!(user(&w), ("Old Walls".to_string(), true), "called as the graph is now");
+    // Deleted, from the Explorer: the node says it cannot be found.
+    w.send(Message::Explorer(ExplorerMessage::DeleteGraph(a, graph)));
+    assert!(w.app.package_doc(a).unwrap().package().graph(graph).is_none());
+    assert_eq!(w.app.doc_key, b);
+    let errors = w.app.eval.node(node).map(|e| e.errors.clone()).unwrap_or_default();
+    assert!(!errors.is_empty(), "the node says the graph is gone: {:?}", w.app.eval.node(node));
+    // The other package's undo is its own: nothing to undo of the wall's in it.
+    let steps = w.app.doc.can_undo();
+    assert!(steps, "the drop is a step of its own package");
+    // The wall's package undoes the deletion: the node works again.
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(a, w.app.package_doc(a).unwrap().current())));
+    w.send(Message::Undo);
+    assert!(w.app.package_doc(a).unwrap().package().graph(graph).is_some(), "the wall is back");
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(b, w.app.package_doc(b).unwrap().current())));
+    assert_eq!(user(&w), ("Old Walls".to_string(), true), "it works again");
+    // And the rename undone: called as it was.
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(a, graph)));
+    w.send(Message::Undo);
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(b, w.app.package_doc(b).unwrap().current())));
+    assert_eq!(user(&w), (name, true), "called as it was");
+    let _ = std::fs::remove_dir_all(&dir);
+}

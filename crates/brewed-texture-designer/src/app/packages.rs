@@ -30,6 +30,45 @@ pub struct OpenPackage {
     pub doc: Document,
 }
 
+/// The packages read from their files for the graphs the open ones use, by path, and how many
+/// times they changed (read, read again, let go): what the graph being edited is laid out of
+/// changes with them. Changed only by its own methods.
+#[derive(Default)]
+pub struct Deps {
+    packages: HashMap<String, Package>,
+    changes: u64,
+}
+
+impl Deps {
+    pub(super) fn insert(&mut self, path: String, package: Package) {
+        self.packages.insert(path, package);
+        self.changes += 1;
+    }
+
+    pub(super) fn remove(&mut self, path: &str) -> Option<Package> {
+        let removed = self.packages.remove(path);
+        if removed.is_some() {
+            self.changes += 1;
+        }
+        removed
+    }
+
+    pub(super) fn changes(&self) -> u64 {
+        self.changes
+    }
+}
+
+impl std::ops::Deref for Deps {
+    type Target = HashMap<String, Package>;
+
+    fn deref(&self) -> &HashMap<String, Package> {
+        &self.packages
+    }
+}
+
+/// What the graph being edited was laid out of (see `App::laid_out_of`).
+pub(super) type Seen = (u64, u64, Vec<(u64, u64)>, u64);
+
 /// The packages the graphs of a flattened graph are found in (see [`package::flatten`]).
 pub struct Shelf<'a> {
     /// The package being flattened when it has no file.

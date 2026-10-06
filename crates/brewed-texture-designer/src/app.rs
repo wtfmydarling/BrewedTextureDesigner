@@ -32,6 +32,7 @@ use brewed_texture_core::project::{self, ViewState};
 use brewed_texture_core::{Category, Document, Edit, GraphId, NodeKind, ParamValue, Value};
 
 pub use packages::OpenPackage;
+use packages::{Deps, Seen};
 pub use settings_dialog::{SettingsDialog, SettingsMessage};
 use brewed_texture_engine::{DisplayImage, EngineService, Event, ExportJob, ImageReport, Request};
 use brewed_texture_engine::simd::ImageStats;
@@ -545,7 +546,7 @@ pub struct App {
     origins: std::collections::hash_map::RandomState,
     /// Packages whose graphs are used but that are not open in the Explorer, read from their
     /// files, by path.
-    deps: HashMap<String, Package>,
+    deps: Deps,
     /// Package files that are used and could not be read.
     unreadable: HashSet<String>,
     /// Where the view of each graph was when another was edited, by package key and graph.
@@ -562,9 +563,9 @@ pub struct App {
     /// For each node laid out from a graph used as a node, the node of the graph being edited
     /// that uses it.
     owners: Arc<HashMap<NodeId, NodeId>>,
-    /// The package and the revision of it the evaluation is of: another package edited, or
-    /// another revision of it, is evaluated again.
-    seen: (u64, u64),
+    /// What the evaluation is of (see [`App::laid_out_of`]): another package edited, or another
+    /// revision of it or of what it uses, is evaluated again.
+    seen: Seen,
     /// How many graphs were sent to the engine: the engine answers with the number of the one
     /// it computed. (Revisions of one package would not do: another package may be at a
     /// revision the engine was at already.)
@@ -1127,7 +1128,7 @@ impl App {
             shelf: Vec::new(),
             next_key: 1,
             origins: std::collections::hash_map::RandomState::new(),
-            deps: HashMap::new(),
+            deps: Deps::default(),
             unreadable: HashSet::new(),
             views: HashMap::new(),
             autosave: autosave::Autosave::default(),
@@ -1136,7 +1137,7 @@ impl App {
             eval,
             flat: (Arc::new(Graph::default()), Arc::new(Evaluation::default())),
             owners: Arc::new(HashMap::new()),
-            seen: (0, 0),
+            seen: Seen::default(),
             eval_revision: 0,
             engine: None,
             events: None,
@@ -1439,8 +1440,16 @@ impl App {
     }
 
     /// Re-evaluate after document changes and keep the UI state consistent with the graph.
+    /// What the graph being edited is laid out of: the package being edited and its revision;
+    /// the other open packages and theirs, and how many times the packages read for them
+    /// changed (the graphs it uses are in those: a graph of another package taken away or
+    /// renamed in the Explorer, the graph being edited still drew it, called as it was).
+    fn laid_out_of(&self) -> Seen {
+        (self.doc_key, self.doc.revision(), self.shelf.iter().map(|p| (p.key, p.doc.revision())).collect(), self.deps.changes())
+    }
+
     fn refresh(&mut self) {
-        if (self.doc_key, self.doc.revision()) == self.seen {
+        if self.laid_out_of() == self.seen {
             return;
         }
         // The nodes that use graphs follow what the graphs are now, in every open package.
@@ -1458,7 +1467,7 @@ impl App {
         let flat_eval = Arc::new(eval::evaluate(&flat.graph));
         self.flat = (Arc::new(flat.graph), flat_eval);
         self.owners = Arc::new(flat.owners);
-        self.seen = (self.doc_key, self.doc.revision());
+        self.seen = self.laid_out_of();
         self.eval_revision += 1;
         let graph = self.doc.graph();
         self.ui.selection.retain(|id| graph.contains(*id));
@@ -1958,7 +1967,7 @@ impl App {
         self.res = Results { exports_pending: self.res.exports_pending, ..Results::default() };
         // The engine forgets the document before, and is told this one (see `Request::Reset`).
         self.send(Request::Reset);
-        if (self.doc_key, self.doc.revision()) == self.seen {
+        if self.laid_out_of() == self.seen {
             self.send_graph();
         } else {
             self.refresh();
