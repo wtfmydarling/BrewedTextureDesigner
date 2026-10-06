@@ -2166,10 +2166,36 @@ fn drag_events(a: Point, b: Point, parts: u64) -> Vec<iced::Event> {
 
 /// What is wrong with the app's state, if anything, once an event is handled.
 fn broken(app: &App) -> Option<String> {
+    use brewed_texture_core::graph::{MAX_COORD, NodeId};
     let g = app.graph();
+    // What a file's graph is held to (as the core's test of mangled files has it): ids of nodes
+    // and comments each its own, below the next one given; places within reach; a node that uses
+    // a graph says which; comments of a color and a size; input values of numbers.
+    let mut ids = std::collections::HashSet::new();
     for n in &g.nodes {
-        if !n.pos.iter().all(|v| v.is_finite()) {
+        if !n.pos.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD) {
             return Some(format!("node {} is at {:?}", n.id.0, n.pos));
+        }
+        if !ids.insert(n.id) || n.id.0 >= g.next_id || n.id.is_inner() {
+            return Some(format!("node id {} taken twice, or not below {}", n.id.0, g.next_id));
+        }
+        if (n.kind == NodeKind::GRAPH_INSTANCE) != n.instance.is_some() {
+            return Some(format!("{} with {:?}", n.def().name, n.instance.as_ref().map(|i| &i.graph)));
+        }
+    }
+    for c in &g.comments {
+        if !ids.insert(NodeId(c.id.0)) || c.id.0 >= g.next_id {
+            return Some(format!("comment id {} taken twice, or not below {}", c.id.0, g.next_id));
+        }
+        let place = c.pos.iter().chain(&c.size).all(|v| v.is_finite() && v.abs() <= MAX_COORD);
+        if !place || !c.color.iter().all(|v| (0.0..=1.0).contains(v)) || c.size[0] < 0.0 || c.size[1] < 0.0 {
+            return Some(format!("a comment at {:?}, {:?} large, of {:?}", c.pos, c.size, c.color));
+        }
+    }
+    for v in &g.variables {
+        let values = [v.value, v.default, v.min, v.max];
+        if !values.iter().all(brewed_texture_core::Value::is_finite) {
+            return Some(format!("the input value {} holds {values:?}", v.name));
         }
     }
     for l in &g.links {
@@ -2182,6 +2208,15 @@ fn broken(app: &App) -> Option<String> {
         if !inputs.insert((l.to, l.to_socket.clone())) {
             return Some(format!("two links go into {} {}", l.to.0, l.to_socket));
         }
+    }
+    // Every link one the graph keeps: between sockets its nodes have, of types that go together,
+    // or waiting for a socket that comes back (an expression's variable being typed, a graph's
+    // output; see `Graph::prune_links`).
+    let mut kept = g.clone();
+    kept.prune_links();
+    if let Some(l) = g.links.iter().find(|l| !kept.links.contains(l)) {
+        let name = |id| g.node(id).map_or("?", |n| n.def().name);
+        return Some(format!("a link from {} {} to {} {} is one the graph does not keep", name(l.from), l.from_socket, name(l.to), l.to_socket));
     }
     let v = app.ui.graph_view;
     if !(v.zoom.is_finite() && v.zoom > 0.0 && v.pan.x.is_finite() && v.pan.y.is_finite()) {
