@@ -105,6 +105,13 @@ impl Document {
         }
     }
 
+    /// The file is not the package's any more (another package was saved as it): the package
+    /// stays as it is, untitled, with changes to save.
+    pub fn forget_path(&mut self) {
+        self.path = None;
+        self.mark_unsaved();
+    }
+
     /// The package is not what its file holds (it was recovered from a snapshot of unsaved
     /// changes, see [`crate::recovery`]): it has changes to save.
     pub fn mark_unsaved(&mut self) {

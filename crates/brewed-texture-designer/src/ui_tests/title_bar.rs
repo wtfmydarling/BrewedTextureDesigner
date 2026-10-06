@@ -252,3 +252,21 @@ fn pressing_the_bar_closes_an_open_menu_first() {
     assert!(of_the_bar(&asked).is_empty(), "{asked:?}");
     assert!(asked.iter().any(|m| matches!(m, Message::Menu(None))), "{asked:?}");
 }
+
+/// Made small to the taskbar, the window says it is of no size (as Windows says it): the size it
+/// had stays, the one kept for when the program starts again, and so do the columns' widths.
+#[test]
+fn a_window_made_small_to_the_taskbar_keeps_its_size() {
+    let mut w = harness!(view::root, W, H);
+    let id = w.main_window();
+    let size = Size::new(1500.0, 900.0);
+    w.window_event(id, iced::Event::Window(window::Event::Resized(size)));
+    assert_eq!(w.app.ui.window_size, size);
+    let splits = crate::app::splits_of(&w.app.ui.panes);
+    w.window_event(id, iced::Event::Window(window::Event::Resized(Size::ZERO)));
+    assert_eq!(w.app.ui.window_size, size, "the size it had");
+    assert_eq!(crate::app::splits_of(&w.app.ui.panes), splits, "the columns as they were");
+    // Back: as it was.
+    w.window_event(id, iced::Event::Window(window::Event::Resized(size)));
+    assert_eq!(crate::app::splits_of(&w.app.ui.panes), splits);
+}

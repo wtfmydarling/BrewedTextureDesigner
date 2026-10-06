@@ -146,12 +146,13 @@ fn the_window_shows_its_names_whole_at_every_size() {
         let mut w = harness!(view::root, width, height);
         let levels = first(&w, NodeKind::LEVELS);
         w.send(Message::Graph(GraphMessage::Select { node: levels, mode: SelectMode::Replace }));
-        for line in cut_short(&mut w) {
+        // (Nor run into one another.)
+        for line in cut_short(&mut w).into_iter().chain(overlapping(&mut w)) {
             found.push(format!("{width}×{height}: {line}"));
         }
         let mortar = w.app.graph().variables.iter().find(|v| v.name == "mortar").map(|v| v.name.clone()).expect("the demo's mortar");
         w.send(Message::ToggleVariable(mortar.clone()));
-        for line in cut_short(&mut w) {
+        for line in cut_short(&mut w).into_iter().chain(overlapping(&mut w)) {
             found.push(format!("{width}×{height}, {mortar} open: {line}"));
         }
         if width > 1000.0 {
@@ -236,6 +237,8 @@ fn the_properties_of_every_node_show_whole() {
         let Some(id) = w.app.graph().nodes_of(kind).last().map(|n| n.id) else { continue };
         w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
         newly_cut(&mut w, &before, &format!("{kind:?}"), &mut found);
+        // (Nor its texts run into one another.)
+        found.extend(overlapping(&mut w).into_iter().map(|line| format!("{kind:?}: {line}")));
         w.send(Message::Delete);
     }
     // Where Properties has a little more room (a television at 300 %), no short name of them is
@@ -424,4 +427,96 @@ fn the_columns_fit_any_window_and_any_split() {
             assert!(column(crate::app::Pane::Properties) >= crate::app::RIGHT_MIN - least, "{width} {left} {right}: Properties {}", column(crate::app::Pane::Properties));
         }
     }
+}
+
+/// The texts of the window where they are seen: moved as the scrollables they are in are
+/// scrolled, and cut to what those show (what is scrolled out of sight is not there).
+#[derive(Default)]
+struct Seen {
+    texts: Vec<(String, Rectangle)>,
+    /// What each scrollable the operation is in shows, and how far it is scrolled.
+    shown: Vec<(Rectangle, iced::Vector)>,
+    /// The scrollable just met, whose content comes next.
+    next: Option<(Rectangle, iced::Vector)>,
+}
+
+impl Operation for Seen {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        let scrolled = self.next.take();
+        if let Some(s) = scrolled {
+            self.shown.push(s);
+        }
+        operate(self);
+        if scrolled.is_some() {
+            self.shown.pop();
+        }
+    }
+
+    fn scrollable(
+        &mut self,
+        _: Option<&Id>,
+        bounds: Rectangle,
+        _: Rectangle,
+        translation: iced::Vector,
+        _: &mut dyn iced::advanced::widget::operation::Scrollable,
+    ) {
+        self.next = Some((bounds, translation));
+    }
+
+    fn text(&mut self, _: Option<&Id>, bounds: Rectangle, text: &str) {
+        let moved = self.shown.iter().fold(iced::Vector::ZERO, |by, (_, t)| by + *t);
+        let mut at = Some(bounds - moved);
+        for (shown, _) in &self.shown {
+            at = at.and_then(|r| r.intersection(shown));
+        }
+        if let Some(at) = at {
+            self.texts.push((text.to_owned(), at));
+        }
+    }
+}
+
+/// The texts of the window laid out over one another where they are seen (by more than a few
+/// pixels each way): a widget run into its neighbor.
+pub(super) fn overlapping(w: &mut Harness) -> Vec<String> {
+    let mut seen = Seen::default();
+    w.input(&[]);
+    w.frame(|ui, renderer| ui.operate(renderer, &mut seen));
+    let texts: Vec<(String, Rectangle)> = seen.texts.into_iter().filter(|(t, r)| !t.trim().is_empty() && r.width > 1.0 && r.height > 1.0).collect();
+    let mut found = Vec::new();
+    for (i, (a, ra)) in texts.iter().enumerate() {
+        for (b, rb) in &texts[i + 1..] {
+            if let Some(o) = ra.intersection(rb)
+                && o.width > 3.0
+                && o.height > 3.0
+            {
+                found.push(format!("{a:?} at {:.0},{:.0} {:.0}×{:.0} over {b:?} at {:.0},{:.0} {:.0}×{:.0}", ra.x, ra.y, ra.width, ra.height, rb.x, rb.y, rb.width, rb.height));
+            }
+        }
+    }
+    found
+}
+
+
+/// The check of texts run into one another sees two texts laid out over each other, and not a
+/// text scrolled out of sight under another.
+#[test]
+fn texts_over_one_another_are_seen_and_scrolled_ones_are_not() {
+    use iced::widget::{column, scrollable, stack, text};
+    let over: View = Box::new(|_| stack![text("A text of the window"), text("Another text on it")].into());
+    let mut w = match Harness::new(over, Size::new(400.0, 300.0)) {
+        Some(w) => w,
+        None => return,
+    };
+    assert_eq!(overlapping(&mut w).len(), 1, "the two texts over each other");
+    // A text far down a scrollable, under a text beside the scrollable: not seen there.
+    let scrolled: View = Box::new(|_| {
+        stack![
+            iced::widget::container(scrollable(column![text("Seen at the top"), iced::widget::space().height(233), text("Far down, out of sight")]).height(200))
+                .height(iced::Length::Fill),
+            column![iced::widget::space().height(250), text("Under the scrollable")],
+        ]
+        .into()
+    });
+    let mut w = Harness::new(scrolled, Size::new(400.0, 300.0)).expect("a renderer, as before");
+    assert!(overlapping(&mut w).is_empty(), "{:?}", overlapping(&mut w));
 }

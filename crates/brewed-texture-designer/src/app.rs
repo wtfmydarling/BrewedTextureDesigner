@@ -1484,6 +1484,16 @@ impl App {
         if gone {
             self.ui.color_picker = None;
         }
+        // So do the names being typed for what an edit took away: an input value for a node, the
+        // name of an input value, of a graph or of a file of the package (Ctrl+Z works while a
+        // field is typed in; they kept the next Esc, and Enter gave the name to nothing).
+        if self.ui.binding.as_ref().is_some_and(|(id, _)| !graph.contains(*id)) {
+            self.ui.binding = None;
+        }
+        if self.ui.renaming_var.as_ref().is_some_and(|(from, _)| !graph.variables.iter().any(|v| v.name == *from)) {
+            self.ui.renaming_var = None;
+        }
+
         self.res.thumbs.retain(|id, _| graph.contains(*id));
         // A menu of pictures belongs to a choice that is still there to be made.
         if let Some(menu) = &self.ui.choice_menu
@@ -1492,6 +1502,34 @@ impl App {
             self.ui.choice_menu = None;
         }
         self.send_graph();
+    }
+
+    /// What the Explorer points at that is not there any more lets go of it, whatever took it
+    /// away (an undo, a package closed or saved over another open one): a graph or a file being
+    /// renamed, a context menu of a package, a graph, a file or something of the graph edited.
+    fn forget_what_is_gone(&mut self) {
+        let graph_of = |app: &App, key: u64, graph: GraphId| app.package_doc(key).is_some_and(|doc| doc.package().graph(graph).is_some());
+        let file_of = |app: &App, key: u64, path: &str| app.package_doc(key).is_some_and(|doc| doc.package().resources.iter().any(|r| r.path == path));
+        if self.ui.renaming_graph.as_ref().is_some_and(|(key, graph, _)| !graph_of(self, *key, *graph)) {
+            self.ui.renaming_graph = None;
+        }
+        if self.ui.renaming_file.as_ref().is_some_and(|(key, path, _)| !file_of(self, *key, path)) {
+            self.ui.renaming_file = None;
+        }
+        let Some(menu) = &self.ui.context else { return };
+        let g = self.doc.graph();
+        let there = match &menu.target {
+            ContextTarget::Node(id) => g.contains(*id),
+            ContextTarget::Link(l) => g.links.contains(l),
+            ContextTarget::Comment(id) => g.comment(*id).is_some(),
+            ContextTarget::Canvas { .. } => true,
+            ContextTarget::Package(key) | ContextTarget::ResourcesFolder(key) => self.package_doc(*key).is_some(),
+            ContextTarget::GraphItem(key, graph) => graph_of(self, *key, *graph),
+            ContextTarget::ResourceItem(key, path) => file_of(self, *key, path),
+        };
+        if !there {
+            self.ui.context = None;
+        }
     }
 
     fn send_graph(&mut self) {
@@ -2162,6 +2200,7 @@ impl App {
             task = Task::batch([task, self.choose_environment(Some(file))]);
         }
         self.refresh();
+        self.forget_what_is_gone();
         self.sync_expression();
         self.sync_description();
         // A file a package began to use is looked at now, not at the next look.
@@ -3036,6 +3075,12 @@ impl App {
         match event {
             E::Window(window::Event::CloseRequested) => return self.close_requested(),
             E::Window(window::Event::Opened { size, .. } | window::Event::Resized(size)) => {
+                // Made small to the taskbar, the window says (on Windows) it is of no size: what it
+                // was stays, as it comes back so, and so does whether it filled the screen (quit
+                // so, the program kept no size, and started again at the smallest).
+                if size.width < 1.0 || size.height < 1.0 {
+                    return Task::none();
+                }
                 self.ui.window_size = size;
                 self.fit_columns();
                 // Whether it fills the screen now (the system, or a key, may have made it).

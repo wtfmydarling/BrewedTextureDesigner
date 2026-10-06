@@ -637,8 +637,24 @@ impl App {
         let file = path.display().to_string();
         super::home::remember(&mut self.ui.recent, &mut self.ui.recent_opened, &file);
         self.forget_file(&file);
-        // Another package open in the Explorer from the same file is this one now.
-        self.shelf.retain(|p| p.key == key || p.doc.key().as_deref() != Some(file.as_str()));
+        // Another package open in the Explorer from the same file is this one now: one without
+        // changes to save goes (what it was is the file's earlier version); one with them stays,
+        // untitled, with them (they went with it, unsaid).
+        let mine = |doc: &Document| doc.key().as_deref() == Some(file.as_str());
+        let mut kept = 0;
+        for other in self.shelf.iter_mut().filter(|p| p.key != key && mine(&p.doc) && p.doc.is_dirty()) {
+            other.doc.forget_path();
+            kept += 1;
+        }
+        self.shelf.retain(|p| p.key == key || !mine(&p.doc));
+        if key != self.doc_key && mine(&self.doc) {
+            self.doc.forget_path();
+            kept += 1;
+        }
+        if kept > 0 {
+            let name = path.file_name().map_or_else(|| file.clone(), |n| n.to_string_lossy().into_owned());
+            self.set_status(format!("{name} was open with changes not saved: they are kept, untitled"), false);
+        }
     }
 
     // ------------------------------------------------------------------ graphs used as nodes

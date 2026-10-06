@@ -2551,10 +2551,23 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
             Ok(None) if step % 250 == 249 => {
                 let cut = text_fits::cut_short(&mut w);
                 let squeezed = text_fits::squeezed(&mut w);
+                // (What floats over the window covers what is under it, as it is meant to.)
+                let ui = &w.app.ui;
+                let floating = ui.menu.is_some()
+                    || ui.context.is_some()
+                    || ui.add_menu.is_some()
+                    || ui.dialog.is_some()
+                    || ui.choice_menu.is_some()
+                    || ui.color_picker.is_some()
+                    || ui.preview.lighting.menu
+                    || ui.drag.is_some();
+                let over = if floating { Vec::new() } else { text_fits::overlapping(&mut w) };
                 if !cut.is_empty() {
                     Some(format!("CUT SHORT at {}×{}: {}", w.size.width, w.size.height, cut.join("; ")))
+                } else if !squeezed.is_empty() {
+                    Some(format!("SQUEEZED at {}×{}: {}", w.size.width, w.size.height, squeezed.join("; ")))
                 } else {
-                    (!squeezed.is_empty()).then(|| format!("SQUEEZED at {}×{}: {}", w.size.width, w.size.height, squeezed.join("; ")))
+                    (!over.is_empty()).then(|| format!("OVERLAPPING at {}×{}: {}", w.size.width, w.size.height, over.join("; ")))
                 }
             }
             Ok(None) => None,

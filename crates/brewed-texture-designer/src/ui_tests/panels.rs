@@ -620,3 +620,115 @@ fn long_names_of_library_graphs_show_whole_in_a_narrow_library() {
     let squeezed = text_fits::squeezed(&mut w);
     assert!(cut.is_empty() && squeezed.is_empty(), "{cut:?} {squeezed:?}");
 }
+
+/// The name of an input value being typed for an Input node that an undo takes away is forgotten
+/// with it (it was kept: the next Esc went to it, and Enter bound it to a node that is not there).
+#[test]
+fn a_name_typed_for_an_input_node_an_undo_takes_away_is_forgotten() {
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::FLOAT_INPUT, pos: [-400.0, 900.0] }));
+    w.send(Message::Seal);
+    let id = w.app.graph().nodes_of(NodeKind::FLOAT_INPUT).map(|n| n.id).max().expect("the Input node");
+    w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+    w.send(Message::BindingText(id, "roughness".into()));
+    assert!(w.app.ui.binding.is_some(), "being typed");
+    w.send(Message::Undo);
+    assert!(w.app.graph().node(id).is_none(), "the node taken away");
+    assert!(w.app.ui.binding.is_none(), "its name being typed forgotten");
+}
+
+/// A name being typed for an input value, a graph or a file that an undo (Ctrl+Z works while a
+/// field is typed in) takes away is forgotten with it.
+#[test]
+fn names_being_typed_for_what_an_undo_takes_away_are_forgotten() {
+    use std::sync::Arc;
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    let key = w.app.doc_key;
+    // An input value, made by an Input node.
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::FLOAT_INPUT, pos: [-400.0, 900.0] }));
+    w.send(Message::Seal);
+    let id = w.app.graph().nodes_of(NodeKind::FLOAT_INPUT).map(|n| n.id).max().expect("the Input node");
+    let name = w.app.graph().node(id).and_then(|n| n.variable.clone()).expect("its input value");
+    w.send(Message::RenameVariable(name.clone(), "roughness".into()));
+    w.send(Message::Undo);
+    assert!(!w.app.graph().variables.iter().any(|v| v.name == name), "the input value taken away");
+    assert!(w.app.ui.renaming_var.is_none(), "its name being typed forgotten");
+    // A graph: one made, and another edited while it is renamed.
+    let wall = w.app.doc.current();
+    w.send(Message::Explorer(ExplorerMessage::NewGraph(key)));
+    let graph = w.app.doc.current();
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, wall)));
+    w.send(Message::Explorer(ExplorerMessage::StartRename(key, graph)));
+    assert!(w.app.ui.renaming_graph.as_ref().is_some_and(|(k, g, _)| *k == key && *g == graph), "being renamed");
+    w.send(Message::Undo);
+    assert!(w.app.doc.package().graph(graph).is_none(), "the graph taken away");
+    assert_eq!(w.app.doc.current(), wall, "the graph edited still edited");
+    assert!(w.app.ui.renaming_graph.is_none(), "its name being typed forgotten");
+    // A file.
+    let held = Held::new("C:/tex/bricks.png", Arc::new(b"the bytes of bricks.png".to_vec()));
+    let path = held.path().to_string();
+    w.send(Message::Explorer(ExplorerMessage::FilesRead { key, embed: false, files: vec![("C:/tex/bricks.png".into(), held)], failed: vec![] }));
+    w.send(Message::Explorer(ExplorerMessage::StartRenameFile(key, path.clone())));
+    assert!(w.app.ui.renaming_file.is_some());
+    w.send(Message::Undo);
+    assert!(!w.app.doc.package().resources.iter().any(|r| r.path == path), "the file taken away");
+    assert!(w.app.ui.renaming_file.is_none(), "its name being typed forgotten");
+}
+
+/// A package saved as the file another open package is from: the other goes where it has nothing
+/// to save, its menu in the Explorer closing with it; where it has changes not saved, it stays,
+/// untitled, with them (they went with it, unsaid), and the status bar says so.
+#[test]
+fn a_package_saved_over_another_open_ones_file_keeps_its_unsaved_changes() {
+    let dir = scratch("saved-over");
+    let file = dir.join("bricks.brewtex");
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    let same = |doc: &brewed_texture_core::Document| doc.path().map(|p| p.display().to_string()) == Some(crate::app::packages::clean(&file));
+    // Saved, then nothing changed: saved over, it goes, its menu with it.
+    w.send(Message::SavePicked(Some(file.clone())));
+    let first = w.app.doc_key;
+    let graph = w.app.doc.current();
+    assert!(same(&w.app.doc) && !w.app.doc.is_dirty(), "saved as bricks.brewtex");
+    w.send(Message::New);
+    w.send(Message::Context(Some(ContextMenu { at: Point::new(100.0, 100.0), target: ContextTarget::GraphItem(first, graph) })));
+    w.send(Message::SavePicked(Some(file.clone())));
+    assert!(w.app.package_doc(first).is_none(), "the package of the file saved over goes");
+    assert!(w.app.ui.context.is_none(), "its menu closes with it");
+    // Changed and not saved: saved over, it stays, untitled, with its change.
+    let second = w.app.doc_key;
+    w.send(Message::New);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
+    w.send(Message::Seal);
+    let changed = w.app.doc_key;
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(second, w.app.package_doc(second).expect("open").current())));
+    w.send(Message::SavePicked(Some(dir.join("other.brewtex"))));
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(changed, w.app.package_doc(changed).expect("open").current())));
+    // (The changed one saved as bricks.brewtex first, then changed again: what it has is not the file's.)
+    w.send(Message::SavePicked(Some(file.clone())));
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::LEVELS, pos: [200.0, 0.0] }));
+    w.send(Message::Seal);
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(second, w.app.package_doc(second).expect("open").current())));
+    w.send(Message::SavePicked(Some(file.clone())));
+    let kept = w.app.package_doc(changed).expect("the changed package stays open");
+    assert!(kept.path().is_none() && kept.is_dirty(), "untitled, with changes to save");
+    assert!(kept.package().graphs.iter().any(|g| g.graph.nodes_of(NodeKind::LEVELS).count() > 0), "its change kept");
+    assert!(w.app.ui.status.as_ref().is_some_and(|s| s.text.contains("kept, untitled")), "said: {:?}", w.app.ui.status);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A short 3D view without maps: what to do to see them and how fast it draws are one under the
+/// other, never over each other (the rate in its corner lay on the hint).
+#[test]
+fn the_hint_and_the_rate_of_a_short_3d_view_do_not_overlap() {
+    use crate::app::Pane;
+    let mut w = harness!(view::root, 1218.0, 795.0);
+    let split = split_between(&w, Pane::Graph, Pane::View3D);
+    for ratio in [0.8, 0.86, 0.9, 0.94] {
+        w.send(Message::PaneResized(iced::widget::pane_grid::ResizeEvent { split, ratio }));
+        draw_frame(&mut w, std::time::Instant::now());
+        assert!(!texts_reading(&mut w, "Set the Usage of Output nodes (Base Color, Normal, Height …) to see them here").is_empty(), "the hint");
+        let over = text_fits::overlapping(&mut w);
+        assert!(over.is_empty(), "at {ratio}: {over:?}");
+    }
+}

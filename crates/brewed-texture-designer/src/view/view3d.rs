@@ -643,18 +643,22 @@ pub fn view(app: &App) -> Element<'_, Message> {
         ),
         Position::Top,
     );
-    layers.push(container(frames).padding([6, 8]).width(Length::Fill).height(Length::Fill).align_right(Length::Fill).align_bottom(Length::Fill).into());
+    // What to do to see the maps at the top, how fast it draws at the bottom: one under the
+    // other, never over each other (in a short view they were); where the view is too short for
+    // both, the rate goes out of it.
+    let mut said = column![];
     if missing {
-        layers.push(
+        said = said.push(
             container(
                 text("Set the Usage of Output nodes (Base Color, Normal, Height …) to see them here")
                     .size(style::SMALL)
                     .color(style::TEXT_DIM),
             )
-            .padding(8)
-            .into(),
+            .padding(8),
         );
     }
+    said = said.push(iced::widget::space().height(Length::Fill)).push(container(frames).padding([6, 8]).width(Length::Fill).align_right(Length::Fill));
+    layers.push(container(said).width(Length::Fill).height(Length::Fill).clip(true).into());
     container(iced::widget::stack(layers))
         .width(Length::Fill)
         .height(Length::Fill)
