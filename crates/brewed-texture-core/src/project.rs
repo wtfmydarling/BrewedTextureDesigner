@@ -1044,6 +1044,48 @@ mod tests {
         Ok(())
     }
 
+    /// Where two packages first differ, said (for a test that finds them not the same).
+    pub(crate) fn first_difference(a: &Package, b: &Package) -> String {
+        if a.resources != b.resources {
+            return format!("files:\n  {:?}\n  {:?}", a.resources, b.resources);
+        }
+        if a.extras != b.extras || a.other_entries != b.other_entries {
+            return "what other programs keep".into();
+        }
+        if a.graphs.len() != b.graphs.len() {
+            return format!("{} graphs and {}", a.graphs.len(), b.graphs.len());
+        }
+        for (x, y) in a.graphs.iter().zip(&b.graphs) {
+            if (x.id, &x.name) != (y.id, &y.name) {
+                return format!("graph {:?} {:?} and {:?} {:?}", x.id, x.name, y.id, y.name);
+            }
+            let (g, h) = (&*x.graph, &*y.graph);
+            let said = |what: &str, p: &dyn std::fmt::Debug, q: &dyn std::fmt::Debug| format!("in '{}', {what}:\n  {p:?}\n  {q:?}", x.name);
+            if g.nodes.len() != h.nodes.len() {
+                return said("nodes", &g.nodes.len(), &h.nodes.len());
+            }
+            if let Some((n, m)) = g.nodes.iter().zip(&h.nodes).find(|(n, m)| n != m) {
+                return said("a node", n, m);
+            }
+            if g.links != h.links {
+                return said("links", &g.links, &h.links);
+            }
+            if g.variables != h.variables {
+                return said("input values", &g.variables, &h.variables);
+            }
+            if g.comments != h.comments {
+                return said("comments", &g.comments, &h.comments);
+            }
+            if (g.resolution, g.precision, g.next_id) != (h.resolution, h.precision, h.next_id) {
+                return said("size, precision, next id", &(g.resolution, g.precision, g.next_id), &(h.resolution, h.precision, h.next_id));
+            }
+            if g != h {
+                return said("attributes or extras", &(&g.attributes, &g.extras), &(&h.attributes, &h.extras));
+            }
+        }
+        if a != b { "the id of the next graph".into() } else { "nothing".into() }
+    }
+
     /// Mangle the part `at` of a value (counted depth first), `how` says how: a number far
     /// out, or of another kind; a string odd; an array emptied, doubled or turned around; a
     /// field gone.
@@ -1168,6 +1210,9 @@ mod tests {
                     assert!(names.insert(g.name.clone()) && !g.name.trim().is_empty(), "file of round {round}: {:?}", g.name);
                     whole(&g.graph).unwrap_or_else(|e| panic!("file of round {round}: {e}"));
                 }
+                // What it was read as is what it is: written again and read back, the same.
+                let again = from_bytes(&to_bytes(p, &l.views, l.open, None).unwrap(), None).unwrap();
+                assert!(again.package == *p, "file of round {round}: read back otherwise once written again: {}", first_difference(p, &again.package));
             }
             if let Some(clip) = Clipboard::from_text(&format!("{}{c}", Clipboard::MAGIC)) {
                 let mut g = demo.clone();

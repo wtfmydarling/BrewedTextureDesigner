@@ -148,6 +148,13 @@ pub fn default_name(path: &str) -> String {
     })
 }
 
+/// A name as typed or as a file says it: without control characters, then without the spaces
+/// around it (in the other order, a name of a control character alone was none, kept so, and
+/// named anew when read back).
+fn plain_name(name: &str) -> String {
+    name.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string()
+}
+
 /// `name`, or, when one of `taken` is called so, the first of "name 2", "name 3"… that none
 /// is (the number before the extension: "bricks 2.png").
 fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
@@ -422,7 +429,7 @@ impl Package {
         }
         let mut names = HashSet::new();
         for entry in &mut self.graphs {
-            let mut name = entry.name.trim().to_string();
+            let mut name = plain_name(&entry.name);
             if name.is_empty() {
                 name = "Graph".into();
             }
@@ -477,8 +484,8 @@ impl Package {
         // Each file named, and its name its own (a file can say any, or none).
         let mut names = HashSet::new();
         for r in &mut self.resources {
-            let name = r.name.trim();
-            let name = if name.is_empty() { default_name(&r.path) } else { name.chars().filter(|c| !c.is_control()).collect() };
+            let name = plain_name(&r.name);
+            let name = if name.is_empty() { default_name(&r.path) } else { name };
             r.name = unique_name(&name, |n| names.contains(n));
             names.insert(r.name.clone());
         }
@@ -622,7 +629,7 @@ impl PackageEdit {
             }
             PackageEdit::RenameGraph { id, name } => {
                 let current = package.graph(id).ok_or("The graph no longer exists")?.name.clone();
-                let name = name.trim().to_string();
+                let name = plain_name(&name);
                 if name.is_empty() {
                     return Err("A graph needs a name".into());
                 }
@@ -637,7 +644,7 @@ impl PackageEdit {
             }
             PackageEdit::RenameResource { path, name } => {
                 let current = package.resources.iter().find(|r| r.path == path).ok_or("The file is not in the package any more")?.name.clone();
-                let name: String = name.trim().chars().filter(|c| !c.is_control()).collect();
+                let name = plain_name(&name);
                 if name.is_empty() {
                     return Err("A file needs a name".into());
                 }
@@ -2492,6 +2499,28 @@ mod tests {
         assert!(PackageEdit::Relink { from: "/new/stones.png".into(), to: held.clone() }.apply(&mut package).is_err());
         assert!(PackageEdit::Relocate(vec![("/other/stones.png".into(), held)]).apply(&mut package).is_err());
         assert_eq!(package, before);
+    }
+
+    /// Names typed or read from a file are kept plain: without control characters, then without
+    /// spaces around them; one of control characters alone is none (a file's named after its
+    /// file, a graph's "Graph"; read from a file, it was none, an empty line in the Explorer).
+    #[test]
+    fn names_are_kept_plain() {
+        let mut package = Package::new("A", Graph::default());
+        PackageEdit::AddResources(vec!["/t/b.ttf".into()]).apply(&mut package).unwrap();
+        let path = package.resources[0].path.clone();
+        assert!(PackageEdit::RenameResource { path: path.clone(), name: "\u{7}".into() }.apply(&mut package.clone()).is_err());
+        PackageEdit::RenameResource { path, name: "Bold \u{7}".into() }.apply(&mut package).unwrap();
+        assert_eq!(package.resources[0].name, "Bold");
+        let id = package.first();
+        assert!(PackageEdit::RenameGraph { id, name: " \u{0} ".into() }.apply(&mut package.clone()).is_err());
+        PackageEdit::RenameGraph { id, name: "Walls \u{0}".into() }.apply(&mut package).unwrap();
+        assert_eq!(package.graphs[0].name, "Walls");
+        // As a file says them.
+        package.resources[0].name = "\u{0}".into();
+        package.graphs[0].name = "\u{7}".into();
+        package.normalize();
+        assert_eq!((package.resources[0].name.as_str(), package.graphs[0].name.as_str()), ("b.ttf", "Graph"));
     }
 
     /// A batch of edits of a package is all of them or none.
