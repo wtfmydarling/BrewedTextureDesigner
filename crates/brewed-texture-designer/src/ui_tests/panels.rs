@@ -243,3 +243,144 @@ fn long_names_in_the_explorer_are_shortened_in_their_middle() {
     w.input(&[]);
     assert_eq!(shown(&mut w), [long.to_string(), format!("{long} 2")]);
 }
+
+/// Where in `area` a click asks for what `wanted` says, looked for every few pixels as a hand
+/// finds a button by its look (what the clicks ask for is not done).
+fn find_click(w: &mut Harness, area: iced::Rectangle, wanted: impl Fn(&Message) -> bool) -> Option<Point> {
+    let mut y = area.y;
+    while y < area.y + area.height {
+        let mut x = area.x;
+        while x < area.x + area.width {
+            let at = Point::new(x, y);
+            w.cursor = mouse::Cursor::Available(at);
+            let asked = w.produced(&[
+                iced::Event::Mouse(mouse::Event::CursorMoved { position: at }),
+                iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            ]);
+            if asked.iter().any(&wanted) {
+                return Some(at);
+            }
+            x += 4.0;
+        }
+        y += 4.0;
+    }
+    None
+}
+
+/// The value a message sets the parameter `key` of a node to.
+fn set_to(m: &Message, key: &str) -> Option<ParamValue> {
+    match m {
+        Message::Edit(Edit::SetParam { key: k, value, .. }) if k == key => Some(value.clone()),
+        Message::SetGradient(_, k, g, _) if k == key => Some(ParamValue::Gradient(g.clone())),
+        Message::Step(inner) => set_to(inner, key),
+        _ => None,
+    }
+}
+
+/// The buttons of a gradient (Reverse, Spread the stops evenly, remove the stop) and of a curve
+/// (upside down, straight) are each a step of their own: pressed one after the other, an undo
+/// takes back only the last (it took back every press of the last second and a half).
+#[test]
+fn the_buttons_of_a_gradient_and_a_curve_are_steps_of_their_own() {
+    use brewed_texture_core::{Curve, GradientStop};
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    // (The buttons are on the right, on the row of the parameter or under it: its name, with a
+    // star once it is changed, the lowest of the texts that say it: the node's name is above.)
+    let right = |w: &mut Harness, label: &str| {
+        let edge = w.size.width - 400.0;
+        let starred = format!("{label}*");
+        let rows = texts_where(w, |t| t == label || t == starred);
+        let row = rows.into_iter().filter(|(_, r)| r.x > edge).map(|(_, r)| r.y).fold(f32::NEG_INFINITY, f32::max);
+        assert!(row.is_finite(), "the row of {label}");
+        iced::Rectangle::new(Point::new(w.size.width - 120.0, row - 8.0), Size::new(120.0, 240.0))
+    };
+    // A Gradient Map whose stops are not evenly spread, and one of them selected.
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::GRADIENT_MAP, pos: [-400.0, 900.0] }));
+    let id = w.app.graph().nodes_of(NodeKind::GRADIENT_MAP).map(|n| n.id).max().expect("the node");
+    let gradient = |w: &Harness| w.app.graph().node(id).and_then(|n| n.value("gradient")).and_then(ParamValue::as_gradient).cloned().unwrap();
+    let mut uneven = gradient(&w);
+    uneven.stops = [(0.0, 0.1), (0.2, 0.5), (1.0, 0.9)].map(|(pos, v)| GradientStop { pos, color: [v, v, v, 1.0] }).to_vec();
+    w.send(Message::Edit(Edit::SetParam { node: id, key: "gradient".into(), value: ParamValue::Gradient(uneven.clone()) }));
+    w.send(Message::Seal);
+    w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+    w.send(Message::GradientStop(id, "gradient".into(), 1));
+    draw_frame(&mut w, std::time::Instant::now());
+    // The buttons, found by what each does to the gradient as it is.
+    let mut without = uneven.clone();
+    without.stops.remove(1);
+    let mut find = |made: brewed_texture_core::Gradient| {
+        let area = right(&mut w, "Gradient");
+        find_click(&mut w, area, |m| set_to(m, "gradient") == Some(ParamValue::Gradient(made.clone()))).expect("the button")
+    };
+    let (reverse, spread, remove) = (find(uneven.reversed()), find(uneven.distributed()), find(without));
+    // Pressed one after the other, at once: reversed, spread, the stop removed.
+    let reversed = uneven.reversed();
+    let spread_out = reversed.distributed();
+    let mut removed = spread_out.clone();
+    removed.stops.remove(1);
+    for (at, made) in [(reverse, &reversed), (spread, &spread_out), (remove, &removed)] {
+        click(&mut w, at);
+        assert_eq!(gradient(&w), *made);
+    }
+    // Each undone on its own.
+    w.send(Message::Undo);
+    assert_eq!(gradient(&w), spread_out, "the stop back");
+    w.send(Message::Undo);
+    assert_eq!(gradient(&w), reversed, "spread no more");
+    w.send(Message::Undo);
+    assert_eq!(gradient(&w), uneven, "reversed no more");
+
+    // A Curve: upside down, then straight again; each undone on its own.
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::CURVE, pos: [-400.0, 1200.0] }));
+    w.send(Message::Seal);
+    let node = w.app.graph().nodes_of(NodeKind::CURVE).map(|n| n.id).max().expect("the curve");
+    w.send(Message::Graph(GraphMessage::Select { node, mode: SelectMode::Replace }));
+    draw_frame(&mut w, std::time::Instant::now());
+    let curve = |w: &Harness| w.app.graph().node(node).and_then(|n| n.value("curve")).and_then(|v| v.as_curve()).cloned().unwrap();
+    let straight = curve(&w);
+    let mut find = |made: Curve| {
+        let area = right(&mut w, "Curve");
+        find_click(&mut w, area, |m| set_to(m, "curve") == Some(ParamValue::Curve(made.clone()))).expect("the button")
+    };
+    let (invert, reset) = (find(straight.inverted()), find(Curve::default()));
+    click(&mut w, invert);
+    assert_eq!(curve(&w), straight.inverted());
+    click(&mut w, reset);
+    assert_eq!(curve(&w), Curve::default());
+    w.send(Message::Undo);
+    assert_eq!(curve(&w), straight.inverted(), "straight no more");
+    w.send(Message::Undo);
+    assert_eq!(curve(&w), straight, "upside down no more");
+}
+
+/// A parameter put back by a middle click on its row is a step of its own: a drag of it right
+/// after is another (the drag was one step with it, and its undo took the value back to before
+/// the middle click).
+#[test]
+fn a_parameter_put_back_by_a_middle_click_is_a_step_of_its_own() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [-400.0, 900.0] }));
+    w.send(Message::Seal);
+    let id = w.app.graph().nodes_of(NodeKind::BLUR).map(|n| n.id).max().expect("the blur");
+    let radius = |w: &Harness| w.app.graph().node(id).and_then(|n| n.value("radius")).cloned();
+    let drag_to = |w: &mut Harness, v: f32| {
+        // (As its field sends it while it is dragged, and then seals it.)
+        w.send(Message::Edit(Edit::SetParam { node: id, key: "radius".into(), value: ParamValue::Float(v) }));
+        w.send(Message::Seal);
+    };
+    drag_to(&mut w, 20.0);
+    w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+    draw_frame(&mut w, std::time::Instant::now());
+    // (Its name has a star: it is changed.)
+    let row = *texts(&mut w, "Radius*").iter().rfind(|r| r.x > 1300.0).expect("the row of the radius");
+    middle_click(&mut w, row.center());
+    assert_eq!(radius(&w), Some(ParamValue::Float(8.0)), "the default back");
+    // Dragged again at once: one undo takes the drag back, not the middle click.
+    w.send(Message::Edit(Edit::SetParam { node: id, key: "radius".into(), value: ParamValue::Float(30.0) }));
+    w.send(Message::Seal);
+    w.send(Message::Undo);
+    assert_eq!(radius(&w), Some(ParamValue::Float(8.0)), "the drag undone, the default left");
+    w.send(Message::Undo);
+    assert_eq!(radius(&w), Some(ParamValue::Float(20.0)), "the middle click undone");
+}

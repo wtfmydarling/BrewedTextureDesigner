@@ -2047,7 +2047,7 @@ fn stays_inside(message: &Message) -> bool {
                 | ExplorerMessage::Locate(..)
                 | ExplorerMessage::CollectFiles(_),
         ) => false,
-        Message::FromMenu(inner) => stays_inside(inner),
+        Message::FromMenu(inner) | Message::Step(inner) => stays_inside(inner),
         _ => true,
     }
 }

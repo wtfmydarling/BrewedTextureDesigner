@@ -53,6 +53,11 @@ fn set(node: NodeId, key: &str, value: ParamValue) -> Message {
     Message::Edit(Edit::SetParam { node, key: key.to_string(), value })
 }
 
+/// What a button does: a step of its own in the history (the presses of a second were one).
+fn step(message: Message) -> Message {
+    Message::Step(Box::new(message))
+}
+
 pub fn view(app: &App) -> Element<'_, Message> {
     let header = crate::view::pane_header("Properties", space());
     // The names of the rows as wide as the panel has room for.
@@ -390,7 +395,7 @@ fn node_view(app: &App, id: NodeId, label_w: f32) -> Element<'_, Message> {
             .filter(|k| !node.is_exposed(k))
             .map(|k| Edit::SetParam { node: id, key: k.to_string(), value: d.param(k).expect("transform param").default_value() })
             .collect::<Vec<_>>();
-        col = col.push(button(text("Reset transform").size(style::SMALL)).padding([4, 10]).style(style::button).on_press(Message::Edits(reset)));
+        col = col.push(button(text("Reset transform").size(style::SMALL)).padding([4, 10]).style(style::button).on_press(step(Message::Edits(reset))));
     }
     // The lights of a panorama are placed by their points in the 2D view.
     let hint = if node.kind == NodeKind::HDRI_GRADIENT {
@@ -660,7 +665,7 @@ Changed — middle-click the row to put {} back", pd.tooltip, shown(&pd, &defaul
     // a value that is already there changes nothing.
     let row = container(col).padding([3, 4]).width(Length::Fill).style(style::stripe(index.is_multiple_of(2)));
     let back = Edit::SetParam { node: id, key: pd.key.to_string(), value: default };
-    mouse_area(row).on_middle_press(Message::Edits(vec![back])).into()
+    mouse_area(row).on_middle_press(step(Message::Edits(vec![back]))).into()
 }
 
 fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamValue) -> Element<'a, Message> {
@@ -755,12 +760,12 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
         (ParamKind::Curve { .. }, ParamValue::Curve(c)) => row![
             space().width(Length::Fill),
             tip(
-                button(icon(Icon::Reverse, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(set(id, key, ParamValue::Curve(c.inverted()))),
+                button(icon(Icon::Reverse, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(set(id, key, ParamValue::Curve(c.inverted())))),
                 "Upside down: dark for light",
                 tooltip::Position::Top,
             ),
             tip(
-                button(icon(Icon::Reset, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(set(id, key, ParamValue::Curve(Curve::default()))),
+                button(icon(Icon::Reset, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(set(id, key, ParamValue::Curve(Curve::default())))),
                 "Straight: every value as it is",
                 tooltip::Position::Top,
             ),
@@ -804,12 +809,12 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'a str, g: &'a Gradien
         ),
         space().width(Length::Fill),
         tip(
-            button(icon(Icon::Reverse, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(set(id, key, ParamValue::Gradient(g.reversed()))),
+            button(icon(Icon::Reverse, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(set(id, key, ParamValue::Gradient(g.reversed())))),
             "Reverse",
             tooltip::Position::Top,
         ),
         tip(
-            button(icon(Icon::Distribute, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(set(id, key, ParamValue::Gradient(g.distributed()))),
+            button(icon(Icon::Distribute, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(set(id, key, ParamValue::Gradient(g.distributed())))),
             "Spread the stops evenly",
             tooltip::Position::Top,
         ),
@@ -850,7 +855,7 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'a str, g: &'a Gradien
                         .padding(4)
                         .style(style::button)
                         .on_press_maybe(removable.then(|| {
-                            Message::SetGradient(id, key.to_string(), removed.clone(), Some(i.saturating_sub(1)))
+                            step(Message::SetGradient(id, key.to_string(), removed.clone(), Some(i.saturating_sub(1))))
                         })),
                     "Remove the stop (or drag it down, off the ramp)",
                     tooltip::Position::Top,

@@ -789,6 +789,9 @@ pub enum Message {
     // document
     Edit(Edit),
     Edits(Vec<Edit>),
+    /// What the message does, as a step of its own in the history (a button pressed): not with
+    /// the edits of the same thing just before it, nor with those after it.
+    Step(Box<Message>),
     Seal,
     Undo,
     Redo,
@@ -2501,6 +2504,12 @@ impl App {
             Message::FromMenu(inner) => {
                 self.close_popups();
                 return self.handle(*inner);
+            }
+            Message::Step(inner) => {
+                self.doc.seal();
+                let task = self.handle(*inner);
+                self.doc.seal();
+                return task;
             }
             Message::Menu(m) => {
                 self.ui.context = None;
