@@ -303,7 +303,8 @@ fn the_home_screen_shows_whole() {
         let Some(mut w) = Harness::started(Box::new(view::root), Size::new(width, height), opts) else { return };
         for page in [HomePage::Home, HomePage::Learn] {
             w.send(Message::Home(HomeMessage::Show(page)));
-            for line in cut_short(&mut w) {
+            // (Nor squeezed, nor run into one another.)
+            for line in cut_short(&mut w).into_iter().chain(squeezed(&mut w)).chain(overlapping(&mut w)) {
                 found.push(format!("{width}×{height}, {page:?}: {line}"));
             }
         }
@@ -519,4 +520,123 @@ fn texts_over_one_another_are_seen_and_scrolled_ones_are_not() {
     });
     let mut w = Harness::new(scrolled, Size::new(400.0, 300.0)).expect("a renderer, as before");
     assert!(overlapping(&mut w).is_empty(), "{:?}", overlapping(&mut w));
+}
+
+/// The texts of each dialog, in the smallest window, do not lie over one another (the dialog
+/// alone is looked at: over the window, it covers it as it is meant to).
+#[test]
+fn the_texts_of_dialogs_do_not_overlap() {
+    let alone: View = Box::new(|app: &App| match &app.ui.dialog {
+        Some(dialog) => view::dialogs::view(app, dialog),
+        None => iced::widget::space().into(),
+    });
+    let mut w = match Harness::new(alone, Size::new(1000.0, 640.0)) {
+        Some(w) => w,
+        None => return,
+    };
+    let mut found = Vec::new();
+    let mut look = |w: &mut Harness, name: &str| found.extend(overlapping(w).into_iter().map(|line| format!("{name}: {line}")));
+    w.send(Message::Settings(SettingsMessage::Open));
+    assert!(!texts(&mut w, "Reset Page to Defaults").is_empty(), "the dialog itself is looked at");
+    for page in crate::settings::Page::ALL {
+        w.send(Message::Settings(SettingsMessage::OpenPage(page)));
+        look(&mut w, &format!("Settings, {}", page.name()));
+    }
+    w.send(Message::Settings(SettingsMessage::Cancel));
+    w.send(Message::NewGraph(NewGraphMessage::Open(None)));
+    look(&mut w, "New Graph");
+    w.send(Message::Dialog(None));
+    w.send(Message::Export(crate::app::export_dialog::ExportMessage::Open));
+    look(&mut w, "Export");
+    w.send(Message::Dialog(None));
+    for (dialog, name) in [
+        (Dialog::Shortcuts, "Shortcuts"),
+        (Dialog::About, "About"),
+        (Dialog::Notices(Default::default()), "Third-Party Notices"),
+        (Dialog::Unsaved(PendingAction::Quit), "Unsaved changes"),
+    ] {
+        w.send(Message::Dialog(Some(dialog)));
+        look(&mut w, name);
+        w.send(Message::Dialog(None));
+    }
+    assert!(found.is_empty(), "over one another:\n{}", found.join("\n"));
+}
+
+/// The Home screen with as many packages opened last as it keeps, of long names in deep folders,
+/// as tiles and as a list, at every size of the window: nothing cut short, squeezed, or run into
+/// something else.
+#[test]
+fn the_home_screen_shows_long_names_whole() {
+    let mut found = Vec::new();
+    let recent: Vec<String> = (0..crate::workspace::RECENT_KEPT)
+        .map(|i| {
+            format!(
+                "C:/Users/somebody/Documents/Projects/A Folder Of Quite A Long Name/Materials Number {i}/Weathered Copper Roof Tiles With Moss And Lichen {i}.brewtex"
+            )
+        })
+        .collect();
+    for (width, height) in WINDOWS {
+        let opts = StartupOptions { home: true, ..StartupOptions::default() };
+        let Some(mut w) = Harness::started(Box::new(view::root), Size::new(width, height), opts) else { return };
+        w.app.ui.recent = recent.clone();
+        for layout in [home_screen::Layout::Grid, home_screen::Layout::List] {
+            w.send(Message::Home(HomeMessage::Show(HomePage::Home)));
+            w.send(Message::Home(HomeMessage::Screen(home_screen::Event::Layout(layout))));
+            w.snapshot(&format!("home_long_{width}_{layout:?}"));
+            for line in cut_short(&mut w).into_iter().chain(squeezed(&mut w)).chain(overlapping(&mut w)) {
+                found.push(format!("{width}×{height}, {layout:?}: {line}"));
+            }
+        }
+    }
+    assert!(found.is_empty(), "not shown whole:\n{}", found.join("\n"));
+}
+
+/// Every split of the window pushed as far as it goes each way, the others where they were, a
+/// node selected (and its input value open): nothing cut short, squeezed into a column a word a
+/// line, or run into something else, in whatever room each panel is left.
+#[test]
+fn every_panel_shows_whole_at_either_end_of_its_splits() {
+    use iced::widget::pane_grid;
+    let mut found = Vec::new();
+    // What is selected: a node (its input value open), a Math node, a comment, every node.
+    for (width, height, what) in [(1000.0, 640.0, 0), (1680.0, 1000.0, 0), (1000.0, 640.0, 1), (1000.0, 640.0, 2), (1000.0, 640.0, 3)] {
+        let mut w = harness!(view::root, width, height);
+        match what {
+            0 => {
+                let levels = first(&w, NodeKind::LEVELS);
+                w.send(Message::Graph(GraphMessage::Select { node: levels, mode: SelectMode::Replace }));
+                w.send(Message::ToggleVariable("mortar".into()));
+            }
+            1 => {
+                w.send(Message::Edit(Edit::AddNode { kind: NodeKind::MATH, pos: [2600.0, -900.0] }));
+                let math = first(&w, NodeKind::MATH);
+                w.send(Message::Graph(GraphMessage::Select { node: math, mode: SelectMode::Replace }));
+            }
+            2 => {
+                let comment = w.app.graph().comments.first().map(|c| c.id).expect("a comment");
+                w.send(Message::Graph(GraphMessage::SelectComment(comment)));
+            }
+            _ => w.send(Message::SelectAll),
+        }
+        let before = cut_short(&mut w);
+        let start = crate::app::splits_of(&w.app.ui.panes);
+        let count = w.app.ui.panes.layout().splits().count();
+        let mut narrowest = f32::INFINITY;
+        for i in 0..count {
+            for ratio in [0.0, 1.0] {
+                w.app.ui.panes = crate::app::panes(&start);
+                w.app.fit_columns();
+                let split = *w.app.ui.panes.layout().splits().nth(i).expect("the split");
+                w.send(Message::PaneResized(pane_grid::ResizeEvent { split, ratio }));
+                let panes: Vec<crate::app::Pane> = w.app.ui.panes.iter().map(|(_, p)| *p).collect();
+                narrowest = panes.iter().map(|p| view::pane_width(&w.app, *p)).fold(narrowest, f32::min);
+                draw_frame(&mut w, std::time::Instant::now());
+                let state = format!("{width}×{height}, a split at {ratio}");
+                newly_cut(&mut w, &before, &state, &mut found);
+                found.extend(overlapping(&mut w).into_iter().map(|line| format!("{state}: {line}")));
+            }
+        }
+        assert!(narrowest < 200.0, "the splits pushed to their ends: a panel {narrowest} wide at the least");
+    }
+    assert!(found.is_empty(), "not shown whole:\n{}", found.join("\n"));
 }

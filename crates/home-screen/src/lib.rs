@@ -262,6 +262,55 @@ fn tail_of(path: &str, width: f32, size: f32, font: iced::Font) -> String {
     });
     tail
 }
+
+/// As much of `content` as fits `width` at `size` in `font`: whole, or its beginning and its end
+/// with "…" between them (names told apart by their ends, "Bricks 2" and "Bricks 3", stay so; cut
+/// at the edge, they read the same). Each worked out once.
+fn middle_of(content: &str, width: f32, size: f32, font: iced::Font) -> String {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    type Middles = HashMap<(String, u32, u32, iced::Font), String>;
+    thread_local! {
+        static MIDDLES: RefCell<Middles> = RefCell::new(HashMap::new());
+    }
+    let key = (content.to_owned(), width.to_bits(), size.to_bits(), font);
+    if let Some(middle) = MIDDLES.with_borrow(|t| t.get(&key).cloned()) {
+        return middle;
+    }
+    let fits = |s: &str| measure(s, size, font) <= width;
+    let middle = if fits(content) {
+        content.to_owned()
+    } else {
+        let chars: Vec<char> = content.chars().collect();
+        let cut = |kept: usize| -> String {
+            let (head, tail) = (kept - kept / 2, kept / 2);
+            chars[..head].iter().chain(['…'].iter()).chain(&chars[chars.len() - tail..]).collect()
+        };
+        // The most characters kept that fit (none: the "…" alone).
+        let (mut lo, mut hi) = (0, chars.len());
+        while lo + 1 < hi {
+            let kept = (lo + hi) / 2;
+            if fits(&cut(kept)) { lo = kept } else { hi = kept }
+        }
+        cut(lo)
+    };
+    MIDDLES.with_borrow_mut(|t| {
+        if t.len() > 512 {
+            t.clear();
+        }
+        t.insert(key, middle.clone());
+    });
+    middle
+}
+
+/// A line of `content` at `size` in `font` and `color`, as wide as its room and made to fit it by
+/// `fit` (what is kept of it in so many pixels).
+fn fitted<'a, E: 'a>(content: String, size: f32, font: iced::Font, color: iced::Color, fit: fn(&str, f32, f32, iced::Font) -> String) -> Element<'a, E> {
+    iced::widget::responsive(move |room| text(fit(&content, room.width, size, font)).size(size).font(font).color(color).wrapping(text::Wrapping::None).into())
+        .height(Length::Shrink)
+        .into()
+}
+
 /// The pictures of the lessons, and of the rows of the list.
 const LESSON: [f32; 2] = [180.0, 112.0];
 const THUMB: f32 = 64.0;
@@ -538,7 +587,9 @@ fn card<'a>(recent: &'a Recent, style: Style) -> Element<'a, Event> {
     let body = column![
         container(picture).style(style.frame()).clip(true),
         space().height(4),
-        text(recent.name.as_str()).size(style.text_size).font(style.semibold()).wrapping(text::Wrapping::None),
+        // (Shortened in its middle where it is longer than the picture: cut at its edge, names of
+        // files that differ at their ends read the same.)
+        text(middle_of(&recent.name, PICTURE, style.text_size, style.semibold())).size(style.text_size).font(style.semibold()).wrapping(text::Wrapping::None),
         // The end of the folder (where it differs from the others), its start given as "…".
         text(tail_of(&recent.folder, PICTURE, style.small_size, style.font)).size(style.small_size).color(style.faint).wrapping(text::Wrapping::None),
         text(said).size(style.small_size).color(if recent.there { style.dim } else { style.warning }),
@@ -552,17 +603,50 @@ fn card<'a>(recent: &'a Recent, style: Style) -> Element<'a, Event> {
     tooltip(tile, container(text(recent.path.as_str()).size(style.small_size)).padding(6).style(style.tooltip()), tooltip::Position::Bottom).into()
 }
 
-/// The files opened last as a list, with a heading of each column to sort by.
+/// The files opened last as a list, with a heading of each column to sort by: the columns there
+/// is room for (see [`list_in`]).
 fn list<'a>(recent: Vec<&'a Recent>, sort: Sort, time: fn(SystemTime) -> String, style: Style) -> Element<'a, Event> {
-    let widths = [Length::FillPortion(4), Length::Fixed(160.0), Length::Fixed(160.0), Length::Fixed(80.0), Length::FillPortion(4)];
-    let columns = [(Column::Name, "Name"), (Column::Opened, "Opened"), (Column::Modified, "Modified"), (Column::Size, "Size"), (Column::Location, "Location")];
+    iced::widget::responsive(move |room| list_in(&recent, sort, time, style, room.width)).height(Length::Shrink).into()
+}
+
+/// How much room the name of a file keeps at the least before columns give way to it: when it was
+/// changed, then its size (in a narrow window, the dates and the size took all but 70 pixels of
+/// the room the name and its folder share).
+const NAME_ROOM: f32 = 180.0;
+
+/// [`list`] in `room` pixels.
+fn list_in<'a>(recent: &[&'a Recent], sort: Sort, time: fn(SystemTime) -> String, style: Style, room: f32) -> Element<'a, Event> {
+    let width = |column: Column| match column {
+        Column::Name | Column::Location => Length::FillPortion(4),
+        Column::Opened | Column::Modified => Length::Fixed(160.0),
+        Column::Size => Length::Fixed(80.0),
+    };
+    let fixed = |column: Column| match width(column) {
+        Length::Fixed(w) => w,
+        _ => 0.0,
+    };
+    let mut shown = vec![Column::Name, Column::Opened, Column::Modified, Column::Size, Column::Location];
+    for gives_way in [Column::Size, Column::Modified] {
+        // (The thumbnail, the rows' padding and the gaps between the columns.)
+        let taken = THUMB + 16.0 + 10.0 * shown.len() as f32 + shown.iter().map(|c| fixed(*c)).sum::<f32>();
+        if (room - taken) / 2.0 < NAME_ROOM {
+            shown.retain(|c| *c != gives_way);
+        }
+    }
+    let label = |column: Column| match column {
+        Column::Name => "Name",
+        Column::Opened => "Opened",
+        Column::Modified => "Modified",
+        Column::Size => "Size",
+        Column::Location => "Location",
+    };
     let mut heads = row![space().width(Length::Fixed(THUMB))].spacing(10).align_y(Alignment::Center);
-    for ((column, label), width) in columns.into_iter().zip(widths) {
-        let mut said = row![text(label).size(style.small_size).font(style.semibold())].spacing(2).align_y(Alignment::Center);
-        if sort.by == column {
+    for column in &shown {
+        let mut said = row![text(label(*column)).size(style.small_size).font(style.semibold())].spacing(2).align_y(Alignment::Center);
+        if sort.by == *column {
             said = said.push(glyph(if sort.descending { Glyph::SortDown } else { Glyph::SortUp }, 13.0, style.text));
         }
-        heads = heads.push(button(said).width(width).padding([3, 0]).style(style.flat()).on_press(Event::Sort(column)));
+        heads = heads.push(button(said).width(width(*column)).padding([3, 0]).style(style.flat()).on_press(Event::Sort(*column)));
     }
     let mut rows = column![container(heads).padding([2, 8]), line(style)].spacing(2);
     for r in recent {
@@ -570,18 +654,24 @@ fn list<'a>(recent: Vec<&'a Recent>, sort: Sort, time: fn(SystemTime) -> String,
             Some(handle) => image(handle.clone()).width(Length::Fixed(THUMB)).height(Length::Fixed(THUMB)).content_fit(ContentFit::Cover).into(),
             None => container(glyph(Glyph::File, 26.0, style.faint)).center(Length::Fixed(THUMB)).into(),
         };
-        let cell = |said: String, width: Length| text(said).size(style.small_size).color(style.dim).width(width).wrapping(text::Wrapping::None);
-        let name = text(r.name.as_str()).size(style.text_size).width(widths[0]).wrapping(text::Wrapping::None);
-        let cells = row![
-            container(thumb).style(style.frame()).clip(true),
-            name,
-            cell(r.opened.map(time).unwrap_or_default(), widths[1]),
-            cell(if r.there { r.modified.map(time).unwrap_or_default() } else { "Not found".into() }, widths[2]),
-            cell(r.size.map(size_said).unwrap_or_default(), widths[3]),
-            cell(r.folder.clone(), widths[4]),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center);
+        let cell = |said: String, column: Column| -> Element<'a, Event> {
+            text(said).size(style.small_size).color(style.dim).width(width(column)).wrapping(text::Wrapping::None).into()
+        };
+        let mut cells = row![container(thumb).style(style.frame()).clip(true)].spacing(10).align_y(Alignment::Center);
+        for column in &shown {
+            cells = cells.push(match column {
+                // (The name shortened in its middle, the folder by its end, to the width of their
+                // column: cut at its edge, the folder showed only where all the others start.)
+                Column::Name => container(fitted(r.name.clone(), style.text_size, style.font, style.text, middle_of)).width(width(*column)).into(),
+                // (A file not there says so where it is said when it was opened, when the column
+                // that says it, Modified, gave way.)
+                Column::Opened if !r.there && !shown.contains(&Column::Modified) => cell("Not found".into(), *column),
+                Column::Opened => cell(r.opened.map(time).unwrap_or_default(), *column),
+                Column::Modified => cell(if r.there { r.modified.map(time).unwrap_or_default() } else { "Not found".into() }, *column),
+                Column::Size => cell(r.size.map(size_said).unwrap_or_default(), *column),
+                Column::Location => container(fitted(r.folder.clone(), style.small_size, style.font, style.dim, tail_of)).width(width(*column)).into(),
+            });
+        }
         rows = rows.push(
             button(container(cells).clip(true))
                 .width(Length::Fill)
@@ -682,6 +772,20 @@ mod tests {
         let tail = tail_of(one, PICTURE, 12.0, font);
         assert!(tail.starts_with('…') && one.ends_with(&tail["…".len()..]) && measure(&tail, 12.0, font) <= PICTURE, "{tail}");
         assert_eq!(tail_of("/home/me", PICTURE, 12.0, font), "/home/me");
+    }
+
+    /// A long name of a file is shown by its beginning and its end, "…" between them, as much of
+    /// each as fits: names that differ at their ends stay told apart; a short one whole.
+    #[test]
+    fn long_names_are_shortened_in_their_middle() {
+        let font = iced::Font::DEFAULT;
+        let [two, three] = ["Weathered Copper Roof Tiles With Moss 2", "Weathered Copper Roof Tiles With Moss 3"].map(|n| middle_of(n, PICTURE, 13.0, font));
+        for (name, end) in [(&two, " 2"), (&three, " 3")] {
+            assert!(name.starts_with("Weathered") && name.contains('…') && name.ends_with(end), "{name}");
+            assert!(measure(name, 13.0, font) <= PICTURE, "{name} fits");
+        }
+        assert_ne!(two, three, "told apart");
+        assert_eq!(middle_of("Bricks", PICTURE, 13.0, font), "Bricks");
     }
 
     /// The files opened last are the latest first; a column sorts them, again the other way.
