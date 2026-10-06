@@ -728,4 +728,187 @@ mod tests {
         pull(&mut app, Grip::Size { x: 0, y: 1 }, Vector::new(0.0, -30.0), false);
         assert!(v2(&app, panel, "size")[1] > 0.55, "{:?}", v2(&app, panel, "size"));
     }
+
+    /// Events fed to the 2D view at `bounds`, showing an image of `image` pixels, the cursor where
+    /// each says; what they publish is applied to the app.
+    fn feed(app: &mut App, state: &mut State, bounds: Rectangle, image: [u32; 2], events: &[(iced::Event, Point)]) {
+        for (event, at) in events {
+            let overlay = Overlay { app: &*app, image: Some(image) };
+            let action = canvas::Program::update(&overlay, state, event, bounds, mouse::Cursor::Available(*at));
+            if let Some(m) = action.and_then(|a| a.into_inner().0) {
+                let _ = app.update(m);
+            }
+        }
+    }
+
+    fn moved(at: Point) -> (iced::Event, Point) {
+        (iced::Event::Mouse(mouse::Event::CursorMoved { position: at }), at)
+    }
+
+    fn button(at: Point, button: mouse::Button, down: bool) -> (iced::Event, Point) {
+        let event = if down { mouse::Event::ButtonPressed(button) } else { mouse::Event::ButtonReleased(button) };
+        (iced::Event::Mouse(event), at)
+    }
+
+    /// The 2D view moves as a hand moves it: it first fits the image in itself; the wheel zooms
+    /// about the cursor, the point of the image under it staying under it, no nearer nor farther
+    /// than the view goes; a drag with any button pans it by as much as the mouse moved; a
+    /// double click fits the image again; and the pixel under the cursor is the one asked about,
+    /// in whichever copy of the image it is over.
+    #[test]
+    fn the_2d_view_is_zoomed_panned_and_fitted_by_the_mouse() {
+        use crate::app::StartupOptions;
+        let (mut app, _) = App::boot(StartupOptions::default());
+        let _ = app.update(Message::Edit(Edit::AddNode { kind: NodeKind::TRANSFORM_2D, pos: [0.0, 0.0] }));
+        let shown = app.graph().nodes_of(NodeKind::TRANSFORM_2D).last().expect("the node").id;
+        app.ui.preview.node = Some(shown);
+        // (Its gizmo is not where the mouse is in this test: it is moved out of the way.)
+        let _ = app.update(Message::Edit(Edit::SetParam { node: shown, key: "offset".into(), value: ParamValue::Vec2([-3.0, -3.0]) }));
+        let (bounds, image) = (Rectangle::new(Point::new(300.0, 80.0), Size::new(800.0, 600.0)), [1024, 512]);
+        let mut state = State::default();
+        let middle = Point::new(bounds.x + 400.0, bounds.y + 300.0);
+        feed(&mut app, &mut state, bounds, image, &[moved(middle), moved(middle)]);
+        let fitted = (776.0 / 1024.0, Vector::ZERO);
+        let p = &app.ui.preview;
+        assert!(!p.fit && ((p.zoom, p.pan) == fitted), "the image fitted, as wide as the view less 12 pixels a side: {} {:?}", p.zoom, p.pan);
+
+        // Where a point of the window is in the image, in its pixels.
+        let in_image = |app: &App, at: Point| {
+            let p = &app.ui.preview;
+            let rect = image_rect(bounds.size(), image, p.zoom, p.pan);
+            [(at.x - bounds.x - rect.x) / p.zoom, (at.y - bounds.y - rect.y) / p.zoom]
+        };
+        let wheel = |y: f32, at: Point| (iced::Event::Mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y } }), at);
+        let at = Point::new(bounds.x + 150.0, bounds.y + 420.0);
+        let under = in_image(&app, at);
+        for turn in [1.0, 1.0, 3.0, -2.0, -4.5] {
+            let zoom = app.ui.preview.zoom;
+            feed(&mut app, &mut state, bounds, image, &[wheel(turn, at)]);
+            assert!((app.ui.preview.zoom > zoom) == (turn > 0.0), "a turn up zooms in");
+            let now = in_image(&app, at);
+            assert!((now[0] - under[0]).abs() < 0.01 && (now[1] - under[1]).abs() < 0.01, "{now:?} is still {under:?}");
+        }
+        // As near as it goes, and as far: the point under the cursor stays all the same.
+        feed(&mut app, &mut state, bounds, image, &[wheel(40.0, at), wheel(40.0, at), wheel(40.0, at)]);
+        assert_eq!(app.ui.preview.zoom, 64.0);
+        feed(&mut app, &mut state, bounds, image, &[wheel(-90.0, at), wheel(-90.0, at), wheel(-90.0, at)]);
+        assert_eq!(app.ui.preview.zoom, 0.02);
+        let now = in_image(&app, at);
+        assert!((now[0] - under[0]).abs() < 0.05 && (now[1] - under[1]).abs() < 0.05, "{now:?} is still {under:?}");
+
+        // A drag with any button pans by as much as the mouse moved.
+        for b in [mouse::Button::Left, mouse::Button::Middle, mouse::Button::Right] {
+            let pan = app.ui.preview.pan;
+            let (from, to) = (Point::new(bounds.x + 500.0, bounds.y + 200.0), Point::new(bounds.x + 530.0, bounds.y + 180.0));
+            // (A press long after the one before: not a double click.)
+            state.last_click = None;
+            let events = [moved(from), button(from, b, true), moved(Point::new(from.x + 10.0, from.y)), moved(to), button(to, b, false)];
+            feed(&mut app, &mut state, bounds, image, &events);
+            assert_eq!(app.ui.preview.pan - pan, Vector::new(30.0, -20.0), "{b:?} pans");
+        }
+        // The mouse moved after the drag pans no more.
+        let pan = app.ui.preview.pan;
+        feed(&mut app, &mut state, bounds, image, &[moved(Point::new(bounds.x + 100.0, bounds.y + 100.0))]);
+        assert_eq!(app.ui.preview.pan, pan);
+
+        // A double click fits the image again, as the button does.
+        let click = [button(middle, mouse::Button::Left, true), button(middle, mouse::Button::Left, false)];
+        feed(&mut app, &mut state, bounds, image, &click);
+        feed(&mut app, &mut state, bounds, image, &[click[0].clone(), click[1].clone(), moved(middle)]);
+        let p = &app.ui.preview;
+        assert!(!p.fit && (p.zoom, p.pan) == fitted, "fitted again: {} {:?}", p.zoom, p.pan);
+
+        // The pixel under the cursor; past the image's edge, none, or the pixel of the copy there
+        // when the view shows the copies (the node tiles both ways).
+        let (zoom, rect) = (p.zoom, image_rect(bounds.size(), image, p.zoom, p.pan));
+        let pixel = |x: f32, y: f32| Point::new(bounds.x + rect.x + (x + 0.5) * zoom, bounds.y + rect.y + (y + 0.5) * zoom);
+        // (Under the image: the view is wider than it is high, as the image is.)
+        let (first, last, beyond) = (pixel(0.0, 0.0), pixel(1023.0, 511.0), pixel(40.0, 512.0 + 3.0));
+        feed(&mut app, &mut state, bounds, image, &[moved(first)]);
+        assert_eq!(app.ui.preview.probe, Some([0, 0]));
+        feed(&mut app, &mut state, bounds, image, &[moved(last)]);
+        assert_eq!(app.ui.preview.probe, Some([1023, 511]));
+        feed(&mut app, &mut state, bounds, image, &[moved(beyond)]);
+        assert_eq!(app.ui.preview.probe, None, "no pixel past the edge");
+        let _ = app.update(Message::Preview(PreviewMessage::ToggleTiling));
+        feed(&mut app, &mut state, bounds, image, &[moved(first), moved(beyond)]);
+        assert_eq!(app.ui.preview.probe, Some([40, 3]), "the pixel of the copy under it");
+    }
+
+    /// The gizmo of a Transform 2D node moves, turns and sizes the image as far as the mouse
+    /// goes, each drag one step of the history: its middle moves it (with Shift, along one axis),
+    /// its ring turns it the way the mouse goes round (with Shift, by 15°), a corner sizes it both
+    /// ways and an edge one way; what takes its value from a socket stays.
+    #[test]
+    fn the_gizmo_of_a_transform_moves_turns_and_sizes_the_image() {
+        use crate::app::StartupOptions;
+        let (mut app, _) = App::boot(StartupOptions::default());
+        let _ = app.update(Message::Edit(Edit::AddNode { kind: NodeKind::TRANSFORM_2D, pos: [0.0, 0.0] }));
+        let _ = app.update(Message::Seal);
+        let id = app.graph().nodes_of(NodeKind::TRANSFORM_2D).last().expect("the node").id;
+        app.ui.preview.node = Some(id);
+        // An image of 768 pixels a side on the screen, from (16, 16): a tenth of it is 76.8 pixels.
+        let (bounds, image) = (Rectangle::new(Point::ORIGIN, Size::new(800.0, 800.0)), [1024, 1024]);
+        let p = &mut app.ui.preview;
+        (p.zoom, p.pan, p.fit) = (0.75, Vector::ZERO, false);
+        let center = Point::new(400.0, 400.0);
+        let drag = |app: &mut App, from: Point, by: Vector, shift: bool| {
+            let mut state = State { bounds, ..State::default() };
+            if shift {
+                state.modifiers = keyboard::Modifiers::SHIFT;
+            }
+            let to = from + by;
+            let events = [
+                moved(from),
+                button(from, mouse::Button::Left, true),
+                moved(from + by * 0.5),
+                moved(to),
+                button(to, mouse::Button::Left, false),
+            ];
+            feed(app, &mut state, bounds, image, &events);
+        };
+        let params = |app: &App| {
+            let x = app.eval.params(id).expect("its parameters");
+            (x.v2("offset"), x.f("rotation"), x.v2("scale"))
+        };
+        let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3;
+
+        // Moved by its middle, one step back.
+        drag(&mut app, center, Vector::new(76.8, 38.4), false);
+        assert!(near(params(&app).0, [0.1, 0.05]), "{:?}", params(&app));
+        let _ = app.update(Message::Undo);
+        assert!(near(params(&app).0, [0.0, 0.0]), "one step back: {:?}", params(&app));
+        // With Shift, along the axis it was moved most along.
+        drag(&mut app, center, Vector::new(76.8, 20.0), true);
+        assert!(near(params(&app).0, [0.1, 0.0]), "{:?}", params(&app));
+        let _ = app.update(Message::Undo);
+
+        // Turned by its ring, from its right to its top: a quarter turn counter-clockwise.
+        drag(&mut app, Point::new(center.x + RING, center.y), Vector::new(-RING, -RING), false);
+        assert!((params(&app).1 - 90.0).abs() < 1e-3, "{:?}", params(&app));
+        let _ = app.update(Message::Undo);
+        // With Shift, by 15°: a little more than 30° is 30°.
+        let (s, c) = 33f32.to_radians().sin_cos();
+        let to = Point::new(center.x + RING * c, center.y - RING * s);
+        drag(&mut app, Point::new(center.x + RING, center.y), to - Point::new(center.x + RING, center.y), true);
+        assert!((params(&app).1 - 30.0).abs() < 1e-3, "{:?}", params(&app));
+        let _ = app.update(Message::Undo);
+        assert_eq!(params(&app).1, 0.0, "one step back");
+
+        // Sized by a corner both ways, by an edge one way.
+        drag(&mut app, Point::new(784.0, 784.0), Vector::new(76.8, 76.8), false);
+        assert!(near(params(&app).2, [1.2, 1.2]), "{:?}", params(&app));
+        let _ = app.update(Message::Undo);
+        drag(&mut app, Point::new(784.0, 400.0), Vector::new(38.4, 0.0), false);
+        assert!(near(params(&app).2, [1.1, 1.0]), "{:?}", params(&app));
+        let _ = app.update(Message::Undo);
+        assert!(near(params(&app).2, [1.0, 1.0]), "one step back");
+
+        // Taking its place from a socket, it stays where the socket says.
+        let _ = app.update(Message::Edit(Edit::SetExposed { node: id, key: "offset".into(), exposed: true }));
+        let _ = app.update(Message::Seal);
+        let held = params(&app).0;
+        drag(&mut app, center, Vector::new(76.8, 0.0), false);
+        assert_eq!(params(&app).0, held);
+    }
 }

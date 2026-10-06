@@ -18,7 +18,7 @@ use iced::{Alignment, ContentFit, Element, Length};
 use crate::app::{App, ContextTarget, DragPayload, ExplorerMessage, Fold, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
-use crate::view::tip;
+use crate::view::{fitted, tip};
 use crate::widget::outside::outside;
 use crate::widget::pressable::pressable;
 
@@ -176,7 +176,7 @@ fn folder<'a>(
         space().width(indent),
         icon(if folded { Icon::ChevronRight } else { Icon::ChevronDown }, 12.0, style::TEXT_DIM),
         icon(Icon::Folder, 13.0, style::TEXT_DIM),
-        container(text(label).size(style::TEXT_SIZE).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true),
+        container(fitted(label, style::TEXT_SIZE, style::ui_font(), None)).width(Length::Fill).clip(true),
         text(count.to_string()).size(style::SMALL).color(style::TEXT_FAINT),
     ]
     .spacing(6)
@@ -193,9 +193,7 @@ fn package_rows<'a>(app: &'a App, uses: &Uses, key: u64, doc: &'a Document) -> E
     let mut head = row![
         icon(if folded { Icon::ChevronRight } else { Icon::ChevronDown }, 12.0, style::TEXT_DIM),
         icon(Icon::Package, 14.0, style::TEXT_DIM),
-        container(text(doc.title()).size(style::TEXT_SIZE).font(style::bold()).wrapping(text::Wrapping::None))
-            .width(Length::Fill)
-            .clip(true),
+        container(fitted(doc.title(), style::TEXT_SIZE, style::bold(), None)).width(Length::Fill).clip(true),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
@@ -227,7 +225,9 @@ fn package_rows<'a>(app: &'a App, uses: &Uses, key: u64, doc: &'a Document) -> E
             )
             .on_press(Some(explorer(ExplorerMessage::CommitRename)))
             .into(),
-            None => text(&g.name).size(style::TEXT_SIZE).wrapping(text::Wrapping::None).into(),
+            // (Shortened in its middle where it is too long: graphs called "Graph 2" and "Graph 3"
+            // cut at the edge of the column read the same.)
+            None => fitted(&g.name, style::TEXT_SIZE, style::ui_font(), None),
         };
         let open = editing && doc.current() == g.id;
         let mut content = row![
@@ -322,11 +322,7 @@ fn resource_row<'a>(app: &'a App, uses: &Uses, key: u64, r: &'a Resource, indent
         )
         .on_press(Some(explorer(ExplorerMessage::CommitRenameFile)))
         .into(),
-        None => text(r.name())
-            .size(style::SMALL)
-            .color(if there { style::TEXT } else { style::TEXT_FAINT })
-            .wrapping(text::Wrapping::None)
-            .into(),
+        None => fitted(r.name(), style::SMALL, style::ui_font(), Some(if there { style::TEXT } else { style::TEXT_FAINT })),
     };
     let mut content = row![space().width(indent), picture, container(name).width(Length::Fill).clip(true),]
     .spacing(6)

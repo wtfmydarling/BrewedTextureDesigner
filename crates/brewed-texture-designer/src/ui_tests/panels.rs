@@ -194,3 +194,52 @@ fn graphs_are_opened_duplicated_and_deleted_in_the_explorer() {
     w.input(&[]);
     assert!(texts(&mut w, "Brick Wall").iter().any(|r| r.x < 300.0), "listed again");
 }
+
+/// A name too long for the Explorer's column is shortened in its middle, its end kept: graphs
+/// whose names differ at their ends ("… 2") are told apart in the narrowest column (cut at its
+/// edge, they read the same), and in a wide one each shows whole.
+#[test]
+fn long_names_in_the_explorer_are_shortened_in_their_middle() {
+    let mut w = harness!(view::root, 1000.0, 640.0);
+    let key = w.app.doc_key;
+    let first = w.app.doc.current();
+    let long = "Normal from Height of the Old Bricks";
+    w.send(Message::Explorer(ExplorerMessage::StartRename(key, first)));
+    w.send(Message::Explorer(ExplorerMessage::RenameText(long.into())));
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    w.send(Message::Explorer(ExplorerMessage::DuplicateGraph(key, first)));
+    let names: Vec<String> = w.app.doc.package().graphs.iter().map(|g| g.name.clone()).collect();
+    assert_eq!(names, [long.to_string(), format!("{long} 2")]);
+    w.input(&[]);
+    // What the Explorer shows of each.
+    let shown = |w: &mut Harness| -> Vec<String> {
+        struct Lines(Vec<(String, iced::Rectangle)>);
+        impl Operation for Lines {
+            fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+                operate(self);
+            }
+            fn text(&mut self, _: Option<&iced::widget::Id>, bounds: iced::Rectangle, text: &str) {
+                self.0.push((text.to_owned(), bounds));
+            }
+        }
+        let mut lines = Lines(Vec::new());
+        w.frame(|ui, renderer| ui.operate(renderer, &mut lines));
+        lines.0.into_iter().filter(|(t, r)| r.x < 300.0 && t.starts_with("Normal fr")).map(|(t, _)| t).collect()
+    };
+    let narrow = shown(&mut w);
+    assert_eq!(narrow.len(), 2, "{narrow:?}");
+    assert!(narrow.iter().all(|t| t.contains('…') && t.starts_with("Normal")), "shortened in the middle: {narrow:?}");
+    assert!(narrow[0].ends_with("Bricks") && narrow[1].ends_with("Bricks 2"), "their ends kept: {narrow:?}");
+    assert_ne!(narrow[0], narrow[1], "told apart");
+    assert!(text_fits::cut_short(&mut w).is_empty(), "{:?}", text_fits::cut_short(&mut w));
+    // In a wide column, whole.
+    w.size = Size::new(2560.0, 1400.0);
+    w.app.ui.window_size = w.size;
+    let split = match w.app.ui.panes.layout() {
+        iced::widget::pane_grid::Node::Split { id, .. } => *id,
+        _ => panic!("the panels are split"),
+    };
+    w.send(Message::PaneResized(iced::widget::pane_grid::ResizeEvent { split, ratio: 0.3 }));
+    w.input(&[]);
+    assert_eq!(shown(&mut w), [long.to_string(), format!("{long} 2")]);
+}

@@ -165,6 +165,48 @@ pub fn text_width_in(content: &str, size: f32, font: iced::Font) -> f32 {
     })
 }
 
+/// `content` in `room` pixels at `size` in `font`: whole when it fits, else its beginning and its
+/// end with "…" between them, as much of each as fits (names told apart by their ends, "Graph 2"
+/// and "Graph 3", stay told apart; cut at the edge, they read the same).
+pub fn shortened(content: &str, size: f32, font: iced::Font, room: f32) -> String {
+    if text_width_in(content, size, font) <= room {
+        return content.to_owned();
+    }
+    let chars: Vec<char> = content.chars().collect();
+    let cut = |kept: usize| -> String {
+        let (head, tail) = (kept - kept / 2, kept / 2);
+        chars[..head].iter().chain(['…'].iter()).chain(&chars[chars.len() - tail..]).collect()
+    };
+    // The most characters kept that fit (none: the "…" alone; nothing where even it does not).
+    let (mut fits, mut over) = (0, chars.len());
+    while fits + 1 < over {
+        let kept = (fits + over) / 2;
+        if text_width_in(&cut(kept), size, font) <= room {
+            fits = kept;
+        } else {
+            over = kept;
+        }
+    }
+    let shown = cut(fits);
+    if fits == 0 && text_width_in(&shown, size, font) > room { String::new() } else { shown }
+}
+
+/// A line of `content` at `size` in `font` (in `color`, or in the color of what it is in) as wide
+/// as its room, shortened to it (see [`shortened`]).
+pub fn fitted<'a>(content: impl Into<String>, size: f32, font: iced::Font, color: Option<iced::Color>) -> Element<'a, Message> {
+    let content: String = content.into();
+    iced::widget::responsive(move |room| {
+        let line = text(shortened(&content, size, font, room.width)).size(size).font(font).wrapping(text::Wrapping::None);
+        match color {
+            Some(color) => line.color(color),
+            None => line,
+        }
+        .into()
+    })
+    .height(Length::Shrink)
+    .into()
+}
+
 /// Wrap an element in a tooltip with the app's style.
 pub fn tip<'a>(content: impl Into<Element<'a, Message>>, tip: impl Into<String>, position: tooltip::Position) -> Element<'a, Message> {
     let tip: String = tip.into();

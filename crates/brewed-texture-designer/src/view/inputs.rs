@@ -242,13 +242,15 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
     // puts that one back.
     let changed = !var.is_default();
     let title = if changed { format!("{}*", var.name) } else { var.name.clone() };
+    // (Shortened in its middle where the column is narrow: names told apart by their ends stay so.)
     let name = row![
         socket_of(var),
-        text(title)
-            .size(style::TEXT_SIZE)
-            .font(if changed { style::italic() } else { style::bold() })
-            .color(if changed { style::ACCENT } else { style::TEXT })
-            .wrapping(text::Wrapping::None),
+        crate::view::fitted(
+            title,
+            style::TEXT_SIZE,
+            if changed { style::italic() } else { style::bold() },
+            Some(if changed { style::ACCENT } else { style::TEXT })
+        ),
     ]
     .spacing(5)
     .align_y(Alignment::Center);

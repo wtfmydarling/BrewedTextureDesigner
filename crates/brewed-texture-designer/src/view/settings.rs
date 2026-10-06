@@ -101,7 +101,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a SettingsDialog) -> Element<'a, Message
     };
     let at_defaults = draft.reset(page) == *draft;
     let footer = row![
-        container(text(kept).size(style::SMALL).color(style::TEXT_FAINT).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true),
+        container(crate::view::fitted(kept, style::SMALL, style::ui_font(), Some(style::TEXT_FAINT))).width(Length::Fill).clip(true),
         button(text("Reset Page to Defaults").size(style::TEXT_SIZE))
             .padding([6, 12])
             .style(style::button)

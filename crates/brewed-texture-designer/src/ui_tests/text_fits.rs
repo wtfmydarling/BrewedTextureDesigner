@@ -50,16 +50,9 @@ pub(super) fn cut_short(w: &mut Harness) -> Vec<String> {
     let mut lines = Lines(Vec::new());
     w.input(&[]);
     w.frame(|ui, renderer| ui.operate(renderer, &mut lines));
-    // What is cut short at its edge as it is meant to be: the name of the node in the 2D view's
-    // header in a narrow view (its buttons stay), what a field of a file says it holds (its tip
-    // says it whole).
-    let shown = w.app.ui.preview.node.and_then(|id| w.app.graph().node(id)).map(crate::view::graph::node_title);
-    let files: Vec<String> = w.app.doc.package().resources.iter().map(|r| w.app.doc.package().file_label(&r.path)).collect();
-    // (And the name of an Output's usage, in its field in a narrow Properties: its menu says it
-    // whole.)
-    let usages = NodeKind::OUTPUT.def().param("usage").map(|p| p.enum_options()).unwrap_or_default();
-    // (And the option chosen in a field of a choice, a value driven by a link: their fields cut
-    // them at their edge; the menu, the node they come from, say them whole.)
+    // What is cut short at its edge as it is meant to be: the option chosen in a field of a
+    // choice, a value driven by a link: their fields cut them at their edge; the menu, the node
+    // they come from, say them whole. (Names are shortened in their middle, with "…", to fit.)
     let mut chosen: Vec<String> = Vec::new();
     for node in w.app.ui.selection.iter().filter_map(|id| w.app.graph().node(*id)) {
         for pd in node.def().params {
@@ -69,22 +62,7 @@ pub(super) fn cut_short(w: &mut Harness) -> Vec<String> {
             }
         }
     }
-    // (And what the status bar says, on its one line beside its readings; what the 2D view's
-    // header says with no node shown, as its name would be.)
-    let status = w.app.ui.status.as_ref().map(|s| s.text.clone());
-    // (And the names of the input values, cut at the edge of their column, their tips saying them whole; changed, with a star.)
-    let names: Vec<String> = w.app.graph().variables.iter().flat_map(|v| [v.name.clone(), format!("{}*", v.name)]).collect();
-    let meant = |text: &String| {
-        Some(text) == shown.as_ref()
-            || Some(text) == status.as_ref()
-            || text == "double-click a node to show it here"
-            || text.starts_with("Set the Usage of Output nodes")
-            || names.contains(text)
-            || files.contains(text)
-            || FILE_FIELDS.contains(&text.as_str())
-            || usages.contains(&text.as_str())
-            || chosen.contains(text)
-    };
+    let meant = |text: &String| text.starts_with("Set the Usage of Output nodes") || chosen.contains(text);
     lines
         .0
         .into_iter()
@@ -120,9 +98,6 @@ fn wrapped(w: &mut Harness) -> Vec<String> {
         })
         .collect()
 }
-
-/// What fields of files say while they hold none (cut short at their edge, as their names are).
-const FILE_FIELDS: [&str; 4] = ["no picture: the color", "none: Inter, built in", "no file", "no picture"];
 
 /// What `state` cuts short that the window did not before.
 fn newly_cut(w: &mut Harness, before: &[String], state: &str, found: &mut Vec<String>) {

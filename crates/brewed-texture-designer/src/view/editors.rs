@@ -48,7 +48,7 @@ pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String, color: Opt
             format!("✕ {name} is not {what}")
         };
         let color = if takes { style::ACCENT } else { style::ERROR };
-        let zone = container(text(says).size(style::SMALL).color(color).wrapping(text::Wrapping::None))
+        let zone = container(crate::view::fitted(says, style::SMALL, style::ui_font(), Some(color)))
             .padding([5, 8])
             .width(Length::Fill)
             .clip(true)
@@ -98,7 +98,7 @@ pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String, color: Opt
     }
     about.push("Drag a file onto it from the Explorer, or choose one.".into());
     let shown = container(
-        row![picture, text(name).size(style::SMALL).color(color).wrapping(text::Wrapping::None)].spacing(6).align_y(Alignment::Center),
+        row![picture, crate::view::fitted(name, style::SMALL, style::ui_font(), Some(color))].spacing(6).align_y(Alignment::Center),
     )
     .padding([1, 6])
     .width(Length::Fill)

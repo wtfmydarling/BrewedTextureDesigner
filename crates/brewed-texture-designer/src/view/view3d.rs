@@ -305,12 +305,13 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
     let send = |m: PreviewMessage| Message::Preview(m);
     let choice = |on: bool, label: String, hint: String, message: Message| -> Element<'_, Message> {
         crate::view::tip(
-            button(
-                text(format!("{}  {label}", if on { "●" } else { "○" }))
-                    .size(style::TEXT_SIZE)
-                    .color(style::TEXT)
-                    .wrapping(text::Wrapping::None),
-            )
+            // (A long name of a file shortened in its middle: the menu is as wide as it is.)
+            button(crate::view::fitted(
+                format!("{}  {label}", if on { "●" } else { "○" }),
+                style::TEXT_SIZE,
+                style::ui_font(),
+                Some(style::TEXT),
+            ))
             .width(Length::Fill)
             .padding([4, 10])
             .style(style::row_button(on))

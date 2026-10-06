@@ -280,9 +280,21 @@ pub fn menu_bar(app: &App) -> Element<'_, Message> {
     let logo = image(crate::brand::logo()).width(Length::Fixed(16.0)).height(Length::Fixed(16.0));
     let dirty = if app.doc.is_dirty() { "  •" } else { "" };
     // (Not while the Home screen is shown: nothing of it is edited there.)
-    let document = match app.ui.home {
-        Some(_) => text(""),
-        None => text(format!("{} — {}{dirty}", app.doc.title(), app.doc.entry().name)).size(style::SMALL).color(style::TEXT_DIM),
+    // (On the right, shortened in its middle where the bar is too short for it.)
+    let document: Element<'_, Message> = match app.ui.home {
+        Some(_) => space().width(Length::Fill).into(),
+        None => {
+            let line = format!("{} — {}{dirty}", app.doc.title(), app.doc.entry().name);
+            iced::widget::responsive(move |room| {
+                let line = text(crate::view::shortened(&line, style::SMALL, style::ui_font(), room.width))
+                    .size(style::SMALL)
+                    .color(style::TEXT_DIM)
+                    .wrapping(text::Wrapping::None);
+                row![space().width(Length::Fill), line].into()
+            })
+            .height(Length::Shrink)
+            .into()
+        }
     };
     // The logo goes to the Home screen, as Adobe's does.
     let home = crate::app::home::HomeMessage::Show(crate::app::home::HomePage::Home);
@@ -296,7 +308,7 @@ pub fn menu_bar(app: &App) -> Element<'_, Message> {
     ]
     .spacing(2)
     .align_y(Alignment::Center);
-    let title = row![space().width(Length::Fill), document].align_y(Alignment::Center).height(Length::Fill);
+    let title = row![document].align_y(Alignment::Center).height(Length::Fill);
     if !OWN_TITLE_BAR {
         return container(row![menus, title].spacing(2).align_y(Alignment::Center).height(Length::Fixed(MENU_BAR_H)))
             .padding([0, 8])
@@ -478,12 +490,9 @@ fn divider<'a>() -> Element<'a, Message> {
 /// them its last change computed again and how long its changes take; how much GPU memory
 /// the images take; and the GPU. (How fast the 3D view draws, it says itself.)
 pub fn status_bar(app: &App) -> Element<'_, Message> {
+    // (Shortened in its middle beside the readings: the file a message is about is at its end.)
     let status: Element<'_, Message> = match &app.ui.status {
-        Some(s) => text(s.text.clone())
-            .size(style::SMALL)
-            .color(if s.error { style::ERROR } else { style::TEXT })
-            .wrapping(text::Wrapping::None)
-            .into(),
+        Some(s) => crate::view::fitted(s.text.clone(), style::SMALL, style::ui_font(), Some(if s.error { style::ERROR } else { style::TEXT })),
         None => space().into(),
     };
 

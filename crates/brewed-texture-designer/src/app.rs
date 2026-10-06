@@ -1606,7 +1606,8 @@ impl App {
         if self.ui.preview.node != node {
             self.ui.preview.node = node;
             self.ui.preview.fit = true;
-            self.res.probe = None;
+            // (The pixel read under the cursor was of the image shown before.)
+            (self.ui.preview.probe, self.res.probe) = (None, None);
             self.send(Request::Preview(node));
         }
     }

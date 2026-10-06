@@ -377,7 +377,7 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
     body = body.push(
         row![
             label("Folder"),
-            container(text(folder).size(style::TEXT_SIZE).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true),
+            container(crate::view::fitted(folder, style::TEXT_SIZE, style::ui_font(), None)).width(Length::Fill).clip(true),
             button(text("Browse…").size(style::TEXT_SIZE)).padding([5, 12]).style(style::button).on_press(say(X::Browse)),
         ]
         .spacing(8)

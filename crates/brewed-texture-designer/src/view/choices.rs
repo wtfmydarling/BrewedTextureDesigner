@@ -81,12 +81,12 @@ pub fn field<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, current: u
     let id = node.id;
     let open = app.ui.choice_menu.as_ref().is_some_and(|m| m.node == id && m.key == pd.key);
     let label = pd.enum_options().get(current as usize).copied().unwrap_or("?");
-    // The node's own thumbnail is what the current option makes. (The name cut at the field's
-    // edge in a narrow Properties, not run under the arrow: the menu says it whole.)
+    // The node's own thumbnail is what the current option makes. (The name shortened in a narrow
+    // Properties, not run under the arrow: the menu says it whole.)
     let face = button(
         row![
             picture(app.res.thumbs.get(&id), FIELD_PICTURE),
-            container(text(label).size(style::TEXT_SIZE).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true),
+            container(crate::view::fitted(label, style::TEXT_SIZE, style::ui_font(), None)).width(Length::Fill).clip(true),
             icon(Icon::ChevronDown, 12.0, style::TEXT_DIM),
         ]
         .spacing(6)
@@ -184,7 +184,7 @@ pub fn grouped_field<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, cu
     if let Some(h) = heading {
         face = face.push(text(h).size(style::SMALL).color(style::TEXT_DIM).wrapping(text::Wrapping::None));
     }
-    let name = container(text(label).size(style::TEXT_SIZE).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true);
+    let name = container(crate::view::fitted(label, style::TEXT_SIZE, style::ui_font(), None)).width(Length::Fill).clip(true);
     let face = face.push(name).push(icon(Icon::ChevronDown, 12.0, style::TEXT_DIM));
     let face = button(face).width(Length::Fill).padding([3, 6]).style(style::choice_field(open)).on_press(Message::ChoiceMenu(if open {
         None

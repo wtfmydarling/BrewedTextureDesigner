@@ -20,15 +20,12 @@ const CHANNELS: [&str; 6] = ["RGBA", "RGB", "R", "G", "B", "A"];
 fn toolbar_2d(app: &App) -> Element<'_, Message> {
     let p = &app.ui.preview;
     let node_name = p.node.and_then(|id| app.graph().node(id)).map(crate::view::graph::node_title);
-    // In a narrow view the name is cut short, and the buttons stay.
+    // In a narrow view the name is shortened, and the buttons stay.
     let name = match node_name {
-        Some(n) => text(n).size(style::TEXT_SIZE).color(style::TEXT),
-        None => text("double-click a node to show it here").size(style::SMALL).color(style::TEXT_DIM),
+        Some(n) => crate::view::fitted(n, style::TEXT_SIZE, style::ui_font(), Some(style::TEXT)),
+        None => crate::view::fitted("double-click a node to show it here", style::SMALL, style::ui_font(), Some(style::TEXT_DIM)),
     };
-    let mut bar = row![
-        icon(Icon::Image, 14.0, style::TEXT_DIM),
-        container(name.wrapping(text::Wrapping::None)).width(Length::Fill).clip(true),
-    ]
+    let mut bar = row![icon(Icon::Image, 14.0, style::TEXT_DIM), container(name).width(Length::Fill).clip(true)]
     .spacing(6)
     .align_y(Alignment::Center);
     // In a narrow view, the buttons closer together; narrower, the channels on a line of their

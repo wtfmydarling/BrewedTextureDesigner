@@ -1559,17 +1559,33 @@ fn the_graph_stays_under_the_mouse_while_it_is_dragged() {
 /// Where the view shows exactly `wanted`, in the order the widgets are laid out (the
 /// window first, then what floats over it).
 fn texts(w: &mut Harness, wanted: &str) -> Vec<iced::Rectangle> {
-    struct Find<'a> {
-        wanted: &'a str,
-        found: Vec<iced::Rectangle>,
+    texts_where(w, |text| text == wanted).into_iter().map(|(_, bounds)| bounds).collect()
+}
+
+/// Where the view shows `full`: whole, or shortened in its middle to fit (see
+/// [`view::shortened`]).
+fn texts_reading(w: &mut Harness, full: &str) -> Vec<iced::Rectangle> {
+    let reads = |text: &str| match text.split_once('…') {
+        _ if text == full => true,
+        Some((head, tail)) => head.len() + tail.len() < full.len() && full.starts_with(head) && full.ends_with(tail),
+        None => false,
+    };
+    texts_where(w, reads).into_iter().map(|(_, bounds)| bounds).collect()
+}
+
+/// The texts of the view that `wanted` says are wanted, and where each is.
+fn texts_where(w: &mut Harness, wanted: impl Fn(&str) -> bool + Send) -> Vec<(String, iced::Rectangle)> {
+    struct Find<F> {
+        wanted: F,
+        found: Vec<(String, iced::Rectangle)>,
     }
-    impl Operation for Find<'_> {
+    impl<F: Fn(&str) -> bool + Send> Operation for Find<F> {
         fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
             operate(self);
         }
         fn text(&mut self, _: Option<&iced::widget::Id>, bounds: iced::Rectangle, text: &str) {
-            if text == self.wanted {
-                self.found.push(bounds);
+            if (self.wanted)(text) {
+                self.found.push((text.to_owned(), bounds));
             }
         }
     }
@@ -3042,7 +3058,7 @@ fn image_inputs_are_input_values_and_drags_say_what_cannot_be() {
     // One row in the Input Values, as any value; no picture yet.
     assert_eq!(w.app.graph().variables.len(), 1);
     assert_eq!(texts(&mut w, &first).len(), 1, "a row of the Input Values");
-    assert_eq!(texts(&mut w, "no picture: the color").len(), 1);
+    assert_eq!(texts_reading(&mut w, "no picture: the color").len(), 1);
     // Renamed there: typed, and a click elsewhere in the window takes it; both nodes follow.
     w.send(Message::ToggleVariable(first.clone()));
     w.send(Message::RenameVariable(first.clone(), "albedo".into()));
@@ -3093,7 +3109,7 @@ fn image_inputs_are_input_values_and_drags_say_what_cannot_be() {
     draw_frame(&mut w, now());
     assert!(texts(&mut w, "IMAGE INPUTS").is_empty(), "not a section of its own");
     assert_eq!(texts(&mut w, "Albedo").len(), 1, "a parameter");
-    assert_eq!(texts(&mut w, "the graph's: bricks.png").len(), 1);
+    assert_eq!(texts_reading(&mut w, "the graph's: bricks.png").len(), 1);
     assert!(w.app.graph().input_sockets(w.app.graph().node(node).unwrap()).is_empty(), "nothing to plug into");
     let given = |w: &Harness| w.app.graph().node(node).map(|n| n.text("albedo").to_string());
 
@@ -3101,7 +3117,7 @@ fn image_inputs_are_input_values_and_drags_say_what_cannot_be() {
     // it is dropped there.
     w.send(Message::Explorer(ExplorerMessage::FilesPicked(key, vec![font.clone()])));
     start_drag(&mut w, DragPayload::Resource { path: font_path.clone(), kind: ResourceKind::Font, name: "letters.ttf".into() });
-    let refused = texts(&mut w, "✕ letters.ttf is not a picture");
+    let refused = texts_reading(&mut w, "✕ letters.ttf is not a picture");
     assert_eq!(refused.len(), 1, "the field says it takes pictures");
     w.snapshot("image-inputs-refused");
     w.hover(refused[0].center());
@@ -3109,7 +3125,7 @@ fn image_inputs_are_input_values_and_drags_say_what_cannot_be() {
     assert_eq!(given(&w), Some(String::new()));
     // The picture: taken, as one step to undo.
     start_drag(&mut w, DragPayload::Resource { path: picture_path.clone(), kind: ResourceKind::Bitmap, name: "bricks.png".into() });
-    let zone = texts(&mut w, "Drop to use bricks.png");
+    let zone = texts_reading(&mut w, "Drop to use bricks.png");
     assert_eq!(zone.len(), 1, "the field says it takes the picture");
     w.snapshot("image-inputs-drop");
     w.hover(zone[0].center());
@@ -3266,6 +3282,32 @@ fn undo_back_to_another_graph_keeps_their_views() {
     w.send(Message::Redo);
     assert_eq!(w.app.doc.current(), other);
     assert_eq!(w.app.ui.graph_view.pan, iced::Vector::new(300.0, -70.0), "the other graph's view");
+}
+
+/// An undo back in another graph that takes away the node its 2D view showed: the view shows the
+/// graph's Output, as when the graph is opened (it showed nothing).
+#[test]
+fn undo_back_to_a_shown_node_taken_away_shows_the_output() {
+    let mut w = harness!(view::root, 1280.0, 800.0);
+    let key = w.app.doc_key;
+    let wall = w.app.doc.current();
+    let output = w.app.graph().nodes_of(NodeKind::OUTPUT).next().expect("an Output").id;
+    w.send(Message::Explorer(ExplorerMessage::NewGraph(key)));
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    let other = w.app.doc.current();
+    // In the wall, a node added and shown; then the other graph opened.
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, wall)));
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::LEVELS, pos: [0.0, 600.0] }));
+    w.send(Message::Seal);
+    let added = w.app.graph().nodes_of(NodeKind::LEVELS).map(|n| n.id).max().expect("the node added");
+    w.send(Message::Graph(GraphMessage::Preview(added)));
+    assert_eq!(w.app.ui.preview.node, Some(added));
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, other)));
+    // The undo takes the node away, back in the wall: its Output is shown.
+    w.send(Message::Undo);
+    assert_eq!(w.app.doc.current(), wall);
+    assert!(w.app.graph().node(added).is_none());
+    assert_eq!(w.app.ui.preview.node, Some(output), "the Output, as the graph opened shows it");
 }
 
 /// Unsaved work is kept as it changes, and what a program that stopped without quitting kept (a
@@ -4037,7 +4079,7 @@ fn packages_opened_last_are_offered_again() {
 #[test]
 fn files_are_renamed_in_the_explorer() {
     use std::sync::Arc;
-    let mut w = harness!(view::root, 1280.0, 800.0);
+    let mut w = harness!(view::root, 1680.0, 1000.0);
     let key = w.app.doc_key;
     let held = Held::new("C:/tex/bricks.png", Arc::new(b"the bytes of bricks.png".to_vec()));
     let path = held.path().to_string();

@@ -264,7 +264,11 @@ impl App {
     /// been shown yet.
     fn restore_view(&mut self, view: Option<ViewState>) {
         let view = view.unwrap_or_default();
-        let preview = view.preview.or_else(|| self.graph().nodes_of(NodeKind::OUTPUT).next().map(|n| n.id));
+        // (A node it showed that is gone, an undo took it away, is as none: the graph's Output.)
+        let preview = view
+            .preview
+            .filter(|id| self.graph().contains(*id))
+            .or_else(|| self.graph().nodes_of(NodeKind::OUTPUT).next().map(|n| n.id));
         self.after_document_change(preview);
         if let (Some(pan), Some(zoom)) = (view.graph_pan, view.graph_zoom) {
             self.ui.graph_view.pan = Vector::new(pan[0], pan[1]);
