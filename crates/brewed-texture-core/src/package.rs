@@ -325,13 +325,27 @@ impl Package {
                 *path = f(path);
             }
         };
-        for r in &mut self.resources {
+        let mut renamed = Vec::new();
+        for (i, r) in self.resources.iter_mut().enumerate() {
             let path = f(&r.path);
-            // Called as its file was, it is called as its new one is.
-            if path != r.path && r.name == default_name(&r.path) && !crate::files::is_embedded(&path) {
-                r.name = default_name(&path);
+            if path != r.path {
+                // Called as its file was, it is called as its new one is.
+                if r.name == default_name(&r.path) && !crate::files::is_embedded(&path) {
+                    renamed.push(i);
+                }
+                // And it is what its new one is (an SVG relinked to a font was read back a font,
+                // and was an SVG until then).
+                if let Some(kind) = ResourceKind::of_path(&path) {
+                    r.kind = kind;
+                }
             }
             r.path = path;
+        }
+        // (A name of its own in the package: relinked to a file called as another file of it
+        // is, the two were called the same, and read back, one was called otherwise.)
+        for i in renamed {
+            let path = self.resources[i].path.clone();
+            self.resources[i].name = self.unique_resource_name(&default_name(&path), Some(&path));
         }
         for entry in &mut self.graphs {
             let graph = Arc::make_mut(&mut entry.graph);
@@ -545,6 +559,9 @@ pub enum PackageEdit {
         nodes: Vec<NodeId>,
         name: String,
     },
+    /// Several edits as one undo step, applied in order: all of them or none. Called as the
+    /// first is.
+    Batch(Vec<PackageEdit>),
 }
 
 /// What a package edit did.
@@ -574,6 +591,7 @@ impl PackageEdit {
             PackageEdit::Import(_) => "Import Files",
             PackageEdit::RemoveUnused => "Remove Unused Files",
             PackageEdit::GraphFromSelection { .. } => "Create Graph from Selection",
+            PackageEdit::Batch(edits) => edits.first().map_or("Edit", PackageEdit::label),
         }
     }
 
@@ -677,12 +695,27 @@ impl PackageEdit {
                 if from == to {
                     return Ok(PackageResult::default());
                 }
+                // (A file of the package relinked to one it cannot use was left out of it when
+                // it was read back.)
+                if package.resources.iter().any(|r| r.path == from) && ResourceKind::of_path(&to).is_none() {
+                    return Err(format!("{} is not a file the package can use", file_name(&to)));
+                }
+                // (What a package holds is held as what it is, by its bytes: a file on disk
+                // called so took the place of the file held, without its bytes.)
+                if crate::files::is_embedded(&to) {
+                    return Err("A file is relinked to a file on disk".into());
+                }
+                let before = package.clone();
                 package.map_paths(|p| if p == from { to.clone() } else { p.to_string() });
                 for r in package.resources.iter_mut().filter(|r| r.path == to && !crate::files::is_embedded(&to)) {
                     r.data = None;
                 }
                 let mut seen = HashSet::new();
                 package.resources.retain(|r| seen.insert(r.path.clone()));
+                // (Nothing said `from`: no step of undo that does nothing.)
+                if *package == before {
+                    return Ok(PackageResult::default());
+                }
                 changed
             }
             PackageEdit::Embed(files) => {
@@ -743,10 +776,41 @@ impl PackageEdit {
                 if moves.is_empty() {
                     return Ok(PackageResult::default());
                 }
+                // (As a file relinked is: one of the package to one it can use.)
+                if let Some((_, to)) = moves.iter().find(|(from, to)| package.resources.iter().any(|r| &r.path == *from) && ResourceKind::of_path(to).is_none()) {
+                    return Err(format!("{} is not a file the package can use", file_name(to)));
+                }
+                if moves.values().any(|to| crate::files::is_embedded(to)) {
+                    return Err("Files are collected to files on disk".into());
+                }
+                let before = package.clone();
                 package.map_paths(|p| moves.get(p).cloned().unwrap_or_else(|| p.to_string()));
+                // (A file on disk is read from there.)
+                for r in package.resources.iter_mut().filter(|r| !crate::files::is_embedded(&r.path)) {
+                    r.data = None;
+                }
                 let mut seen = HashSet::new();
                 package.resources.retain(|r| seen.insert(r.path.clone()));
+                if *package == before {
+                    return Ok(PackageResult::default());
+                }
                 changed
+            }
+            PackageEdit::Batch(edits) => {
+                // (Made in a copy: the package stays as it is if one of them is refused.)
+                let mut made = package.clone();
+                let mut result = PackageResult::default();
+                for edit in edits {
+                    let r = edit.apply(&mut made)?;
+                    result.changed |= r.changed;
+                    result.graph = r.graph.or(result.graph);
+                    result.created.extend(r.created);
+                    result.notice = r.notice.or(result.notice);
+                }
+                if result.changed {
+                    *package = made;
+                }
+                result
             }
             PackageEdit::GraphFromSelection { graph, nodes, name } => {
                 let entry = package.graph(graph).ok_or("The graph no longer exists")?;
@@ -2402,6 +2466,49 @@ mod tests {
         PackageEdit::Relocate(plan.clone()).apply(&mut package).unwrap();
         let to = plan.iter().find(|(from, _)| from == "/far/c.png").map(|(_, to)| to.clone()).unwrap();
         assert_eq!(image_input(graph_of(&mut package, t), "input").picture, to);
+    }
+
+    /// A file relinked is what its new file is, and called as no other file of the package is:
+    /// located at a "stones.png" while the package has another "stones.png", it is "stones
+    /// 2.png", as it is when read back (it was "stones.png" twice until then); an SVG relinked to
+    /// a font is a font (it was an SVG until read back). Relinked to what the package cannot use,
+    /// or to a file it holds, it is not; and relinking what nothing says changes nothing (it made
+    /// a step of undo that did nothing).
+    #[test]
+    fn relinked_files_are_what_their_new_files_are() {
+        let mut package = Package::new("A", Graph::default());
+        let files = ["/old/bricks.png", "/other/stones.png", "/v/logo.svg"].map(String::from).to_vec();
+        PackageEdit::AddResources(files).apply(&mut package).unwrap();
+        PackageEdit::Relink { from: "/old/bricks.png".into(), to: "/new/stones.png".into() }.apply(&mut package).unwrap();
+        let names: Vec<&str> = package.resources.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["stones 2.png", "stones.png", "logo.svg"]);
+        PackageEdit::Relink { from: "/v/logo.svg".into(), to: "/v/logo.ttf".into() }.apply(&mut package).unwrap();
+        assert_eq!((package.resources[2].kind, package.resources[2].name.as_str()), (ResourceKind::Font, "logo.ttf"));
+        let before = package.clone();
+        assert!(!PackageEdit::Relink { from: "/nowhere.png".into(), to: "/x.png".into() }.apply(&mut package).unwrap().changed);
+        assert!(!PackageEdit::Relocate(vec![("/nowhere.png".into(), "/x.png".into())]).apply(&mut package).unwrap().changed);
+        assert!(PackageEdit::Relink { from: "/new/stones.png".into(), to: "/new/stones.doc".into() }.apply(&mut package).is_err());
+        let held = crate::files::embedded_path("stones.png", b"abc");
+        assert!(PackageEdit::Relink { from: "/new/stones.png".into(), to: held.clone() }.apply(&mut package).is_err());
+        assert!(PackageEdit::Relocate(vec![("/other/stones.png".into(), held)]).apply(&mut package).is_err());
+        assert_eq!(package, before);
+    }
+
+    /// A batch of edits of a package is all of them or none.
+    #[test]
+    fn package_batches_are_all_or_nothing() {
+        let mut package = Package::new("A", Graph::default());
+        PackageEdit::AddResources(vec!["/a/x.png".into(), "/a/y.png".into()]).apply(&mut package).unwrap();
+        let relink = |from: &str, to: &str| PackageEdit::Relink { from: from.into(), to: to.into() };
+        let before = package.clone();
+        let refused = PackageEdit::Batch(vec![relink("/a/x.png", "/b/x.png"), relink("/a/y.png", "/b/y.doc")]);
+        assert_eq!(refused.label(), "Relink");
+        assert!(refused.apply(&mut package).is_err());
+        assert_eq!(package, before, "the first one undone with the second");
+        assert!(PackageEdit::Batch(vec![relink("/a/x.png", "/b/x.png"), relink("/a/y.png", "/b/y.png")]).apply(&mut package).unwrap().changed);
+        let paths: Vec<&str> = package.resources.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, ["/b/x.png", "/b/y.png"]);
+        assert!(!PackageEdit::Batch(Vec::new()).apply(&mut package).unwrap().changed);
     }
 
     #[test]

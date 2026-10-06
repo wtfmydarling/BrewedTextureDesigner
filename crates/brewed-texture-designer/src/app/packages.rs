@@ -128,6 +128,16 @@ pub fn copy_files(plan: &[(String, String)]) -> Collected {
     out
 }
 
+/// `name` (of a file, or a path) with the extension of the file at `path` where it has none of
+/// a file of its kind: "Bricks" for a picture, "Bricks.png" (saved so, the package could not use
+/// it).
+pub fn with_extension_of(name: &str, path: &str) -> String {
+    match (ResourceKind::of_path(path), Path::new(path).extension()) {
+        (Some(kind), Some(extension)) if ResourceKind::of_path(name) != Some(kind) => format!("{name}.{}", extension.to_string_lossy()),
+        _ => name.to_string(),
+    }
+}
+
 /// A path as the packages say it: absolute, without `.` and `..`.
 pub fn clean(path: &Path) -> String {
     let path = if path.is_absolute() {
@@ -987,6 +997,14 @@ impl App {
         )
     }
 
+    /// What a file the package open as `key` holds (`path`) is called when it is saved as a file
+    /// of its own: as the package calls it, with the extension of what it is (it was its name in
+    /// the package, the hash of its bytes with a colon, which no file of Windows may have).
+    pub(crate) fn save_name(&self, key: u64, path: &str) -> String {
+        let name = self.package_doc(key).map_or_else(|| package::default_name(path), |d| d.package().file_label(path));
+        with_extension_of(&name, path)
+    }
+
     /// The missing file `from` of the package open as `key` is at `to`: the package says so
     /// from now on (an undo step). A package must have the graphs that are used of it. Other
     /// files missing from the same folder are looked for next to it.
@@ -1034,13 +1052,22 @@ impl App {
                 }
             }
         }
+        let relink = |found: &[(String, String)]| {
+            PackageEdit::Batch(found.iter().map(|(from, to)| PackageEdit::Relink { from: from.clone(), to: to.clone() }).collect())
+        };
         let Some(doc) = self.package_doc_mut(key) else { return };
-        let count = found.len();
-        for (from, to) in &found {
-            if let Err(e) = doc.apply_package(PackageEdit::Relink { from: from.clone(), to: to.clone() }) {
-                log::warn!("relinking {from}: {e}");
-            }
+        // All of them one step of undo (each was a step of its own); the one chosen alone when
+        // the others cannot be. (Refused, it said it was relinked.)
+        let done = doc.apply_package(relink(&found)).or_else(|_| {
+            found.truncate(1);
+            doc.apply_package(relink(&found))
+        });
+        if let Err(e) = done {
+            log::warn!("relinking {from}: {e}");
+            self.set_status(format!("{} is not relinked: {e}", package::file_name(&from)), true);
+            return;
         }
+        let count = found.len();
         for (_, to) in &found {
             self.unreadable.remove(to);
         }
@@ -1363,7 +1390,7 @@ impl App {
             }
             ExplorerMessage::SaveResourceAs(key, path) => {
                 self.close_popups();
-                let name = package::file_name(&path);
+                let name = self.save_name(key, &path);
                 let folder = self.dialog_folder(self.package_doc(key).and_then(|d| d.path()).map(PathBuf::as_path), true);
                 return Task::perform(
                     blocking(move || {
@@ -1381,7 +1408,13 @@ impl App {
                     self.set_status(format!("{} is not in its package", package::file_name(&path)), true);
                     return Task::none();
                 };
-                let to = clean(&to);
+                let picked = clean(&to);
+                let to = with_extension_of(&picked, &path);
+                // (Not over a file the dialog did not ask about.)
+                if to != picked && Path::new(&to).exists() {
+                    self.set_status(format!("{} is there already: save it as that to replace it", package::file_name(&to)), true);
+                    return Task::none();
+                }
                 return Task::perform(
                     blocking({
                         let to = to.clone();

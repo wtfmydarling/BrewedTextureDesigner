@@ -808,6 +808,138 @@ mod tests {
         }
     }
 
+    /// Any edit of the package `p` as a whole, most of them sensible, some not.
+    fn any_package_edit(seed: &mut u64, p: &crate::package::Package) -> crate::package::PackageEdit {
+        use crate::files::Held;
+        use crate::instance::GraphId;
+        use crate::package::PackageEdit;
+        use std::sync::Arc;
+        const NAMES: [&str; 7] = ["B", "Graph", "", "  ", "a/b", "Ünïcödé 名前", "Graph 2"];
+        const FILES: [&str; 5] = ["/a.png", "/b.svg", "/c.ttf", "", "/d.unknown"];
+        let name = |seed: &mut u64| NAMES[roll(seed, NAMES.len())].to_string();
+        let graph = |seed: &mut u64| p.graphs.get(roll(seed, p.graphs.len() + 1)).map_or(GraphId(999), |g| g.id);
+        let file = |seed: &mut u64| match p.resources.get(roll(seed, p.resources.len() + 1)) {
+            Some(r) => r.path.clone(),
+            None => FILES[roll(seed, FILES.len())].to_string(),
+        };
+        match roll(seed, 12) {
+            0 => PackageEdit::AddGraph { name: name(seed), graph: Graph::default() },
+            1 => PackageEdit::RemoveGraph(graph(seed)),
+            2 => PackageEdit::RenameGraph { id: graph(seed), name: name(seed) },
+            3 => PackageEdit::DuplicateGraph(graph(seed)),
+            4 | 5 => {
+                let id = graph(seed);
+                let nodes = p.graph(id).map_or_else(Vec::new, |e| e.graph.nodes.iter().filter(|_| roll(seed, 3) == 0).map(|n| n.id).collect());
+                PackageEdit::GraphFromSelection { graph: id, nodes, name: name(seed) }
+            }
+            6 => PackageEdit::AddResources(vec![file(seed), file(seed)]),
+            7 => PackageEdit::RemoveResource(file(seed)),
+            8 => PackageEdit::RenameResource { path: file(seed), name: name(seed) },
+            9 if roll(seed, 2) == 0 => PackageEdit::Relink { from: file(seed), to: file(seed) },
+            9 => PackageEdit::Relocate(vec![(file(seed), file(seed))]),
+            10 => {
+                // (What a file holds, read from it.)
+                let bytes = Arc::new(vec![roll(seed, 4) as u8; 3]);
+                match p.resources.iter().find(|r| !r.is_embedded()) {
+                    Some(r) if roll(seed, 2) == 0 => PackageEdit::Embed(vec![(r.path.clone(), Held::new(&r.path, bytes))]),
+                    _ => {
+                        let path = FILES[roll(seed, FILES.len())].to_string();
+                        PackageEdit::Import(vec![(path.clone(), Held::new(&path, bytes))])
+                    }
+                }
+            }
+            _ => PackageEdit::RemoveUnused,
+        }
+    }
+
+    /// Whatever is edited, in whatever order, in the graphs of a package and in the package as a
+    /// whole: an edit refused, or one that says it changed nothing, changes nothing (else no step
+    /// of undo had what it did, and undo went back past it); each step undoes to what was before
+    /// it and redoes to what it made; and the package is read back from its file as it was.
+    #[test]
+    fn any_edits_undo_redo_and_read_back_as_they_were() {
+        use crate::document::Document;
+        use crate::instance::{GraphRef, Interface};
+        use crate::package::{Library, Package, flatten, uses_graph};
+        use std::collections::HashMap;
+        struct Itself(Package);
+        impl Library for Itself {
+            fn package(&self, path: Option<&str>) -> Option<&Package> {
+                path.is_none().then_some(&self.0)
+            }
+        }
+        let mut seed = 2026;
+        for round in 0..24 {
+            let mut doc = Document::new(Package::new("A", Graph::default()), None);
+            doc.set_undo_steps(100_000);
+            let mut states = vec![doc.package().clone()];
+            for step in 0..300 {
+                let before = doc.package().clone();
+                let ids: Vec<_> = doc.package().graphs.iter().map(|g| g.id).collect();
+                let (what, result) = if roll(&mut seed, 6) == 0 {
+                    let edit = any_package_edit(&mut seed, doc.package());
+                    (format!("{edit:?}"), doc.apply_package(edit).map(|r| r.changed))
+                } else if roll(&mut seed, 6) == 0 {
+                    // A node that uses another graph of the package (not one that uses this one,
+                    // as the editor does not let it).
+                    let (here, other) = (doc.current(), ids[roll(&mut seed, ids.len())]);
+                    if other == here || uses_graph(&Itself(doc.package().clone()), None, other, (None, here)) {
+                        continue;
+                    }
+                    let entry = doc.package().graph(other).expect("a graph of the package");
+                    let r = GraphRef { package: None, graph: other, name: entry.name.clone() };
+                    let edit = Edit::AddInstance { instance: Instance::new(r, Interface::of(&entry.graph)), pos: [0.0, 0.0] };
+                    (format!("{edit:?}"), doc.apply(edit).map(|r| r.changed))
+                } else {
+                    // In one of its graphs.
+                    doc.open_graph(ids[roll(&mut seed, ids.len())]);
+                    let edit = any_edit(&mut seed, doc.graph());
+                    (format!("{edit:?}"), doc.apply(edit).map(|r| r.changed))
+                };
+                doc.seal();
+                let what: String = what.chars().take(300).collect();
+                match result {
+                    Ok(true) => {
+                        // The nodes that use the graphs brought in line with them, as the
+                        // editor does after each edit (no step of undo).
+                        let lib = Itself(doc.package().clone());
+                        doc.sync_instances(&lib);
+                        states.push(doc.package().clone());
+                    }
+                    _ => assert!(doc.package() == &before, "round {round} step {step}: {what} changed the package, and said {result:?}"),
+                }
+                if step % 10 == 9 {
+                    // Each graph laid out with what it uses, whole, and evaluated.
+                    let lib = Itself(doc.package().clone());
+                    for g in &doc.package().graphs {
+                        let flat = flatten(&lib, None, g.id).expect("laid out");
+                        let f = &flat.graph;
+                        assert!(f.links.iter().all(|l| f.contains(l.from) && f.contains(l.to)), "round {round} step {step}: after {what}");
+                        let ev = crate::eval::evaluate(f);
+                        assert_eq!(ev.order.len() + ev.cyclic.len(), f.nodes.len(), "round {round} step {step}");
+                    }
+                }
+                if step % 50 == 49 {
+                    let package = doc.package();
+                    let bytes = crate::project::to_bytes(package, &HashMap::new(), doc.current(), None).expect("written");
+                    let read = crate::project::from_bytes(&bytes, None).expect("read back");
+                    assert!(read.package == *package, "round {round} step {step}: read back otherwise, after {what}");
+                }
+            }
+            // Back step by step to the start, and forward again.
+            for (i, state) in states.iter().enumerate().rev().skip(1) {
+                assert!(doc.undo(), "round {round}: undo {i}");
+                assert!(doc.package() == state, "round {round}: undone to {i}, otherwise");
+            }
+            assert!(!doc.can_undo(), "round {round}: no more steps than edits");
+            for (i, state) in states.iter().enumerate().skip(1) {
+                assert!(doc.redo(), "round {round}: redo {i}");
+                assert!(doc.package() == state, "round {round}: redone to {i}, otherwise");
+            }
+            assert!(!doc.can_redo());
+        }
+    }
+
     /// Graphs edited at random, and used as nodes in one another at random, lay out whole:
     /// every link between nodes that are there, no Image Input left (each is what it shows),
     /// and they evaluate.

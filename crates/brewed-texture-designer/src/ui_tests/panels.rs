@@ -991,3 +991,77 @@ fn what_is_read_for_a_graph_goes_to_it() {
     assert!(in_graph(&w, wall).node(bitmap).is_some_and(|n| !n.text("path").is_empty()), "the file the wall's Bitmap reads");
     assert_eq!(in_graph(&w, other), before, "the other graph's node of that number untouched");
 }
+
+/// A file the package holds is saved as a file of its own under the name the package calls it
+/// by, with the extension of what it is: not the name it is held by (the hash of its bytes, after
+/// a colon no file of Windows may have); a picture called "Bricks" is saved "Bricks.png", and,
+/// typed so where a "Bricks.png" is, not written over it unasked.
+#[test]
+fn files_held_are_saved_as_the_package_calls_them() {
+    use brewed_texture_core::PackageEdit;
+    let dir = scratch("held-saved-as");
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    let key = w.app.doc_key;
+    let held = Held::new("C:/tex/bricks.png", std::sync::Arc::new(b"the bytes of bricks.png".to_vec()));
+    let path = held.path().to_string();
+    w.send(Message::Explorer(ExplorerMessage::FilesRead { key, embed: false, files: vec![("C:/tex/bricks.png".into(), held)], failed: vec![] }));
+    assert!(w.app.doc.package().resources.iter().any(|r| r.path == path), "held");
+    assert_eq!(w.app.save_name(key, &path), "bricks.png");
+    w.app.doc.apply_package(PackageEdit::RenameResource { path: path.clone(), name: "Bricks".into() }).expect("renamed");
+    assert_eq!(w.app.save_name(key, &path), "Bricks.png");
+    assert_eq!(crate::app::packages::with_extension_of("C:/out/Bricks", &path), "C:/out/Bricks.png");
+    assert_eq!(crate::app::packages::with_extension_of("C:/out/Bricks.PNG", &path), "C:/out/Bricks.PNG");
+    // Typed without its extension where the file with it is: not written over.
+    let there = dir.join("Bricks.png");
+    std::fs::write(&there, b"another picture").expect("a file");
+    w.send(Message::Explorer(ExplorerMessage::ResourceSavePicked(key, path.clone(), Some(dir.join("Bricks")))));
+    assert!(w.app.ui.status.as_ref().is_some_and(|s| s.error && s.text.contains("is there already")), "said: {:?}", w.app.ui.status);
+    assert_eq!(std::fs::read(&there).expect("still there"), b"another picture");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Files missing from one folder, found in another: one located, the others there are relinked
+/// with it, in one step of undo (each was a step of its own); a file the package cannot use is
+/// not taken for one, and the status bar says so (it said it was relinked, and the package, read
+/// back, left the file out).
+#[test]
+fn files_found_in_one_folder_are_relinked_in_one_step() {
+    use brewed_texture_core::{Graph, Package};
+    let dir = scratch("relinked-together");
+    let (old, new) = (dir.join("old"), dir.join("new"));
+    std::fs::create_dir_all(&new).expect("a folder");
+    for name in ["a.png", "b.png"] {
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 100, 50, 255])).save(new.join(name)).expect("a picture");
+    }
+    std::fs::write(new.join("a.doc"), b"not a picture").expect("a file");
+    let mut g = Graph::default();
+    for (i, name) in ["a.png", "b.png"].iter().enumerate() {
+        let id = g.add_node(NodeKind::BITMAP, [0.0, 200.0 * i as f32]);
+        g.node_mut(id).unwrap().param_mut("path").unwrap().value = ParamValue::Text(crate::app::packages::clean(&old.join(name)));
+    }
+    let file = dir.join("walls.brewtex");
+    let package = Package::new("Walls", g);
+    brewed_texture_core::project::save(&file, &package, &Default::default(), package.first()).expect("a file");
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    w.send(Message::OpenPicked(Some(file.clone())));
+    let Some(Dialog::Missing(missing)) = w.app.ui.dialog.clone() else { panic!("the missing files are asked for: {:?}", w.app.ui.dialog) };
+    assert_eq!(missing.items.len(), 2, "{:?}", missing.items);
+    let paths = |w: &Harness| -> Vec<String> { w.app.doc.package().resources.iter().map(|r| r.path.clone()).collect() };
+    let before = paths(&w);
+    let a = missing.items.iter().find(|i| i.path.ends_with("a.png")).expect("a.png asked for").path.clone();
+    // Not a picture: not taken for one.
+    w.send(Message::Explorer(ExplorerMessage::Located(missing.key, a.clone(), Some(new.join("a.doc")))));
+    assert_eq!(paths(&w), before);
+    assert!(!w.app.doc.can_undo(), "no step of undo");
+    assert!(w.app.ui.status.as_ref().is_some_and(|s| s.error && s.text.contains("is not relinked")), "said: {:?}", w.app.ui.status);
+    let Some(Dialog::Missing(still)) = &w.app.ui.dialog else { panic!("still asked for") };
+    assert_eq!(still.items.len(), 2);
+    // The picture: the other one found beside it.
+    w.send(Message::Explorer(ExplorerMessage::Located(missing.key, a, Some(new.join("a.png")))));
+    assert!(w.app.ui.dialog.is_none(), "both found");
+    let clean = |name: &str| crate::app::packages::clean(&new.join(name));
+    assert_eq!(paths(&w), [clean("a.png"), clean("b.png")]);
+    w.send(Message::Undo);
+    assert_eq!(paths(&w), before, "one step undoes both");
+    let _ = std::fs::remove_dir_all(&dir);
+}
