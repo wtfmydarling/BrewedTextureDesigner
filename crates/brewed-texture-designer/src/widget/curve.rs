@@ -43,11 +43,15 @@ impl<Message> CurveEditor<'_, Message> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Grab {
     index: usize,
     /// Dragged out of the square: its point goes when the button is let go.
     removing: bool,
+    /// The curve as the drag made it last, which it moves on: the editor's own is the one it
+    /// was made with until the window is drawn again (a point added and dragged before that
+    /// was lost, and its neighbour moved).
+    curve: Curve,
 }
 
 #[derive(Default)]
@@ -120,13 +124,13 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for CurveEdito
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let Some(p) = cursor.position_over(bounds) else { return };
                 if let Some(index) = self.handle_at(sq, p) {
-                    state.grab = Some(Grab { index, removing: false });
+                    state.grab = Some(Grab { index, removing: false, curve: self.curve.clone() });
                 } else if outside(sq, p) == 0.0 {
                     let [x, y] = to_curve(sq, p);
                     let mut curve = self.curve.clone();
                     let Some(index) = curve.insert(x, y) else { return };
-                    shell.publish((self.on_change)(curve));
-                    state.grab = Some(Grab { index, removing: false });
+                    shell.publish((self.on_change)(curve.clone()));
+                    state.grab = Some(Grab { index, removing: false, curve });
                 } else {
                     return;
                 }
@@ -135,27 +139,28 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for CurveEdito
             }
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 let Some(grab) = &mut state.grab else { return };
-                if grab.index >= self.curve.points.len() {
+                if grab.index >= grab.curve.points.len() {
                     return;
                 }
-                let removing = self.curve.points.len() > 2 && outside(sq, *position) > REMOVE_DISTANCE;
+                let removing = grab.curve.points.len() > 2 && outside(sq, *position) > REMOVE_DISTANCE;
                 if removing != grab.removing {
                     grab.removing = removing;
                     shell.request_redraw();
                 }
                 if !removing {
                     let [x, y] = to_curve(sq, *position);
-                    let moved = self.curve.moved(grab.index, x, y);
-                    if moved != self.curve {
-                        shell.publish((self.on_change)(moved));
+                    let moved = grab.curve.moved(grab.index, x, y);
+                    if moved != grab.curve {
+                        shell.publish((self.on_change)(moved.clone()));
+                        grab.curve = moved;
                     }
                 }
                 shell.capture_event();
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 let Some(grab) = state.grab.take() else { return };
-                if grab.removing && grab.index < self.curve.points.len() && self.curve.points.len() > 2 {
-                    let mut curve = self.curve.clone();
+                if grab.removing && grab.index < grab.curve.points.len() && grab.curve.points.len() > 2 {
+                    let mut curve = grab.curve;
                     curve.points.remove(grab.index);
                     shell.publish((self.on_change)(curve));
                 }
@@ -179,7 +184,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for CurveEdito
     ) -> mouse::Interaction {
         let state = tree.state.downcast_ref::<State>();
         let sq = square(layout.bounds());
-        match state.grab {
+        match &state.grab {
             Some(g) if g.removing => mouse::Interaction::NotAllowed,
             Some(_) => mouse::Interaction::Grabbing,
             None => match cursor.position_over(layout.bounds()) {
@@ -225,10 +230,10 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for CurveEdito
         frame.stroke(&curve, Stroke::default().with_width(1.8).with_color(style::TEXT));
         // The handles: the one held (or under the pointer) lit.
         let local = cursor.position_in(bounds);
-        let hot = state.grab.map(|g| g.index).or_else(|| local.and_then(|p| self.handle_at(sq, p)));
+        let hot = state.grab.as_ref().map(|g| g.index).or_else(|| local.and_then(|p| self.handle_at(sq, p)));
         for (i, p) in self.curve.points.iter().enumerate() {
             let at = to_screen(sq, *p);
-            let removing = state.grab.is_some_and(|g| g.index == i && g.removing);
+            let removing = state.grab.as_ref().is_some_and(|g| g.index == i && g.removing);
             let color = if removing {
                 style::alpha(style::TEXT, 0.3)
             } else if hot == Some(i) {

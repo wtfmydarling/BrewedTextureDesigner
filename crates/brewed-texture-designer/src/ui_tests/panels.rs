@@ -323,6 +323,8 @@ fn the_buttons_of_a_gradient_and_a_curve_are_steps_of_their_own() {
         click(&mut w, at);
         assert_eq!(gradient(&w), *made);
     }
+    // (The stop removed, the one before it is selected.)
+    assert_eq!(w.app.ui.gradient_stop.get(&(id, "gradient".to_string())).copied(), Some(0), "the stop before the one removed");
     // Each undone on its own.
     w.send(Message::Undo);
     assert_eq!(gradient(&w), spread_out, "the stop back");
@@ -1064,4 +1066,106 @@ fn files_found_in_one_folder_are_relinked_in_one_step() {
     w.send(Message::Undo);
     assert_eq!(paths(&w), before, "one step undoes both");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The demo's gradient, in its editor alone.
+fn the_demo_ramp(app: &App) -> iced::Element<'_, Message> {
+    let map = app.graph().nodes_of(NodeKind::GRADIENT_MAP).next().expect("the demo colors by a gradient").id;
+    let g = app.graph().node(map).and_then(|n| n.value("gradient")).and_then(ParamValue::as_gradient).expect("its gradient");
+    let selected = app.ui.gradient_stop.get(&(map, "gradient".to_string())).copied();
+    crate::widget::gradient::gradient_editor(
+        g,
+        selected,
+        move |g| Message::SetGradient(map, "gradient".into(), g, None),
+        move |i| Message::GradientStop(map, "gradient".into(), i),
+    )
+    .into()
+}
+
+/// A stop of a gradient dragged past another is the stop that moves, however many moves come
+/// before the window is drawn again (the second of two went to the stop that had taken its
+/// place); and a stop added on the ramp and dragged at once is not lost.
+#[test]
+fn a_stop_dragged_fast_is_the_stop_that_moves() {
+    use brewed_texture_core::Gradient;
+    let mut w = harness!(the_demo_ramp, 400.0, 60.0);
+    let map = w.app.graph().nodes_of(NodeKind::GRADIENT_MAP).next().expect("a gradient map").id;
+    let (black, gray, white) = ([0.0, 0.0, 0.0, 1.0], [0.5, 0.5, 0.5, 1.0], [1.0, 1.0, 1.0, 1.0]);
+    w.send(Message::SetGradient(map, "gradient".into(), Gradient::from_pairs(&[(0.0, black), (0.5, gray), (1.0, white)]), None));
+    w.send(Message::Seal);
+    // Where a stop's handle is, and the ramp (as the editor lays them out).
+    let x = |pos: f32| 5.5 + pos * (400.0 - 11.0);
+    let (handle, ramp) = (35.0, 13.0);
+    let moved = |x: f32, y: f32| iced::Event::Mouse(mouse::Event::CursorMoved { position: Point::new(x, y) });
+    let stops = |w: &Harness| -> Vec<(f32, [f32; 4])> { gradient_of(&w.app, map).stops.iter().map(|s| ((s.pos * 100.0).round() / 100.0, s.color)).collect() };
+    // The black one, past the gray one and on, in one go.
+    w.hover(Point::new(x(0.0), handle));
+    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    w.input(&[moved(x(0.7), handle), moved(x(0.8), handle)]);
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    assert_eq!(stops(&w), [(0.5, gray), (0.8, black), (1.0, white)]);
+    // One added on the ramp and dragged at once.
+    w.hover(Point::new(x(0.25), ramp));
+    w.input(&[iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)), moved(x(0.3), ramp), moved(x(0.35), ramp)]);
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    let after = stops(&w);
+    assert_eq!(after.len(), 4, "the stop added is there: {after:?}");
+    assert_eq!(after.iter().map(|s| s.0).collect::<Vec<_>>(), [0.35, 0.5, 0.8, 1.0], "and where it was dragged: {after:?}");
+}
+
+/// The curve of the last Curve node, in its editor alone (a drag of it sets it as Properties
+/// does).
+fn the_last_curve(app: &App) -> iced::Element<'_, Message> {
+    let Some(node) = app.graph().nodes_of(NodeKind::CURVE).last() else { return iced::widget::space().into() };
+    let id = node.id;
+    let curve = node.value("curve").and_then(ParamValue::as_curve).expect("its curve");
+    crate::widget::curve::curve_editor(curve, move |c| Message::Edit(Edit::SetParam { node: id, key: "curve".into(), value: ParamValue::Curve(c) }))
+        .into()
+}
+
+/// A point added to a curve and dragged before the window is drawn again is the point that
+/// moves (it was lost, and the point after it moved in its place).
+#[test]
+fn a_point_added_to_a_curve_and_dragged_at_once_is_kept() {
+    let mut w = harness!(the_last_curve, 400.0, 200.0);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::CURVE, pos: [2600.0, -900.0] }));
+    w.send(Message::Seal);
+    let node = w.app.graph().nodes_of(NodeKind::CURVE).last().map(|n| n.id).expect("a curve");
+    let points = |w: &Harness| -> Vec<[f32; 2]> {
+        let curve = w.app.graph().node(node).and_then(|n| n.value("curve")).and_then(ParamValue::as_curve).cloned().expect("its curve");
+        curve.points.iter().map(|p| p.map(|v| (v * 100.0).round() / 100.0)).collect()
+    };
+    assert_eq!(points(&w), [[0.0, 0.0], [1.0, 1.0]]);
+    // (Where a point of the curve is, as the editor lays it out: a square 180 high, 6 in.)
+    let at = |x: f32, y: f32| Point::new(6.0 + x * (400.0 - 12.0), 6.0 + (1.0 - y) * 180.0);
+    let moved = |p: Point| iced::Event::Mouse(mouse::Event::CursorMoved { position: p });
+    w.hover(at(0.5, 0.5));
+    w.input(&[iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)), moved(at(0.5, 0.8)), moved(at(0.4, 0.9))]);
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    assert_eq!(points(&w), [[0.0, 0.0], [0.4, 0.9], [1.0, 1.0]]);
+}
+
+/// Reversed, a gradient keeps the stop that was selected selected: the stop, at its new place
+/// (the one that came to its old place was selected instead, and its color shown).
+#[test]
+fn a_reversed_gradient_keeps_its_stop_selected() {
+    use brewed_texture_core::GradientStop;
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::GRADIENT_MAP, pos: [-400.0, 900.0] }));
+    let id = w.app.graph().nodes_of(NodeKind::GRADIENT_MAP).map(|n| n.id).max().expect("the node");
+    let gradient = |w: &Harness| w.app.graph().node(id).and_then(|n| n.value("gradient")).and_then(ParamValue::as_gradient).cloned().unwrap();
+    let mut three = gradient(&w);
+    three.stops = [(0.0, 0.1), (0.2, 0.5), (1.0, 0.9)].map(|(pos, v)| GradientStop { pos, color: [v, v, v, 1.0] }).to_vec();
+    w.send(Message::Edit(Edit::SetParam { node: id, key: "gradient".into(), value: ParamValue::Gradient(three.clone()) }));
+    w.send(Message::Seal);
+    w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+    // The darkest stop, the first.
+    w.send(Message::GradientStop(id, "gradient".into(), 0));
+    draw_frame(&mut w, std::time::Instant::now());
+    let area = iced::Rectangle::new(Point::new(w.size.width - 400.0, 0.0), Size::new(400.0, w.size.height));
+    let reverse = find_click(&mut w, area, |m| set_to(m, "gradient") == Some(ParamValue::Gradient(three.reversed()))).expect("Reverse");
+    click(&mut w, reverse);
+    let selected = w.app.ui.gradient_stop.get(&(id, "gradient".to_string())).copied().expect("a stop selected");
+    assert_eq!(gradient(&w).stops[selected].color, [0.1, 0.1, 0.1, 1.0], "the darkest, now the last");
+    assert!(!texts(&mut w, "Stop 3 of 3").is_empty(), "said so");
 }

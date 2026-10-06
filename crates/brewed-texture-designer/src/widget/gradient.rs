@@ -55,6 +55,10 @@ struct Drag {
     removing: bool,
     /// Where the handle was grabbed, from its center: the stop does not jump to the cursor.
     grab: f32,
+    /// The gradient as the drag made it last, which it moves on: the editor's own is the one
+    /// it was made with until the window is drawn again (the second of two moves before that
+    /// moved the stop that had taken the dragged one's place, and a stop added was lost).
+    gradient: Gradient,
 }
 
 #[derive(Default)]
@@ -99,15 +103,16 @@ impl<Message> GradientEditor<'_, Message> {
         })
     }
 
-    /// Move stop `index` to `pos`; returns the new gradient and the stop's new index.
-    fn moved(&self, index: usize, pos: f32) -> (Gradient, usize) {
-        let mut g = self.gradient.clone();
-        let mut stop = g.stops.remove(index);
-        stop.pos = pos;
-        let j = g.stops.partition_point(|s| s.pos <= pos);
-        g.stops.insert(j, stop);
-        (g, j)
-    }
+}
+
+/// `g` with its stop `index` moved to `pos`, and the stop's new index.
+fn moved(g: &Gradient, index: usize, pos: f32) -> (Gradient, usize) {
+    let mut g = g.clone();
+    let mut stop = g.stops.remove(index);
+    stop.pos = pos;
+    let j = g.stops.partition_point(|s| s.pos <= pos);
+    g.stops.insert(j, stop);
+    (g, j)
 }
 
 impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for GradientEditor<'_, Message> {
@@ -146,13 +151,13 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for GradientEd
                 if let Some(i) = self.handle_at(bounds, p) {
                     shell.publish((self.on_select)(i));
                     let center = handle_rect(bounds, self.gradient.stops[i].pos).center_x();
-                    state.drag = Some(Drag { index: i, removing: false, grab: center - p.x });
+                    state.drag = Some(Drag { index: i, removing: false, grab: center - p.x, gradient: self.gradient.clone() });
                 } else if bar(bounds).contains(p) {
                     let mut g = self.gradient.clone();
                     let i = g.insert_at(self.position(bounds, p));
-                    shell.publish((self.on_change)(g));
+                    shell.publish((self.on_change)(g.clone()));
                     shell.publish((self.on_select)(i));
-                    state.drag = Some(Drag { index: i, removing: false, grab: 0.0 });
+                    state.drag = Some(Drag { index: i, removing: false, grab: 0.0, gradient: g });
                 } else {
                     return;
                 }
@@ -160,19 +165,20 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for GradientEd
             }
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 let Some(drag) = &mut state.drag else { return };
-                if drag.index >= self.gradient.stops.len() {
+                if drag.index >= drag.gradient.stops.len() {
                     return;
                 }
-                let removing = self.gradient.stops.len() > 2 && position.y > bounds.y + bounds.height + REMOVE_DISTANCE;
+                let removing = drag.gradient.stops.len() > 2 && position.y > bounds.y + bounds.height + REMOVE_DISTANCE;
                 if removing != drag.removing {
                     drag.removing = removing;
                     shell.request_redraw();
                 }
                 if !removing {
                     let at = Point::new(position.x + drag.grab, position.y);
-                    let (g, j) = self.moved(drag.index, self.position(bounds, at));
-                    if g != self.gradient {
-                        shell.publish((self.on_change)(g));
+                    let (g, j) = moved(&drag.gradient, drag.index, self.position(bounds, at));
+                    if g != drag.gradient {
+                        shell.publish((self.on_change)(g.clone()));
+                        drag.gradient = g;
                     }
                     if j != drag.index {
                         shell.publish((self.on_select)(j));
@@ -183,8 +189,8 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for GradientEd
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 let Some(drag) = state.drag.take() else { return };
-                if drag.removing && drag.index < self.gradient.stops.len() {
-                    let mut g = self.gradient.clone();
+                if drag.removing && drag.index < drag.gradient.stops.len() {
+                    let mut g = drag.gradient;
                     g.stops.remove(drag.index);
                     shell.publish((self.on_change)(g));
                     shell.publish((self.on_select)(drag.index.saturating_sub(1)));

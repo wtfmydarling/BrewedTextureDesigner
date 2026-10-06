@@ -840,7 +840,12 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'a str, g: &'a Gradien
         ),
         space().width(Length::Fill),
         tip(
-            button(icon(Icon::Reverse, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(set(id, key, ParamValue::Gradient(g.reversed())))),
+            // (The stop selected stays selected, where it is now: the one at its place was
+            // selected instead, and its color shown.)
+            button(icon(Icon::Reverse, 14.0, style::TEXT_DIM))
+                .padding(4)
+                .style(style::button)
+                .on_press(step(Message::SetGradient(id, key.to_string(), g.reversed(), selected.map(|i| g.stops.len() - 1 - i)))),
             "Reverse",
             tooltip::Position::Top,
         ),
