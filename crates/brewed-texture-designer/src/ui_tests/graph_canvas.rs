@@ -569,3 +569,58 @@ fn a_long_title_of_a_comment_stays_in_its_frame() {
     let differ = short.iter().zip(&long).filter(|(a, b)| (i32::from(**a) - i32::from(**b)).abs() > 2).count();
     assert_eq!(differ, 0, "nothing of the title past the frame");
 }
+
+/// The arrow keys and Page Up / Page Down move through what the menu that adds a node offers,
+/// never past its ends, the list scrolling to keep the one chosen in sight; Enter adds that one.
+#[test]
+fn the_keys_move_through_the_add_menu_and_enter_adds_the_one_chosen() {
+    use keyboard::key::Named;
+    let mut w = canvas!();
+    let b = w.app.ui.graph_view.bounds;
+    let at = Point::new(b.center_x(), b.center_y());
+    let graph_pos = w.app.ui.graph_view.to_graph(at);
+    w.send(Message::Graph(GraphMessage::OpenAddMenu { at, graph_pos }));
+    w.input(&[]);
+    let kinds = view::add_menu::items(&w.app);
+    let count = kinds.len();
+    assert!(count > 20, "every kind of node offered: {count}");
+    let chosen = |w: &Harness| w.app.ui.add_menu.as_ref().map(|m| m.selected).expect("the menu open");
+    let in_sight = |w: &Harness| {
+        let menu = w.app.ui.add_menu.as_ref().expect("the menu open");
+        view::add_menu::scroll_to_row(menu.selected, menu.scroll, count).is_none()
+    };
+    press(&mut w, Named::ArrowUp);
+    assert_eq!(chosen(&w), 0, "nothing before the first");
+    for _ in 0..3 {
+        press(&mut w, Named::ArrowDown);
+    }
+    assert_eq!(chosen(&w), 3);
+    press(&mut w, Named::PageDown);
+    assert_eq!(chosen(&w), 11, "a page on");
+    for _ in 0..(count / 8 + 2) {
+        press(&mut w, Named::PageDown);
+        assert!(in_sight(&w), "the one chosen in sight at {}", chosen(&w));
+    }
+    assert_eq!(chosen(&w), count - 1, "nothing after the last");
+    press(&mut w, Named::ArrowDown);
+    assert_eq!(chosen(&w), count - 1);
+    press(&mut w, Named::PageUp);
+    assert_eq!(chosen(&w), count - 9);
+    assert!(in_sight(&w));
+    // Enter, in the menu's field: the one chosen, added.
+    let kind = kinds[count - 9];
+    let before = w.app.graph().nodes_of(kind).count();
+    let _ = w.operate(focusable::focus::<()>(view::add_menu::search_id()));
+    let enter = Key::Named(Named::Enter);
+    w.input(&[iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key: enter.clone(),
+        modified_key: enter,
+        physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::default(),
+        text: None,
+        repeat: false,
+    })]);
+    assert!(w.app.ui.add_menu.is_none(), "Enter closes the menu");
+    assert_eq!(w.app.graph().nodes_of(kind).count(), before + 1, "a {} added", kind.def().name);
+}

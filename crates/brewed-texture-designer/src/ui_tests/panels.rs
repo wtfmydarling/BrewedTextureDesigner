@@ -732,3 +732,149 @@ fn the_hint_and_the_rate_of_a_short_3d_view_do_not_overlap() {
         assert!(over.is_empty(), "at {ratio}: {over:?}");
     }
 }
+
+/// Mangle the part `at` of a value (counted depth first), `how` says how: a number far out, a
+/// string odd, an array emptied, doubled or turned around, a field gone (as the core's test of
+/// mangled files does).
+fn mangle(v: &mut serde_json::Value, at: &mut usize, how: usize) {
+    use serde_json::Value as Json;
+    let here = *at == 0;
+    *at = at.wrapping_sub(1);
+    match v {
+        Json::Number(_) if here => {
+            let far = [1e39, -1e39, 3e38, -3e38, 1e30, 0.0, -0.0, 1e-40, 4294967296.0, -1.0, 0.5, 8192.0, 16384.0];
+            *v = serde_json::json!(far[how % far.len()]);
+        }
+        Json::String(text) if here => {
+            let odd = ["", " ", "a b", "i:input", "o:output", "../x", "\u{0}", "ы"];
+            *text = match how % 9 {
+                8 => "ы".repeat(3000),
+                k => odd[k].to_string(),
+            };
+        }
+        Json::Bool(b) if here => *b = !*b,
+        Json::Array(items) if here => match how % 3 {
+            0 => items.clear(),
+            1 => items.extend(items.clone()),
+            _ => items.reverse(),
+        },
+        Json::Object(fields) if here => {
+            if let Some(key) = fields.keys().nth(how % fields.len().max(1)).cloned() {
+                fields.remove(&key);
+            }
+        }
+        Json::Array(items) => items.iter_mut().for_each(|i| mangle(i, at, how)),
+        Json::Object(fields) => fields.values_mut().for_each(|f| mangle(f, at, how)),
+        _ => {}
+    }
+}
+
+fn parts(v: &serde_json::Value) -> usize {
+    1 + match v {
+        serde_json::Value::Array(items) => items.iter().map(parts).sum(),
+        serde_json::Value::Object(fields) => fields.values().map(parts).sum(),
+        _ => 0,
+    }
+}
+
+/// Packages mangled at random, opened in the window: each that opens is drawn, its nodes shown in
+/// Properties one after the other, and the interface holds nothing that is not there (the core
+/// reads them whole or says why it does not; the window must show whatever it reads).
+#[test]
+fn mangled_packages_open_in_the_window() {
+    use brewed_texture_core::archive::{Archive, Method, Writer};
+    use std::io::Cursor;
+    let dir = scratch("mangled");
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    let file = dir.join("demo.brewtex");
+    w.send(Message::SavePicked(Some(file.clone())));
+    let bytes = std::fs::read(&file).expect("the package saved");
+    let mut archive = Archive::new(Cursor::new(bytes)).expect("its archive");
+    let names: Vec<String> = archive.entries().iter().map(|e| e.name.clone()).collect();
+    let contents: Vec<(String, Vec<u8>)> = names.into_iter().map(|n| (n.clone(), archive.read(&n, 1 << 30).unwrap())).collect();
+    let jsons: Vec<(usize, serde_json::Value)> = contents
+        .iter()
+        .enumerate()
+        .filter(|(_, (n, _))| n.ends_with(".json"))
+        .map(|(i, (_, c))| (i, serde_json::from_slice(c).unwrap()))
+        .collect();
+    let mut seed = 7u32;
+    let mut opened = 0;
+    let mangled = dir.join("mangled.brewtex");
+    for round in 0..150 {
+        let mut files = jsons.clone();
+        for _ in 0..1 + round % 3 {
+            seed = brewed_texture_core::expr::builtins::pcg_hash(seed);
+            let which = seed as usize % files.len();
+            let f = &mut files[which].1;
+            let mut at = (seed >> 8) as usize % parts(f);
+            mangle(f, &mut at, (seed >> 20) as usize);
+        }
+        let mut zip = Writer::new(Vec::new());
+        for (i, (name, content)) in contents.iter().enumerate() {
+            match files.iter().find(|(k, _)| *k == i) {
+                Some((_, json)) => zip.add(name, json.to_string().as_bytes(), Method::Stored).unwrap(),
+                None => zip.add(name, content, Method::Stored).unwrap(),
+            }
+        }
+        std::fs::write(&mangled, zip.finish().unwrap()).unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            w.send(Message::Proceed(PendingAction::OpenPath(mangled.clone())));
+            draw_frame(&mut w, std::time::Instant::now());
+            let ids: Vec<_> = w.app.graph().nodes.iter().map(|n| n.id).collect();
+            for id in ids {
+                w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+                w.input(&[]);
+            }
+            w.send(Message::SelectAll);
+            draw_frame(&mut w, std::time::Instant::now());
+            broken(&w.app)
+        }));
+        match result {
+            Ok(None) => {}
+            Ok(Some(why)) => panic!("round {round}: {why}"),
+            Err(_) => panic!("round {round}: the window panicked on the package"),
+        }
+        if w.app.doc.path().is_some_and(|p| p.ends_with("mangled.brewtex")) {
+            opened += 1;
+        }
+        // (Each opened in place of the one before: no package piles up.)
+        w.send(Message::Proceed(PendingAction::LoadDemo));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(opened > 30, "{opened} of 150 opened");
+
+    // Pastes mangled so, of every node of the demo: what is pasted shows as what opens does.
+    use brewed_texture_core::graph::Clipboard;
+    w.send(Message::Proceed(PendingAction::LoadDemo));
+    w.send(Message::SelectAll);
+    let _ = w.app.update(Message::Copy);
+    let copied = w.app.ui.clipboard.clone().expect("the nodes copied").to_text();
+    let clip: serde_json::Value = serde_json::from_str(copied.strip_prefix(Clipboard::MAGIC).expect("the clipboard's mark")).unwrap();
+    let mut pasted = 0;
+    for round in 0..150 {
+        let mut c = clip.clone();
+        for _ in 0..1 + round % 3 {
+            seed = brewed_texture_core::expr::builtins::pcg_hash(seed);
+            let mut at = seed as usize % parts(&c);
+            mangle(&mut c, &mut at, (seed >> 20) as usize);
+        }
+        let text = format!("{}{c}", Clipboard::MAGIC);
+        let before = w.app.graph().nodes.len();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            w.send(Message::ClipboardText(Some(text.clone())));
+            draw_frame(&mut w, std::time::Instant::now());
+            broken(&w.app)
+        }));
+        match result {
+            Ok(None) => {}
+            Ok(Some(why)) => panic!("paste {round}: {why}"),
+            Err(_) => panic!("paste {round}: the window panicked on what was pasted"),
+        }
+        if w.app.graph().nodes.len() > before {
+            pasted += 1;
+        }
+        w.send(Message::Undo);
+    }
+    assert!(pasted > 30, "{pasted} of 150 pasted");
+}
