@@ -144,7 +144,7 @@ pub fn text_width_in(content: &str, size: f32, font: iced::Font) -> f32 {
     let version = font_system().read().ok().map(|f| f.version());
     WIDTHS.with_borrow_mut(|(known, widths)| {
         // (Fonts loaded since, or too many kept: measured anew.)
-        if *known != version || widths.len() > 2048 {
+        if *known != version || widths.len() > 8192 {
             widths.clear();
             *known = version;
         }
@@ -191,6 +191,28 @@ pub fn shortened(content: &str, size: f32, font: iced::Font, room: f32) -> Strin
     if fits == 0 && text_width_in(&shown, size, font) > room { String::new() } else { shown }
 }
 
+/// `content` in `room` pixels at `size` in `font`: whole when it fits, else as much of its
+/// beginning as fits, with "…" after it (a sentence reads from its beginning; nothing where even
+/// "…" does not fit).
+pub fn cut(content: &str, size: f32, font: iced::Font, room: f32) -> String {
+    if text_width_in(content, size, font) <= room {
+        return content.to_owned();
+    }
+    let chars: Vec<char> = content.chars().collect();
+    let cut = |kept: usize| -> String { chars[..kept].iter().collect::<String>().trim_end().to_owned() + "…" };
+    let (mut fits, mut over) = (0, chars.len());
+    while fits + 1 < over {
+        let kept = (fits + over) / 2;
+        if text_width_in(&cut(kept), size, font) <= room {
+            fits = kept;
+        } else {
+            over = kept;
+        }
+    }
+    let shown = cut(fits);
+    if fits == 0 && text_width_in(&shown, size, font) > room { String::new() } else { shown }
+}
+
 /// A line of `content` at `size` in `font` (in `color`, or in the color of what it is in) as wide
 /// as its room, shortened to it (see [`shortened`]).
 pub fn fitted<'a>(content: impl Into<String>, size: f32, font: iced::Font, color: Option<iced::Color>) -> Element<'a, Message> {
@@ -213,9 +235,10 @@ pub fn tip<'a>(content: impl Into<Element<'a, Message>>, tip: impl Into<String>,
     if tip.is_empty() {
         return content.into();
     }
+    // (A path in it breaks where it has to: a folder's name longer than the tip ran out of it.)
     tooltip(
         content,
-        container(text(tip).size(style::SMALL)).padding(6).max_width(320).style(style::tooltip),
+        container(text(tip).size(style::SMALL).wrapping(text::Wrapping::WordOrGlyph)).padding(6).max_width(320).style(style::tooltip),
         position,
     )
     .delay(std::time::Duration::from_millis(450))

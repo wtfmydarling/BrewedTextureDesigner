@@ -502,3 +502,70 @@ fn the_graph_draws_in_its_view_only() {
     }
     assert!(found.is_empty(), "{}", found.join("\n"));
 }
+
+/// A title too long for its node's header is shortened in its middle, in what the header's
+/// badges leave it: the badges (the format of an Output, the marker of the node shown in the 2D
+/// view) and what is past the node are drawn as they are with a short title (the title ran over
+/// them, and out of the node).
+#[test]
+fn a_long_title_leaves_the_badges_of_its_node_as_they_are() {
+    let mut w = canvas!();
+    let output = first(&w, NodeKind::OUTPUT);
+    w.send(Message::Graph(GraphMessage::Preview(output)));
+    w.app.ui.graph_view.zoom = 2.0;
+    let r = node_rect(&w, output);
+    let view = w.app.ui.graph_view;
+    w.send(Message::Graph(GraphMessage::PanBy(Vector::new(view.bounds.center_x() - r.center_x(), view.bounds.center_y() - r.center_y()))));
+    w.input(&[]);
+    // The right of the header, where its badges are, and past the node.
+    let (r, z) = (node_rect(&w, output), w.app.ui.graph_view.zoom);
+    let header_h = view::graph::layout::HEADER_H * z;
+    let (from, to) = ((r.x + r.width - 48.0 * z) as usize, (r.x + r.width + 40.0) as usize);
+    let (top, bottom) = (r.y as usize + 2, (r.y + header_h) as usize - 1);
+    let badges = |w: &mut Harness, name: &str| -> Vec<u8> {
+        w.send(Message::Edit(Edit::SetParam { node: output, key: "name".into(), value: ParamValue::Text(name.into()) }));
+        w.send(Message::Seal);
+        w.input(&[]);
+        let pixels = w.pixels();
+        let width = w.size.width as usize;
+        (top..bottom).flat_map(|y| pixels[(y * width + from) * 4..(y * width + to) * 4].to_vec()).collect()
+    };
+    let short = badges(&mut w, "Out");
+    for long in ["WWWWMMMMWWWWMMMMWWWW", "base_color_of_the_bricks_and_of_the_mortar_between_them"] {
+        let drawn = badges(&mut w, long);
+        let differ = short.iter().zip(&drawn).filter(|(a, b)| (i32::from(**a) - i32::from(**b)).abs() > 2).count();
+        assert_eq!(differ, 0, "{long}: the badges as they are with a short title");
+    }
+}
+
+/// What a comment says in its title bar is cut, measured, to the frame: past a narrow frame
+/// nothing is drawn of a long title of wide letters (it ran on past the frame's edge).
+#[test]
+fn a_long_title_of_a_comment_stays_in_its_frame() {
+    let mut w = canvas!();
+    // A narrow comment, alone where it is.
+    w.send(Message::Edit(Edit::AddComment { text: "Bricks".into(), pos: [3000.0, 3000.0], size: [220.0, 160.0] }));
+    w.send(Message::Seal);
+    let id = w.app.graph().comments.last().map(|c| c.id).expect("the comment");
+    w.app.ui.graph_view.zoom = 1.5;
+    let r = comment_rect(&w, id);
+    let view = w.app.ui.graph_view;
+    w.send(Message::Graph(GraphMessage::PanBy(Vector::new(view.bounds.center_x() - r.center_x(), view.bounds.center_y() - r.center_y()))));
+    w.input(&[]);
+    let r = comment_rect(&w, id);
+    // Past the frame's right edge, along its title bar.
+    let (from, to) = ((r.x + r.width + 3.0) as usize, (r.x + r.width + 200.0) as usize);
+    let (top, bottom) = (r.y as usize + 2, (r.y + 24.0) as usize);
+    let past = |w: &mut Harness, title: &str| -> Vec<u8> {
+        w.send(Message::Edit(Edit::SetCommentText { id, text: title.into() }));
+        w.send(Message::Seal);
+        w.input(&[]);
+        let pixels = w.pixels();
+        let width = w.size.width as usize;
+        (top..bottom).flat_map(|y| pixels[(y * width + from) * 4..(y * width + to) * 4].to_vec()).collect()
+    };
+    let short = past(&mut w, "Bricks");
+    let long = past(&mut w, "WIDE MORTAR WITH WORN EDGES WHERE THE BRICKS MEET");
+    let differ = short.iter().zip(&long).filter(|(a, b)| (i32::from(**a) - i32::from(**b)).abs() > 2).count();
+    assert_eq!(differ, 0, "nothing of the title past the frame");
+}

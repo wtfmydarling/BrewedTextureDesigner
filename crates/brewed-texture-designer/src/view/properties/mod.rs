@@ -252,12 +252,15 @@ fn messages(app: &App, node: &Node) -> Element<'static, Message> {
     // What went wrong inside the graph a node uses is the node's too.
     let inner = app.res.inner.get(&node.id).cloned();
     let errors = eval.map(|e| e.errors.clone()).unwrap_or_default().into_iter().chain(report.and_then(|r| r.error.clone())).chain(inner);
+    // (A path in a message breaks where it has to: a folder's name longer than the panel ran out
+    // of its box.)
+    let said = |m: String| text(m).size(style::SMALL).wrapping(text::Wrapping::WordOrGlyph);
     for e in errors {
-        list = list.push(container(text(e).size(style::SMALL)).padding(6).width(Length::Fill).style(style::message_box(style::ERROR)));
+        list = list.push(container(said(e)).padding(6).width(Length::Fill).style(style::message_box(style::ERROR)));
     }
     let warnings = eval.map(|e| e.warnings.clone()).unwrap_or_default().into_iter().chain(report.and_then(|r| r.warning.clone()));
     for w in warnings {
-        list = list.push(container(text(w).size(style::SMALL)).padding(6).width(Length::Fill).style(style::message_box(style::WARNING)));
+        list = list.push(container(said(w)).padding(6).width(Length::Fill).style(style::message_box(style::WARNING)));
     }
     // Always present, so the widgets below keep their place (and focus) when messages
     // appear or disappear while typing.

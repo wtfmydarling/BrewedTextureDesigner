@@ -730,6 +730,26 @@ fn scaled(size: f32, zoom: f32) -> f32 {
     ((size * zoom) * 4.0).round() / 4.0
 }
 
+/// The sizes the texts of nodes are measured at, whatever the zoom: widths go as sizes go (and
+/// one size measured is measured once).
+const TITLE_AT: f32 = 12.5;
+const SMALL_AT: f32 = 11.0;
+const COMMENT_AT: f32 = 13.5;
+
+/// How wide `content` is drawn at `size` in `font`, measured at `at`.
+fn width_at(content: &str, at: f32, size: f32, font: iced::Font) -> f32 {
+    crate::view::text_width_in(content, at, font) * size / at
+}
+
+/// `content` drawn at `size` in `font` in `room` pixels: shortened in its middle where it is too
+/// long (see [`crate::view::shortened`]), measured at `at`.
+fn fit(content: &str, at: f32, size: f32, font: iced::Font, room: f32) -> String {
+    if size <= 0.0 || room <= 0.0 {
+        return String::new();
+    }
+    crate::view::shortened(content, at, font, room * at / size)
+}
+
 fn draw_grid(frame: &mut Frame, t: &Transform, size: Size) {
     let mut step = 32.0 * t.zoom;
     while step < 14.0 {
@@ -835,11 +855,12 @@ impl GraphCanvas<'_> {
         let size = scaled(13.5, z).max(10.0).min(l.header.height - 1.0);
         if size >= 7.0 {
             let content = if comment.text.is_empty() { "Comment".to_string() } else { comment.text.clone() };
-            let max_chars = ((l.rect.width - 14.0 * z) / (7.2 * size / 13.5)).max(3.0) as usize;
+            // (As much of it as the frame holds, measured: wide letters ran past the frame.)
+            let room = (l.rect.width - 16.0 * z) * COMMENT_AT / size;
             let faint = comment.text.is_empty();
             let text_color = if faint { style::alpha(Color::WHITE, 0.5) } else { style::mix(color, Color::WHITE, 0.78) };
             frame.fill_text(Text {
-                content: truncate(&content, max_chars),
+                content: if room > 0.0 { crate::view::cut(&content, COMMENT_AT, style::bold(), room) } else { String::new() },
                 position: Point::new(l.header.x + 8.0 * z, l.header.center_y()),
                 color: text_color,
                 size: Pixels(size),
@@ -952,18 +973,57 @@ impl GraphCanvas<'_> {
         let show_text = z > 0.32;
         let font_size = scaled(12.5, z);
         let small = scaled(11.0, z);
-        if show_text {
-            let max_chars = ((l.rect.width - 44.0 * z) / (7.0 * z)).max(3.0) as usize;
-            let mut title = truncate(&node_kind_title(node), max_chars);
-            if node.bypass {
-                title = truncate(&format!("{title} (bypassed)"), max_chars);
+
+        // Header badges: error / warning, preview marker, output format; the title in what they
+        // leave of the header.
+        let mut badge_x = l.header.x + l.header.width - 10.0 * z;
+        let mut title_right = l.header.x + l.header.width - 8.0 * z;
+        if error.is_some() || warning.is_some() {
+            let c = if error.is_some() { style::ERROR } else { style::WARNING };
+            frame.fill(&Path::circle(Point::new(badge_x, cy), 6.0 * z), c);
+            if show_text {
+                text_at(frame, "!".into(), Point::new(badge_x, cy), small, Color::BLACK, TextAlign::Center);
             }
+            title_right = badge_x - 10.0 * z;
+            badge_x -= 16.0 * z;
+        }
+        if app.ui.preview.node == Some(node.id) {
+            let center = Point::new(badge_x, cy);
+            frame.stroke(&Path::circle(center, 5.0 * z), Stroke::default().with_width(1.5 * z).with_color(Color::WHITE));
+            frame.fill(&Path::circle(center, 2.2 * z), Color::WHITE);
+            title_right = badge_x - 9.0 * z;
+            badge_x -= 16.0 * z;
+        }
+        if node.kind == NodeKind::OUTPUT && show_text {
+            let format = OUTPUT_FORMATS.get(node.enum_value("format") as usize).copied().unwrap_or("");
+            let right = badge_x + 4.0 * z;
+            title_right = right - width_at(format, SMALL_AT, small, style::ui_font()) - 6.0 * z;
+            text_at(frame, format.to_string(), Point::new(right, cy), small, style::NODE_TEXT, TextAlign::Right);
+        }
+        if show_text {
+            // Shortened in its middle where it is too long (it ran over the badges and out of the
+            // node); "(bypassed)" kept whole while the name has room beside it.
+            let (left, font) = (l.header.x + 8.0 * z, style::bold());
+            let room = title_right - left;
+            let name = node_kind_title(node);
+            let title = match node.bypass {
+                true => {
+                    let said = " (bypassed)";
+                    let beside = room - width_at(said, TITLE_AT, font_size, font);
+                    if beside >= width_at("Abc…", TITLE_AT, font_size, font) {
+                        format!("{}{said}", fit(&name, TITLE_AT, font_size, font, beside))
+                    } else {
+                        fit(&format!("{name}{said}"), TITLE_AT, font_size, font, room)
+                    }
+                }
+                false => fit(&name, TITLE_AT, font_size, font, room),
+            };
             frame.fill_text(Text {
                 content: title,
-                position: Point::new(l.header.x + 8.0 * z, cy),
+                position: Point::new(left, cy),
                 color: Color::WHITE,
                 size: Pixels(font_size),
-                font: style::bold(),
+                font,
                 align_x: TextAlign::Left,
                 align_y: Vertical::Center,
                 line_height: LineHeight::default(),
@@ -972,40 +1032,24 @@ impl GraphCanvas<'_> {
             });
         }
 
-        // Header badges: error / warning, preview marker, output format.
-        let mut badge_x = l.header.x + l.header.width - 10.0 * z;
-        if error.is_some() || warning.is_some() {
-            let c = if error.is_some() { style::ERROR } else { style::WARNING };
-            frame.fill(&Path::circle(Point::new(badge_x, cy), 6.0 * z), c);
-            if show_text {
-                text_at(frame, "!".into(), Point::new(badge_x, cy), small, Color::BLACK, TextAlign::Center);
-            }
-            badge_x -= 16.0 * z;
-        }
-        if app.ui.preview.node == Some(node.id) {
-            let center = Point::new(badge_x, cy);
-            frame.stroke(&Path::circle(center, 5.0 * z), Stroke::default().with_width(1.5 * z).with_color(Color::WHITE));
-            frame.fill(&Path::circle(center, 2.2 * z), Color::WHITE);
-            badge_x -= 16.0 * z;
-        }
-        if node.kind == NodeKind::OUTPUT && show_text {
-            let format = OUTPUT_FORMATS.get(node.enum_value("format") as usize).copied().unwrap_or("");
-            text_at(frame, format.to_string(), Point::new(badge_x + 4.0 * z, cy), small, style::NODE_TEXT, TextAlign::Right);
-        }
-
         // Socket labels.
         if z > 0.48 {
-            for (s, p) in &l.inputs {
+            // (Each as wide as its side of the row, or the row when it is alone on it: the names
+            // of the sockets of a graph used as a node are its own, and ran into each other.)
+            let room = |shared: bool| if shared { l.rect.width * 0.5 - 14.0 * z } else { l.rect.width - 20.0 * z };
+            for (i, (s, p)) in l.inputs.iter().enumerate() {
                 let linked = input_linked(&s.key);
                 let color = if linked && s.kind == brewed_texture_core::SocketKind::Param {
                     style::type_color(s.ty)
                 } else {
                     style::NODE_TEXT
                 };
-                text_at(frame, s.label.clone(), *p + Vector::new(10.0 * z, 0.0), small, color, TextAlign::Left);
+                let label = fit(&s.label, SMALL_AT, small, style::ui_font(), room(i < l.outputs.len()));
+                text_at(frame, label, *p + Vector::new(10.0 * z, 0.0), small, color, TextAlign::Left);
             }
-            for (s, p) in &l.outputs {
-                text_at(frame, s.label.clone(), *p - Vector::new(10.0 * z, 0.0), small, style::NODE_TEXT, TextAlign::Right);
+            for (i, (s, p)) in l.outputs.iter().enumerate() {
+                let label = fit(&s.label, SMALL_AT, small, style::ui_font(), room(i < l.inputs.len()));
+                text_at(frame, label, *p - Vector::new(10.0 * z, 0.0), small, style::NODE_TEXT, TextAlign::Right);
             }
         }
 
@@ -1039,19 +1083,24 @@ impl GraphCanvas<'_> {
         } else if show_text {
             let row = if node.is_expression_node() { 1.0 } else { 0.0 };
             let value = eval.and_then(|e| e.value);
+            // (As wide as the node: a long message ran out of it.)
+            let right = l.rect.x + l.rect.width - 8.0 * z;
+            let fitted = |s: &str, from: f32| fit(s, SMALL_AT, small, style::ui_font(), right - from);
             match (&error, value) {
                 (Some(e), _) => {
-                    let msg = if node.kind == NodeKind::MATH { "Invalid expression".to_string() } else { truncate(e, 26) };
+                    let msg = if node.kind == NodeKind::MATH { "Invalid expression".to_string() } else { fitted(e, text_x) };
                     text_at(frame, msg, Point::new(text_x, line(row)), small, style::ERROR, TextAlign::Left);
                 }
                 (None, Some(Value::Color(c))) => {
                     let sw = Rectangle::new(Point::new(text_x, line(row) - 6.0 * z), Size::new(28.0 * z, 12.0 * z));
                     frame.fill_rectangle(sw.position(), sw.size(), style::color_of(c));
-                    let label = Value::Color(c).display();
-                    text_at(frame, label, Point::new(sw.x + sw.width + 6.0 * z, line(row)), small, style::NODE_TEXT, TextAlign::Left);
+                    let at = sw.x + sw.width + 6.0 * z;
+                    let label = fitted(&Value::Color(c).display(), at);
+                    text_at(frame, label, Point::new(at, line(row)), small, style::NODE_TEXT, TextAlign::Left);
                 }
                 (None, Some(v)) => {
-                    text_at(frame, format!("= {}", v.display()), Point::new(text_x, line(row)), small, style::NODE_TEXT, TextAlign::Left);
+                    let label = fitted(&format!("= {}", v.display()), text_x);
+                    text_at(frame, label, Point::new(text_x, line(row)), small, style::NODE_TEXT, TextAlign::Left);
                 }
                 (None, None) => {}
             }

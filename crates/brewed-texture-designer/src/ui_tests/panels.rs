@@ -507,3 +507,64 @@ fn the_options_of_the_nodes_selected_fit_and_are_steps_of_their_own() {
     w.send(Message::Undo);
     assert_eq!(tiling_of(&w), before, "the first");
 }
+
+/// The menu of what lights the 3D view, with as many images as it keeps, in the smallest window
+/// (it opens above its button, where there is more room): what does not fit in that room
+/// scrolls, down to its last field (cut there, the fields under the images were out of reach).
+#[test]
+fn the_lighting_menu_scrolls_to_its_last_field_in_the_smallest_window() {
+    let mut w = harness!(view::root, 1000.0, 640.0);
+    let l = &mut w.app.ui.preview.lighting;
+    l.recent = (0..crate::view::view3d::RECENT).map(|i| format!("C:/skies/sky number {i}.hdr")).collect();
+    l.file = l.recent.first().cloned();
+    w.send(Message::Preview(PreviewMessage::LightingMenu(true)));
+    draw_frame(&mut w, std::time::Instant::now());
+    w.snapshot("lighting_menu_small");
+    // (Where the texts of a scrollable's content are laid out, not scrolled.)
+    let blur = *texts(&mut w, "Blur").last().expect("the last field of the menu");
+    let menu = *texts(&mut w, "Environment").last().expect("the menu's heading");
+    let area = iced::Rectangle::new(Point::new(menu.x - 20.0, 0.0), Size::new(300.0, w.size.height));
+    let holds = |content: &iced::Rectangle| content.y <= blur.y && blur.y + blur.height <= content.y + content.height + 0.5;
+    let (bounds, content, _) = *scrollables_in(&mut w, area).iter().find(|(_, c, _)| holds(c)).expect("the menu scrolls");
+    assert!(bounds.y >= 0.0 && bounds.y + bounds.height <= w.size.height, "the menu in the window: {bounds:?}");
+    w.hover(bounds.center());
+    for _ in 0..20 {
+        w.mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 } });
+    }
+    let (bounds, _, scrolled) = scrollables_in(&mut w, area).into_iter().find(|(_, c, _)| holds(c)).expect("the menu");
+    let shown = (blur.y - scrolled.y, blur.y + blur.height - scrolled.y);
+    assert!(bounds.y <= shown.0 && shown.1 <= bounds.y + bounds.height + 0.5, "Blur shown: {shown:?} in {bounds:?} ({content:?})");
+}
+
+/// A message of Properties that says a long path (a file that cannot be read, deep in folders of
+/// long names) breaks where it has to: nothing of it is drawn past the edge of its box (a folder's
+/// name longer than the panel ran out of it, to the edge of the window).
+#[test]
+fn a_long_path_in_a_message_stays_in_its_box() {
+    let mut w = harness!(view::root, 1000.0, 1000.0);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BITMAP, pos: [-400.0, 900.0] }));
+    let id = w.app.graph().nodes_of(NodeKind::BITMAP).map(|n| n.id).max().expect("the Bitmap");
+    let path = "C:/Users/somebody/Textures/A_Folder_Of_A_Name_Longer_Than_The_Panel_Is_Wide_Without_Spaces/bricks.png";
+    w.send(Message::Edit(Edit::SetParam { node: id, key: "path".into(), value: ParamValue::Text(path.into()) }));
+    w.send(Message::Seal);
+    // (What the engine says of a file it cannot read.)
+    let said = format!("Cannot read {path}: The system cannot find the path specified. (os error 3)");
+    w.app.res.reports.insert(id, brewed_texture_engine::ImageReport { version: 1, error: Some(said.clone()), warning: None, kind: None });
+    w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+    draw_frame(&mut w, std::time::Instant::now());
+    w.snapshot("long_path_in_a_message");
+    let message = *texts(&mut w, &said).first().expect("the message");
+    // Right of its box (padded by 6 pixels, its edge a pixel wide), to the window's edge: no red of
+    // its words.
+    let pixels = w.pixels();
+    let width = w.size.width as usize;
+    let from = (message.x + message.width + 6.0 + 2.0).ceil() as usize;
+    let red = (message.y as usize..(message.y + message.height) as usize)
+        .flat_map(|y| (from..width).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            let p = &pixels[(y * width + x) * 4..][..3];
+            i32::from(p[0]) > i32::from(p[1]) + 40
+        })
+        .count();
+    assert_eq!(red, 0, "red pixels of the message past its box, right of x {from}");
+}

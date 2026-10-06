@@ -421,7 +421,10 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
             number(l.blur as f64, 0.0, 1.0).limits(0.0, 1.0).default_value(0.25).on_change(move |v| send(PreviewMessage::Blur(v as f32))).into(),
         ));
     }
-    container(column(items).spacing(1).width(Length::Fixed(270.0))).padding(4).style(style::popup).into()
+    // (It scrolls where the room it opens in is shorter than it: cut there, its fields under the
+    // images were out of reach.)
+    let items = iced::widget::scrollable(column(items).spacing(1).width(Length::Fixed(270.0))).style(style::scrollable);
+    container(items).padding(4).style(style::popup).into()
 }
 
 /// The usage of an engine image, from its Output node.

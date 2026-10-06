@@ -508,7 +508,7 @@ fn recover(app: &App) -> Element<'_, Message> {
                 icon(Icon::Package, 16.0, style::TEXT_DIM),
                 column![
                     text(&unsaved.title).size(style::TEXT_SIZE).font(style::bold()),
-                    text(place).size(style::SMALL).color(style::TEXT_FAINT),
+                    text(place).size(style::SMALL).color(style::TEXT_FAINT).wrapping(text::Wrapping::WordOrGlyph),
                     text(when).size(style::SMALL).color(style::TEXT_DIM),
                 ]
                 .spacing(2)
@@ -570,7 +570,7 @@ fn missing_files<'a>(app: &'a App, missing: &'a MissingFiles) -> Element<'a, Mes
                 icon(which, 16.0, style::TEXT_DIM),
                 column![
                     text(file_name(&item.path)).size(style::TEXT_SIZE).font(style::bold()),
-                    text(&item.path).size(style::SMALL).color(style::TEXT_FAINT),
+                    text(&item.path).size(style::SMALL).color(style::TEXT_FAINT).wrapping(text::Wrapping::WordOrGlyph),
                     text(what).size(style::SMALL).color(style::TEXT_DIM),
                 ]
                 .spacing(2)
