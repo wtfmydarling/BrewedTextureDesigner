@@ -849,8 +849,8 @@ fn closing_with_unsaved_changes_asks_first() {
     assert_eq!(app.graph().resolution, [512, 512]);
 }
 
-/// The color of a stop of a gradient: the stop chosen on the ramp, its swatch opens the
-/// picker, and the picker colors that stop.
+/// The color of a stop of a gradient: the stop chosen on the ramp, its square opens the Color
+/// Editor on it, and the editor's square colors that stop.
 #[test]
 fn a_stop_of_a_gradient_takes_a_color_from_the_picker() {
     let mut w = harness!(view::root, 1680.0, 1000.0);
@@ -860,16 +860,19 @@ fn a_stop_of_a_gradient_takes_a_color_from_the_picker() {
     w.send(Message::GradientStop(map, "gradient".into(), 1));
     w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
     let stop = |w: &Harness| gradient_of(&w.app, map).stops[1].color;
-    let hex = crate::widget::color::to_hex(stop(&w));
-    let swatch = *texts(&mut w, &hex).first().expect("the swatch of the stop");
-    // (The window tells the app where the cursor is: the picker opens there.)
-    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: swatch.center() }));
-    click(&mut w, swatch.center());
-    assert_eq!(w.app.ui.color_picker, Some(ColorTarget::GradientStop(map, "gradient".into())));
+    let target = ColorTarget::GradientStop(map, "gradient".into());
+    let area = iced::Rectangle::new(Point::new(w.size.width - 400.0, 0.0), Size::new(400.0, w.size.height));
+    let square = panels::find_click(&mut w, area, |m| matches!(m, Message::ColorPicker(Some(t)) if *t == target)).expect("the square of the stop");
+    // (The window tells the app where the cursor is: the editor opens near it.)
+    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: square }));
+    click(&mut w, square);
+    assert_eq!(w.app.ui.color_picker, Some(target));
     w.snapshot("gradient_stop_picker");
-    // Dragging in the saturation square of the picker colors the stop.
+    // Dragging in the editor's square colors the stop.
     let before = stop(&w);
-    let square = w.app.ui.color_picker_at + iced::Vector::new(118.0, 70.0);
+    let title = texts_where(&mut w, |t| t.starts_with("Color Editor")).first().map(|(_, r)| *r).expect("the editor's title");
+    assert!(texts_where(&mut w, |t| t.contains("stop 2")).len() == 1, "which says the stop it edits");
+    let square = Point::new(title.x + 100.0, title.y + 110.0);
     drag(&mut w, square, square + iced::Vector::new(-40.0, 20.0));
     assert_ne!(stop(&w), before);
     assert_eq!(gradient_of(&w.app, map).stops.len(), 4, "no stop added or taken away");
@@ -1484,10 +1487,14 @@ fn a_value_is_dragged_as_far_as_the_pointer_can_be_pushed() {
     assert!(brewed_texture_core::NodeKind::TRANSFORM_2D.def().param("rotation").expect("rotation").limits.is_none());
 }
 
-/// The color picker floats where it was opened instead of unfolding inside a panel, so
-/// nothing under it moves; a click anywhere else puts it away.
+/// The Color Editor is a window of its own inside the program's: it opens near where it was
+/// asked for, kept in the window, over everything, and nothing under it moves; its square sets
+/// the color; a click and a drag elsewhere (the model turned in the 3D view) leave it open; it
+/// moves by its title bar, following the cursor, and opens again where it was put; its × closes
+/// it, as Esc does. (A popup, it closed at a click elsewhere: the color was to be found again
+/// for each look at the model.)
 #[test]
-fn the_color_picker_floats_over_the_interface() {
+fn the_color_editor_is_a_window_that_stays_open() {
     let mut w = harness!(view::root, 1680.0, 1000.0);
     let window = w.app.main_window().expect("the main window");
     // A node of its own: the demo's Uniform Color takes its color from an input socket.
@@ -1500,25 +1507,72 @@ fn the_color_picker_floats_over_the_interface() {
     w.send(Message::Graph(GraphMessage::Select { node: uniform, mode: SelectMode::Replace }));
     w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
 
-    // Opened from the swatch: the picker appears under the cursor, over everything.
+    // Opened from the swatch: it appears near the cursor, kept in the window.
+    let target = ColorTarget::Param(uniform, "color".into());
     let at = Point::new(1500.0, 400.0);
     w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: at }));
-    w.send(Message::ColorPicker(Some(ColorTarget::Param(uniform, "color".into()))));
+    w.send(Message::ColorPicker(Some(target.clone())));
     w.input(&[]);
-    assert!(w.app.ui.color_picker.is_some());
+    assert_eq!(w.app.ui.color_picker, Some(target.clone()));
+    let title = |w: &mut Harness| texts_where(w, |t| t.starts_with("Color Editor")).first().map(|(_, r)| *r).expect("its title");
+    let t = title(&mut w);
+    assert!(t.x + crate::view::editors::COLOR_EDITOR.width - 10.0 <= w.size.width, "in the window: {t:?}");
+    assert!((t.x - 4.0 - w.app.ui.color_picker_at.x).abs() < 6.0, "where it is said to be: {t:?}, {:?}", w.app.ui.color_picker_at);
 
-    // The saturation square of the floating picker takes the mouse: dragging in it changes
-    // the color, which means the picker really is there and not in the panel.
+    // Its square, under its title, sets the color: it is there, over the panels.
     let before = color(&w);
-    let square = w.app.ui.color_picker_at + iced::Vector::new(118.0, 70.0);
+    let square = Point::new(t.x + 60.0, t.y + 110.0);
     drag(&mut w, square, square + iced::Vector::new(-40.0, 20.0));
-    assert_ne!(color(&w), before, "the picker is not under the cursor");
+    assert_ne!(color(&w), before, "the square is not under the cursor");
 
-    // A click anywhere else puts it away, and the color it set stays.
+    // A click and a drag elsewhere (the views, as the model is turned) leave it open.
     let changed = color(&w);
-    drag(&mut w, Point::new(500.0, 900.0), Point::new(500.0, 900.0));
-    assert_eq!(w.app.ui.color_picker, None, "a click elsewhere closes the picker");
+    drag(&mut w, Point::new(500.0, 900.0), Point::new(560.0, 880.0));
+    assert_eq!(w.app.ui.color_picker, Some(target.clone()), "a click elsewhere leaves it open");
     assert_eq!(color(&w), changed);
+
+    // Moved by its title bar, it follows the cursor (the window says where the cursor is).
+    let grab = Point::new(t.x + 120.0, t.y + t.height / 2.0);
+    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: grab }));
+    w.hover(grab);
+    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    assert!(w.app.ui.color_editor_grab.is_some(), "grabbed by its title bar");
+    let to = grab - iced::Vector::new(300.0, 100.0);
+    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: to }));
+    w.window_event(window, iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)));
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    let moved = title(&mut w);
+    assert!((moved.x - (t.x - 300.0)).abs() < 1.0 && (moved.y - (t.y - 100.0)).abs() < 1.0, "{t:?} to {moved:?}");
+    assert_eq!(color(&w), changed, "moving it changes no color");
+    // As high as it is said to be, at the most (it is kept in the window by that).
+    let lowest = texts_where(&mut w, |t| t == "Float").into_iter().filter(|(_, r)| r.x < moved.x + 300.0).map(|(_, r)| r.y + r.height).fold(0.0, f32::max);
+    let bottom = w.app.ui.color_picker_at.y + crate::view::editors::COLOR_EDITOR.height;
+    assert!(lowest > moved.y && lowest + 14.0 <= bottom, "its last button ends at {lowest}, it is said to end at {bottom}");
+
+    // Its × closes it; opened again, it is where it was put.
+    let area = iced::Rectangle::new(Point::new(moved.x, moved.y - 8.0), Size::new(crate::view::editors::COLOR_EDITOR.width, 28.0));
+    let close = panels::find_click(&mut w, area, |m| matches!(m, Message::ColorPicker(None))).expect("its ×");
+    click(&mut w, close);
+    assert_eq!(w.app.ui.color_picker, None);
+    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: at }));
+    w.send(Message::ColorPicker(Some(target.clone())));
+    let again = title(&mut w);
+    assert!((again.x - moved.x).abs() < 1.0 && (again.y - moved.y).abs() < 1.0, "where it was put: {again:?}, {moved:?}");
+    // Esc closes it too.
+    w.send(Message::Runtime(
+        iced::Event::Keyboard(keyboard::Event::KeyPressed {
+            key: Key::Named(keyboard::key::Named::Escape),
+            modified_key: Key::Named(keyboard::key::Named::Escape),
+            physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Escape),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::default(),
+            text: None,
+            repeat: false,
+        }),
+        iced::event::Status::Ignored,
+        window,
+    ));
+    assert_eq!(w.app.ui.color_picker, None);
 }
 
 /// Panning the graph keeps the point that was grabbed under the mouse, however fast the
@@ -3541,6 +3595,33 @@ fn the_recovery_dialog_offers_what_was_kept() {
     assert_eq!(w.app.ui.dialog, None);
     assert!(w.app.doc.is_dirty() && w.app.doc.path() == Some(&walls));
     assert_eq!(w.app.graph().nodes_of(NodeKind::BLUR).count(), blurs, "with the node added after it was saved");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Started on the Home screen, as it starts without files, the program offers what it kept of
+/// one that stopped; recovered, it is what is edited: the graph, not the Home screen (it waited
+/// behind the Home screen's button). Later leaves the Home screen as it is.
+#[test]
+fn recovered_work_is_shown_at_once() {
+    use crate::app::autosave::Recovery;
+    let dir = scratch("recovery-shown");
+    let opts = StartupOptions { recovery: Some(dir.join("Recovery")), home: true, ..StartupOptions::default() };
+    let (mut crashed, _) = App::boot(opts.clone());
+    crashed.ui.home = None;
+    let _ = crashed.update(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
+    crashed.autosave_now();
+    drop(crashed);
+    let (mut later, _) = App::boot(opts.clone());
+    assert!(later.ui.home.is_some(), "on the Home screen");
+    assert_eq!(later.ui.dialog, Some(Dialog::Recover));
+    let _ = later.update(Message::Recover(Recovery::Later));
+    assert!(later.ui.home.is_some(), "Later: still on the Home screen");
+    drop(later);
+    let (mut next, _) = App::boot(opts);
+    assert_eq!(next.ui.dialog, Some(Dialog::Recover));
+    let _ = next.update(Message::Recover(Recovery::Recover));
+    assert!(next.ui.home.is_none(), "the graph recovered shown");
+    assert_eq!(next.graph().nodes_of(NodeKind::BLUR).count(), 1, "with its changes");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

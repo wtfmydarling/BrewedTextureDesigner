@@ -441,6 +441,58 @@ fn the_properties_of_a_graph_a_comment_and_a_selection_show_whole() {
     assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
 }
 
+/// The Color Editor shows whole in the smallest window, of a color and of a level of gray, in
+/// each way channels are said; so do the color fields of Properties at its narrowest (a color
+/// parameter, a gradient's stop, a comment's color, a color input value opened).
+#[test]
+fn colors_show_whole_in_the_smallest_window() {
+    use crate::app::{ColorTarget, ColorUnits, VarField};
+    let mut w = harness!(view::root, 1000.0, 640.0);
+    narrowest_properties(&mut w);
+    w.send(Message::Graph(GraphMessage::ClearSelection));
+    let before = cut_short(&mut w);
+    let mut found = Vec::new();
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::UNIFORM_COLOR, pos: [2600.0, -900.0] }));
+    w.send(Message::Seal);
+    let id = w.app.graph().nodes_of(NodeKind::UNIFORM_COLOR).map(|n| n.id).max().expect("the node");
+    w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+    let target = ColorTarget::Param(id, "color".into());
+    for gray in [false, true] {
+        w.send(Message::Edit(Edit::SetParam { node: id, key: "output".into(), value: ParamValue::Enum(u32::from(gray)) }));
+        w.send(Message::Seal);
+        for (float, hsv) in [(false, false), (true, false), (false, true), (true, true)] {
+            w.app.ui.color_units = ColorUnits { float, hsv };
+            for open in [false, true] {
+                w.app.ui.color_picker = open.then(|| target.clone());
+                newly_cut(&mut w, &before, &format!("a color (gray: {gray}, float: {float}, hsv: {hsv}, editor: {open})"), &mut found);
+            }
+        }
+    }
+    w.app.ui.color_picker = None;
+    w.app.ui.color_units = ColorUnits::default();
+    found.extend(overlapping(&mut w).into_iter().map(|line| format!("a color parameter: {line}")));
+    // A gradient's stop.
+    let map = w.app.graph().nodes_of(NodeKind::GRADIENT_MAP).next().map(|n| n.id).expect("the demo colors by a gradient");
+    w.send(Message::Graph(GraphMessage::Select { node: map, mode: SelectMode::Replace }));
+    w.send(Message::GradientStop(map, "gradient".into(), 1));
+    newly_cut(&mut w, &before, "a stop of a gradient", &mut found);
+    w.app.ui.color_picker = Some(ColorTarget::GradientStop(map, "gradient".into()));
+    newly_cut(&mut w, &before, "a stop of a gradient, in the editor", &mut found);
+    w.app.ui.color_picker = None;
+    // A comment's color.
+    let comment = w.app.graph().comments.first().map(|c| c.id).expect("the demo has comments");
+    w.send(Message::Graph(GraphMessage::SelectComment(comment)));
+    newly_cut(&mut w, &before, "a comment", &mut found);
+    // A color input value, opened.
+    let tint = w.app.graph().variables.iter().find(|v| matches!(v.value, brewed_texture_core::Value::Color(_))).map(|v| v.name.clone()).expect("the demo has a color input");
+    w.send(Message::Graph(GraphMessage::ClearSelection));
+    w.app.ui.expanded_vars.insert(tint.clone());
+    newly_cut(&mut w, &before, "a color input value", &mut found);
+    w.app.ui.color_picker = Some(ColorTarget::Variable(tint, VarField::Value));
+    newly_cut(&mut w, &before, "a color input value, in the editor", &mut found);
+    assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
+}
+
 /// Every dialog shows whole at the narrowest the window is let be: the settings, each of their
 /// pages, a new graph, the export, the shortcuts, about the program, the notices, a question
 /// about unsaved changes.

@@ -168,7 +168,10 @@ fn vs(v: VIn) -> VOut {
         } else {
             h = widen(slot_level(e & 31u, uv), (e & 32u) != 0u).r;
         }
-        p = p + v.normal * clamp(h, -4.0, 4.0) * u.params.x;
+        // As in Substance Designer: middle gray (128) leaves the surface where it is, white
+        // moves it out and black in, as far apart as the view says (it only moved out, from
+        // black: the relief is as deep as it was, about the surface now).
+        p = p + v.normal * (clamp(h, -4.0, 4.0) - 0.5) * u.params.x;
     }
     var o: VOut;
     o.clip = u.view_proj * vec4<f32>(p, 1.0);

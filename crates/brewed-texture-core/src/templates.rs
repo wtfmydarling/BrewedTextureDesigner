@@ -582,9 +582,17 @@ fn material(g: &mut Graph, template: Template, maps: &[Map]) {
     const PAIR: f32 = 620.0;
     for (i, Map(name, value, is_gray, usage)) in maps.iter().enumerate() {
         let [x, y] = [(i % columns) as f32 * PAIR, (i / columns) as f32 * ROW];
-        let uniform = g.add_node(NodeKind::UNIFORM_COLOR, [x, y]);
-        set(g, uniform, "color", ParamValue::Color(*value));
-        set(g, uniform, "output", ParamValue::Enum(u32::from(*is_gray)));
+        // (A number where the map holds numbers: a color's channels are from 0 to 1.)
+        let uniform = if past_one(*usage) {
+            let uniform = g.add_node(NodeKind::UNIFORM_VALUE, [x, y]);
+            set(g, uniform, "value", ParamValue::Float(value[0]));
+            uniform
+        } else {
+            let uniform = g.add_node(NodeKind::UNIFORM_COLOR, [x, y]);
+            set(g, uniform, "color", ParamValue::Color(*value));
+            set(g, uniform, "output", ParamValue::Enum(u32::from(*is_gray)));
+            uniform
+        };
         let out = output(g, name, usage.index(), [x + 340.0, y]);
         if past_one(*usage) {
             set(g, out, "bit_depth", ParamValue::Enum(DEPTH_16F));
@@ -599,8 +607,8 @@ fn material(g: &mut Graph, template: Template, maps: &[Map]) {
     };
     let said = format!(
         "Each Output is one map of an OpenPBR material, named as the standard names it and of the usage of its \
-         parameter, which the 3D view shows it by. The uniform colors only hold a value: connect what makes each \
-         map in their place.{layer}"
+         parameter, which the 3D view shows it by. The uniform colors and values only hold a value: connect what \
+         makes each map in their place.{layer}"
     );
     let width = (columns as f32 - 1.0) * PAIR + 568.0;
     let top = said_height(&said, width);

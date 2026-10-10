@@ -1,15 +1,15 @@
 //! Editors for values, shared by the Input Values panel and the properties panel.
 
-use iced::widget::{button, column, container, image, mouse_area, row, space, text, toggler, tooltip};
-use iced::{Alignment, Border, ContentFit, Element, Length};
-use brewed_texture_core::{Edit, ParamValue, ResourceKind, Value, files};
+use iced::widget::{button, column, container, image, mouse_area, opaque, row, space, text, text_input, toggler, tooltip};
+use iced::{Alignment, Border, ContentFit, Element, Length, Size};
+use brewed_texture_core::{ResourceKind, Value, files};
 
-use crate::app::{App, ColorTarget, DragPayload, FileTarget, Message, PickMessage, VarField};
+use crate::app::{App, ColorEditorMessage, ColorTarget, ColorUnits, DragPayload, FileTarget, Message, PickMessage, VarField};
 use crate::icons::{Icon, icon};
 use crate::picker::PickTarget;
 use crate::style;
 use crate::view::tip;
-use crate::widget::color::{color_picker, to_hex};
+use crate::widget::color::{color_picker, color_strip, gray_of, hsv_to_rgb, luminance, rgb_to_hsv, to_hex};
 use crate::widget::number::{NumberField, number};
 
 /// Does a field that takes the files with these extensions (none: any) take the file at `path`?
@@ -146,40 +146,6 @@ pub fn swatch<'a>(c: [f32; 4], open: bool, on_press: Message) -> Element<'a, Mes
 
 /// The expanded color editor: picker, numeric RGBA channels and the eyedropper, which
 /// takes a color from anywhere on the screen for `target`.
-pub fn color_editor<'a>(
-    c: [f32; 4],
-    target: ColorTarget,
-    on_change: impl Fn([f32; 4]) -> Message + Clone + 'a,
-    on_release: Message,
-    picking: Option<&PickTarget>,
-) -> Element<'a, Message> {
-    let mut channels = row![].spacing(4);
-    for (i, label) in ["R ", "G ", "B ", "A "].iter().enumerate() {
-        let f = on_change.clone();
-        channels = channels.push(
-            number(c[i] as f64, 0.0, 1.0)
-                .prefix(*label)
-                .decimals(3)
-                .on_change(move |v| {
-                    let mut n = c;
-                    n[i] = v as f32;
-                    f(n)
-                })
-                .on_release(on_release.clone()),
-        );
-    }
-    let footer = row![
-        eyedropper(PickTarget::Color(target), picking, "Pick color", "Click anywhere on any monitor to take its color. Esc or a right click cancels."),
-        space().width(Length::Fill),
-        text(to_hex(c)).size(style::SMALL).font(style::mono()).color(style::TEXT_DIM),
-    ]
-    .align_y(Alignment::Center);
-    container(column![color_picker(c, on_change).on_release(on_release), channels, footer].spacing(6))
-        .padding(8)
-        .style(style::card)
-        .into()
-}
-
 /// A button that starts picking from the screen. While its pick is in progress it stays
 /// down, and a click on it cancels.
 pub fn eyedropper<'a>(target: PickTarget, picking: Option<&PickTarget>, label: &'a str, tooltip: &'a str) -> Element<'a, Message> {
@@ -280,70 +246,301 @@ pub fn value_editor<'a>(
     }
 }
 
-/// The color picker, floating where it was opened. It is a layer of its own so that
-/// opening it moves nothing in the panels, and a click anywhere else closes it.
-pub fn color_popup(app: &App) -> Option<Element<'_, Message>> {
-    let target = app.ui.color_picker.clone()?;
-    let graph = app.graph();
-    let picking = app.picking();
-    let content: Element<'_, Message> = match &target {
-        ColorTarget::Param(node, key) => {
-            let (node, key) = (*node, key.clone());
-            let c = match graph.node(node).and_then(|n| n.value(&key)) {
-                Some(ParamValue::Color(c)) => *c,
-                _ => return None,
-            };
-            let set = key.clone();
-            color_editor(
-                c,
-                target.clone(),
-                move |c| Message::Edit(Edit::SetParam { node, key: set.clone(), value: ParamValue::Color(c) }),
-                Message::Seal,
-                picking,
-            )
+// ---------------------------------------------------------------------------- colors
+
+/// How large the Color Editor is (its height, at the most: a gray's is lower), and how large
+/// its square.
+pub const COLOR_EDITOR: Size = Size::new(580.0, 316.0);
+const COLOR_SQUARE: f32 = 220.0;
+
+/// A channel of a color, as its sliders say it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Channel {
+    R,
+    G,
+    B,
+    H,
+    S,
+    V,
+    A,
+    /// Its level of gray (its luminance, what a grayscale image makes of it).
+    L,
+}
+
+impl Channel {
+    fn label(self) -> &'static str {
+        match self {
+            Channel::R => "R",
+            Channel::G => "G",
+            Channel::B => "B",
+            Channel::H => "H",
+            Channel::S => "S",
+            Channel::V => "V",
+            Channel::A => "A",
+            Channel::L => "L",
         }
-        ColorTarget::Variable(name, field) => {
-            let var = graph.variable(name)?;
-            let current = if *field == VarField::Value { var.value } else { var.default };
-            let Value::Color(c) = current else { return None };
-            let (name, field) = (name.clone(), *field);
-            color_editor(
-                c,
-                target.clone(),
-                move |c| {
-                    let value = Value::Color(c);
-                    Message::Edit(match field {
-                        VarField::Value => Edit::SetVariable { name: name.clone(), value },
-                        VarField::Default => Edit::SetVariableDefault { name: name.clone(), value },
-                    })
-                },
-                Message::Seal,
-                picking,
-            )
+    }
+
+    /// How much of it `c` has, from 0 to 1.
+    fn of(self, c: [f32; 4]) -> f32 {
+        let [h, s, v] = rgb_to_hsv([c[0], c[1], c[2]]);
+        match self {
+            Channel::R => c[0],
+            Channel::G => c[1],
+            Channel::B => c[2],
+            Channel::H => h,
+            Channel::S => s,
+            Channel::V => v,
+            Channel::A => c[3],
+            Channel::L => luminance(c),
         }
-        ColorTarget::Comment(id) => {
-            let id = *id;
-            let c = graph.comment(id)?.color;
-            color_editor(c, target.clone(), move |c| Message::Edit(Edit::SetCommentColor { id, color: c }), Message::Seal, picking)
+    }
+
+    /// `c` with `x` (from 0 to 1) of it.
+    fn set(self, c: [f32; 4], x: f32) -> [f32; 4] {
+        let x = if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.0 };
+        let [h, s, v] = rgb_to_hsv([c[0], c[1], c[2]]);
+        let hsv = |h: f32, s: f32, v: f32| {
+            let [r, g, b] = hsv_to_rgb([h, s, v]);
+            [r, g, b, c[3]]
+        };
+        match self {
+            Channel::R => [x, c[1], c[2], c[3]],
+            Channel::G => [c[0], x, c[2], c[3]],
+            Channel::B => [c[0], c[1], x, c[3]],
+            Channel::H => hsv(x.min(0.9999), s, v),
+            Channel::S => hsv(h, x, v),
+            Channel::V => hsv(h, s, x),
+            Channel::A => [c[0], c[1], c[2], x],
+            Channel::L => [x, x, x, c[3]],
         }
-        ColorTarget::GradientStop(node, key) => {
-            let (node, key) = (*node, key.clone());
-            let gradient = graph.node(node).and_then(|n| n.value(&key)).and_then(ParamValue::as_gradient)?.clone();
-            let index = *app.ui.gradient_stop.get(&(node, key.clone()))?;
-            let stop = gradient.stops.get(index)?;
-            let (base, set) = (gradient.clone(), key.clone());
-            color_editor(
-                stop.color,
-                target.clone(),
-                move |c| {
-                    let mut n = base.clone();
-                    n.stops[index].color = c;
-                    Message::Edit(brewed_texture_core::edit::gradient_edit(node, &set, n))
-                },
-                Message::Seal,
-                picking,
-            )
+    }
+
+    /// What 1 is said as: 1, or 255 (a hue, 360 degrees).
+    fn scale(self, units: ColorUnits) -> f64 {
+        match (units.float, self) {
+            (true, _) => 1.0,
+            (false, Channel::H) => 360.0,
+            (false, _) => 255.0,
         }
+    }
+}
+
+/// A slider each of `channels` of `c`, setting `target`: from 0 to 1 or to 255, as `units` say,
+/// never past them (a color could be given negative channels).
+fn sliders<'a>(target: &ColorTarget, c: [f32; 4], units: ColorUnits, channels: &[Channel]) -> iced::widget::Column<'a, Message> {
+    let mut col = column![].spacing(4).width(Length::Fill);
+    for &channel in channels {
+        let (target, scale) = (target.clone(), channel.scale(units));
+        let field = number(f64::from(channel.of(c)) * scale, 0.0, scale)
+            .limits(0.0, scale)
+            .integer(!units.float)
+            .decimals(3)
+            .prefix(format!("{} ", channel.label()))
+            .on_change(move |x| Message::SetColor(target.clone(), channel.set(c, (x / scale) as f32)))
+            .on_release(Message::Seal);
+        col = col.push(field);
+    }
+    col
+}
+
+/// The buttons that say how channels are said: from 0 to 255, from 0 to 1, and (of a color
+/// that is not a gray) as hue, saturation and value.
+fn unit_buttons<'a>(units: ColorUnits, gray: bool, width: Length) -> Element<'a, Message> {
+    let toggle = |label: &'a str, on: bool, then: ColorUnits, said: &'a str| {
+        tip(
+            button(text(label).size(style::SMALL).wrapping(text::Wrapping::None).width(Length::Fill).center())
+                .padding([2, 6])
+                .width(width)
+                .style(style::toggle_button(on))
+                .on_press(Message::ColorEditor(ColorEditorMessage::Units(then))),
+            said,
+            tooltip::Position::Top,
+        )
     };
-    Some(crate::view::popup_layer(content, app.ui.color_picker_at, 236.0, Message::ColorPicker(None)))
+    let mut buttons: Vec<Element<'a, Message>> = vec![
+        toggle("0–255", !units.float, ColorUnits { float: false, ..units }, "Each channel from 0 to 255"),
+        toggle("Float", units.float, ColorUnits { float: true, ..units }, "Each channel from 0 to 1"),
+    ];
+    if !gray {
+        buttons.push(toggle("HSV", units.hsv, ColorUnits { hsv: !units.hsv, ..units }, "Hue, saturation and value in place of red, green and blue"));
+    }
+    column(buttons).spacing(4).into()
+}
+
+/// A small square of `c` that opens (`open`: shows open) the Color Editor.
+fn chip_button<'a>(c: [f32; 4], open: bool, on_press: Message) -> Element<'a, Message> {
+    let chip = container(space().width(Length::Fixed(20.0)).height(Length::Fixed(16.0))).style(style::chip(style::color_of(c)));
+    tip(button(chip).padding(2).style(style::toggle_button(open)).on_press(on_press), "Open the Color Editor", tooltip::Position::Top)
+}
+
+/// A button that picks a color from the screen, as its icon only.
+fn eyedropper_icon<'a>(target: PickTarget, picking: Option<&PickTarget>) -> Element<'a, Message> {
+    let active = picking == Some(&target);
+    let message = if active { PickMessage::Cancel } else { PickMessage::Start(target) };
+    let button = button(icon(Icon::Pipette, 14.0, if active { style::TEXT } else { style::TEXT_DIM }))
+        .padding(4)
+        .style(move |theme, status| if active { style::toggle_button(true)(theme, status) } else { style::button(theme, status) })
+        .on_press(Message::Pick(message));
+    tip(button, "Pick a color anywhere on any monitor (Esc or a right click cancels)", tooltip::Position::Top)
+}
+
+/// A color field: the eyedropper, the square that opens the Color Editor, and the strip a color
+/// (`gray`: a level of gray) is picked from at a click or a drag.
+pub fn color_field<'a>(app: &'a App, target: ColorTarget, c: [f32; 4], gray: bool) -> Element<'a, Message> {
+    let open = app.ui.color_picker.as_ref() == Some(&target);
+    let pick = eyedropper_icon(PickTarget::Color(target.clone()), app.picking());
+    let chip = chip_button(c, open, Message::ColorPicker(Some(target.clone())));
+    let strip = color_strip(c, gray, move |c| Message::SetColor(target.clone(), c)).on_release(Message::Seal);
+    row![pick, chip, strip].spacing(6).align_y(Alignment::Center).into()
+}
+
+/// The channels of a color field, under it: how they are said, and a slider each (of a level of
+/// gray, its level only), so that a color is set without opening the Color Editor.
+pub fn color_channels<'a>(app: &'a App, target: ColorTarget, c: [f32; 4], gray: bool) -> Element<'a, Message> {
+    use Channel::*;
+    let units = app.ui.color_units;
+    let channels: &[Channel] = match (gray, units.hsv) {
+        (true, _) => &[L],
+        (false, true) => &[H, S, V, A],
+        (false, false) => &[R, G, B, A],
+    };
+    row![unit_buttons(units, gray, Length::Fixed(52.0)), sliders(&target, c, units, channels)].spacing(8).into()
+}
+
+/// What `target` is called in the Color Editor's title: the node and its parameter, the input
+/// value, the stop of a gradient.
+fn target_name(app: &App, target: &ColorTarget) -> String {
+    let graph = app.graph();
+    let node = |id| graph.node(id);
+    match target {
+        ColorTarget::Param(id, key) => match node(*id) {
+            Some(n) => {
+                let label = n.param_def(key).map_or_else(|| key.clone(), |pd| pd.label.to_string());
+                format!("{} · {label}", crate::view::graph::node_title(n))
+            }
+            None => key.clone(),
+        },
+        ColorTarget::Variable(name, VarField::Value) => name.clone(),
+        ColorTarget::Variable(name, VarField::Default) => format!("{name}, by default"),
+        ColorTarget::GradientStop(id, key) => {
+            let stop = app.ui.gradient_stop.get(&(*id, key.clone())).map_or(0, |i| i + 1);
+            match node(*id) {
+                Some(n) => format!("{} · stop {stop}", crate::view::graph::node_title(n)),
+                None => format!("stop {stop}"),
+            }
+        }
+        ColorTarget::Comment(_) => "Comment".to_string(),
+    }
+}
+
+/// The Color Editor: a window of its own inside the program's, moved by its title bar, open
+/// until it is closed (a click elsewhere, a turn of the model, leaves it open). The square of the
+/// hue with the hue bar beside it (of a level of gray: the levels, white to black), the color
+/// seen, Pick, Invert, To Gray, Copy and Paste of its hexadecimal (as other programs copy it), how
+/// channels are said, a slider each, and its hexadecimal typed.
+pub fn color_window(app: &App) -> Option<Element<'_, Message>> {
+    use Channel::*;
+    let target = app.ui.color_picker.clone()?;
+    let c = app.target_color(&target)?;
+    let gray = app.target_gray(&target);
+    let c = if gray { gray_of(c) } else { c };
+    let units = app.ui.color_units;
+    let set = target.clone();
+    let picked: Element<'_, Message> = if gray {
+        color_strip(c, true, move |c| Message::SetColor(set.clone(), c)).vertical(COLOR_SQUARE).on_release(Message::Seal).into()
+    } else {
+        color_picker(c, move |c| Message::SetColor(set.clone(), c)).side(COLOR_SQUARE).on_release(Message::Seal).into()
+    };
+    let doing = |label: &'static str, message: ColorEditorMessage, said: &'static str| {
+        tip(
+            button(text(label).size(style::SMALL).width(Length::Fill).center().wrapping(text::Wrapping::None))
+                .padding([3, 6])
+                .width(Length::Fill)
+                .style(style::button)
+                .on_press(Message::Step(Box::new(Message::ColorEditor(message)))),
+            said,
+            tooltip::Position::Left,
+        )
+    };
+    // (As wide as the others: its own button elsewhere is as wide as its words.)
+    let from_screen = PickTarget::Color(target.clone());
+    let picking = app.picking() == Some(&from_screen);
+    let pick = tip(
+        button(
+            container(
+                row![icon(Icon::Pipette, 14.0, if picking { style::TEXT } else { style::TEXT_DIM }), text("Pick").size(style::SMALL)]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+            )
+            .center_x(Length::Fill),
+        )
+        .padding([3, 6])
+        .width(Length::Fill)
+        .style(move |theme, status| if picking { style::toggle_button(true)(theme, status) } else { style::button(theme, status) })
+        .on_press(Message::Pick(if picking { PickMessage::Cancel } else { PickMessage::Start(from_screen) })),
+        "Click anywhere on any monitor to take its color. Esc or a right click cancels.",
+        tooltip::Position::Left,
+    );
+    let seen = container(space().width(Length::Fill).height(Length::Fixed(56.0))).style(style::chip(style::color_of(c)));
+    let mut middle = column![seen, pick, doing("Invert", ColorEditorMessage::Invert, "Each channel turned over: dark for light")]
+    .spacing(4)
+    .width(Length::Fixed(88.0));
+    if !gray {
+        middle = middle.push(doing("To Gray", ColorEditorMessage::ToGray, "Its gray: the level of gray it looks"));
+    }
+    middle = middle
+        .push(doing("Copy", ColorEditorMessage::Copy, "Its hexadecimal (#RRGGBB) on the clipboard"))
+        .push(doing("Paste", ColorEditorMessage::Paste, "The color the clipboard says (#RRGGBB, as other programs copy it)"))
+        .push(unit_buttons(units, true, Length::Fill));
+    let channels: &[Channel] = if gray { &[L] } else { &[R, G, B, H, S, V, A] };
+    let hex = match &app.ui.color_hex {
+        Some((typed, at)) if *at == c => typed.clone(),
+        _ => to_hex(c),
+    };
+    let hex = text_input("#RRGGBB", &hex)
+        .on_input(|t| Message::ColorEditor(ColorEditorMessage::Hex(t)))
+        .font(style::mono())
+        .size(style::TEXT_SIZE)
+        .padding([3, 6])
+        .style(style::text_input);
+    let right = sliders(&target, c, units, channels).push(hex);
+    let title = crate::view::fitted(format!("Color Editor · {}", target_name(app, &target)), style::TEXT_SIZE, style::bold(), Some(style::TEXT));
+    let close = tip(
+        button(icon(Icon::Close, 14.0, style::TEXT_DIM)).padding(4).style(style::flat_button).on_press(Message::ColorPicker(None)),
+        "Close the Color Editor",
+        tooltip::Position::Bottom,
+    );
+    let bar = mouse_area(container(row![title, close].spacing(6).align_y(Alignment::Center)).padding([4, 4]).width(Length::Fill).style(style::window_bar))
+        .on_press(Message::ColorEditor(ColorEditorMessage::Grab))
+        .interaction(iced::mouse::Interaction::Grab);
+    let body = row![picked, middle, right].spacing(12).padding(10);
+    let window = container(column![bar, body]).width(Length::Fixed(COLOR_EDITOR.width)).style(style::popup);
+    Some(crate::widget::placed::placed(opaque(window), app.ui.color_picker_at).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A channel set is the channel read, the others as they were; none goes past its ends; a
+    /// level of gray set is a gray; and channels are said to 255 (a hue, to 360 degrees) or to 1.
+    #[test]
+    fn channels_are_set_read_and_said() {
+        use Channel::*;
+        let c = [0.2, 0.4, 0.6, 0.8];
+        for channel in [R, G, B, A, S, V] {
+            for x in [0.0, 0.25, 1.0] {
+                assert!((channel.of(channel.set(c, x)) - x).abs() < 1e-4, "{channel:?} at {x}");
+            }
+        }
+        assert!((H.of(H.set(c, 0.5)) - 0.5).abs() < 1e-4);
+        assert_eq!(R.set(c, 1.0)[1..], c[1..], "the others as they were");
+        assert_eq!(A.set(c, 0.1)[..3], c[..3]);
+        assert_eq!((R.set(c, -3.0)[0], G.set(c, 7.0)[1], A.set(c, f32::NAN)[3]), (0.0, 1.0, 0.0), "none past its ends");
+        assert_eq!(L.set(c, 0.5), [0.5, 0.5, 0.5, 0.8]);
+        assert!((L.of([1.0, 1.0, 1.0, 1.0]) - 1.0).abs() < 1e-6 && L.of([0.0, 0.0, 0.0, 1.0]) == 0.0);
+        let (bytes, float) = (ColorUnits::default(), ColorUnits { float: true, hsv: false });
+        assert_eq!((R.scale(bytes), A.scale(bytes), H.scale(bytes), R.scale(float), H.scale(float)), (255.0, 255.0, 360.0, 1.0, 1.0));
+    }
 }

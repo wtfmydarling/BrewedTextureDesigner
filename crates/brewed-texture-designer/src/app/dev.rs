@@ -287,6 +287,10 @@ impl App {
                 let output = said.as_ref().and_then(|(name, _)| graph.nodes_of(NodeKind::OUTPUT).find(|n| n.text("name") == name).map(|n| n.id));
                 let fed = output.and_then(|o| graph.link_into(o, "i:input")).map(|l| l.from);
                 match (fed, said) {
+                    // (A number where the map is fed one: a Uniform Value.)
+                    (Some(node), Some((_, v))) if !v.is_empty() && graph.node(node).is_some_and(|n| n.kind == NodeKind::UNIFORM_VALUE) => {
+                        self.apply(Edit::SetParam { node, key: "value".into(), value: ParamValue::Float(v[0]) });
+                    }
                     (Some(node), Some((_, v))) if !v.is_empty() => {
                         let color = if v.len() >= 3 { [v[0], v[1], v[2], 1.0] } else { [v[0], v[0], v[0], 1.0] };
                         self.apply(Edit::SetParam { node, key: "color".into(), value: ParamValue::Color(color) });

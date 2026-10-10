@@ -129,6 +129,12 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
             .style(style::text_input),
     ));
 
+    // A color's value, as a color parameter's: the field, and its channels under it.
+    if let (None, Value::Color(c)) = (&var.image, var.value) {
+        let target = ColorTarget::Variable(name.clone(), VarField::Value);
+        col = col.push(field_row("Value", crate::view::editors::color_field(app, target.clone(), c, false)));
+        col = col.push(row![space().width(Length::Fixed(78.0)), crate::view::editors::color_channels(app, target, c, false)]);
+    }
     match &var.image {
         Some(image) => col = image_settings(app, var, image, col),
         None => {

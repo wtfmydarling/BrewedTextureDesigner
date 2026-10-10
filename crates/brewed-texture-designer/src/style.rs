@@ -213,14 +213,6 @@ pub fn canvas_frame(_: &Theme) -> container::Style {
     container::Style { background: Some(CANVAS.into()), ..Default::default() }
 }
 
-pub fn card(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(HEADER.into()),
-        border: Border { color: LINE, width: 1.0, radius: 3.0.into() },
-        ..Default::default()
-    }
-}
-
 pub fn field_box(_: &Theme) -> container::Style {
     container::Style {
         background: Some(FIELD.into()),

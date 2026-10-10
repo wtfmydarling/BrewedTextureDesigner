@@ -18,7 +18,7 @@ use crate::app::{App, ColorTarget, FileTarget, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
 use crate::picker::PickTarget;
-use crate::view::editors::{eyedropper, file_field, swatch};
+use crate::view::editors::{eyedropper, file_field};
 use crate::view::{tip, section};
 use crate::widget::curve::curve_editor;
 use crate::widget::gradient::gradient_editor;
@@ -159,7 +159,6 @@ fn graph_view(app: &App, label_w: f32) -> Element<'_, Message> {
 
 fn comment_view(app: &App, id: brewed_texture_core::CommentId, label_w: f32) -> Element<'_, Message> {
     let Some(comment) = app.graph().comment(id) else { return space().into() };
-    let open = app.ui.color_picker == Some(ColorTarget::Comment(id));
     let description: Element<'_, Message> = match &app.ui.description {
         Some((cid, content)) if *cid == id => iced::widget::text_editor(content)
             .placeholder("What do they do? Said under the title.")
@@ -198,9 +197,10 @@ fn comment_view(app: &App, id: brewed_texture_core::CommentId, label_w: f32) -> 
             column![text("Description").size(style::SMALL).color(style::TEXT_DIM), description].spacing(4),
             row![
                 text("Color").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)),
-                swatch(comment.color, open, Message::ColorPicker(Some(ColorTarget::Comment(id)))),
+                crate::view::editors::color_field(app, ColorTarget::Comment(id), comment.color, false),
             ]
             .align_y(Alignment::Center),
+            crate::view::editors::color_channels(app, ColorTarget::Comment(id), comment.color, false),
             row![
                 button(text("Delete Comment").size(style::SMALL))
                     .padding([3, 8])
@@ -686,6 +686,12 @@ Changed — middle-click the row to put {} back", pd.tooltip, shown(&pd, &defaul
     if !exposed && let ParamValue::Gradient(g) = &slot.value {
         col = col.push(gradient_block(app, node, pd.key, g));
     }
+    // So are a color's channels, a slider each (a level of gray's, one): set without opening the
+    // Color Editor.
+    if !exposed && let ParamValue::Color(c) = &slot.value {
+        let target = ColorTarget::Param(node.id, pd.key.to_string());
+        col = col.push(crate::view::editors::color_channels(app, target, *c, node.param_gray(&pd)));
+    }
     // So is a curve, whose square is under the row.
     if let ParamValue::Curve(c) = &slot.value {
         let (id, key) = (node.id, pd.key);
@@ -749,9 +755,9 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
             .size(16)
             .style(style::toggler)
             .into(),
+        // (Its channels under the row: see `param_row`.)
         (ParamKind::Color { .. }, ParamValue::Color(c)) => {
-            let open = app.ui.color_picker == Some(ColorTarget::Param(id, key.to_string()));
-            swatch(*c, open, Message::ColorPicker(Some(ColorTarget::Param(id, key.to_string()))))
+            crate::view::editors::color_field(app, ColorTarget::Param(id, key.to_string()), *c, node.param_gray(&pd))
         }
         // (Only a node type's choices have pictures.)
         (ParamKind::Enum { .. }, ParamValue::Enum(v)) if pd.pictured && node.def().param(key).is_some() => {
@@ -900,17 +906,14 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'a str, g: &'a Gradien
             .spacing(6)
             .align_y(Alignment::Center),
         );
-        // Its color, in the picker that floats where it is opened.
+        // Its color, as a color parameter's: the field, and its channels under it.
         let target = ColorTarget::GradientStop(id, key.to_string());
-        let open = app.ui.color_picker.as_ref() == Some(&target);
         col = col.push(
-            row![
-                text("Color").size(style::SMALL).color(style::TEXT_DIM),
-                swatch(stop.color, open, Message::ColorPicker(Some(target))),
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
+            row![text("Color").size(style::SMALL).color(style::TEXT_DIM), crate::view::editors::color_field(app, target.clone(), stop.color, false)]
+                .spacing(6)
+                .align_y(Alignment::Center),
         );
+        col = col.push(crate::view::editors::color_channels(app, target, stop.color, false));
     } else {
         col = col.push(
             text("Click the ramp to add a stop, or a handle to change its color and position.")

@@ -74,7 +74,8 @@ pub const INPUTS: &[Input] = &[
     Input { name: "NORMAL", usages: &[Usage::Normal], default: [0.5, 0.5, 1.0, 1.0] },
     Input { name: "TANGENT", usages: &[Usage::Tangent], default: [1.0, 0.5, 0.0, 1.0] },
     Input { name: "AO", usages: &[Usage::AmbientOcclusion], default: gray(1.0) },
-    Input { name: "HEIGHT", usages: &[Usage::Height, Usage::Displacement], default: gray(0.0) },
+    // (Middle gray: the surface where it is.)
+    Input { name: "HEIGHT", usages: &[Usage::Height, Usage::Displacement], default: gray(0.5) },
     Input { name: "BUMP", usages: &[Usage::Bump], default: gray(0.0) },
     Input { name: "DETAIL_NORMAL", usages: &[Usage::DetailNormal], default: [0.5, 0.5, 1.0, 1.0] },
     Input { name: "DIFFUSE", usages: &[Usage::Diffuse], default: gray(0.8) },

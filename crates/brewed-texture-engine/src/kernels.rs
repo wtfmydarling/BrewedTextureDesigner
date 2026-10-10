@@ -84,6 +84,7 @@ pub(crate) fn with_mips(cx: &mut ExecCtx, image: &GpuImage) -> Result<Option<Gpu
 pub fn kernel_for(kind: NodeKind) -> Option<KernelFn> {
     let f: KernelFn = match kind.id() {
         "uniform_color" => uniform_color,
+        "uniform_value" => uniform_value,
         "image_input" => image_input,
         "shape" => shape,
         "tile_generator" => tile_generator,
@@ -543,6 +544,13 @@ fn uniform(cx: &mut ExecCtx, c: [f32; 4]) -> Result<Option<String>, String> {
 
 fn uniform_color(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     uniform(cx, cx.params.color("color"))
+}
+
+/// A number in every pixel (not held from 0 to 1, as a color's channels are).
+fn uniform_value(cx: &mut ExecCtx) -> Result<Option<String>, String> {
+    let v = cx.params.f("value");
+    cx.gpu.run(cx.encoder, "uniform_color", bytes(&ColorU { color: [v, v, v, 1.0] }), &[], cx.output)?;
+    Ok(None)
 }
 
 /// An Image Input computed as it is (a graph laid out never has one: each is what it shows,

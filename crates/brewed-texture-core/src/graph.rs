@@ -460,6 +460,12 @@ impl Node {
         }
     }
 
+    /// Is the parameter, a color, a level of gray now (see [`ParamDef::gray_if`])? Not while
+    /// what decides is exposed: then it is known only once evaluated.
+    pub fn param_gray(&self, pd: &ParamDef) -> bool {
+        pd.gray_if.is_some_and(|(key, values)| !self.is_exposed(key) && values.contains(&self.enum_value(key)))
+    }
+
     /// Is the parameter currently relevant (see [`ParamDef::visible_if`])?
     pub fn param_visible(&self, pd: &ParamDef) -> bool {
         match pd.visible_if {
@@ -468,9 +474,28 @@ impl Node {
         }
     }
 
+    /// A Uniform Color that makes grayscale of a "color" past a color's channels (a file of
+    /// before colors were held from 0 to 1: an index of refraction of 1.5 as a level of gray) is
+    /// the Uniform Value of that number: what it made, it makes. Not one driven by its socket.
+    fn value_of_a_color(&mut self) {
+        if self.kind != NodeKind::UNIFORM_COLOR || self.enum_value("output") != 1 {
+            return;
+        }
+        let Some(slot) = self.param("color").filter(|s| !s.exposed) else { return };
+        let ParamValue::Color(c) = slot.value else { return };
+        if !c[..3].iter().all(|v| v.is_finite()) || c[..3].iter().all(|v| (0.0..=1.0).contains(v)) {
+            return;
+        }
+        let value = if c[0] == c[1] && c[1] == c[2] { c[0] } else { 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] };
+        self.kind = NodeKind::UNIFORM_VALUE;
+        self.params.retain(|s| s.key != "color" && s.key != "output");
+        self.params.push(ParamSlot { key: "value".into(), value: ParamValue::Float(value), exposed: false });
+    }
+
     /// Bring the parameter list in line with the node definition (after loading a file
     /// written by another version, or hand-edited JSON).
     pub fn normalize(&mut self) {
+        self.value_of_a_color();
         if self.kind != NodeKind::GRAPH_INSTANCE {
             self.instance = None;
         }

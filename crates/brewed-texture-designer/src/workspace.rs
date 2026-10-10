@@ -45,6 +45,10 @@ pub struct Workspace {
     pub closed_headings: Vec<String>,
     /// The folder a file dialog was answered from last.
     pub last_folder: Option<String>,
+    /// How the channels of colors are said: from 0 to 1 (else from 0 to 255), and as hue,
+    /// saturation and value (else red, green and blue).
+    pub color_float: Option<bool>,
+    pub color_hsv: Option<bool>,
 }
 
 /// How many packages are remembered, of which the File menu offers as many as the settings
@@ -158,6 +162,8 @@ mod tests {
             template_layout: Some("grid".into()),
             closed_headings: vec!["Transmission".into()],
             last_folder: Some("C:/work".into()),
+            color_float: Some(true),
+            color_hsv: Some(false),
         };
         let json = serde_json::to_string(&w).unwrap();
         assert_eq!(serde_json::from_str::<Workspace>(&json).unwrap(), w);

@@ -246,7 +246,7 @@ fn long_names_in_the_explorer_are_shortened_in_their_middle() {
 
 /// Where in `area` a click asks for what `wanted` says, looked for every few pixels as a hand
 /// finds a button by its look (what the clicks ask for is not done).
-fn find_click(w: &mut Harness, area: iced::Rectangle, wanted: impl Fn(&Message) -> bool) -> Option<Point> {
+pub(super) fn find_click(w: &mut Harness, area: iced::Rectangle, wanted: impl Fn(&Message) -> bool) -> Option<Point> {
     let mut y = area.y;
     while y < area.y + area.height {
         let mut x = area.x;
@@ -1226,4 +1226,144 @@ fn a_graph_another_package_uses_is_followed_through_rename_delete_and_undo() {
     w.send(Message::Explorer(ExplorerMessage::OpenGraph(b, w.app.package_doc(b).unwrap().current())));
     assert_eq!(user(&w), (name, true), "called as it was");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A Uniform Color added and selected, and the color it has.
+fn a_uniform_color(w: &mut Harness) -> brewed_texture_core::graph::NodeId {
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::UNIFORM_COLOR, pos: [0.0, 0.0] }));
+    w.send(Message::Seal);
+    let id = w.app.graph().nodes_of(NodeKind::UNIFORM_COLOR).map(|n| n.id).max().expect("the node");
+    w.send(Message::Graph(GraphMessage::Select { node: id, mode: SelectMode::Replace }));
+    draw_frame(w, std::time::Instant::now());
+    id
+}
+
+fn color_of(w: &Harness, id: brewed_texture_core::graph::NodeId) -> [f32; 4] {
+    match w.app.graph().node(id).and_then(|n| n.value("color")) {
+        Some(ParamValue::Color(c)) => *c,
+        other => panic!("no color: {other:?}"),
+    }
+}
+
+/// A color parameter is set in Properties without the Color Editor: a click on its strip takes
+/// the color there, its channels are said from 0 to 255 or from 0 to 1 and as red, green, blue or
+/// hue, saturation, value, and none goes past its ends (a color could be given negative
+/// channels). A Uniform Color that makes grayscale has a level of gray: its strip is black to
+/// white, and whatever it is given, it keeps the gray of.
+#[test]
+fn a_color_is_set_in_properties_and_a_gray_is_a_level() {
+    use crate::app::{ColorEditorMessage, ColorTarget, ColorUnits};
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let id = a_uniform_color(&mut w);
+    let target = ColorTarget::Param(id, "color".into());
+    let area = iced::Rectangle::new(Point::new(w.size.width - 400.0, 0.0), Size::new(400.0, w.size.height));
+    // Its strip: a click takes the color there, as bright as colors are.
+    let on_strip = |w: &mut Harness| {
+        let target = target.clone();
+        find_click(w, area, move |m| matches!(m, Message::SetColor(t, _) if *t == target)).expect("the strip of the color")
+    };
+    let strip = on_strip(&mut w);
+    click(&mut w, strip);
+    let picked = color_of(&w, id);
+    let (most, least) = (picked[..3].iter().copied().fold(0.0, f32::max), picked[..3].iter().copied().fold(1.0, f32::min));
+    assert!(most > 0.5 && least < 0.01 && picked[3] == 1.0, "a color of the strip, its alpha kept: {picked:?}");
+    w.snapshot("color_field");
+    // No channel past its ends, whatever is asked.
+    w.send(Message::SetColor(target.clone(), [-0.5, 1.5, 0.25, 7.0]));
+    assert_eq!(color_of(&w, id), [0.0, 1.0, 0.25, 1.0]);
+    // How channels are said: from 0 to 1, and as hue, saturation and value.
+    assert_eq!(w.app.ui.color_units, ColorUnits::default(), "from 0 to 255, red, green and blue, at first");
+    let units = |w: &mut Harness, wanted: ColorUnits| {
+        find_click(w, area, move |m| matches!(m, Message::ColorEditor(ColorEditorMessage::Units(u)) if *u == wanted)).expect("the button")
+    };
+    let float = units(&mut w, ColorUnits { float: true, hsv: false });
+    click(&mut w, float);
+    let hsv = units(&mut w, ColorUnits { float: true, hsv: true });
+    click(&mut w, hsv);
+    assert_eq!(w.app.ui.color_units, ColorUnits { float: true, hsv: true });
+    assert!(text_fits::cut_short(&mut w).is_empty(), "{:?}", text_fits::cut_short(&mut w));
+    w.snapshot("color_field_hsv");
+
+    // Grayscale: a level of gray. Whatever it is given, the gray of it.
+    w.send(Message::Edit(Edit::SetParam { node: id, key: "output".into(), value: ParamValue::Enum(1) }));
+    w.send(Message::Seal);
+    assert!(w.app.target_gray(&target));
+    w.send(Message::SetColor(target.clone(), [1.0, 0.0, 0.0, 1.0]));
+    let gray = color_of(&w, id);
+    assert!(gray[0] == gray[1] && gray[1] == gray[2] && (gray[0] - 0.2126).abs() < 1e-4, "the gray of red: {gray:?}");
+    // Its strip, black to white: a click near its right end, a light gray.
+    draw_frame(&mut w, std::time::Instant::now());
+    let strip = on_strip(&mut w);
+    let near_its_end = Point::new(w.size.width - 60.0, strip.y);
+    click(&mut w, near_its_end);
+    let light = color_of(&w, id);
+    assert!(light[0] == light[1] && light[1] == light[2] && light[0] > 0.5, "a light gray: {light:?}");
+    // (No hue to say of a gray: its button is not there.)
+    let with_hue = ColorUnits { float: true, hsv: false };
+    assert!(find_click(&mut w, area, move |m| matches!(m, Message::ColorEditor(ColorEditorMessage::Units(u)) if *u == with_hue)).is_none());
+    w.snapshot("color_field_gray");
+    // In color again, it is a color again.
+    w.send(Message::Edit(Edit::SetParam { node: id, key: "output".into(), value: ParamValue::Enum(0) }));
+    assert!(!w.app.target_gray(&target));
+}
+
+/// The Color Editor's own controls: Paste takes the color the clipboard says in hexadecimal, as
+/// other programs copy it, and says so of what is none; its hexadecimal typed is taken as soon as
+/// it says a color, and kept as typed meanwhile; Invert turns each channel over and To Gray makes
+/// it its gray, a step of undo each; Copy says what it copied. Of a level of gray, what is pasted
+/// is its gray.
+#[test]
+fn the_color_editor_pastes_reads_hexadecimal_inverts_and_grays() {
+    use crate::app::{ColorEditorMessage as E, ColorTarget};
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let id = a_uniform_color(&mut w);
+    let target = ColorTarget::Param(id, "color".into());
+    w.send(Message::ColorPicker(Some(target.clone())));
+    let said = |w: &Harness| w.app.ui.status.as_ref().map(|s| (s.text.clone(), s.error)).unwrap_or_default();
+    let step = |w: &mut Harness, m: E| w.send(Message::Step(Box::new(Message::ColorEditor(m))));
+    // Pasted, as Photoshop or Unreal copy a color.
+    step(&mut w, E::Pasted(Some(" #FF8000 ".into())));
+    assert_eq!(color_of(&w, id), [1.0, 128.0 / 255.0, 0.0, 1.0]);
+    step(&mut w, E::Pasted(Some("ff0000".into())));
+    assert_eq!(color_of(&w, id), [1.0, 0.0, 0.0, 1.0]);
+    // What is no color is not taken, and said.
+    step(&mut w, E::Pasted(Some("a brick wall".into())));
+    assert_eq!(color_of(&w, id), [1.0, 0.0, 0.0, 1.0]);
+    assert!(said(&w).1 && said(&w).0.contains("is not a color"), "{:?}", said(&w));
+    step(&mut w, E::Pasted(None));
+    assert!(said(&w).1 && said(&w).0.contains("no color"), "{:?}", said(&w));
+    // Typed: taken once it says a color, as typed until then.
+    w.send(Message::ColorEditor(E::Hex("#00F".into())));
+    assert_eq!(color_of(&w, id), [0.0, 0.0, 1.0, 1.0]);
+    w.send(Message::ColorEditor(E::Hex("#00FF".into())));
+    assert_eq!(color_of(&w, id), [0.0, 0.0, 1.0, 1.0], "not a color yet");
+    assert_eq!(w.app.ui.color_hex.as_ref().map(|(typed, _)| typed.as_str()), Some("#00FF"), "kept as typed");
+    w.send(Message::ColorEditor(E::Hex("#00FF00".into())));
+    assert_eq!(color_of(&w, id), [0.0, 1.0, 0.0, 1.0]);
+    w.send(Message::Seal);
+    // Copy says what it copied.
+    step(&mut w, E::Copy);
+    assert_eq!(said(&w), ("Copied #00FF00".to_string(), false));
+    // Invert, then To Gray: a step each.
+    step(&mut w, E::Invert);
+    assert_eq!(color_of(&w, id), [1.0, 0.0, 1.0, 1.0]);
+    step(&mut w, E::ToGray);
+    let gray = color_of(&w, id);
+    assert!(gray[0] == gray[1] && gray[1] == gray[2] && (gray[0] - (0.2126 + 0.0722)).abs() < 1e-4, "{gray:?}");
+    w.send(Message::Undo);
+    assert_eq!(color_of(&w, id), [1.0, 0.0, 1.0, 1.0], "gray no more");
+    w.send(Message::Undo);
+    assert_eq!(color_of(&w, id), [0.0, 1.0, 0.0, 1.0], "turned back over");
+    assert!(text_fits::cut_short(&mut w).is_empty(), "{:?}", text_fits::cut_short(&mut w));
+    w.snapshot("color_editor");
+
+    // A level of gray: what is pasted is its gray, and there is no To Gray to press.
+    w.send(Message::Edit(Edit::SetParam { node: id, key: "output".into(), value: ParamValue::Enum(1) }));
+    w.send(Message::Seal);
+    step(&mut w, E::Pasted(Some("#0000FF".into())));
+    let gray = color_of(&w, id);
+    assert!(gray[0] == gray[1] && gray[1] == gray[2] && (gray[0] - 0.0722).abs() < 1e-4, "the gray of blue: {gray:?}");
+    assert!(texts(&mut w, "To Gray").is_empty() && !texts(&mut w, "Invert").is_empty());
+    assert!(text_fits::cut_short(&mut w).is_empty(), "{:?}", text_fits::cut_short(&mut w));
+    w.snapshot("color_editor_gray");
 }

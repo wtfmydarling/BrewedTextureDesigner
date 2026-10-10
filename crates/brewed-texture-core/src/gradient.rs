@@ -76,13 +76,13 @@ impl Gradient {
         .normalized()
     }
 
-    /// Positions clamped to [0, 1], non-finite values replaced, stops sorted (stable, so
-    /// stops at the same position keep their order), at least one stop.
+    /// Positions and the channels of colors clamped to [0, 1], non-finite values replaced, stops
+    /// sorted (stable, so stops at the same position keep their order), at least one stop.
     pub fn normalized(&self) -> Gradient {
         let mut stops: Vec<GradientStop> = self
             .stops
             .iter()
-            .map(|s| GradientStop { pos: finite(s.pos, 0.0).clamp(0.0, 1.0), color: s.color.map(|c| finite(c, 0.0)) })
+            .map(|s| GradientStop { pos: finite(s.pos, 0.0).clamp(0.0, 1.0), color: s.color.map(|c| finite(c, 0.0).clamp(0.0, 1.0)) })
             .collect();
         stops.sort_by(|a, b| a.pos.total_cmp(&b.pos));
         if stops.is_empty() {
@@ -241,10 +241,11 @@ mod tests {
     /// across, the first and the last among them; fewer are all kept.
     #[test]
     fn a_gradient_keeps_as_many_stops_as_it_can_draw() {
-        let pairs: Vec<(f32, [f32; 4])> = (0..100_000).map(|i| (i as f32 / 99_999.0, [i as f32, 0.0, 0.0, 1.0])).collect();
+        // (Each stop's red says which it is.)
+        let pairs: Vec<(f32, [f32; 4])> = (0..100_000).map(|i| (i as f32 / 99_999.0, [i as f32 / 99_999.0, 0.0, 0.0, 1.0])).collect();
         let g = Gradient::from_pairs(&pairs);
         assert_eq!(g.stops.len(), Gradient::MAX_KEPT);
-        assert_eq!((g.stops[0].color[0], g.stops[Gradient::MAX_KEPT - 1].color[0]), (0.0, 99_999.0));
+        assert_eq!((g.stops[0].color[0], g.stops[Gradient::MAX_KEPT - 1].color[0]), (0.0, 1.0));
         assert!(g.stops.windows(2).all(|w| w[0].pos <= w[1].pos));
         assert_eq!(g.normalized(), g, "kept as it is read again");
         assert_eq!(Gradient::from_pairs(&pairs[..500]).stops.len(), 500);

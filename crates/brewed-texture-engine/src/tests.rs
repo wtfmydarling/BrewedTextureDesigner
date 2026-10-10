@@ -3017,6 +3017,26 @@ fn image_inputs_show_their_pictures_as_bitmaps_would() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A Uniform Value fills the image with its number, past 1 and under 0 too (an index of
+/// refraction, an Abbe number, which way light scatters: what a color's channels do not hold),
+/// and what reads it reads that.
+#[test]
+fn a_uniform_value_holds_a_number() {
+    let Some(mut e) = engine() else { return };
+    for v in [1.5, -0.25, 0.5, 20.0] {
+        let mut g = graph();
+        let value = g.add_node(NodeKind::UNIFORM_VALUE, [0.0, 0.0]);
+        set(&mut g, value, "value", ParamValue::Float(v));
+        let blur = g.add_node(NodeKind::BLUR, [300.0, 0.0]);
+        g.connect(value, "o:output", blur, "i:input").unwrap();
+        let p = pixel(&eval_read(&mut e, &g, blur), RES / 2, RES / 2);
+        assert!(close(p[0], v, 2e-3 * v.abs().max(1.0)), "{v}: {p:?}");
+        let own = pixel(&eval_read(&mut e, &g, value), 0, 0);
+        assert!(close(own[0], v, 2e-3 * v.abs().max(1.0)), "{v}: {own:?}");
+    }
+    assert!(e.gpu.take_errors().is_empty());
+}
+
 /// What is not a number in Pixel Math (1/0 of nothing, the root of a negative, the log of 0) is
 /// none, and what is infinite the largest a half float holds: nothing spreads from it through
 /// what reads it.

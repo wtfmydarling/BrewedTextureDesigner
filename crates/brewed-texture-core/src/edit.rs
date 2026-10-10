@@ -1138,6 +1138,78 @@ mod tests {
         assert_eq!(g.links, before);
     }
 
+    /// A color's channels are from 0 to 1 wherever a color is kept: a parameter set or driven
+    /// past them, an input value and its default, the stops of a gradient (a color could be
+    /// given negative channels).
+    #[test]
+    fn colors_are_from_0_to_1() {
+        let mut g = Graph::default();
+        let id = g.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+        let odd = [-0.5, 1.5, 0.25, -3.0];
+        Edit::SetParam { node: id, key: "color".into(), value: ParamValue::Color(odd) }.apply(&mut g).unwrap();
+        assert_eq!(g.node(id).unwrap().value("color"), Some(&ParamValue::Color([0.0, 1.0, 0.25, 0.0])));
+        let input = g.add_node(NodeKind::COLOR_INPUT, [0.0, 0.0]);
+        let name = g.node(input).unwrap().variable.clone().unwrap();
+        Edit::SetVariable { name: name.clone(), value: Value::Color(odd) }.apply(&mut g).unwrap();
+        Edit::SetVariableDefault { name: name.clone(), value: Value::Color([2.0, -1.0, 0.5, 1.0]) }.apply(&mut g).unwrap();
+        let v = g.variable(&name).unwrap();
+        assert_eq!((v.value, v.default), (Value::Color([0.0, 1.0, 0.25, 0.0]), Value::Color([1.0, 0.0, 0.5, 1.0])));
+        let mut gradient = crate::Gradient::default();
+        gradient.stops[0].color = odd;
+        assert_eq!(gradient.normalized().stops[0].color, [0.0, 1.0, 0.25, 0.0]);
+        // Driven past them: a color input of a value out of them is held to them too.
+        let mut read = g.clone();
+        read.variables.iter_mut().find(|v| v.name == name).unwrap().value = Value::Color(odd);
+        read.normalize();
+        assert_eq!(read.variable(&name).unwrap().value, Value::Color([0.0, 1.0, 0.25, 0.0]), "as a file says it");
+    }
+
+    /// A Uniform Color making grayscale of a "color" past a color's channels, as the files of
+    /// before held an index of refraction (a gray of 1.5), is read as the Uniform Value of that
+    /// number, where it was and feeding what it fed: what it made, it makes. A level of gray from
+    /// 0 to 1 stays a color; a color past its channels is held to them.
+    #[test]
+    fn a_number_kept_as_a_color_is_read_as_a_value() {
+        use crate::package::Package;
+        use std::collections::HashMap;
+        let mut g = Graph::default();
+        let slot = |g: &mut Graph, id: NodeId, key: &str, value: ParamValue| g.node_mut(id).unwrap().param_mut(key).unwrap().value = value;
+        let ior = g.add_node(NodeKind::UNIFORM_COLOR, [10.0, 20.0]);
+        slot(&mut g, ior, "color", ParamValue::Color([1.5, 1.5, 1.5, 1.0]));
+        slot(&mut g, ior, "output", ParamValue::Enum(1));
+        let out = g.add_node(NodeKind::OUTPUT, [300.0, 20.0]);
+        g.connect(ior, "o:output", out, "i:input").unwrap();
+        let level = g.add_node(NodeKind::UNIFORM_COLOR, [10.0, 300.0]);
+        slot(&mut g, level, "color", ParamValue::Color([0.25, 0.25, 0.25, 1.0]));
+        slot(&mut g, level, "output", ParamValue::Enum(1));
+        let bright = g.add_node(NodeKind::UNIFORM_COLOR, [10.0, 600.0]);
+        slot(&mut g, bright, "color", ParamValue::Color([2.0, -1.0, 0.5, 1.0]));
+        // As a file says it: written and read back.
+        let package = Package::new("Old", g);
+        let bytes = crate::project::to_bytes(&package, &HashMap::new(), package.first(), None).unwrap();
+        let read = crate::project::from_bytes(&bytes, None).unwrap().package;
+        let g = &read.graphs[0].graph;
+        let node = g.node(ior).unwrap();
+        assert_eq!((node.kind, node.value("value"), node.pos), (NodeKind::UNIFORM_VALUE, Some(&ParamValue::Float(1.5)), [10.0, 20.0]));
+        assert!(node.param("color").is_none() && node.param("output").is_none());
+        assert_eq!(g.link_into(out, "i:input").map(|l| l.from), Some(ior), "feeding what it fed");
+        assert!(g.links.iter().all(|l| g.is_link_live(l)));
+        let node = g.node(level).unwrap();
+        assert_eq!((node.kind, node.value("color")), (NodeKind::UNIFORM_COLOR, Some(&ParamValue::Color([0.25, 0.25, 0.25, 1.0]))));
+        assert_eq!(g.node(bright).unwrap().value("color"), Some(&ParamValue::Color([1.0, 0.0, 0.5, 1.0])));
+        // Read again, the same.
+        let mut again = Graph::clone(g);
+        again.normalize();
+        assert_eq!(&again, &**g);
+        // The templates give the maps that hold numbers a Uniform Value: none keeps a number as a color.
+        for template in crate::templates::Template::ALL {
+            let made = template.graph([64, 64], crate::graph::Precision::Half);
+            let mut read = made.clone();
+            read.normalize();
+            assert_eq!(read, made, "{template:?}");
+        }
+    }
+
     #[test]
     fn add_node_with_parameters() {
         let mut g = Graph::default();

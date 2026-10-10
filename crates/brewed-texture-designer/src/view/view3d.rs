@@ -46,7 +46,9 @@ pub struct Camera {
     pub light_yaw: f32,
     pub light_pitch: f32,
     pub shape: Shape,
-    /// Displacement of white in the height map, in model units.
+    /// How far apart black and white in the height map move the surface, in model units: white
+    /// out and black in, half of it each; middle gray (128) leaves it where it is, as in
+    /// Substance Designer.
     pub displacement: f32,
     /// Texture repetitions.
     pub tiling: f32,
@@ -272,7 +274,7 @@ pub fn toolbar(app: &App, room: f32) -> (iced::widget::Row<'_, Message>, Option<
         crate::view::tip(container(field).width(Length::Fixed(width)), says, Position::Bottom)
     };
     let fields = row![
-        tip(height.prefix("h "), "Height: how far the model's surface is moved by the height map", 64.0),
+        tip(height.prefix("h "), "Height: how far apart the height map moves the model's surface: white out, black in, middle gray (128) not at all", 64.0),
         tip(repeat.prefix("× "), "Repeat: how many times the maps tile across the model", 54.0),
     ]
     .spacing(4)
@@ -1311,7 +1313,12 @@ mod tests {
             for (name, value) in changes {
                 let out = g.nodes_of(NodeKind::OUTPUT).find(|n| n.text("name") == *name).map(|n| n.id).expect(name);
                 let uniform = g.links.iter().find(|l| l.to == out).map(|l| l.from).expect("fed by a uniform color");
-                g.node_mut(uniform).and_then(|n| n.param_mut("color")).expect("its color").value = ParamValue::Color(*value);
+                // (A color, or the number of a map that holds numbers.)
+                let node = g.node_mut(uniform).expect("the node");
+                match node.kind == NodeKind::UNIFORM_VALUE {
+                    true => node.param_mut("value").expect("its value").value = ParamValue::Float(value[0]),
+                    false => node.param_mut("color").expect("its color").value = ParamValue::Color(*value),
+                }
             }
             g
         };

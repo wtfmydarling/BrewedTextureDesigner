@@ -1043,7 +1043,7 @@ impl Engine {
                 Some(file) if node.kind == NodeKind::BITMAP => file.kind(),
                 _ => image_kind(node.kind, params, &input_kinds),
             };
-            let uniform = node.kind == NodeKind::UNIFORM_COLOR || node.kind == NodeKind::IMAGE_INPUT;
+            let uniform = [NodeKind::UNIFORM_COLOR, NodeKind::UNIFORM_VALUE, NodeKind::IMAGE_INPUT].contains(&node.kind);
             let size = if uniform { [1, 1] } else { resolution };
             let precision = Precision::of_node(params.u("precision"), graph.precision);
             (Some(kind), size, Some(format_of(kind, precision)))

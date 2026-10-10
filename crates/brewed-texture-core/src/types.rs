@@ -132,7 +132,8 @@ impl Value {
         })
     }
 
-    /// Clamp into [min, max] component-wise (no-op for bool and color).
+    /// Clamp into [min, max] component-wise (no-op for bool); a color's channels into [0, 1],
+    /// whatever its range says (a color of a negative channel is none).
     pub fn clamped(&self, min: &Value, max: &Value) -> Value {
         match (self, min, max) {
             (Value::Float(v), Value::Float(a), Value::Float(b)) if a <= b => Value::Float(v.clamp(*a, *b)),
@@ -146,6 +147,7 @@ impl Value {
                 }
                 Value::Vec2(out)
             }
+            (Value::Color(c), ..) => Value::Color(c.map(|v| v.clamp(0.0, 1.0))),
             _ => *self,
         }
     }

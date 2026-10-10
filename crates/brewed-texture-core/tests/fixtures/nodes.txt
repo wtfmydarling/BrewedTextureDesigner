@@ -90,6 +90,19 @@ uniform_color p:color color
 uniform_color p:output choice
 uniform_color p:output = color
 uniform_color p:output = gray
+uniform_value
+uniform_value o:output image
+uniform_value p:tiling choice
+uniform_value p:tiling = none
+uniform_value p:tiling = horizontal
+uniform_value p:tiling = vertical
+uniform_value p:tiling = both
+uniform_value p:precision choice
+uniform_value p:precision = graph
+uniform_value p:precision = unorm8
+uniform_value p:precision = float16
+uniform_value p:precision = float32
+uniform_value p:value float
 shape
 shape o:output image
 shape p:tiling choice

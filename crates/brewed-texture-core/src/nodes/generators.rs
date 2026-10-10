@@ -91,11 +91,29 @@ pub static UNIFORM_COLOR: NodeDef = NodeDef {
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,
     params: &[
-        color("color", "Color", [0.5, 0.5, 0.5, 1.0]),
+        // (Grayscale, a level of gray: what it makes is its luminance.)
+        color("color", "Color", [0.5, 0.5, 0.5, 1.0]).gray_when("output", &[1]),
         choice("output", "Output", 0, UNIFORM_OUTPUTS, UNIFORM_OUTPUT_IDS)
             .fixed()
             .tip("Color: the color. Grayscale: its luminance, in a grayscale image."),
     ],
+    role: Role::Image,
+};
+
+/// A number in every pixel: what a map holds that is not a color (a color's channels are from 0
+/// to 1; an index of refraction is 1.5).
+pub static UNIFORM_VALUE: NodeDef = NodeDef {
+    id: "uniform_value",
+    name: "Uniform Value",
+    category: Category::Generators,
+    description: "Fills the image with a number: what a map holds that is not a color, as an index of refraction of 1.5.",
+    keywords: "constant number value float ior data map solid fill flat",
+    inputs: NO_SOCKETS,
+    outputs: GRAY_OUT,
+    params: &[float("value", "Value", 0.5, 0.0, 1.0).tip(
+        "The number every pixel holds. From 0 to 1 it is a level of gray; an index of refraction, a distance or a \
+         luminance takes it past them (an Output of floats keeps it: 8 bits hold it between 0 and 1).",
+    )],
     role: Role::Image,
 };
 

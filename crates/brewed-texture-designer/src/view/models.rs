@@ -278,12 +278,15 @@ pub(super) fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
         Shape::RoundedCube => {
             // The surface of a box of half-size `H - R` grown by a ball of radius `R`:
             // every point of a face is pushed out from the nearest point of that box, which
-            // leaves the middle of a face flat and rounds the edges and corners.
+            // leaves the middle of a face flat and rounds the edges and corners. Its edges are
+            // rounded as little as Substance Designer's are (a quarter of each face was round,
+            // too round), on a grid fine enough to round them smoothly (eight steps a quarter
+            // turn).
             const H: f32 = 0.8;
-            const R: f32 = 0.22;
+            const R: f32 = 0.1;
             for (n, a, b) in CUBE_FACES {
                 grid(
-                    96,
+                    128,
                     [1.0, 1.0],
                     |u, v| {
                         let (s, t) = (u * 2.0 - 1.0, v * 2.0 - 1.0);

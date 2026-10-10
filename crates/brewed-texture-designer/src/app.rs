@@ -320,6 +320,32 @@ pub enum VarField {
     Default,
 }
 
+/// How the channels of colors are said, in the color fields and the Color Editor: from 0 to 1
+/// (`float`), else from 0 to 255; as hue, saturation and value (`hsv`), else red, green and
+/// blue. Kept from one session to the next.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ColorUnits {
+    pub float: bool,
+    pub hsv: bool,
+}
+
+/// What the Color Editor's own controls do (its colors are set by [`Message::SetColor`]).
+#[derive(Clone, Debug)]
+pub enum ColorEditorMessage {
+    /// Its title bar pressed: it moves with the cursor until the button is let go.
+    Grab,
+    Units(ColorUnits),
+    /// Each channel turned over, or the color made its gray: a step of its own each.
+    Invert,
+    ToGray,
+    /// Its hexadecimal put on the clipboard; the clipboard's read, and what it says taken.
+    Copy,
+    Paste,
+    Pasted(Option<String>),
+    /// Its hexadecimal typed: taken as soon as it says a color.
+    Hex(String),
+}
+
 /// The open menu of a choice picked by its pictures (see [`crate::view::choices`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChoiceMenu {
@@ -417,9 +443,19 @@ pub struct Ui {
     pub lock_square: bool,
     pub status: Option<Status>,
     pub clipboard: Option<Clipboard>,
+    /// What the Color Editor edits, while it is open: a window of its own inside the program's,
+    /// open until it is closed (not by a click elsewhere: the model is turned with it open).
     pub color_picker: Option<ColorTarget>,
-    /// Where the color picker floats: where it was opened from.
+    /// Where its top left corner is: near where it was first opened, then where it was put.
     pub color_picker_at: Point,
+    /// It was moved by its title bar: it opens there again.
+    pub color_editor_placed: bool,
+    /// Where its title bar was grabbed, from its corner, while it is being moved.
+    pub color_editor_grab: Option<Vector>,
+    /// Its hexadecimal as typed, and the color it was typed for (a color set otherwise since is
+    /// said anew).
+    pub color_hex: Option<(String, [f32; 4])>,
+    pub color_units: ColorUnits,
     pub choice_menu: Option<ChoiceMenu>,
     /// The headings of the menus of choices under headings (an Output's usage) that are
     /// closed: their options hidden. Kept from one session to the next.
@@ -921,6 +957,10 @@ pub enum Message {
     /// Typing in the description of a comment.
     Description(CommentId, text_editor::Action),
     ColorPicker(Option<ColorTarget>),
+    /// A color set where it is kept (a level of gray where it is one: see
+    /// [`brewed_texture_core::Node::param_gray`]).
+    SetColor(ColorTarget, [f32; 4]),
+    ColorEditor(ColorEditorMessage),
     GradientStop(NodeId, String, usize),
     /// Replace a gradient and select one of its stops.
     SetGradient(NodeId, String, brewed_texture_core::Gradient, Option<usize>),
@@ -1195,6 +1235,13 @@ impl App {
                 clipboard: None,
                 color_picker: None,
                 color_picker_at: Point::ORIGIN,
+                color_editor_placed: false,
+                color_editor_grab: None,
+                color_hex: None,
+                color_units: ColorUnits {
+                    float: opts.workspace.as_ref().and_then(|w| w.color_float).unwrap_or(false),
+                    hsv: opts.workspace.as_ref().and_then(|w| w.color_hsv).unwrap_or(false),
+                },
                 choice_menu: None,
                 closed_headings: opts.workspace.as_ref().map(|w| w.closed_headings.iter().cloned().collect()).unwrap_or_default(),
                 realtime: opts.workspace.as_ref().and_then(|w| w.realtime).unwrap_or(true),
@@ -2174,6 +2221,8 @@ impl App {
             home_layout: Some(home::layout_said(self.ui.home_layout).into()),
             home_sort: Some(home::sort_said(self.ui.home_sort)),
             template_layout: Some(home::layout_said(self.ui.template_layout).into()),
+            color_float: Some(self.ui.color_units.float),
+            color_hsv: Some(self.ui.color_units.hsv),
             closed_headings: self.ui.closed_headings.iter().cloned().collect(),
             last_folder: self.ui.last_folder.as_ref().map(|f| f.display().to_string()),
             ..Workspace::default()
@@ -2670,11 +2719,23 @@ impl App {
             Message::Expression(node, action) => self.expression_action(node, action),
             Message::Description(id, action) => self.description_action(id, action),
             Message::ColorPicker(target) => {
-                // The picker floats where it was opened, so nothing in the panels moves.
-                self.ui.color_picker_at = self.ui.cursor + Vector::new(-120.0, 18.0);
+                // The editor opens near where it was asked for, the first time, so that nothing
+                // in the panels moves; then where it was put. Asked for something else while it
+                // is open, it edits that, where it is.
+                if target.is_some() && self.ui.color_picker.is_none() && !self.ui.color_editor_placed {
+                    self.ui.color_picker_at = self.color_editor_kept(self.ui.cursor + Vector::new(-120.0, 18.0));
+                }
                 self.ui.color_picker = if self.ui.color_picker == target { None } else { target };
+                self.ui.color_hex = None;
+                self.ui.color_editor_grab = None;
                 self.doc.seal();
             }
+            Message::SetColor(target, color) => {
+                if let Some(edit) = self.color_edit(&target, color) {
+                    self.apply(edit);
+                }
+            }
+            Message::ColorEditor(message) => return self.color_editor_message(message),
             Message::GradientStop(node, key, index) => {
                 self.ui.gradient_stop.insert((node, key), index);
             }
@@ -3114,6 +3175,11 @@ impl App {
             E::Window(_) => {}
             E::Mouse(mouse::Event::CursorMoved { position }) => {
                 self.ui.cursor = position;
+                // The Color Editor moved by its title bar, kept in the window.
+                if let Some(grab) = self.ui.color_editor_grab {
+                    self.ui.color_picker_at = self.color_editor_kept(position - grab);
+                    self.ui.color_editor_placed = true;
+                }
                 if let Some((payload, start)) = &self.ui.press
                     && position.distance(*start) > 4.0
                 {
@@ -3125,6 +3191,7 @@ impl App {
                 // Drops on the graph are handled by the canvas (it knows its bounds).
                 self.ui.press = None;
                 self.ui.drag = None;
+                self.ui.color_editor_grab = None;
             }
             E::Mouse(_) => {}
             E::Keyboard(keyboard::Event::ModifiersChanged(m)) => self.ui.modifiers = m,
@@ -3779,39 +3846,157 @@ impl App {
 
     /// Put a color picked from the screen where the eyedropper was clicked. A screen has
     /// no transparency: the target keeps its alpha.
-    fn apply_picked_color(&mut self, target: &ColorTarget, rgb: [f32; 4]) {
+    /// Where the Color Editor is put to be at `at`: inside the window, under its title bar, as
+    /// it is drawn (kept so, it follows the cursor that moves it from the start).
+    fn color_editor_kept(&self, at: Point) -> Point {
+        let size = view::editors::COLOR_EDITOR;
+        let (w, margin) = (self.ui.window_size, crate::widget::placed::MARGIN);
+        let top = if OWN_TITLE_BAR { view::toolbar::MENU_BAR_H } else { margin };
+        Point::new(at.x.min(w.width - size.width - margin).max(margin), at.y.min(w.height - size.height - margin).max(top))
+    }
+
+    /// The color `target` is now (none: it is gone).
+    pub fn target_color(&self, target: &ColorTarget) -> Option<[f32; 4]> {
         let graph = self.doc.graph();
-        let with_alpha = |a: f32| [rgb[0], rgb[1], rgb[2], a];
-        let edit = match target {
-            ColorTarget::Param(node, key) => {
-                let alpha = match graph.node(*node).and_then(|n| n.value(key)) {
-                    Some(ParamValue::Color(c)) => c[3],
-                    _ => 1.0,
-                };
-                Some(Edit::SetParam { node: *node, key: key.clone(), value: ParamValue::Color(with_alpha(alpha)) })
-            }
-            ColorTarget::Variable(name, field) => graph.variable(name).map(|var| {
-                let current = if *field == VarField::Value { var.value } else { var.default };
-                let alpha = if let Value::Color(c) = current { c[3] } else { 1.0 };
-                let value = Value::Color(with_alpha(alpha));
-                match field {
-                    VarField::Value => Edit::SetVariable { name: name.clone(), value },
-                    VarField::Default => Edit::SetVariableDefault { name: name.clone(), value },
-                }
-            }),
-            ColorTarget::Comment(id) => graph.comment(*id).map(|c| Edit::SetCommentColor { id: *id, color: with_alpha(c.color[3]) }),
-            ColorTarget::GradientStop(node, key) => {
-                let gradient = graph.node(*node).and_then(|n| n.value(key)).and_then(ParamValue::as_gradient).cloned();
-                let stop = self.ui.gradient_stop.get(&(*node, key.clone())).copied();
-                match (gradient, stop) {
-                    (Some(mut g), Some(i)) if i < g.stops.len() => {
-                        g.stops[i].color = with_alpha(g.stops[i].color[3]);
-                        Some(brewed_texture_core::edit::gradient_edit(*node, key, g))
-                    }
+        match target {
+            ColorTarget::Param(node, key) => match graph.node(*node).and_then(|n| n.value(key)) {
+                Some(ParamValue::Color(c)) => Some(*c),
+                _ => None,
+            },
+            ColorTarget::Variable(name, field) => {
+                let var = graph.variable(name)?;
+                match if *field == VarField::Value { var.value } else { var.default } {
+                    Value::Color(c) => Some(c),
                     _ => None,
                 }
             }
+            ColorTarget::Comment(id) => graph.comment(*id).map(|c| c.color),
+            ColorTarget::GradientStop(node, key) => {
+                let gradient = graph.node(*node).and_then(|n| n.value(key)).and_then(ParamValue::as_gradient)?;
+                let stop = self.ui.gradient_stop.get(&(*node, key.clone())).copied()?;
+                gradient.stops.get(stop).map(|s| s.color)
+            }
+        }
+    }
+
+    /// Is `target` a level of gray (a Uniform Color's color while it makes grayscale)?
+    pub fn target_gray(&self, target: &ColorTarget) -> bool {
+        match target {
+            ColorTarget::Param(node, key) => {
+                self.doc.graph().node(*node).is_some_and(|n| n.param_def(key).is_some_and(|pd| n.param_gray(&pd)))
+            }
+            _ => false,
+        }
+    }
+
+    /// The edit that makes `target` `color`: its gray where it is a level of gray, its channels
+    /// from 0 to 1. None where it is gone.
+    fn color_edit(&self, target: &ColorTarget, color: [f32; 4]) -> Option<Edit> {
+        let color = color.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 });
+        let color = if self.target_gray(target) { crate::widget::color::gray_of(color) } else { color };
+        let graph = self.doc.graph();
+        match target {
+            ColorTarget::Param(node, key) => {
+                graph.node(*node)?;
+                Some(Edit::SetParam { node: *node, key: key.clone(), value: ParamValue::Color(color) })
+            }
+            ColorTarget::Variable(name, field) => {
+                graph.variable(name)?;
+                let value = Value::Color(color);
+                Some(match field {
+                    VarField::Value => Edit::SetVariable { name: name.clone(), value },
+                    VarField::Default => Edit::SetVariableDefault { name: name.clone(), value },
+                })
+            }
+            ColorTarget::Comment(id) => graph.comment(*id).map(|_| Edit::SetCommentColor { id: *id, color }),
+            ColorTarget::GradientStop(node, key) => {
+                let mut g = graph.node(*node).and_then(|n| n.value(key)).and_then(ParamValue::as_gradient)?.clone();
+                let i = self.ui.gradient_stop.get(&(*node, key.clone())).copied()?;
+                g.stops.get_mut(i)?.color = color;
+                Some(brewed_texture_core::edit::gradient_edit(*node, key, g))
+            }
+        }
+    }
+
+    /// What the Color Editor's own controls do.
+    fn color_editor_message(&mut self, message: ColorEditorMessage) -> Task<Message> {
+        let target = self.ui.color_picker.clone();
+        let current = target.as_ref().and_then(|t| self.target_color(t));
+        // A step of its own (a button pressed right after a drag of the same color is not
+        // undone with it).
+        let set = |app: &mut App, color: [f32; 4]| {
+            let Some(target) = &target else { return };
+            if let Some(edit) = app.color_edit(target, color) {
+                app.doc.seal();
+                if app.apply(edit) {
+                    app.doc.seal();
+                }
+            }
         };
+        match message {
+            ColorEditorMessage::Grab => {
+                // (From where it is seen: a window made smaller since may have moved it.)
+                let at = self.color_editor_kept(self.ui.color_picker_at);
+                self.ui.color_picker_at = at;
+                self.ui.color_editor_grab = Some(self.ui.cursor - at);
+            }
+            ColorEditorMessage::Units(units) => self.ui.color_units = units,
+            ColorEditorMessage::Invert => {
+                if let Some(c) = current {
+                    set(self, [1.0 - c[0], 1.0 - c[1], 1.0 - c[2], c[3]]);
+                }
+            }
+            ColorEditorMessage::ToGray => {
+                if let Some(c) = current {
+                    set(self, crate::widget::color::gray_of(c));
+                }
+            }
+            ColorEditorMessage::Copy => {
+                if let Some(c) = current {
+                    let hex = crate::widget::color::to_hex(c);
+                    self.set_status(format!("Copied {hex}"), false);
+                    return iced::clipboard::write(hex);
+                }
+            }
+            ColorEditorMessage::Paste => return iced::clipboard::read().map(|t| Message::ColorEditor(ColorEditorMessage::Pasted(t))),
+            ColorEditorMessage::Pasted(text) => {
+                let Some(c) = current else { return Task::none() };
+                match text.as_deref().and_then(|t| crate::widget::color::parse_hex(t, c[3])) {
+                    Some(pasted) => {
+                        self.ui.color_hex = None;
+                        set(self, pasted);
+                    }
+                    None => {
+                        let said = text.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| crate::view::graph::truncate(t, 24));
+                        self.set_status(
+                            match said {
+                                Some(t) => format!("\"{t}\" is not a color: paste one as #RRGGBB"),
+                                None => "The clipboard holds no color: copy one as #RRGGBB".into(),
+                            },
+                            true,
+                        );
+                    }
+                }
+            }
+            ColorEditorMessage::Hex(text) => {
+                let Some((target, c)) = target.zip(current) else { return Task::none() };
+                match crate::widget::color::parse_hex(&text, c[3]).and_then(|typed| self.color_edit(&target, typed).map(|e| (typed, e))) {
+                    Some((typed, edit)) => {
+                        self.apply(edit);
+                        let now = self.target_color(&target).unwrap_or(typed);
+                        self.ui.color_hex = Some((text, now));
+                    }
+                    None => self.ui.color_hex = Some((text, c)),
+                }
+            }
+        }
+        Task::none()
+    }
+
+    fn apply_picked_color(&mut self, target: &ColorTarget, rgb: [f32; 4]) {
+        // (With the alpha it had: the screen has none.)
+        let alpha = self.target_color(target).map_or(1.0, |c| c[3]);
+        let edit = self.color_edit(target, [rgb[0], rgb[1], rgb[2], alpha]);
         match edit {
             Some(edit) => {
                 if self.apply(edit) {

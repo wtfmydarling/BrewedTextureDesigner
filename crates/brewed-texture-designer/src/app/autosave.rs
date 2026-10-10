@@ -260,6 +260,11 @@ impl App {
             }
         }
         self.refresh();
+        // What is recovered is what is edited now: off the Home screen, to it (left on the Home
+        // screen, the work recovered waited behind its button).
+        if !recovered.is_empty() {
+            self.ui.home = None;
+        }
         match (recovered.len(), failed.is_empty()) {
             (_, false) => self.set_status(format!("Could not recover {}", failed.join("; ")), true),
             (0, true) => {}

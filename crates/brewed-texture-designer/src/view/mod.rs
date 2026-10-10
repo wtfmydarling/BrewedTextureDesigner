@@ -72,6 +72,10 @@ pub fn root(app: &App) -> Element<'_, Message> {
         ],
     };
     let mut layers: Vec<Element<'_, Message>> = vec![window.into()];
+    // The Color Editor, a window over the panels: the menus over it, a dialog over all.
+    if let Some(editor) = editors::color_window(app) {
+        layers.push(blind(editor, menu_open).into());
+    }
     if let Some(ctx) = &app.ui.context {
         layers.push(context_menu::view(app, ctx));
     }
@@ -87,9 +91,6 @@ pub fn root(app: &App) -> Element<'_, Message> {
         let ghost = container(says).padding([4, 8]).max_width(420).style(style::popup);
         let at = app.ui.cursor + iced::Vector::new(14.0, 10.0);
         layers.push(pin(ghost).position(at).into());
-    }
-    if let Some(picker) = editors::color_popup(app) {
-        layers.push(picker);
     }
     if let Some(dialog) = &app.ui.dialog {
         // Where the program draws the window's title bar, a dialog covers what is under it, not

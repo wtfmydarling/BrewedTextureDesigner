@@ -248,6 +248,9 @@ pub struct ParamDef<'a> {
     /// values `.1`. If that enum is itself exposed, its value is only known at evaluation
     /// time, so the parameter stays visible.
     pub visible_if: Option<(&'static str, &'static [u32])>,
+    /// A color that is a level of gray while the enum parameter `.0` has one of the values `.1`
+    /// (what the node makes of it then is gray: it is edited as a gray, one value).
+    pub gray_if: Option<(&'static str, &'static [u32])>,
     pub exposed_by_default: bool,
     /// Whether the parameter can get an input socket. Structural settings (tiling, output
     /// format, file paths, expressions, gradients) cannot.
@@ -287,6 +290,7 @@ impl<'a> ParamDef<'a> {
             kind,
             tooltip: "",
             visible_if: None,
+            gray_if: None,
             exposed_by_default: false,
             exposable,
             limits: None,
@@ -343,6 +347,11 @@ impl<'a> ParamDef<'a> {
     }
     pub(crate) const fn when(mut self, key: &'static str, values: &'static [u32]) -> Self {
         self.visible_if = Some((key, values));
+        self
+    }
+    /// A color edited as a level of gray while `key` is one of `values` (see [`ParamDef::gray_if`]).
+    pub(crate) const fn gray_when(mut self, key: &'static str, values: &'static [u32]) -> Self {
+        self.gray_if = Some((key, values));
         self
     }
     pub(crate) const fn exposed(mut self) -> Self {
@@ -459,8 +468,9 @@ impl<'a> ParamDef<'a> {
             (ParamKind::Vec2 { default, .. }, ParamValue::Vec2(v)) => {
                 ParamValue::Vec2([fin(v[0], default[0]), fin(v[1], default[1])])
             }
+            // (Each channel from 0 to 1: typed or driven past them, a color had negative channels.)
             (ParamKind::Color { default }, ParamValue::Color(c)) => {
-                ParamValue::Color(std::array::from_fn(|i| fin(c[i], default[i])))
+                ParamValue::Color(std::array::from_fn(|i| fin(c[i], default[i]).clamp(0.0, 1.0)))
             }
             (ParamKind::Enum { options, .. }, ParamValue::Enum(v)) => {
                 ParamValue::Enum(v.min(options.len().saturating_sub(1) as u32))
@@ -834,6 +844,7 @@ impl NodeKind {
     pub const IMAGE_INPUT: NodeKind = NodeKind(&values::IMAGE_INPUT);
     // Generators.
     pub const UNIFORM_COLOR: NodeKind = NodeKind(&generators::UNIFORM_COLOR);
+    pub const UNIFORM_VALUE: NodeKind = NodeKind(&generators::UNIFORM_VALUE);
     pub const SHAPE: NodeKind = NodeKind(&generators::SHAPE);
     pub const TILE_GENERATOR: NodeKind = NodeKind(&generators::TILE_GENERATOR);
     pub const TILE_SAMPLER: NodeKind = NodeKind(&generators::TILE_SAMPLER);
@@ -902,6 +913,7 @@ impl NodeKind {
         NodeKind::COMPOSE_COLOR,
         NodeKind::IMAGE_INPUT,
         NodeKind::UNIFORM_COLOR,
+        NodeKind::UNIFORM_VALUE,
         NodeKind::SHAPE,
         NodeKind::TILE_GENERATOR,
         NodeKind::TILE_SAMPLER,
