@@ -296,11 +296,12 @@ pub(super) fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
             // The surface of a box of half-size `H - R` grown by a ball of radius `R`:
             // every point of a face is pushed out from the nearest point of that box, which
             // leaves the middle of a face flat and rounds the edges and corners. Its edges are
-            // rounded as little as Substance Designer's are, a sixteenth of its half-size (a
-            // quarter of each face was round, too round for texture design), on a grid finest
-            // where it rounds: sixteen steps a quarter turn, the flat part as fine as it was.
+            // rounded by a sixty-fourth of its side: enough to catch the light as the edge of a
+            // real thing does, the faces flat to their ends for a texture to be judged on (a
+            // quarter of each face was round, then a sixteenth and a thirty-second of the
+            // side). The grid is finest where it rounds: sixteen steps an eighth of a turn.
             const H: f32 = 0.8;
-            const R: f32 = 0.05;
+            const R: f32 = 2.0 * H / 64.0;
             let at = banded(R / H / 2.0, 16, 112);
             for (n, a, b) in CUBE_FACES {
                 grid_at(

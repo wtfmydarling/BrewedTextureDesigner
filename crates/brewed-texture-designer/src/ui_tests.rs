@@ -2039,7 +2039,8 @@ fn a_curve_is_drawn_with_the_mouse() {
 #[test]
 fn the_3d_view_is_lit_by_an_environment_image() {
     use crate::app::PreviewMessage as P;
-    let dir = scratch("environment");
+    // (A folder of its own: the test of the files of environment images has "environment".)
+    let dir = scratch("lit-by-an-image");
     let sky = dir.join("sky.hdr");
     let pixels: Vec<image::Rgb<f32>> =
         (0..32u32).flat_map(|y| (0..64u32).map(move |x| image::Rgb([x as f32 / 16.0, 1.0 - y as f32 / 32.0, 2.0]))).collect();

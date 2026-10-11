@@ -4,7 +4,7 @@
 // The material is what OpenPBR makes of its layers, from the top: a fuzz, a coat, and the base,
 // which is metal or not — a surface that reflects (as its IOR says) over what is under it: a
 // matte color, light scattered under the surface, or light going through; a thin film colors
-// the base's reflection. Each layer is lit by the studio's two lights and its sky, or by the
+// the base's reflection. Each layer is lit by the studio's light and its sky, or by the
 // environment image (its irradiance, and its light blurred for each roughness), each weighed
 // by how much of the light it reflects (shading.rs: `lut`) and keeps from the layers under it.
 // The parameters come from the material's maps, by the inputs of shading.rs (`IN_…`, put
@@ -374,6 +374,10 @@ fn phase(cos: f32, g: f32) -> f32 {
 
 // ---------------------------------------------------------------------------- the light
 
+// How bright the studio's sky is on a matte surface: it alone lights what the studio's light
+// does not reach (a second light, opposite the first, did: see `fs`).
+const SKY_AROUND: f32 = 0.5;
+
 // The studio's sky.
 fn studio_sky(dir: vec3<f32>) -> vec3<f32> {
     let sky = vec3<f32>(0.55, 0.62, 0.75);
@@ -410,7 +414,7 @@ fn around(n: vec3<f32>) -> vec3<f32> {
     if (lit_by_image()) {
         return irradiance(turned(n));
     }
-    return studio_sky(n) * 0.35 * PI;
+    return studio_sky(n) * SKY_AROUND * PI;
 }
 
 // The same, averaged over every way a surface can face.
@@ -418,7 +422,7 @@ fn around_mean() -> vec3<f32> {
     if (lit_by_image()) {
         return max(u.sh[0].rgb, vec3<f32>(0.0));
     }
-    return (studio_sky(vec3<f32>(0.0, 1.0, 0.0)) + studio_sky(vec3<f32>(0.0, -1.0, 0.0))) * 0.5 * 0.35 * PI;
+    return (studio_sky(vec3<f32>(0.0, 1.0, 0.0)) + studio_sky(vec3<f32>(0.0, -1.0, 0.0))) * 0.5 * SKY_AROUND * PI;
 }
 
 // The light from around in direction `r`, blurred as a lobe of `rough` blurs it.
@@ -491,9 +495,23 @@ fn darkened(c: vec3<f32>, coat: f32, darkening: f32, ior: f32) -> vec3<f32> {
     return mix(c, dark, clamp(coat * darkening, 0.0, 1.0));
 }
 
+// The roughness of a lobe of roughness `rough` made wider: `more` added to the square of its
+// width (see `surface_of`).
+fn widened(rough: f32, more: f32) -> f32 {
+    let a = rough * rough;
+    return min(sqrt(sqrt(a * a + more)), 1.0);
+}
+
 fn surface_of(i: VOut, front: bool) -> Surface {
     var s: Surface;
     let ng0 = normalize(i.normal);
+    // Where the surface turns within a pixel (a rounded edge a pixel or two wide), a lobe
+    // narrower than the turn shows as a broken line of sparks: the lobes are as wide as the
+    // turn at least (Tokuyoshi and Kaplanyan, 2019: the variance of the normal over the pixel,
+    // added to the square of the lobe's width).
+    let turn_x = dpdx(ng0);
+    let turn_y = dpdy(ng0);
+    let wider = min(0.5 * (dot(turn_x, turn_x) + dot(turn_y, turn_y)), 0.18);
     let tg0 = normalize(i.tangent.xyz - ng0 * dot(ng0, i.tangent.xyz));
     let bg0 = cross(ng0, tg0) * i.tangent.w;
 
@@ -571,7 +589,7 @@ fn surface_of(i: VOut, front: bool) -> Surface {
     if (!given(IN_ROUGHNESS) && given(IN_GLOSSINESS)) {
         rough = 1.0 - value(IN_GLOSSINESS);
     }
-    s.rough = clamp(rough, 0.02, 1.0);
+    s.rough = widened(clamp(rough, 0.02, 1.0), wider);
     s.aniso = clamp(value(IN_ANISOTROPY), 0.0, 1.0);
 
     s.trans = clamp(value(IN_TRANSMISSION_WEIGHT), 0.0, 1.0);
@@ -593,7 +611,7 @@ fn surface_of(i: VOut, front: bool) -> Surface {
     s.sss_reach = clamp(reach / (1.0 - 0.5 * s.sss_g), vec3<f32>(0.0), vec3<f32>(1.0));
 
     s.coat_color = clamp(color(IN_COAT_COLOR), vec3<f32>(0.0), vec3<f32>(1.0));
-    s.coat_rough = clamp(value(IN_COAT_ROUGHNESS), 0.02, 1.0);
+    s.coat_rough = widened(clamp(value(IN_COAT_ROUGHNESS), 0.02, 1.0), wider);
     s.coat_aniso = clamp(value(IN_COAT_ANISOTROPY), 0.0, 1.0);
 
     s.fuzz = clamp(value(IN_FUZZ_WEIGHT), 0.0, 1.0);
@@ -823,15 +841,13 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let s = surface_of(i, front);
     let v = normalize(u.eye.xyz - i.world);
     var color = reflected_around(s, v);
-    // The studio's key light, and the fill light opposite it; over an environment image, the
-    // key light only where it is asked for too (u.flags.x).
+    // The studio's light: one, as the view says it has (a second, opposite it, filled the
+    // other side: the model had two highlights for one light, and a dark line along every
+    // rounded edge between a side the one lit and a side the other did; the sky fills that
+    // side now); over an environment image, only where it is asked for too (u.flags.x).
     if (!lit_by_image() || u.flags.x != 0u) {
         let key = normalize(u.light.xyz);
         color = color + reflected(s, v, key) * vec3<f32>(3.2, 3.05, 2.85);
-        if (!lit_by_image()) {
-            let fill = normalize(vec3<f32>(-key.x, 0.3, -key.z));
-            color = color + reflected(s, v, fill) * vec3<f32>(0.45, 0.5, 0.6);
-        }
     }
     color = color + glow(s, v);
     return on_screen(color * u.params.z, s.opacity);
