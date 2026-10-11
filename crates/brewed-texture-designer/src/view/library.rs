@@ -2,7 +2,7 @@
 //! add a node in the middle of the graph view). After the program's own nodes, the graphs of
 //! the library folders (Settings → Library), under the categories they say.
 
-use iced::widget::{button, column, container, row, scrollable, space, text, text_input, tooltip};
+use iced::widget::{button, column, container, row, space, text, text_input, tooltip};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::{Category, NodeKind};
 
@@ -10,6 +10,7 @@ use crate::app::library::LibraryGraph;
 use crate::app::{App, DragPayload, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
+use crate::widget::scroll::scroll_box;
 use crate::widget::pressable::pressable;
 
 fn item(kind: NodeKind) -> Element<'static, Message> {
@@ -116,10 +117,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     column![
         crate::view::pane_header("Library", tools),
         container(search).padding([2, 8]),
-        scrollable(container(list).padding([6, 6]))
-            .height(Length::Fill)
-            .style(style::scrollable)
-            .direction(scrollable::Direction::Vertical(scrollable::Scrollbar::new().width(6).scroller_width(6))),
+        scroll_box(container(list).padding([6, 6])).height(Length::Fill),
     ]
     .spacing(6)
     .into()

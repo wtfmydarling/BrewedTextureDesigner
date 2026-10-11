@@ -77,23 +77,27 @@ enum Part {
 #[derive(Default)]
 struct State {
     drag: Option<Part>,
-    /// Hue kept while the color is gray (where hue is undefined).
-    hue: f32,
-    synced: Option<[f32; 4]>,
+    /// What is being picked, as the events of a frame change it (the widget's own copy is as
+    /// the frame began: several events arrive in one), and the widget's copy it was taken from.
+    work: [f32; 3],
+    synced: Option<[f32; 3]>,
 }
 
 pub struct ColorPicker<'a, Message> {
-    color: [f32; 4],
+    /// The hue, saturation and value shown: where the point of the square and the mark of the
+    /// hue bar are. (Not a color: black has no saturation to say and a gray no hue, and the
+    /// point dragged to the bottom of the square jumped to its corner.)
+    hsv: [f32; 3],
     /// How large the square is.
     side: f32,
-    on_change: Box<dyn Fn([f32; 4]) -> Message + 'a>,
+    on_change: Box<dyn Fn([f32; 3]) -> Message + 'a>,
     on_release: Option<Message>,
 }
 
-/// The square of `color`'s hue, saturation across and value down, with the hue bar beside it;
-/// its alpha is left as it is.
-pub fn color_picker<'a, Message>(color: [f32; 4], on_change: impl Fn([f32; 4]) -> Message + 'a) -> ColorPicker<'a, Message> {
-    ColorPicker { color, side: 200.0, on_change: Box::new(on_change), on_release: None }
+/// The square of the hue of `hsv`, saturation across and value down, with the hue bar beside
+/// it: what is picked is said as a hue, a saturation and a value too.
+pub fn color_picker<'a, Message>(hsv: [f32; 3], on_change: impl Fn([f32; 3]) -> Message + 'a) -> ColorPicker<'a, Message> {
+    ColorPicker { hsv: hsv.map(clamp01), side: 200.0, on_change: Box::new(on_change), on_release: None }
 }
 
 impl<Message> ColorPicker<'_, Message> {
@@ -121,37 +125,19 @@ impl<Message> ColorPicker<'_, Message> {
         Areas { sv, hue }
     }
 
-    fn hsv(&self, state: &State) -> [f32; 3] {
-        let [h, s, v] = rgb_to_hsv([clamp01(self.color[0]), clamp01(self.color[1]), clamp01(self.color[2])]);
-        if s < 1e-4 || v < 1e-4 { [state.hue, s, v] } else { [h, s, v] }
-    }
-
     /// The hue at `y` on the bar: red at its top and bottom, through magenta, blue, cyan, green
     /// and yellow on the way down, as Substance Designer's.
     fn hue_at(a: &Areas, y: f32) -> f32 {
         (1.0 - clamp01((y - a.hue.y) / a.hue.height)).min(0.9999)
     }
 
-    fn value_at(&self, state: &State, part: Part, p: Point, a: &Areas) -> [f32; 4] {
-        let [h, s, v] = self.hsv(state);
-        let alpha = clamp01(self.color[3]);
+    /// `[h, s, v]` with what `part` says at `p`: the square its saturation and value (past its
+    /// edges, what the nearest edge says: black under it, at the saturation the point is at),
+    /// the bar its hue.
+    fn value_at([h, s, v]: [f32; 3], part: Part, p: Point, a: &Areas) -> [f32; 3] {
         match part {
-            Part::SatValue => {
-                let s = clamp01((p.x - a.sv.x) / a.sv.width);
-                let v = 1.0 - clamp01((p.y - a.sv.y) / a.sv.height);
-                let [r, g, b] = hsv_to_rgb([h, s, v]);
-                [r, g, b, alpha]
-            }
-            Part::Hue => {
-                let h = Self::hue_at(a, p.y);
-                let [r, g, b] = hsv_to_rgb([h, s.max(1e-3), v.max(1e-3)]);
-                // Keep the exact gray level when the color was gray.
-                if s < 1e-4 || v < 1e-4 {
-                    [self.color[0], self.color[1], self.color[2], alpha]
-                } else {
-                    [r, g, b, alpha]
-                }
-            }
+            Part::SatValue => [h, clamp01((p.x - a.sv.x) / a.sv.width), 1.0 - clamp01((p.y - a.sv.y) / a.sv.height)],
+            Part::Hue => [Self::hue_at(a, p.y), s, v],
         }
     }
 }
@@ -262,12 +248,9 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for ColorPicke
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_mut::<State>();
-        if state.synced != Some(self.color) {
-            let [h, s, v] = rgb_to_hsv([clamp01(self.color[0]), clamp01(self.color[1]), clamp01(self.color[2])]);
-            if s > 1e-4 && v > 1e-4 && state.drag != Some(Part::Hue) {
-                state.hue = h;
-            }
-            state.synced = Some(self.color);
+        if state.synced != Some(self.hsv) {
+            state.work = self.hsv;
+            state.synced = Some(self.hsv);
         }
         let a = self.areas(layout.bounds());
         match event {
@@ -281,18 +264,14 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for ColorPicke
                     return;
                 };
                 state.drag = Some(part);
-                if part == Part::Hue {
-                    state.hue = Self::hue_at(&a, p.y);
-                }
-                shell.publish((self.on_change)(self.value_at(state, part, p, &a)));
+                state.work = Self::value_at(state.work, part, p, &a);
+                shell.publish((self.on_change)(state.work));
                 shell.capture_event();
             }
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 if let Some(part) = state.drag {
-                    if part == Part::Hue {
-                        state.hue = Self::hue_at(&a, position.y);
-                    }
-                    shell.publish((self.on_change)(self.value_at(state, part, *position, &a)));
+                    state.work = Self::value_at(state.work, part, *position, &a);
+                    shell.publish((self.on_change)(state.work));
                     shell.capture_event();
                 }
             }
@@ -324,7 +303,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for ColorPicke
 
     fn draw(
         &self,
-        tree: &Tree,
+        _tree: &Tree,
         renderer: &mut iced::Renderer,
         _theme: &iced::Theme,
         _style: &renderer::Style,
@@ -332,9 +311,8 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for ColorPicke
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
-        let state = tree.state.downcast_ref::<State>();
         let a = self.areas(layout.bounds());
-        let [h, s, v] = self.hsv(state);
+        let [h, s, v] = self.hsv;
         let pure = hsv_to_rgb([h, 1.0, 1.0]);
         let pure = Color::from_rgb(pure[0], pure[1], pure[2]);
 

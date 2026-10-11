@@ -8,7 +8,7 @@
 //! heading with its options under it, in columns, each option saying what it is where it is
 //! pointed at; the same search, the same keys.
 
-use iced::widget::{Id, button, column, container, image, row, scrollable, space, text, text_input};
+use iced::widget::{Id, button, column, container, image, row, space, text, text_input};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::graph::Node;
 use brewed_texture_core::nodes::ParamDef;
@@ -16,6 +16,7 @@ use brewed_texture_core::nodes::ParamDef;
 use crate::app::{App, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
+use crate::widget::scroll::scroll_box;
 use crate::widget::dropdown::dropdown;
 
 /// Side of an option's picture in the menu.
@@ -132,7 +133,7 @@ fn menu<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, current: u32) -
         grid = grid.push(container(text("Nothing matches").size(style::SMALL).color(style::TEXT_DIM)).padding(8));
     }
     // Scrolls when the window is too low for all of it.
-    let list = scrollable(grid).id(list_id()).style(style::scrollable);
+    let list = scroll_box(grid).id(list_id());
     let body: Element<'a, Message> = if searched(pd) {
         column![
             text_input("Search…", query)
@@ -203,8 +204,7 @@ fn grouped_menu<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, current
     let options = pd.enum_options();
     let (lit, query) = app.ui.choice_menu.as_ref().map_or((current as usize, ""), |m| (m.cursor, m.query.as_str()));
     let searching = !query.trim().is_empty();
-    // (Room on the right for the scrollbar, which is drawn over what it scrolls.)
-    let mut list = column![].spacing(1).width(Length::Fixed(GROUPED_W)).padding(iced::Padding { right: 12.0, ..iced::Padding::ZERO });
+    let mut list = column![].spacing(1).width(Length::Fixed(GROUPED_W));
     let mut any = false;
     for (heading, of) in pd.groups {
         let found: Vec<usize> = of.iter().map(|&i| i as usize).filter(|&i| pd.option_matches(i, query)).collect();
@@ -248,7 +248,7 @@ fn grouped_menu<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, current
             .size(style::TEXT_SIZE)
             .width(Length::Fixed(GROUPED_W))
             .style(style::text_input),
-        container(scrollable(list).id(list_id()).style(style::scrollable)).max_height(560),
+        container(scroll_box(list).id(list_id())).max_height(560),
     ]
     .spacing(6);
     container(body).padding(6).style(style::popup).into()

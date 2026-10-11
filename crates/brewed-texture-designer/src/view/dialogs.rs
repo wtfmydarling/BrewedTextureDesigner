@@ -1,7 +1,7 @@
 //! Modal dialogs: unsaved changes, work kept by a program that stopped, files a package cannot
 //! find, the settings (see [`crate::view::settings`]), keyboard and mouse, about.
 
-use iced::widget::{button, center, column, container, mouse_area, opaque, row, rule, scrollable, space, text};
+use iced::widget::{button, center, column, container, mouse_area, opaque, row, rule, space, text};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::package::{MissingKind, file_name};
 
@@ -9,6 +9,7 @@ use crate::app::autosave::Recovery;
 use crate::app::{App, Dialog, ExplorerMessage, Message, MissingFiles, PendingAction, SettingsMessage};
 use crate::icons::{Icon, icon};
 use crate::style;
+use crate::widget::scroll::scroll_box;
 
 fn dialog_box<'a>(content: impl Into<Element<'a, Message>>, width: f32) -> Element<'a, Message> {
     container(content).padding(18).width(Length::Fixed(width)).style(style::popup).into()
@@ -141,9 +142,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
-                scrollable(column![keyboard, mouse].spacing(6).padding(iced::Padding { right: 12.0, ..iced::Padding::ZERO }))
-                    .height(Length::Shrink)
-                    .style(style::scrollable),
+                scroll_box(column![keyboard, mouse].spacing(6)).height(Length::Shrink),
             ]
             .spacing(14);
             let dialog = container(body).padding(18).width(Length::Fixed(760.0)).max_height(640).style(style::popup);
@@ -239,7 +238,7 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
             Layout::List => Element::from(column(of.into_iter().map(|(t, card)| home_screen::template_row(card, *t == dialog.template, say(N::Template(*t)), home_screen::Style::default()))).spacing(3)),
         });
     }
-    let templates = container(scrollable(container(templates).padding(16)).height(Length::Fill).spacing(8).style(style::scrollable))
+    let templates = container(scroll_box(container(templates).padding(16)).height(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(style::template_area);
@@ -403,7 +402,7 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
     if planned.is_empty() {
         files = files.push(text("None: the graph has no Output of what this writes (give Outputs their Usage).").size(style::SMALL).color(style::WARNING));
     }
-    body = body.push(row![label("Files"), container(scrollable(files).height(Length::Shrink).spacing(8)).max_height(160.0).width(Length::Fill)].align_y(Alignment::Start));
+    body = body.push(row![label("Files"), container(scroll_box(files).height(Length::Shrink)).max_height(160.0).width(Length::Fill)].align_y(Alignment::Start));
     let ready = dialog.folder.is_some() && !planned.is_empty();
     body = body.push(
         row![
@@ -470,7 +469,7 @@ fn versions<'a>(app: &'a App, dialog: &'a crate::app::versions::VersionsDialog) 
         text(format!("Each save keeps the package as it was saved: the newest {kept} of it, beside the settings, never beside the package."))
             .size(style::TEXT_SIZE)
             .color(style::TEXT_DIM),
-        container(scrollable(list).height(Length::Shrink).spacing(8).style(style::scrollable)).max_height(360.0),
+        container(scroll_box(list).height(Length::Shrink)).max_height(360.0),
         text(restoring).size(style::SMALL).color(style::TEXT_FAINT),
         row![
             space().width(Length::Fill),
@@ -535,7 +534,7 @@ fn recover(app: &App) -> Element<'_, Message> {
         ))
         .size(style::TEXT_SIZE)
         .color(style::TEXT_DIM),
-        scrollable(list).height(Length::Shrink).spacing(8).style(style::scrollable),
+        scroll_box(list).height(Length::Shrink),
         text(
             "Recovered, each opens with the changes it had, not saved yet: saving saves it where it was. \
              Later, they are offered again the next time the program starts."
@@ -603,7 +602,7 @@ fn missing_files<'a>(app: &'a App, missing: &'a MissingFiles) -> Element<'a, Mes
     if let Some(note) = &missing.note {
         body = body.push(container(text(note).size(style::SMALL)).padding(6).width(Length::Fill).style(style::message_box(style::WARNING)));
     }
-    body = body.push(scrollable(list).height(Length::Shrink).spacing(8).style(style::scrollable));
+    body = body.push(scroll_box(list).height(Length::Shrink));
     body = body.push(
         row![
             text("Left missing, they show nothing.").size(style::SMALL).color(style::TEXT_FAINT),

@@ -429,7 +429,7 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
     }
     // (It scrolls where the room it opens in is shorter than it: cut there, its fields under the
     // images were out of reach.)
-    let items = iced::widget::scrollable(column(items).spacing(1).width(Length::Fixed(270.0))).style(style::scrollable);
+    let items = crate::widget::scroll::scroll_box(column(items).spacing(1).width(Length::Fixed(270.0)));
     container(items).padding(4).style(style::popup).into()
 }
 

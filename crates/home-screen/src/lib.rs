@@ -321,7 +321,12 @@ pub fn view<'a>(content: Content<'a>, state: State, style: Style) -> Element<'a,
         Page::Home => home(&content, state, style),
         Page::Learn => learn(&content, style),
     };
-    let page = scrollable(container(page).padding(Padding { top: 30.0, right: 40.0, bottom: 34.0, left: 40.0 }).width(Length::Fill))
+    // The bar of the page beside the page, never over it: its room is taken from the page while
+    // there is something to scroll (as every box of the program that scrolls has it; this screen
+    // knows nothing of the program, and says it for itself).
+    let bar = scrollable::Scrollbar::new().width(8).scroller_width(8).spacing(2);
+    let page = scrollable(container(page).padding(Padding { top: 30.0, right: 30.0, bottom: 34.0, left: 40.0 }).width(Length::Fill))
+        .direction(scrollable::Direction::Vertical(bar))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(style.scrollable());

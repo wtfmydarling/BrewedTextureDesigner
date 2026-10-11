@@ -10,6 +10,7 @@ pub mod number;
 pub mod outside;
 pub mod placed;
 pub mod pressable;
+pub mod scroll;
 
 use iced::widget::{button, svg, tooltip};
 use iced::{Color, Element, Length};

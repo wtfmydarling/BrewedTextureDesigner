@@ -1658,6 +1658,66 @@ fn a_gray_is_picked_in_the_editor_of_colors_and_the_color_before_comes_back() {
     assert_eq!(w.app.ui.color_before.as_ref().map(|(.., c)| *c), Some(gray));
 }
 
+/// The point of the Color Editor's square dragged past its bottom is at its bottom, under the
+/// cursor: black, of the hue and the saturation it was dragged at. They are kept, which black
+/// does not say: the point jumped to the square's corner, the sliders of hue and saturation
+/// fell to 0, and the value raised again made a gray. Dragged back up, or its value raised, the
+/// color is of that hue and saturation again; no channel is ever not a number.
+#[test]
+fn a_color_dragged_to_black_keeps_its_hue_and_saturation() {
+    use crate::widget::color::rgb_to_hsv;
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::UNIFORM_COLOR, pos: [0.0, 0.0] }));
+    let uniform = w.app.ui.selection.iter().next().copied().expect("the new node");
+    let target = ColorTarget::Param(uniform, "color".into());
+    let color = |w: &Harness| match w.app.graph().node(uniform).and_then(|n| n.value("color")) {
+        Some(ParamValue::Color(c)) => *c,
+        _ => panic!("no color"),
+    };
+    let orange = 30.0 / 360.0;
+    w.send(Message::SetColor(target.clone(), [1.0, 0.5, 0.0, 1.0]));
+    w.send(Message::Seal);
+    w.send(Message::ColorPicker(Some(target.clone())));
+    w.look_at(Box::new(view::editors::color_editor), crate::view::editors::COLOR_EDITOR);
+    // Pressed in the square, dragged down past its bottom and out of the window, several moves
+    // in one frame as a fast mouse sends them.
+    let (inside, below) = (Point::new(150.0, 150.0), Point::new(150.0, 900.0));
+    w.hover(inside);
+    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    let pressed = w.app.hsv_shown(&target).expect("its hue, saturation and value");
+    assert!((pressed[0] - orange).abs() < 1e-3 && pressed[1] > 0.3 && pressed[1] < 0.8, "the orange, less saturated: {pressed:?}");
+    let moved = |p: Point| iced::Event::Mouse(mouse::Event::CursorMoved { position: p });
+    w.cursor = mouse::Cursor::Available(below);
+    w.input(&[moved(Point::new(150.0, 250.0)), moved(Point::new(150.0, 330.0)), moved(below)]);
+    assert_eq!(color(&w), [0.0, 0.0, 0.0, 1.0], "black, at the bottom of the square");
+    let bottom = w.app.hsv_shown(&target).expect("its hue, saturation and value");
+    assert!((bottom[0] - orange).abs() < 1e-3 && (bottom[1] - pressed[1]).abs() < 1e-3 && bottom[2] == 0.0, "the hue and the saturation kept: {bottom:?}");
+    // Back up into the square, the button still held: the orange again.
+    w.hover(inside);
+    let back = color(&w);
+    assert!(back.iter().all(|x| x.is_finite()) && (rgb_to_hsv([back[0], back[1], back[2]])[0] - orange).abs() < 1e-3, "{back:?}");
+    // Down again and let go there; the value raised by its slider: of that hue and saturation.
+    w.hover(below);
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    w.send(Message::Seal);
+    assert_eq!(color(&w), [0.0, 0.0, 0.0, 1.0]);
+    let [h, s, v] = w.app.hsv_shown(&target).expect("its hue, saturation and value");
+    assert!((h - orange).abs() < 1e-3 && (s - pressed[1]).abs() < 1e-3 && v == 0.0, "{:?}", [h, s, v]);
+    w.send(Message::SetHsv(target.clone(), [h, s, 0.8]));
+    let raised = color(&w);
+    let [rh, rs, rv] = rgb_to_hsv([raised[0], raised[1], raised[2]]);
+    assert!((rh - orange).abs() < 1e-3 && (rs - s).abs() < 1e-3 && (rv - 0.8).abs() < 1e-3, "the orange as dark, not a gray: {raised:?}");
+    // The red, green and blue set to none by their sliders: black, and still of that hue.
+    w.send(Message::SetColor(target.clone(), [0.0, 0.0, 0.0, 1.0]));
+    assert!((w.app.hsv_shown(&target).expect("shown")[0] - orange).abs() < 1e-3);
+    // Another color altogether (pasted, picked from the screen) is shown as it is.
+    w.send(Message::SetColor(target.clone(), [0.0, 0.0, 1.0, 1.0]));
+    assert!((w.app.hsv_shown(&target).expect("shown")[0] - 240.0 / 360.0).abs() < 1e-3);
+    // No number that is not one sets anything a color cannot be.
+    w.send(Message::SetHsv(target.clone(), [f32::NAN, f32::INFINITY, -4.0]));
+    assert!(color(&w).iter().all(|x| x.is_finite() && (0.0..=1.0).contains(x)), "{:?}", color(&w));
+}
+
 /// Panning the graph keeps the point that was grabbed under the mouse, however fast the
 /// mouse goes round: several moves arrive in one frame, and none of them may be lost.
 #[test]
@@ -2402,12 +2462,13 @@ fn broken(app: &App) -> Option<String> {
     if let Some(socket) = ui.add_menu.as_ref().and_then(|m| m.pending.as_ref()).filter(|s| !g.contains(s.node)) {
         return Some(format!("the menu that adds a node connects it to node {}, which is not in the graph", socket.node.0));
     }
-    // Every package open edits a graph it has; what the Explorer and its menus point at is open.
+    // Every package open edits a graph it has (none, where it has none: a package may hold
+    // files only); what the Explorer and its menus point at is open.
     let packages = app.packages();
     let package = |key: u64| packages.iter().find(|(k, _)| *k == key).map(|(_, doc)| *doc);
     for (key, doc) in &packages {
-        if doc.package().graph(doc.current()).is_none() {
-            return Some(format!("package {key} edits a graph it has not"));
+        if doc.has_graph() == doc.package().graphs.is_empty() {
+            return Some(format!("package {key} edits a graph it has not, or none of those it has"));
         }
     }
     let graph_of = |key: u64, graph: brewed_texture_core::GraphId| package(key).is_some_and(|doc| doc.package().graph(graph).is_some());
@@ -2423,7 +2484,7 @@ fn broken(app: &App) -> Option<String> {
             ContextTarget::Node(id) => g.contains(*id),
             ContextTarget::Link(l) => g.links.contains(l),
             ContextTarget::Comment(id) => g.comment(*id).is_some(),
-            ContextTarget::Canvas { .. } => true,
+            ContextTarget::Canvas { .. } | ContextTarget::Explorer => true,
             ContextTarget::Package(key) | ContextTarget::ResourcesFolder(key) => package(*key).is_some(),
             ContextTarget::GraphItem(key, graph) => graph_of(*key, *graph),
             ContextTarget::ResourceItem(key, path) => file_of(*key, path),
@@ -2773,7 +2834,11 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
                     || ui.preview.lighting.menu
                     || ui.drag.is_some();
                 let over = if floating { Vec::new() } else { text_fits::overlapping(&mut w) };
-                if !cut.is_empty() {
+                // (Nor the bar of a box that scrolls over what it holds.)
+                let bars = text_fits::scroll_boxes(&mut w).1;
+                if !bars.is_empty() {
+                    Some(format!("A SCROLLBAR OVER WHAT IT SCROLLS at {}×{}: {}", w.size.width, w.size.height, bars.join("; ")))
+                } else if !cut.is_empty() {
                     Some(format!("CUT SHORT at {}×{}: {}", w.size.width, w.size.height, cut.join("; ")))
                 } else if !squeezed.is_empty() {
                     Some(format!("SQUEEZED at {}×{}: {}", w.size.width, w.size.height, squeezed.join("; ")))
@@ -3039,7 +3104,7 @@ fn packages_and_graphs_used_as_nodes() {
         w.send(Message::Explorer(ExplorerMessage::Close(key)));
     }
     assert_eq!(package_keys(&w.app).len(), 1);
-    w.send(Message::OpenPicked(Some(uses.clone())));
+    w.send(Message::OpenPicked(vec![uses.clone()]));
     assert_eq!(package_keys(&w.app).len(), 1, "the empty package made room");
     assert!(w.app.ui.dialog.is_none());
     let node = w.app.graph().nodes[0].id;
@@ -3058,7 +3123,7 @@ fn packages_and_graphs_used_as_nodes() {
     for key in package_keys(&w.app) {
         w.send(Message::Explorer(ExplorerMessage::Close(key)));
     }
-    w.send(Message::OpenPicked(Some(uses.clone())));
+    w.send(Message::OpenPicked(vec![uses.clone()]));
     let node = w.app.graph().nodes[0].id;
     assert!(w.app.eval.node(node).is_some_and(|e| e.error().is_some_and(|e| e.contains("cannot be found"))));
     let Some(Dialog::Missing(missing)) = w.app.ui.dialog.clone() else { panic!("the missing file is asked for: {:?}", w.app.ui.dialog) };
@@ -3916,7 +3981,7 @@ fn settings_are_changed_and_applied() {
     key(&mut w, "б", Physical::Code(Code::Comma), ctrl);
     assert_eq!(page(&w), Some(Page::General));
     draw_frame(&mut w, std::time::Instant::now());
-    for label in ["General", "Packages", "Recovery", "Graphics", "Shortcuts", "Undo steps", "Recent packages", "File dialogs open in", "Invert zoom"] {
+    for label in ["General", "Packages", "Recovery", "Graphics", "Shortcuts", "Undo steps", "Recent packages", "File dialog folder", "Invert zoom"] {
         assert!(!texts(&mut w, label).is_empty(), "{label}");
     }
     assert!(texts(&mut w, "Keep unsaved work").is_empty(), "on a page of its own");

@@ -2,12 +2,13 @@
 //! [`crate::third_party`]), as programs list them: each its name and its license, a link to where
 //! it is; searched, under their kinds.
 
-use iced::widget::{button, center, column, container, mouse_area, opaque, row, scrollable, space, text, text_input};
+use iced::widget::{button, center, column, container, mouse_area, opaque, row, space, text, text_input};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::{Message, NoticesMessage};
 use crate::icons::{Icon, icon};
 use crate::style;
+use crate::widget::scroll::scroll_box;
 use crate::third_party::{Kind, Work, works};
 
 /// The window's state: what is searched for.
@@ -82,7 +83,7 @@ pub fn view(dialog: &NoticesDialog) -> Element<'_, Message> {
         container(search).padding(Padding { top: 0.0, right: 18.0, bottom: 8.0, left: 18.0 }),
         crate::view::hairline(),
         // (A well darker than the window, the lists lighter than it.)
-        container(scrollable(list).height(Length::Fill).style(style::scrollable)).height(Length::Fill).style(style::panel_dark),
+        container(scroll_box(list).height(Length::Fill)).height(Length::Fill).style(style::panel_dark),
         crate::view::hairline(),
         footer,
     ];

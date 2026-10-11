@@ -626,7 +626,21 @@ impl App {
         }
     }
 
-    /// A new, empty package in the Explorer.
+    /// A new package with nothing in it, in the Explorer: no graph, no file (a package may have
+    /// no graph, as in Substance Designer: files only, say). What is being edited stays the one
+    /// edited; a package that is untitled and untouched makes room for it, as for any other.
+    pub(super) fn add_empty_package(&mut self) {
+        let untouched = self.doc.path().is_none() && !self.doc.is_dirty() && !self.doc.can_undo();
+        if untouched {
+            self.replace_package(Package::empty(), None, HashMap::new(), GraphId(0));
+        } else {
+            let key = self.next_key();
+            let doc = self.document(Package::empty(), None);
+            self.shelf.push(OpenPackage { key, doc });
+        }
+    }
+
+    /// A new package of one empty graph in the Explorer.
     #[cfg(any(test, feature = "dev-tools"))]
     pub(super) fn new_package(&mut self) {
         let package = Package::new("Graph", self.new_graph());
@@ -849,6 +863,9 @@ impl App {
 
     /// Why what is dragged cannot be dropped on the graph being edited, if it cannot.
     pub fn drop_refusal(&self, payload: &DragPayload) -> Option<String> {
+        if !self.doc.has_graph() {
+            return Some("the package has no graph yet".into());
+        }
         match payload {
             DragPayload::Graph { key, graph, .. } => self.graph_refusal(*key, *graph),
             // (A package not read yet has nothing to refuse until it is.)
@@ -1232,6 +1249,10 @@ impl App {
                 self.close_popups();
                 self.activate(key, Some(graph));
             }
+            ExplorerMessage::NewPackage => {
+                self.close_popups();
+                self.add_empty_package();
+            }
             #[cfg(test)]
             ExplorerMessage::NewGraph(key) => {
                 self.close_popups();
@@ -1266,7 +1287,8 @@ impl App {
                         if let Some(notice) = result.notice {
                             self.set_status(notice, true);
                         }
-                        // The graph being edited went: the package's first is edited now.
+                        // The graph being edited went: the package's first is edited now (none,
+                        // where that was its last: a package may have no graph).
                         if before.0 == key && before.1 == graph {
                             let view = self.views.get(&(self.doc_key, self.doc.current())).cloned();
                             self.restore_view(view);
@@ -1335,7 +1357,7 @@ impl App {
                 return Task::perform(
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new()
-                            .set_title("Link files to the package")
+                            .set_title("Import and link files")
                             .add_filter("Images, vector graphics and fonts", &extensions);
                         for kind in ResourceKind::ALL {
                             dialog = dialog.add_filter(kind.name(), kind.extensions());
@@ -1374,7 +1396,7 @@ impl App {
                 return Task::perform(
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new()
-                            .set_title("Import files into the package")
+                            .set_title("Import and embed files")
                             .add_filter("Images, vector graphics and fonts", &extensions);
                         for kind in ResourceKind::ALL {
                             dialog = dialog.add_filter(kind.name(), kind.extensions());

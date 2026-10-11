@@ -11,6 +11,14 @@ use crate::history::History;
 use crate::instance::GraphId;
 use crate::package::{GraphEntry, Library, Package, PackageEdit, PackageResult, sync_instances};
 
+/// What a document edits while its package has no graph: a graph with nothing in it, which is
+/// not the package's and takes no edit (see [`Document::has_graph`]).
+static NO_GRAPH: std::sync::LazyLock<GraphEntry> =
+    std::sync::LazyLock::new(|| GraphEntry { id: GraphId(0), name: String::new(), graph: Arc::new(Graph::default()) });
+
+/// What an edit of a graph is told where the package has none.
+pub const NO_GRAPH_TO_EDIT: &str = "The package has no graph: make one first (right-click the package, New Graph…)";
+
 pub struct Document {
     package: Package,
     /// The graph being edited.
@@ -34,14 +42,21 @@ impl Document {
         Document::new(Package::new("Graph", graph), path)
     }
 
-    /// The graph being edited.
+    /// The graph being edited (an empty one that is no graph of the package's, where the
+    /// package has none: see [`Document::has_graph`]).
     pub fn graph(&self) -> &Graph {
         &self.entry().graph
     }
 
-    /// The graph being edited, with its id and name.
+    /// The graph being edited, with its id and name (see [`Document::graph`]).
     pub fn entry(&self) -> &GraphEntry {
-        self.package.graph(self.current).expect("the graph being edited is in the package")
+        self.package.graph(self.current).unwrap_or(&NO_GRAPH)
+    }
+
+    /// Whether there is a graph being edited: a package may have none (its files only), and
+    /// then there is nothing to edit until it is given one.
+    pub fn has_graph(&self) -> bool {
+        self.package.graph(self.current).is_some()
     }
 
     pub fn package(&self) -> &Package {
@@ -140,7 +155,7 @@ impl Document {
         let merge = self.history.would_merge(key.as_ref(), now);
         // (A copy of the package shares its graphs: the one the edit changes is copied then.)
         let before = if merge { None } else { Some((self.package.clone(), self.current)) };
-        let entry = self.package.graph_mut(self.current).expect("the graph being edited is in the package");
+        let entry = self.package.graph_mut(self.current).ok_or(NO_GRAPH_TO_EDIT)?;
         let result = edit.apply(Arc::make_mut(&mut entry.graph))?;
         if result.changed {
             self.package.sync_resources();
@@ -252,6 +267,42 @@ mod tests {
     use super::*;
     use crate::{NodeKind, ParamValue};
     use std::time::Duration;
+
+    /// A package may have no graph, as in Substance Designer: its files only. Its document
+    /// edits nothing (an empty graph that is not the package's, and takes no edit) until the
+    /// package is given a graph, which is then the one edited; the last graph of a package can
+    /// be taken away, and undo brings it back as the one edited. Saved, it reads back with no
+    /// graph, its files as they were.
+    #[test]
+    fn a_package_may_have_no_graph() {
+        use crate::package::Resource;
+        let mut doc = Document::new(Package::empty(), None);
+        assert!(!doc.has_graph() && doc.package().graphs.is_empty());
+        assert!(doc.graph().nodes.is_empty() && doc.entry().name.is_empty());
+        let refused = doc.apply(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] });
+        assert_eq!(refused.err().as_deref(), Some(NO_GRAPH_TO_EDIT));
+        assert!(!doc.is_dirty() && !doc.can_undo() && doc.package().graphs.is_empty(), "nothing changed");
+        // A file of it: the package holds it without a graph that reads it.
+        doc.apply_package(PackageEdit::AddResources(vec!["/icons/wall.png".into()])).unwrap();
+        assert_eq!(doc.package().resources.iter().map(|r: &Resource| r.path.as_str()).collect::<Vec<_>>(), ["/icons/wall.png"]);
+        // Written and read back: no graph, the file there.
+        let bytes = crate::project::to_bytes(doc.package(), &Default::default(), doc.current(), None).unwrap();
+        let read = crate::project::from_bytes(&bytes, None).unwrap().package;
+        assert_eq!(&read, doc.package());
+        assert!(read.graphs.is_empty() && read.resources.len() == 1);
+        // Given a graph, that is the one edited.
+        let made = doc.apply_package(PackageEdit::AddGraph { name: "Wall".into(), graph: Box::default() }).unwrap().graph.unwrap();
+        assert!(doc.has_graph() && doc.current() == made && doc.entry().name == "Wall");
+        doc.apply(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }).unwrap();
+        assert_eq!(doc.graph().nodes.len(), 1);
+        // Its last graph taken away: nothing to edit again; undone, the graph and its node.
+        doc.apply_package(PackageEdit::RemoveGraph(made)).unwrap();
+        assert!(!doc.has_graph() && doc.graph().nodes.is_empty() && doc.package().resources.len() == 1);
+        assert!(doc.undo());
+        assert!(doc.has_graph() && doc.current() == made && doc.graph().nodes.len() == 1);
+        assert!(doc.redo());
+        assert!(!doc.has_graph());
+    }
 
     #[test]
     fn undo_redo_merging_and_dirty_state() {

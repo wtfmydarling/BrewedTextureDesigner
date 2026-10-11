@@ -194,6 +194,8 @@ pub enum ContextTarget {
     ResourceItem(u64, String),
     /// The Resources folder of a package in the Explorer.
     ResourcesFolder(u64),
+    /// The Explorer, where it lists nothing: a new package, packages opened.
+    Explorer,
 }
 
 /// What folds in the Explorer: a package, its Resources folder, and the folder of a kind of
@@ -350,6 +352,18 @@ pub enum ColorEditorMessage {
     Hex(String),
 }
 
+/// A color as it was last given to what keeps it: the color itself (a level of gray keeps only
+/// its gray: the Color Editor shows the color it was given, see `App::color_shown`), and its
+/// hue, saturation and value as they were picked. A color does not say them all: black has no
+/// saturation and no hue, a gray no hue; the point of the editor's square dragged to its bottom
+/// jumped to its corner, and the sliders of hue and saturation fell to 0 (see `App::hsv_shown`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Given {
+    pub target: ColorTarget,
+    pub color: [f32; 4],
+    pub hsv: [f32; 3],
+}
+
 /// Where the Color Editor's window was, and how large: in the program's points (and on Windows,
 /// in the screens' pixels too, which every screen agrees on: see [`crate::tool_window`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -463,9 +477,8 @@ pub struct Ui {
     /// The color of what it edits as it was when it was opened for it (or for that stop of a
     /// gradient): what, which stop, the color. A click on it in the editor gives it back.
     pub color_before: Option<(ColorTarget, Option<usize>, [f32; 4])>,
-    /// The color last given to what, as it was given: a level of gray keeps its gray only, the
-    /// editor shows the color (see `App::color_shown`).
-    pub color_given: Option<(ColorTarget, [f32; 4])>,
+    /// The color last given to something, as it was given (see [`Given`]).
+    pub color_given: Option<Given>,
     /// Where its window was put and how large it was made, when it last closed.
     pub color_editor_place: Option<ColorEditorPlace>,
     /// Its window, shown cloaked (on Windows, as the main window is): drawn, not yet on screen.
@@ -763,6 +776,8 @@ pub enum AddMenuMessage {
 pub enum ExplorerMessage {
     /// Show or hide what a package, or a folder of it, holds.
     Toggle(Fold),
+    /// A new package with nothing in it: to be given graphs, or files only.
+    NewPackage,
     OpenGraph(u64, GraphId),
     /// A new, empty graph in a package, at once (the tests'; File → New Graph… asks, see
     /// [`home`]).
@@ -858,7 +873,9 @@ pub enum Message {
     #[cfg(any(test, feature = "dev-tools"))]
     New,
     Open,
-    OpenPicked(Option<PathBuf>),
+    /// The packages chosen in the dialog that opens them: one, or several at once (none: the
+    /// dialog was closed).
+    OpenPicked(Vec<PathBuf>),
     Save,
     SaveAs,
     SavePicked(Option<PathBuf>),
@@ -981,6 +998,9 @@ pub enum Message {
     /// A color set where it is kept (a level of gray where it is one: see
     /// [`brewed_texture_core::Node::param_gray`]).
     SetColor(ColorTarget, [f32; 4]),
+    /// A color set by its hue, saturation and value (its alpha kept): as the square of the Color
+    /// Editor and the sliders of the three say it, so that they stay where they were put.
+    SetHsv(ColorTarget, [f32; 3]),
     ColorEditor(ColorEditorMessage),
     GradientStop(NodeId, String, usize),
     /// Replace a gradient and select one of its stops.
@@ -1028,7 +1048,8 @@ fn answered_from(message: &Message) -> Option<PathBuf> {
     let file = |p: &Option<PathBuf>| p.as_deref().and_then(Path::parent).map(Path::to_path_buf);
     match message {
         Message::Asked(_, answer) => answered_from(answer),
-        Message::OpenPicked(p) | Message::SavePicked(p) | Message::ExportNodePicked(_, p) | Message::FilePicked(_, p) => file(p),
+        Message::SavePicked(p) | Message::ExportNodePicked(_, p) | Message::FilePicked(_, p) => file(p),
+        Message::OpenPicked(files) => files.first().and_then(|f| f.parent()).map(Path::to_path_buf),
         Message::ExportFolderPicked(folder) | Message::Export(export_dialog::ExportMessage::Folder(folder)) => folder.clone(),
         Message::Preview(PreviewMessage::EnvironmentPicked(p)) => file(p),
         Message::Explorer(ExplorerMessage::Located(_, _, p) | ExplorerMessage::ResourceSavePicked(_, _, p)) => file(p),
@@ -1417,6 +1438,10 @@ impl App {
             return format!("{} — pick from the screen", brewed_texture_core::APP_NAME);
         }
         let dirty = if self.doc.is_dirty() { " •" } else { "" };
+        // (A package with no graph: the package alone.)
+        if !self.doc.has_graph() {
+            return format!("{}{dirty} — {}", self.doc.title(), brewed_texture_core::APP_NAME);
+        }
         format!("{} — {}{dirty} — {}", self.doc.entry().name, self.doc.title(), brewed_texture_core::APP_NAME)
     }
 
@@ -1640,7 +1665,7 @@ impl App {
             ContextTarget::Node(id) => g.contains(*id),
             ContextTarget::Link(l) => g.links.contains(l),
             ContextTarget::Comment(id) => g.comment(*id).is_some(),
-            ContextTarget::Canvas { .. } => true,
+            ContextTarget::Canvas { .. } | ContextTarget::Explorer => true,
             ContextTarget::Package(key) | ContextTarget::ResourcesFolder(key) => self.package_doc(*key).is_some(),
             ContextTarget::GraphItem(key, graph) => graph_of(self, *key, *graph),
             ContextTarget::ResourceItem(key, path) => file_of(self, *key, path),
@@ -2044,6 +2069,12 @@ impl App {
 
     fn open_add_menu(&mut self, at: Point, graph_pos: [f32; 2], pending: Option<SocketRef>) -> Task<Message> {
         self.close_popups();
+        // (A package with no graph has nothing to add a node to: said, rather than a menu
+        // whose every choice is refused.)
+        if !self.doc.has_graph() {
+            self.set_status(brewed_texture_core::document::NO_GRAPH_TO_EDIT, true);
+            return Task::none();
+        }
         self.ui.add_menu = Some(AddMenu { at, graph_pos, query: String::new(), selected: 0, scroll: 0.0, pending });
         operation::focus(view::add_menu::search_id())
     }
@@ -2224,20 +2255,20 @@ impl App {
         }
     }
 
-    /// The file dialog to open a package.
+    /// The file dialog to open packages: one, or several at once.
     fn pick_package(&self) -> Task<Message> {
         let folder = self.dialog_folder(None, false);
         Task::perform(
             blocking(move || {
                 let mut dialog = rfd::FileDialog::new()
-                    .set_title("Open package")
+                    .set_title("Open packages")
                     .add_filter(format!("{} package", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION, "json"]);
                 if let Some(folder) = folder {
                     dialog = dialog.set_directory(folder);
                 }
-                dialog.pick_file()
+                dialog.pick_files()
             }),
-            |p| Message::OpenPicked(p.flatten()),
+            |files| Message::OpenPicked(files.flatten().unwrap_or_default()),
         )
     }
 
@@ -2477,10 +2508,9 @@ impl App {
                 self.ui.after_save = Some(action);
                 return self.handle(Message::Save);
             }
-            Message::OpenPicked(path) => {
-                if let Some(path) = path {
-                    return self.open_file(path, false);
-                }
+            Message::OpenPicked(paths) => {
+                let opened: Vec<Task<Message>> = paths.into_iter().map(|path| self.open_file(path, false)).collect();
+                return Task::batch(opened);
             }
             Message::OpenRecent(path) => {
                 self.close_popups();
@@ -2801,7 +2831,13 @@ impl App {
                 self.ui.color_hex = None;
                 self.doc.seal();
             }
-            Message::SetColor(target, color) => self.set_color(&target, color),
+            Message::SetColor(target, color) => self.set_color(&target, color, None),
+            Message::SetHsv(target, hsv) => {
+                let hsv = hsv.map(|x| if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.0 });
+                let alpha = self.color_shown(&target).map_or(1.0, |c| c[3]);
+                let [r, g, b] = crate::widget::color::hsv_to_rgb(hsv);
+                self.set_color(&target, [r, g, b, alpha], Some(hsv));
+            }
             Message::ColorEditor(message) => return self.color_editor_message(message),
             Message::GradientStop(node, key, index) => {
                 self.ui.gradient_stop.insert((node, key), index);
@@ -2994,6 +3030,9 @@ impl App {
     /// The model of the 3D view, its height and repeat, as the graph edited says them (as it
     /// starts, what it does not say): after an edit, an undo, another graph opened.
     pub(crate) fn sync_scene(&mut self) {
+        if !self.doc.has_graph() {
+            return;
+        }
         let scene = &self.doc.graph().scene;
         let start = view::view3d::Camera::default();
         let camera = &mut self.ui.preview.view3d;
@@ -3644,7 +3683,10 @@ impl App {
     fn preview_message(&mut self, msg: PreviewMessage) -> Task<Message> {
         // The model, its height and repeat are the graph's (a step of undo, saved with it); where
         // the camera and the light are, the view's.
-        if let PreviewMessage::Camera(c) = &msg {
+        // (Where the package has no graph, they are the view's too: there is nothing to keep them in.)
+        if let PreviewMessage::Camera(c) = &msg
+            && self.doc.has_graph()
+        {
             let shown = &self.ui.preview.view3d;
             if (c.shape, c.displacement, c.tiling) != (shown.shape, shown.displacement, shown.tiling) {
                 let scene = brewed_texture_core::graph::Scene {
@@ -3936,6 +3978,10 @@ impl App {
     /// closed it (a click, Esc, an undo that took away what it edits, another package opened);
     /// what it edits keeps the color it had then, to be given back (see `Ui::color_before`).
     fn color_window_follows(&mut self) -> Task<Message> {
+        // (Open for what has no color, whatever asked for it: closed. Its window showed nothing.)
+        if self.ui.color_picker.as_ref().is_some_and(|target| self.target_color(target).is_none()) {
+            self.ui.color_picker = None;
+        }
         self.color_before_follows();
         match (self.ui.color_picker.is_some(), self.color_window) {
             (true, None) => match self.window {
@@ -4037,18 +4083,39 @@ impl App {
     pub fn color_shown(&self, target: &ColorTarget) -> Option<[f32; 4]> {
         let c = self.target_color(target)?;
         Some(match &self.ui.color_given {
-            Some((of, given)) if of == target && self.color_kept(target, *given).iter().zip(c).all(|(a, b)| (a - b).abs() < 1e-4) => *given,
+            Some(given) if given.target == *target && self.color_kept(target, given.color).iter().zip(c).all(|(a, b)| (a - b).abs() < 1e-4) => given.color,
             _ => c,
         })
     }
 
+    /// The hue, saturation and value the Color Editor and the sliders show for `target`: as they
+    /// were last given, where they are still of the color it shows; else the color's own.
+    pub fn hsv_shown(&self, target: &ColorTarget) -> Option<[f32; 3]> {
+        use crate::widget::color::{hsv_to_rgb, rgb_to_hsv};
+        let c = self.color_shown(target)?;
+        Some(match &self.ui.color_given {
+            Some(given) if given.target == *target && hsv_to_rgb(given.hsv).iter().zip(c).all(|(a, b)| (a - b).abs() < 1e-4) => given.hsv,
+            _ => rgb_to_hsv([c[0], c[1], c[2]]),
+        })
+    }
+
     /// Give `target` `color` (as it keeps it: see [`App::color_edit`]), as a step of undo with what
-    /// came just before it (a drag of a slider is one step).
-    fn set_color(&mut self, target: &ColorTarget, color: [f32; 4]) {
-        if let Some(edit) = self.color_edit(target, color) {
-            self.ui.color_given = Some((target.clone(), color.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 })));
-            self.apply(edit);
-        }
+    /// came just before it (a drag of a slider is one step). `hsv`: the hue, saturation and value
+    /// it was picked as; else its own, and where it has none to say (a black, a gray), those it
+    /// was shown with.
+    fn set_color(&mut self, target: &ColorTarget, color: [f32; 4], hsv: Option<[f32; 3]>) {
+        let Some(edit) = self.color_edit(target, color) else { return };
+        let color = color.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 });
+        let hsv = hsv.unwrap_or_else(|| {
+            let [h, s, v] = crate::widget::color::rgb_to_hsv([color[0], color[1], color[2]]);
+            match self.hsv_shown(target) {
+                Some([was_h, was_s, _]) if v < 1e-4 => [was_h, was_s, v],
+                Some([was_h, ..]) if s < 1e-4 => [was_h, s, v],
+                _ => [h, s, v],
+            }
+        });
+        self.ui.color_given = Some(Given { target: target.clone(), color, hsv });
+        self.apply(edit);
     }
 
     /// Put a color picked from the screen where the eyedropper was clicked. A screen has
@@ -4132,7 +4199,7 @@ impl App {
         let set = |app: &mut App, color: [f32; 4]| {
             let Some(target) = &target else { return };
             app.doc.seal();
-            app.set_color(target, color);
+            app.set_color(target, color, None);
             app.doc.seal();
         };
         match message {
@@ -4183,7 +4250,7 @@ impl App {
                 let Some((target, c)) = target.zip(current) else { return Task::none() };
                 match crate::widget::color::parse_hex(&text, c[3]) {
                     Some(typed) => {
-                        self.set_color(&target, typed);
+                        self.set_color(&target, typed, None);
                         let now = self.color_shown(&target).unwrap_or(typed);
                         self.ui.color_hex = Some((text, now));
                     }
@@ -4201,7 +4268,7 @@ impl App {
             self.set_status("The color to set no longer exists", true);
             return;
         }
-        self.set_color(target, [rgb[0], rgb[1], rgb[2], alpha]);
+        self.set_color(target, [rgb[0], rgb[1], rgb[2], alpha], None);
         self.doc.seal();
         self.set_status(format!("Picked {}", picker::hex(rgb)), false);
     }

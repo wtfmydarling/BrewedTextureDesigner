@@ -410,6 +410,18 @@ pub fn toggle_button(on: bool) -> impl Fn(&Theme, button_w::Status) -> button_w:
     }
 }
 
+/// A switch that is a button whichever way it is (Float, HSV): off, a push button as any; on,
+/// light, its text dark, as a button held down. (Off, it had no chrome at all, as a tab or a
+/// channel has: it read as a word beside the sliders, not as something to press.)
+pub fn switch_button(on: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::Style {
+    move |theme, status| match (on, status) {
+        (false, _) => button(theme, status),
+        (true, button_w::Status::Hovered) => button_base(Some(gray(232)), gray(18), gray(250)),
+        (true, button_w::Status::Disabled) => button_base(Some(gray(96)), gray(40), gray(110)),
+        (true, _) => button_base(Some(gray(205)), gray(18), gray(236)),
+    }
+}
+
 /// The field of a segmented control: its options side by side in it.
 pub fn segments(_: &Theme) -> container::Style {
     container::Style {

@@ -7,7 +7,7 @@
 pub mod expression;
 mod levels;
 
-use iced::widget::{button, column, container, mouse_area, pick_list, row, scrollable, space, text, text_input, toggler, tooltip};
+use iced::widget::{button, column, container, mouse_area, pick_list, row, space, text, text_input, toggler, tooltip};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::graph::{Node, NodeId, param_socket_key};
 use brewed_texture_core::nodes::{NodeKind, ParamDef, ParamKind};
@@ -17,6 +17,7 @@ use brewed_texture_core::{Curve, DataType, Edit, Gradient, GraphAttributes, Inte
 use crate::app::{App, ColorTarget, FileTarget, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
+use crate::widget::scroll::scroll_box;
 use crate::picker::PickTarget;
 use crate::view::editors::{eyedropper, file_field};
 use crate::view::{tip, section};
@@ -77,10 +78,8 @@ fn body(app: &App, label_w: f32) -> Element<'_, Message> {
     };
     // Whatever it shows scrolls in a short panel (a comment's and several nodes' were cut at its
     // bottom, their fields and buttons out of reach).
-    scrollable(container(content).padding(iced::Padding { top: 0.0, right: 12.0, bottom: 16.0, left: 10.0 }))
-        .height(Length::Fill)
-        .style(style::scrollable)
-        .into()
+    // (Its bar has its own room, see `scroll_box`: the margin on the right was kept for it.)
+    scroll_box(container(content).padding(iced::Padding { top: 0.0, right: 6.0, bottom: 16.0, left: 10.0 })).height(Length::Fill).into()
 }
 
 /// Id of the text field of a comment (for focusing it from the graph).
@@ -92,6 +91,17 @@ pub fn comment_text_id() -> iced::widget::Id {
 /// The graph being edited, when nothing in it is chosen: what it holds, and what it says of
 /// itself for the Library of the packages that have it (Settings → Library).
 fn graph_view(app: &App, label_w: f32) -> Element<'_, Message> {
+    // A package with no graph: nothing of a graph to show.
+    if !app.doc.has_graph() {
+        return column![
+            text("This package has no graph.").size(style::TEXT_SIZE).color(style::TEXT_DIM),
+            text("Right-click it in the Explorer for New Graph…, or to import files: a package may hold files only.")
+                .size(style::SMALL)
+                .color(style::TEXT_FAINT),
+        ]
+        .spacing(6)
+        .into();
+    }
     let g = app.graph();
     let a = g.attributes.clone();
     let with = |change: fn(&mut GraphAttributes, String), a: GraphAttributes| {

@@ -688,9 +688,14 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
         }
 
         if graph.nodes.is_empty() {
+            // (A package with no graph has nothing to add nodes to.)
+            let says = match app.doc.has_graph() {
+                true => "Drag nodes from the library, double-click or press Space to add one",
+                false => "This package has no graph: right-click it in the Explorer for New Graph…",
+            };
             text_at(
                 &mut frame,
-                "Drag nodes from the library, double-click or press Space to add one".to_string(),
+                says.to_string(),
                 Point::new(bounds.width / 2.0, bounds.height / 2.0),
                 15.0,
                 style::TEXT_FAINT,

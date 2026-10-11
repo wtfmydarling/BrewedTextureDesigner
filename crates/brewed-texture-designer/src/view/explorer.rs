@@ -6,18 +6,20 @@
 //! "Notes", as Substance Designer says it): what nothing uses is what a package can do
 //! without. A ⚠ says what is wrong. A double click opens a graph; a graph dragged onto the
 //! canvas becomes a node that uses it, a file the node that reads it; every row and folder
-//! has its context menu.
+//! has its context menu, and so has the Explorer where it lists nothing (a new package, packages
+//! opened). A package may have no graph: its files only.
 
 use std::collections::{BTreeMap, HashMap};
 
 use brewed_texture_core::package::{Reader, Resource, ResourceKind};
 use brewed_texture_core::{Document, GraphId};
-use iced::widget::{button, column, container, image, row, scrollable, space, text, text_input, tooltip};
+use iced::widget::{button, column, container, image, row, space, text, text_input, tooltip};
 use iced::{Alignment, ContentFit, Element, Length};
 
 use crate::app::{App, ContextTarget, DragPayload, ExplorerMessage, Fold, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
+use crate::widget::scroll::scroll_box;
 use crate::view::{fitted, tip};
 use crate::widget::outside::outside;
 use crate::widget::pressable::pressable;
@@ -143,7 +145,7 @@ fn status<'a>(warning: Option<String>, notes: Option<String>) -> Element<'a, Mes
 pub fn view(app: &App) -> Element<'_, Message> {
     let tools = row![
         tool(Icon::Plus, "New graph from a template, in a new package or one open (Ctrl+N)", Message::NewGraph(crate::app::home::NewGraphMessage::Open(None))),
-        tool(Icon::Folder, "Open a package (Ctrl+O)", Message::Open),
+        tool(Icon::Folder, "Open packages (Ctrl+O)", Message::Open),
     ]
     .spacing(2);
     let uses = Uses::of(app);
@@ -151,14 +153,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
     for (key, doc) in app.packages() {
         list = list.push(package_rows(app, &uses, key, doc));
     }
-    column![
-        crate::view::pane_header("Explorer", tools),
-        scrollable(container(list).padding([4, 6]))
-            .height(Length::Fill)
-            .style(style::scrollable)
-            .direction(scrollable::Direction::Vertical(scrollable::Scrollbar::new().width(6).scroller_width(6))),
-    ]
-    .into()
+    // A right click where it lists nothing: a new package, packages opened (a row takes its own).
+    let listed = iced::widget::mouse_area(
+        scroll_box(container(list).padding([4, 6])).height(Length::Fill),
+    )
+    .on_right_press(explorer(ExplorerMessage::Context(ContextTarget::Explorer)));
+    column![crate::view::pane_header("Explorer", tools), listed].into()
 }
 
 /// A row that folds what is under it.

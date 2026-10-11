@@ -517,6 +517,103 @@ fn editor_whole(w: &mut Harness, target: &crate::app::ColorTarget, state: &str, 
     w.look_at(Box::new(view::root), main);
 }
 
+/// The boxes of what scrolls in the view: how many have something to scroll now, and those of
+/// them whose bar lies over what they hold (see `crate::widget::scroll`: the bar has room of its
+/// own, taken from what the box holds while there is something to scroll).
+pub(super) fn scroll_boxes(w: &mut Harness) -> (usize, Vec<String>) {
+    use iced::advanced::widget::operation::Scrollable;
+    struct Find(usize, Vec<String>);
+    impl Operation for Find {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+            operate(self);
+        }
+        fn scrollable(&mut self, _: Option<&Id>, bounds: Rectangle, content: Rectangle, _: iced::Vector, _: &mut dyn Scrollable) {
+            if content.height <= bounds.height + 0.5 {
+                return;
+            }
+            self.0 += 1;
+            if content.width > bounds.width - crate::widget::scroll::ROOM + 0.5 {
+                self.1.push(format!(
+                    "the box at {:.0},{:.0}, {:.0} wide, holds what is {:.0} wide and scrolls: its bar is over it",
+                    bounds.x, bounds.y, bounds.width, content.width
+                ));
+            }
+        }
+    }
+    let mut find = Find(0, Vec::new());
+    w.frame(|ui, renderer| ui.operate(renderer, &mut find));
+    (find.0, find.1)
+}
+
+/// No bar of a box that scrolls lies over what the box holds, wherever the program has one: the
+/// panels in a small window (the Library, Input Values with a value opened, Properties of a
+/// node), the menu of nodes, the menus of choices (pictured, and under headings), the lighting
+/// menu, the settings, the shortcuts, a new graph's templates, the notices. Each is one box (see
+/// `crate::widget::scroll`); each said its own bar before, and where one forgot, the bar covered
+/// the ends of its rows: the categories in the menu of nodes, the marks of the Explorer.
+#[test]
+fn no_scrollbar_lies_over_what_it_scrolls() {
+    let mut w = harness!(view::root, 1000.0, 640.0);
+    let mut found = Vec::new();
+    let mut seen = Vec::new();
+    let mut look = |w: &mut Harness, state: &str, at_least: usize| {
+        draw_frame(w, std::time::Instant::now());
+        let (scrolling, over) = scroll_boxes(w);
+        seen.push(format!("{state}: {scrolling}"));
+        if scrolling < at_least {
+            found.push(format!("{state}: {scrolling} boxes scroll, {at_least} were to (nothing is looked at)"));
+        }
+        found.extend(over.into_iter().map(|line| format!("{state}: {line}")));
+    };
+    // The panels: the Library always has more than its room; an input value opened, and a node
+    // of many parameters chosen.
+    let tint = w.app.graph().variables.iter().find(|v| matches!(v.value, brewed_texture_core::Value::Color(_))).map(|v| v.name.clone()).expect("a color input");
+    w.app.ui.expanded_vars.insert(tint);
+    let tile = first(&w, NodeKind::TILE_GENERATOR);
+    w.send(Message::Graph(GraphMessage::Select { node: tile, mode: SelectMode::Replace }));
+    look(&mut w, "the panels", 3);
+    // The menu of nodes.
+    w.send(Message::Graph(GraphMessage::OpenAddMenu { at: iced::Point::new(400.0, 120.0), graph_pos: [0.0, 0.0] }));
+    look(&mut w, "the menu of nodes", 4);
+    w.snapshot("add_menu");
+    w.send(Message::AddMenu(crate::app::AddMenuMessage::Close));
+    // The menus of choices: the noises by their pictures, an Output's usages under headings.
+    let noise = first(&w, NodeKind::NOISE);
+    w.send(Message::Graph(GraphMessage::Select { node: noise, mode: SelectMode::Replace }));
+    w.send(Message::ChoiceMenu(Some((noise, "type"))));
+    look(&mut w, "the types of noise", 3);
+    w.send(Message::ChoiceMenu(None));
+    let output = first(&w, NodeKind::OUTPUT);
+    w.send(Message::Graph(GraphMessage::Select { node: output, mode: SelectMode::Replace }));
+    w.send(Message::ChoiceMenu(Some((output, "usage"))));
+    look(&mut w, "the usages of an Output", 3);
+    w.snapshot("usage_menu_small");
+    w.send(Message::ChoiceMenu(None));
+    // The lighting menu, longer than its room in a window this small.
+    let l = &mut w.app.ui.preview.lighting;
+    l.recent = (0..crate::view::view3d::RECENT).map(|i| format!("C:/skies/sky number {i}.hdr")).collect();
+    l.file = l.recent.first().cloned();
+    w.send(Message::Preview(crate::app::PreviewMessage::LightingMenu(true)));
+    look(&mut w, "the lighting menu", 3);
+    w.send(Message::Preview(crate::app::PreviewMessage::LightingMenu(false)));
+    // The dialogs.
+    w.send(Message::Settings(SettingsMessage::Open));
+    for page in crate::settings::Page::ALL {
+        w.send(Message::Settings(SettingsMessage::OpenPage(page)));
+        look(&mut w, &format!("Settings, {}", page.name()), 2);
+    }
+    w.send(Message::Settings(SettingsMessage::Cancel));
+    w.send(Message::NewGraph(NewGraphMessage::Open(None)));
+    look(&mut w, "New Graph", 3);
+    w.send(Message::Dialog(None));
+    for (dialog, name) in [(Dialog::Shortcuts, "Shortcuts"), (Dialog::Notices(Default::default()), "Third-Party Notices")] {
+        w.send(Message::Dialog(Some(dialog)));
+        look(&mut w, name, 3);
+        w.send(Message::Dialog(None));
+    }
+    assert!(found.is_empty(), "{}\n(boxes scrolling: {})", found.join("\n"), seen.join("; "));
+}
+
 /// Every dialog shows whole at the narrowest the window is let be: the settings, each of their
 /// pages, a new graph, the export, the shortcuts, about the program, the notices, a question
 /// about unsaved changes.

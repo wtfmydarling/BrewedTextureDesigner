@@ -950,8 +950,9 @@ mod tests {
                     (format!("{edit:?}"), doc.apply_package(edit).map(|r| r.changed))
                 } else if roll(&mut seed, 6) == 0 {
                     // A node that uses another graph of the package (not one that uses this one,
-                    // as the editor does not let it).
-                    let (here, other) = (doc.current(), ids[roll(&mut seed, ids.len())]);
+                    // as the editor does not let it; none, where the package has no graph).
+                    let Some(&other) = ids.get(roll(&mut seed, ids.len().max(1))) else { continue };
+                    let here = doc.current();
                     if other == here || uses_graph(&Itself(doc.package().clone()), None, other, (None, here)) {
                         continue;
                     }
@@ -960,8 +961,12 @@ mod tests {
                     let edit = Edit::AddInstance { instance: Instance::new(r, Interface::of(&entry.graph)), pos: [0.0, 0.0] };
                     (format!("{edit:?}"), doc.apply(edit).map(|r| r.changed))
                 } else {
-                    // In one of its graphs.
-                    doc.open_graph(ids[roll(&mut seed, ids.len())]);
+                    // In one of its graphs (in none, where it has none: the edit is refused, and
+                    // changes nothing).
+                    match ids.get(roll(&mut seed, ids.len().max(1))) {
+                        Some(&id) => drop(doc.open_graph(id)),
+                        None => assert!(!doc.has_graph(), "round {round} step {step}: a graph edited of a package that has none"),
+                    }
                     let edit = any_edit(&mut seed, doc.graph());
                     (format!("{edit:?}"), doc.apply(edit).map(|r| r.changed))
                 };

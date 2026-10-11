@@ -5,7 +5,7 @@
 //! takes the changes, Cancel forgets them. And the offer to start the program again, for the
 //! settings it takes only then.
 
-use iced::widget::{button, center, column, container, mouse_area, opaque, pick_list, row, scrollable, space, text, toggler};
+use iced::widget::{button, center, column, container, mouse_area, opaque, pick_list, row, space, text, toggler};
 use iced::{Alignment, Color, Element, Length, Padding};
 use brewed_texture_core::Precision;
 
@@ -14,6 +14,7 @@ use crate::icons::{Icon, icon};
 use crate::settings::{FileDialogs, Graphics, NewFiles, Page, Setting, Settings};
 use crate::shortcuts::{Chord, Command, Place, Shortcuts};
 use crate::style;
+use crate::widget::scroll::scroll_box;
 use crate::widget::number::number;
 
 /// How wide the values are.
@@ -80,7 +81,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a SettingsDialog) -> Element<'a, Message
     for part in body {
         content = content.push(part);
     }
-    let content = scrollable(content).height(Length::Fill).width(Length::Fill).style(style::scrollable);
+    let content = scroll_box(content).height(Length::Fill).width(Length::Fill);
 
     // What is wrong with the settings file, over everything.
     let (file, problems) = app.settings_file();
@@ -318,7 +319,7 @@ fn general<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>
                     set(Setting::RecentPackages(d.recent_packages)),
                 ),
                 Row::new(
-                    "File dialogs open in",
+                    "File dialog folder",
                     match draft.file_dialogs {
                         FileDialogs::Auto => "Each where it fits: saving a package or one of its files, in the package's folder; looking for a missing file, where it was; any other, where the system opens it.",
                         FileDialogs::Package => "All in the folder of the package being edited; for one never saved, where a dialog was answered last.",
@@ -355,7 +356,7 @@ impl std::fmt::Display for Side {
 
 fn packages<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>> {
     let d = Settings::default();
-    let files = segmented(&[(NewFiles::Embed, "Embed in the package"), (NewFiles::Link, "Link to the file")], draft.new_files, true, Setting::NewFiles);
+    let files = segmented(&[(NewFiles::Embed, "Embed in the package"), (NewFiles::Link, "Link to the package")], draft.new_files, true, Setting::NewFiles);
     let [width, height] = draft.graph_size;
     let size = row![
         choices(with(&crate::view::toolbar::RESOLUTIONS.map(Side), Side(width), |s| s.0), Side(width), true, move |s: Side| Setting::GraphSize([s.0, height])),
@@ -375,10 +376,10 @@ fn packages<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message
             "Files",
             vec![
                 Row::new(
-                    "A file chosen or dropped",
+                    "File import mode",
                     match draft.new_files {
-                        NewFiles::Embed => "The package holds it: it is one file to copy or send, and needs nothing beside it.",
-                        NewFiles::Link => "The package names it where it is on disk: it goes with the package only if copied along.",
+                        NewFiles::Embed => "A file chosen in a field or dropped on the window is held in the package: one file to copy or send, which needs nothing beside it.",
+                        NewFiles::Link => "A file chosen in a field or dropped on the window is named where it is on disk: it goes with the package only if copied along.",
                     },
                     files,
                 )
@@ -448,7 +449,7 @@ fn library<'a>(app: &App, applied: &Settings, draft: &'a Settings) -> Vec<Elemen
          Library, under the categories they say (a graph's Category, in its properties; else the name of its \
          package), to drag onto the graph as nodes."
     };
-    let mut add_row = Row::new("A folder more", about, container(add).align_right(Length::Fill));
+    let mut add_row = Row::new("Add a folder", about, container(add).align_right(Length::Fill));
     add_row.pending = removed;
     rows.push(add_row);
     let mut out = vec![group("Folders", rows)];
@@ -500,8 +501,8 @@ fn recovery<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message
             )
             .state(applied.keep_unsaved, draft.keep_unsaved, d.keep_unsaved, set(Setting::KeepUnsaved(d.keep_unsaved))),
             Row::new(
-                "How often",
-                "Only packages that changed since are kept again. On a slow disk, less often is kinder.",
+                "Auto-save interval",
+                "How often unsaved work is kept. Only packages that changed since are kept again; on a slow disk, less often is kinder.",
                 choices(every, Minutes(draft.keep_every), draft.keep_unsaved, |m: Minutes| Setting::KeepEvery(m.0)),
             )
             .state(applied.keep_every, draft.keep_every, d.keep_every, set(Setting::KeepEvery(d.keep_every))),

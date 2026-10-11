@@ -188,11 +188,16 @@ pub struct Package {
 impl Package {
     /// A package with one graph.
     pub fn new(name: &str, graph: Graph) -> Package {
-        let mut package =
-            Package { graphs: Vec::new(), resources: Vec::new(), next_graph: 1, extras: serde_json::Map::new(), other_entries: Vec::new() };
+        let mut package = Package::empty();
         package.add_graph(name, graph);
         package.sync_resources();
         package
+    }
+
+    /// A package with nothing in it: no graph, no file. A package may have no graph (as in
+    /// Substance Designer): files only, say, a set of pictures other packages link to.
+    pub fn empty() -> Package {
+        Package { graphs: Vec::new(), resources: Vec::new(), next_graph: 1, extras: serde_json::Map::new(), other_entries: Vec::new() }
     }
 
     /// Put together from what a file says (`next_graph`: the id the next graph gets, see
@@ -419,14 +424,11 @@ impl Package {
         out
     }
 
-    /// Make what a file says whole: at least one graph, graphs of their own ids and names, and
-    /// the files the nodes read listed.
+    /// Make what a file says whole: graphs of their own ids and names (none at all is a package
+    /// too), and the files the nodes read listed.
     pub fn normalize(&mut self) {
         let mut ids = HashSet::new();
         self.graphs.retain(|g| ids.insert(g.id));
-        if self.graphs.is_empty() {
-            self.graphs.push(GraphEntry { id: GraphId(1), name: "Graph".into(), graph: Arc::new(Graph::default()) });
-        }
         let mut names = HashSet::new();
         for entry in &mut self.graphs {
             let mut name = plain_name(&entry.name);
@@ -612,10 +614,8 @@ impl PackageEdit {
                 PackageResult { graph: Some(id), ..changed }
             }
             PackageEdit::RemoveGraph(id) => {
+                // (The last one too: a package may have no graph.)
                 let name = package.graph(id).ok_or("The graph no longer exists")?.name.clone();
-                if package.graphs.len() == 1 {
-                    return Err("A package has at least one graph".into());
-                }
                 package.graphs.retain(|g| g.id != id);
                 // Nodes that used it show nothing now; they say so.
                 let users = package
@@ -2561,7 +2561,7 @@ mod tests {
         assert!(r.notice.unwrap().contains("x.doc"));
         assert_eq!(package.resources[1].kind, ResourceKind::Font);
         assert!(package.missing().iter().any(|m| m.path == "/fonts/a.ttf"));
-        // Graphs of a package: names of their own, at least one.
+        // Graphs of a package: names of their own; the last can go too, its files staying.
         let first = package.first();
         let second = PackageEdit::AddGraph { name: "Main".into(), graph: Box::default() }
             .apply(&mut package)
@@ -2571,6 +2571,12 @@ mod tests {
         assert_eq!(package.graph(second).unwrap().name, "Main 2");
         assert!(PackageEdit::RenameGraph { id: second, name: "Main".into() }.apply(&mut package.clone()).is_err());
         PackageEdit::RemoveGraph(first).apply(&mut package).unwrap();
-        assert!(PackageEdit::RemoveGraph(second).apply(&mut package).is_err(), "the last graph stays");
+        PackageEdit::RemoveGraph(second).apply(&mut package).unwrap();
+        assert!(package.graphs.is_empty() && package.resources.iter().any(|r| r.path == "/fonts/a.ttf"), "no graph, its files still");
+        assert!(PackageEdit::RemoveGraph(second).apply(&mut package).is_err(), "gone already");
+        // A graph more: the first of the package again.
+        let again = PackageEdit::AddGraph { name: "Main".into(), graph: Box::default() }.apply(&mut package).unwrap().graph.unwrap();
+        assert_eq!((package.first(), package.graph(again).unwrap().name.as_str()), (again, "Main"));
+        assert!(again != first && again != second, "of an id no graph of it had");
     }
 }

@@ -1830,7 +1830,7 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                 }
                 6 => {
                     let mut steps = close_all(app);
-                    steps.extend([Step::Do(Message::OpenPicked(Some(uses))), Step::Wait]);
+                    steps.extend([Step::Do(Message::OpenPicked(vec![uses])), Step::Wait]);
                     Some(steps)
                 }
                 7 => {
@@ -1853,7 +1853,7 @@ fn more_scenes(folder: &Path) -> Vec<Scene> {
                     let mut steps = close_all(app);
                     let _ = std::fs::rename(&wall, &moved);
                     steps.extend([
-                        Step::Do(Message::OpenPicked(Some(uses))),
+                        Step::Do(Message::OpenPicked(vec![uses])),
                         Step::Wait,
                         Step::Check(Box::new(|app: &App| {
                             (!matches!(app.ui.dialog, Some(Dialog::Missing(_)))).then(|| "a moved package was not asked for".into())

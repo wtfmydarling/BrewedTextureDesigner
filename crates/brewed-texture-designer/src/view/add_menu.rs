@@ -1,12 +1,13 @@
 //! Node search popup (Space, double-click on the canvas, or a link dropped on empty space).
 
-use iced::widget::{Id, column, container, row, scrollable, space, text, text_input};
+use iced::widget::{Id, column, container, row, space, text, text_input};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::edit::accepts_link;
 
 use crate::app::{AddMenu, AddMenuMessage, App, Message, menu_index};
 use crate::style;
+use crate::widget::scroll::scroll_box;
 
 pub const SEARCH_ID: &str = "brewed-add-node-search";
 pub const LIST_ID: &str = "brewed-add-node-list";
@@ -17,8 +18,6 @@ const ROW_H: f32 = 26.0;
 const ROW_PITCH: f32 = ROW_H + 1.0;
 const MIN_ROWS: usize = 3;
 const MAX_ROWS: usize = 12;
-/// Up to five lines of description under the list (see `brewed_texture_core::nodes::MAX_DESCRIPTION`).
-const HINT_H: f32 = 80.0;
 
 pub fn search_id() -> Id {
     Id::new(SEARCH_ID)
@@ -107,13 +106,18 @@ pub fn view<'a>(app: &'a App, menu: &'a AddMenu) -> Element<'a, Message> {
             .padding([5, 8])
             .size(style::TEXT_SIZE)
             .style(style::text_input),
-        scrollable(list)
+        scroll_box(list)
             .id(list_id())
             .height(Length::Fixed(list_height(kinds.len())))
-            .on_scroll(|viewport| Message::AddMenu(AddMenuMessage::Scrolled(viewport.absolute_offset().y)))
-            .style(style::scrollable),
-        container(text(hint).size(style::SMALL).color(style::TEXT_DIM)).height(Length::Fixed(HINT_H)).clip(true),
+            .on_scroll(|viewport| Message::AddMenu(AddMenuMessage::Scrolled(viewport.absolute_offset().y))),
     ]
     .spacing(6);
+    // What the node chosen does, under the list: as high as it is long (a room of five lines
+    // was kept for it whatever it said, most of it empty under most nodes), none where there
+    // is nothing to say.
+    let body = match hint {
+        "" => body,
+        hint => body.push(text(hint).size(style::SMALL).color(style::TEXT_DIM)),
+    };
     crate::view::popup_layer(container(body).padding(8).style(style::popup), menu.at, WIDTH, Message::AddMenu(AddMenuMessage::Close))
 }

@@ -153,20 +153,130 @@ fn a_node_double_clicked_in_the_library_is_added_in_the_middle() {
     assert!(w.app.ui.selection.contains(&id), "selected");
 }
 
+/// A package may have no graph, as in Substance Designer: files only (a set of pictures other
+/// packages use, say). The Explorer, right-clicked where it lists nothing, offers New Package
+/// and Open Package(s)…; a new package has nothing in it, and what is being edited stays the one
+/// edited. The last graph of a package is deleted as any other: the window then says the
+/// package has no graph (the graph view, Properties, the title), a node added is refused and
+/// said why, and Undo brings the graph back. Saved with no graph and opened again, it has none,
+/// and its files.
+#[test]
+fn a_package_may_have_no_graph() {
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    draw_frame(&mut w, std::time::Instant::now());
+    let key = w.app.doc_key;
+    let first = w.app.doc.current();
+    // (Edited: an untouched package would make room for the new one.)
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 900.0] }));
+    w.send(Message::Seal);
+
+    // A right click under the Explorer's rows: its own menu.
+    let row = texts_where(&mut w, |t| t == "Brick Wall").into_iter().map(|(_, r)| r).find(|r| r.x < 300.0).expect("the graph's row");
+    let of_the_explorer = |asked: &[Message]| asked.iter().any(|m| matches!(m, Message::Explorer(ExplorerMessage::Context(ContextTarget::Explorer))));
+    // (A row takes its own menu, not the Explorer's.)
+    let asked = right_clicked(&mut w, row.center());
+    assert!(asked.iter().any(|m| matches!(m, Message::Explorer(ExplorerMessage::Context(ContextTarget::GraphItem(..))))) && !of_the_explorer(&asked), "{asked:?}");
+    let empty = (1..60)
+        .map(|i| Point::new(100.0, row.y + row.height + i as f32 * 10.0))
+        .find(|p| of_the_explorer(&right_clicked(&mut w, *p)))
+        .expect("a place of the Explorer where it lists nothing");
+    w.hover(empty);
+    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Right));
+    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Right));
+    assert_eq!(w.app.ui.context.as_ref().map(|c| c.target.clone()), Some(ContextTarget::Explorer));
+    assert!(!texts(&mut w, "Open Package(s)…").is_empty(), "packages opened from it");
+    let new = *texts(&mut w, "New Package").last().expect("New Package in the menu");
+    click(&mut w, new.center());
+    assert_eq!(w.app.ui.context, None);
+    let packages = w.app.packages();
+    assert_eq!(packages.len(), 2, "a package more");
+    let (made, empty_doc) = packages.iter().find(|(k, _)| *k != key).map(|(k, d)| (*k, *d)).expect("the new package");
+    assert!(empty_doc.package().graphs.is_empty() && empty_doc.package().resources.is_empty() && !empty_doc.is_dirty());
+    assert_eq!((w.app.doc_key, w.app.doc.current()), (key, first), "what was edited is still");
+    assert!(crate::ui_tests::broken(&w.app).is_none(), "{:?}", crate::ui_tests::broken(&w.app));
+    // Files in it, and no graph: saved and opened again as it was.
+    let dir = scratch("no-graph");
+    let picture = dir.join("icon.png");
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 100, 50, 255])).save(&picture).expect("a picture");
+    w.send(Message::Explorer(ExplorerMessage::FilesPicked(made, vec![picture.clone()])));
+    let file = dir.join("icons.brewtex");
+    let package = w.app.package_doc(made).expect("the package").package().clone();
+    assert_eq!(package.resources.len(), 1, "linked to it");
+    brewed_texture_core::project::save(&file, &package, &std::collections::HashMap::new(), package.first()).expect("saved");
+    let read = brewed_texture_core::project::load(&file).expect("read").package;
+    assert!(read.graphs.is_empty() && read.resources.len() == 1, "no graph, its file");
+    w.send(Message::Proceed(PendingAction::Close(made)));
+    assert_eq!(w.app.packages().len(), 1);
+
+    // The last graph of the package edited, deleted: nothing to edit, and said so.
+    let nodes = w.app.graph().nodes.len();
+    w.send(Message::Explorer(ExplorerMessage::DeleteGraph(key, first)));
+    assert!(!w.app.doc.has_graph() && w.app.doc.package().graphs.is_empty());
+    assert!(crate::ui_tests::broken(&w.app).is_none(), "{:?}", crate::ui_tests::broken(&w.app));
+    w.send(Message::Graph(GraphMessage::ClearSelection));
+    draw_frame(&mut w, std::time::Instant::now());
+    assert_eq!(texts(&mut w, "This package has no graph.").len(), 1, "Properties says so");
+    assert!(!w.app.title(w.main_window()).contains("Brick Wall"), "{}", w.app.title(w.main_window()));
+    // A node added is refused, and why is said; the menu of nodes does not open for nothing.
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }));
+    let said = w.app.ui.status.as_ref().map(|s| (s.text.clone(), s.error)).expect("a status");
+    assert!(said.1 && said.0.contains("no graph"), "{said:?}");
+    assert!(w.app.graph().nodes.is_empty());
+    w.send(Message::Graph(GraphMessage::OpenAddMenu { at: Point::new(600.0, 400.0), graph_pos: [0.0, 0.0] }));
+    assert!(w.app.ui.add_menu.is_none());
+    // The 3D view's model changed meanwhile is the view's: no error, nothing to undo with it.
+    let camera = w.app.ui.preview.view3d;
+    w.send(Message::Preview(crate::app::PreviewMessage::Camera(crate::view::view3d::Camera { displacement: 0.2, ..camera })));
+    assert_eq!(w.app.ui.preview.view3d.displacement, 0.2);
+    // Undo: the graph and its nodes back, edited again.
+    w.send(Message::Undo);
+    assert!(w.app.doc.has_graph() && w.app.doc.current() == first && w.app.graph().nodes.len() == nodes);
+    // A graph given to a package that has none is the one edited.
+    w.send(Message::Redo);
+    assert!(!w.app.doc.has_graph());
+    w.send(Message::Explorer(ExplorerMessage::NewGraph(key)));
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    assert!(w.app.doc.has_graph() && w.app.doc.package().graphs.len() == 1 && w.app.doc.package().graphs[0].id == w.app.doc.current());
+    assert!(crate::ui_tests::broken(&w.app).is_none(), "{:?}", crate::ui_tests::broken(&w.app));
+}
+
+/// The menus say "import" for what brings files into a package, both ways: linked where they
+/// are, or embedded in the package's file; in the File menu as in the package's own.
+#[test]
+fn files_are_imported_linked_or_embedded_by_the_menus() {
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    let key = w.app.doc_key;
+    for menu in [None, Some(ContextTarget::Package(key)), Some(ContextTarget::ResourcesFolder(key))] {
+        match &menu {
+            None => w.send(Message::Menu(Some(crate::app::MenuId::File))),
+            Some(target) => w.send(Message::Context(Some(ContextMenu { at: Point::new(120.0, 200.0), target: target.clone() }))),
+        }
+        w.input(&[]);
+        for (label, wanted) in [("Import and Link Files…", true), ("Import and Embed Files…", false)] {
+            let item = *texts(&mut w, label).last().unwrap_or_else(|| panic!("{label} in {menu:?}"));
+            let made = clicked(&mut w, item.center());
+            let links = made.iter().any(|m| matches!(m, Message::FromMenu(inner) if matches!(&**inner, Message::Explorer(ExplorerMessage::LinkFiles(k)) if *k == key)));
+            let embeds = made.iter().any(|m| matches!(m, Message::FromMenu(inner) if matches!(&**inner, Message::Explorer(ExplorerMessage::ImportFiles(k)) if *k == key)));
+            assert_eq!((links, embeds), (wanted, !wanted), "{label} in {menu:?}: {made:?}");
+        }
+        assert!(texts(&mut w, "Link Files…").is_empty() && texts(&mut w, "Import Files…").is_empty(), "the names of before");
+        w.send(Message::Menu(None));
+        w.send(Message::Context(None));
+    }
+    // The File menu makes a package and opens packages too.
+    w.send(Message::Menu(Some(crate::app::MenuId::File)));
+    w.input(&[]);
+    assert!(!texts(&mut w, "New Package").is_empty() && !texts(&mut w, "Open Package(s)…").is_empty());
+}
+
 /// A graph of the package is opened by a double click in the Explorer, duplicated by its menu
-/// (named after it), and deleted by its menu while the package keeps another; folded, the
-/// package shows none of them.
+/// (named after it), and deleted by its menu (its last one too: see
+/// `a_package_may_have_no_graph`); folded, the package shows none of them.
 #[test]
 fn graphs_are_opened_duplicated_and_deleted_in_the_explorer() {
     let mut w = harness!(view::root, 1400.0, 900.0);
     let key = w.app.doc_key;
     let first = w.app.doc.current();
-    // With one graph, Delete is not offered.
-    w.send(Message::Context(Some(ContextMenu { at: Point::new(120.0, 200.0), target: ContextTarget::GraphItem(key, first) })));
-    w.input(&[]);
-    let delete = *texts(&mut w, "Delete").last().expect("Delete in the menu");
-    assert!(!clicked(&mut w, delete.center()).iter().any(|m| matches!(m, Message::FromMenu(_))), "the last graph is not deleted");
-    w.send(Message::Context(None));
     w.send(Message::Explorer(ExplorerMessage::DuplicateGraph(key, first)));
     w.input(&[]);
     let names: Vec<String> = w.app.doc.package().graphs.iter().map(|g| g.name.clone()).collect();
@@ -556,18 +666,20 @@ fn a_long_path_in_a_message_stays_in_its_box() {
     draw_frame(&mut w, std::time::Instant::now());
     w.snapshot("long_path_in_a_message");
     let message = *texts(&mut w, &said).first().expect("the message");
-    // Right of its box (padded by 6 pixels, its edge a pixel wide), to the window's edge: no red of
-    // its words.
+    // Right of its box, to the window's edge: no red of its words. (Its box is as wide as the
+    // panel has room, wider than its words where they are broken short: its right edge is the
+    // red line as high as the message.)
     let pixels = w.pixels();
     let width = w.size.width as usize;
-    let from = (message.x + message.width + 6.0 + 2.0).ceil() as usize;
-    let red = (message.y as usize..(message.y + message.height) as usize)
-        .flat_map(|y| (from..width).map(move |x| (x, y)))
-        .filter(|(x, y)| {
-            let p = &pixels[(y * width + x) * 4..][..3];
-            i32::from(p[0]) > i32::from(p[1]) + 40
-        })
-        .count();
+    let rows = message.y as usize..(message.y + message.height) as usize;
+    let is_red = |x: usize, y: usize| {
+        let p = &pixels[(y * width + x) * 4..][..3];
+        i32::from(p[0]) > i32::from(p[1]) + 40
+    };
+    let edge = (0..width).rev().find(|x| rows.clone().filter(|y| is_red(*x, *y)).count() * 10 >= rows.len() * 9).expect("the right edge of its box");
+    assert!(edge as f32 >= message.x + message.width, "its box ends at {edge}, after its words: {message:?}");
+    let from = edge + 1;
+    let red = rows.clone().flat_map(|y| (from..width).map(move |x| (x, y))).filter(|(x, y)| is_red(*x, *y)).count();
     assert_eq!(red, 0, "red pixels of the message past its box, right of x {from}");
 }
 
@@ -1045,7 +1157,7 @@ fn files_found_in_one_folder_are_relinked_in_one_step() {
     let package = Package::new("Walls", g);
     brewed_texture_core::project::save(&file, &package, &Default::default(), package.first()).expect("a file");
     let mut w = harness!(view::root, 1400.0, 900.0);
-    w.send(Message::OpenPicked(Some(file.clone())));
+    w.send(Message::OpenPicked(vec![file.clone()]));
     let Some(Dialog::Missing(missing)) = w.app.ui.dialog.clone() else { panic!("the missing files are asked for: {:?}", w.app.ui.dialog) };
     assert_eq!(missing.items.len(), 2, "{:?}", missing.items);
     let paths = |w: &Harness| -> Vec<String> { w.app.doc.package().resources.iter().map(|r| r.path.clone()).collect() };

@@ -29,8 +29,9 @@ fn item<'a>(label: impl Into<String>, shortcut: impl Into<String>, message: Opti
     Entry::new(element, width)
 }
 
-/// What is done to the files of a package: linked, imported (held in the package), those
-/// linked held in it, and those no node reads taken out.
+/// What is done to the files of a package: imported, linked (used where they are on disk) or
+/// embedded (held in the package's own file); those linked embedded; and those no node reads
+/// taken out. (Both ways in are called importing, which is the word looked for.)
 fn file_items<'a>(app: &App, key: u64) -> Vec<Entry<'a>> {
     let package = app.package_doc(key).map(|d| d.package());
     let linked: Vec<String> = package
@@ -45,8 +46,8 @@ fn file_items<'a>(app: &App, key: u64) -> Vec<Entry<'a>> {
     let unused = package.is_some_and(|p| !p.unused_resources().is_empty());
     let explorer = |m: ExplorerMessage| Message::Explorer(m);
     vec![
-        item("Link Files…", "", Some(explorer(ExplorerMessage::LinkFiles(key)))),
-        item("Import Files…", "", Some(explorer(ExplorerMessage::ImportFiles(key)))),
+        item("Import and Link Files…", "", Some(explorer(ExplorerMessage::LinkFiles(key)))),
+        item("Import and Embed Files…", "", Some(explorer(ExplorerMessage::ImportFiles(key)))),
         item("Embed the Linked Files", "", (!linked.is_empty()).then(|| explorer(ExplorerMessage::Embed(key, linked)))),
         item("Remove Unused Files", "", unused.then(|| explorer(ExplorerMessage::RemoveUnused(key)))),
     ]
@@ -105,9 +106,12 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
             items
         }
         ContextTarget::ResourcesFolder(key) => file_items(app, *key),
+        ContextTarget::Explorer => vec![
+            item("New Package", "", Some(Message::Explorer(ExplorerMessage::NewPackage))),
+            item("Open Package(s)…", app.key_of(Command::Open), Some(Message::Open)),
+        ],
         ContextTarget::GraphItem(key, graph) => {
             let (key, graph) = (*key, *graph);
-            let many = app.package_doc(key).is_some_and(|d| d.package().graphs.len() > 1);
             vec![
                 item("Open", "double-click", Some(Message::Explorer(ExplorerMessage::OpenGraph(key, graph)))),
                 item("Rename", "", Some(Message::Explorer(ExplorerMessage::StartRename(key, graph)))),
@@ -115,7 +119,8 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
                 separator(),
                 item("New Graph…", "", Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(Some(key))))),
                 separator(),
-                item("Delete", "", many.then_some(Message::Explorer(ExplorerMessage::DeleteGraph(key, graph)))),
+                // (Its last graph too: a package may have none.)
+                item("Delete", "", Some(Message::Explorer(ExplorerMessage::DeleteGraph(key, graph)))),
             ]
         }
         ContextTarget::ResourceItem(key, path) => {

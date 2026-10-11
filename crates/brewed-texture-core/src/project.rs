@@ -570,9 +570,7 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
         }
         entries.push(GraphEntry { id: item.id, name: item.name.clone(), graph: Arc::new(graph) });
     }
-    if entries.is_empty() {
-        return Err("The package has no graph".into());
-    }
+    // (No graph at all is a package too: its files.)
     let unsaved: Option<Unsaved> = match archive.entry(RECOVERY) {
         Some(_) => serde_json::from_slice(&archive.read(RECOVERY, MAX_JSON)?).ok(),
         None => None,
@@ -1222,8 +1220,8 @@ mod tests {
             if let Ok(l) = from_bytes(&zip.finish().unwrap(), None) {
                 loaded += 1;
                 let p = &l.package;
-                assert!(!p.graphs.is_empty(), "file of round {round}: no graph");
-                assert!(p.graph(l.open).is_some(), "file of round {round}: open {:?}", l.open);
+                // (A file may say no graph at all: a package of files.)
+                assert!(p.graphs.is_empty() || p.graph(l.open).is_some(), "file of round {round}: open {:?}", l.open);
                 let mut names = std::collections::HashSet::new();
                 for g in &p.graphs {
                     assert!(names.insert(g.name.clone()) && !g.name.trim().is_empty(), "file of round {round}: {:?}", g.name);

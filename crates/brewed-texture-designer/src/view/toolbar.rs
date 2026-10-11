@@ -164,12 +164,14 @@ fn file_menu(app: &App) -> Vec<Entry<'_>> {
         h(item("Home Screen", "", Some(Message::Home(crate::app::home::HomeMessage::Show(crate::app::home::HomePage::Home))))),
         separator(),
         h(item("New Graph…", app.key_of(Command::New), Some(Message::NewGraph(crate::app::home::NewGraphMessage::Open(None))))),
-        h(item("Open Package…", app.key_of(Command::Open), Some(Message::Open))),
+        h(item("New Package", "", Some(Message::Explorer(ExplorerMessage::NewPackage)))),
+        h(item("Open Package(s)…", app.key_of(Command::Open), Some(Message::Open))),
         recent_packages(app),
     ];
     let items_after: Vec<Entry<'_>> = vec![
         separator(),
-        item("Link Files…", "", Some(Message::Explorer(ExplorerMessage::LinkFiles(key)))),
+        item("Import and Link Files…", "", Some(Message::Explorer(ExplorerMessage::LinkFiles(key)))),
+        item("Import and Embed Files…", "", Some(Message::Explorer(ExplorerMessage::ImportFiles(key)))),
         item("Collect Files", "", Some(Message::Explorer(ExplorerMessage::CollectFiles(key)))),
         separator(),
         item("Save", app.key_of(Command::Save), Some(Message::Save)),
@@ -284,7 +286,11 @@ pub fn menu_bar(app: &App) -> Element<'_, Message> {
     let document: Element<'_, Message> = match app.ui.home {
         Some(_) => space().width(Length::Fill).into(),
         None => {
-            let line = format!("{} — {}{dirty}", app.doc.title(), app.doc.entry().name);
+            // (A package with no graph: the package alone.)
+            let line = match app.doc.has_graph() {
+                true => format!("{} — {}{dirty}", app.doc.title(), app.doc.entry().name),
+                false => format!("{}{dirty}", app.doc.title()),
+            };
             iced::widget::responsive(move |room| {
                 let line = text(crate::view::shortened(&line, style::SMALL, style::ui_font(), room.width))
                     .size(style::SMALL)

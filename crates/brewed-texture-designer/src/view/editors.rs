@@ -9,7 +9,7 @@ use crate::icons::{Icon, icon};
 use crate::picker::PickTarget;
 use crate::style;
 use crate::view::tip;
-use crate::widget::color::{color_picker, color_strip, hsv_to_rgb, luminance, rgb_to_hsv, to_hex};
+use crate::widget::color::{color_picker, color_strip, luminance, rgb_to_hsv, to_hex};
 use crate::widget::number::{NumberField, number};
 
 /// Does a field that takes the files with these extensions (none: any) take the file at `path`?
@@ -282,9 +282,9 @@ impl Channel {
         }
     }
 
-    /// How much of it `c` has, from 0 to 1.
-    fn of(self, c: [f32; 4]) -> f32 {
-        let [h, s, v] = rgb_to_hsv([c[0], c[1], c[2]]);
+    /// How much of it `c` has, from 0 to 1 (`hsv`: its hue, saturation and value, as they are
+    /// shown: see `App::hsv_shown`).
+    fn of(self, c: [f32; 4], [h, s, v]: [f32; 3]) -> f32 {
         match self {
             Channel::R => c[0],
             Channel::G => c[1],
@@ -297,23 +297,20 @@ impl Channel {
         }
     }
 
-    /// `c` with `x` (from 0 to 1) of it.
-    fn set(self, c: [f32; 4], x: f32) -> [f32; 4] {
+    /// What gives `target` (of color `c`, of hue, saturation and value `hsv`) as much of it as
+    /// `x` says, from 0 to 1: the hue, the saturation and the value are set as such (the other
+    /// two stay as they are shown, whatever the color then says of them), the rest as a color.
+    fn set(self, target: ColorTarget, c: [f32; 4], [h, s, v]: [f32; 3], x: f32) -> Message {
         let x = if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.0 };
-        let [h, s, v] = rgb_to_hsv([c[0], c[1], c[2]]);
-        let hsv = |h: f32, s: f32, v: f32| {
-            let [r, g, b] = hsv_to_rgb([h, s, v]);
-            [r, g, b, c[3]]
-        };
         match self {
-            Channel::R => [x, c[1], c[2], c[3]],
-            Channel::G => [c[0], x, c[2], c[3]],
-            Channel::B => [c[0], c[1], x, c[3]],
-            Channel::H => hsv(x.min(0.9999), s, v),
-            Channel::S => hsv(h, x, v),
-            Channel::V => hsv(h, s, x),
-            Channel::A => [c[0], c[1], c[2], x],
-            Channel::L => [x, x, x, c[3]],
+            Channel::R => Message::SetColor(target, [x, c[1], c[2], c[3]]),
+            Channel::G => Message::SetColor(target, [c[0], x, c[2], c[3]]),
+            Channel::B => Message::SetColor(target, [c[0], c[1], x, c[3]]),
+            Channel::H => Message::SetHsv(target, [x.min(0.9999), s, v]),
+            Channel::S => Message::SetHsv(target, [h, x, v]),
+            Channel::V => Message::SetHsv(target, [h, s, x]),
+            Channel::A => Message::SetColor(target, [c[0], c[1], c[2], x]),
+            Channel::L => Message::SetColor(target, [x, x, x, c[3]]),
         }
     }
 
@@ -327,18 +324,19 @@ impl Channel {
     }
 }
 
-/// A slider each of `channels` of `c`, setting `target`: from 0 to 1 or to 255, as `units` say,
-/// never past them (a color could be given negative channels).
-fn sliders<'a>(target: &ColorTarget, c: [f32; 4], units: ColorUnits, channels: &[Channel]) -> iced::widget::Column<'a, Message> {
+/// A slider each of `channels` of `c` (of hue, saturation and value `hsv`), setting `target`:
+/// from 0 to 1 or to 255, as `units` say, never past them (a color could be given negative
+/// channels).
+fn sliders<'a>(target: &ColorTarget, c: [f32; 4], hsv: [f32; 3], units: ColorUnits, channels: &[Channel]) -> iced::widget::Column<'a, Message> {
     let mut col = column![].spacing(4).width(Length::Fill);
     for &channel in channels {
         let (target, scale) = (target.clone(), channel.scale(units));
-        let field = number(f64::from(channel.of(c)) * scale, 0.0, scale)
+        let field = number(f64::from(channel.of(c, hsv)) * scale, 0.0, scale)
             .limits(0.0, scale)
             .integer(!units.float)
             .decimals(3)
             .prefix(format!("{} ", channel.label()))
-            .on_change(move |x| Message::SetColor(target.clone(), channel.set(c, (x / scale) as f32)))
+            .on_change(move |x| channel.set(target.clone(), c, hsv, (x / scale) as f32))
             .on_release(Message::Seal);
         col = col.push(field);
     }
@@ -353,7 +351,7 @@ fn unit_buttons<'a>(units: ColorUnits, hsv: bool, width: Length) -> Element<'a, 
             button(text(label).size(style::SMALL).wrapping(text::Wrapping::None).width(Length::Fill).center())
                 .padding([2, 6])
                 .width(width)
-                .style(style::toggle_button(on))
+                .style(style::switch_button(on))
                 .on_press(Message::ColorEditor(ColorEditorMessage::Units(then))),
             said,
             tooltip::Position::Top,
@@ -411,7 +409,8 @@ pub fn color_channels<'a>(app: &'a App, target: ColorTarget, c: [f32; 4], gray: 
         (false, true) => &[H, S, V, A],
         (false, false) => &[R, G, B, A],
     };
-    let block = row![unit_buttons(units, !gray, Length::Fixed(52.0)), sliders(&target, c, units, channels)].spacing(8);
+    let hsv = app.hsv_shown(&target).unwrap_or_else(|| rgb_to_hsv([c[0], c[1], c[2]]));
+    let block = row![unit_buttons(units, !gray, Length::Fixed(52.0)), sliders(&target, c, hsv, units, channels)].spacing(8);
     container(block).padding(iced::Padding { left, right, ..iced::Padding::ZERO }).into()
 }
 
@@ -492,8 +491,9 @@ fn editor_body<'a>(app: &'a App, target: &ColorTarget, c: [f32; 4], room: Size) 
     let shown = app.color_shown(target).unwrap_or(c);
     let units = app.ui.color_units;
     let side = room.height.min(room.width - crate::widget::color::HUE_ROOM - 2.0 * SPACING - MIDDLE_W - SLIDERS_MIN).max(80.0);
+    let hsv = app.hsv_shown(target).unwrap_or_else(|| rgb_to_hsv([shown[0], shown[1], shown[2]]));
     let set = target.clone();
-    let square = color_picker(shown, move |c| Message::SetColor(set.clone(), c)).side(side).on_release(Message::Seal);
+    let square = color_picker(hsv, move |hsv| Message::SetHsv(set.clone(), hsv)).side(side).on_release(Message::Seal);
     let doing = |label: &'static str, message: ColorEditorMessage, said: &'static str| {
         tip(
             button(text(label).size(style::SMALL).width(Length::Fill).center().wrapping(text::Wrapping::None))
@@ -560,7 +560,7 @@ fn editor_body<'a>(app: &'a App, target: &ColorTarget, c: [f32; 4], room: Size) 
         .padding([3, 6])
         .style(style::text_input);
     // (Its hexadecimal at the bottom, whatever the height of the window.)
-    let right = column![sliders(target, shown, units, &[R, G, B, H, S, V, A]), space().height(Length::Fill), hex]
+    let right = column![sliders(target, shown, hsv, units, &[R, G, B, H, S, V, A]), space().height(Length::Fill), hex]
         .height(Length::Fill)
         .width(Length::Fill);
     row![square, middle, right].spacing(SPACING).height(Length::Fill).into()
@@ -572,21 +572,40 @@ mod tests {
 
     /// A channel set is the channel read, the others as they were; none goes past its ends; a
     /// level of gray set is a gray; and channels are said to 255 (a hue, to 360 degrees) or to 1.
+    /// The hue, the saturation and the value are set as such: the value at none (black) or the
+    /// saturation at none (a gray) leave the other two as they were, which the color alone
+    /// would not say.
     #[test]
     fn channels_are_set_read_and_said() {
+        use crate::widget::color::hsv_to_rgb;
         use Channel::*;
         let c = [0.2, 0.4, 0.6, 0.8];
+        let hsv = rgb_to_hsv([c[0], c[1], c[2]]);
+        let target = ColorTarget::Variable("tint".into(), VarField::Value);
+        // What a channel set comes to: the color, and its hue, saturation and value.
+        let set = |channel: Channel, x: f32| match channel.set(target.clone(), c, hsv, x) {
+            Message::SetColor(_, color) => (color, rgb_to_hsv([color[0], color[1], color[2]])),
+            Message::SetHsv(_, hsv) => {
+                let [r, g, b] = hsv_to_rgb(hsv);
+                ([r, g, b, c[3]], hsv)
+            }
+            other => panic!("{other:?}"),
+        };
         for channel in [R, G, B, A, S, V] {
             for x in [0.0, 0.25, 1.0] {
-                assert!((channel.of(channel.set(c, x)) - x).abs() < 1e-4, "{channel:?} at {x}");
+                let (color, hsv) = set(channel, x);
+                assert!((channel.of(color, hsv) - x).abs() < 1e-4, "{channel:?} at {x}");
             }
         }
-        assert!((H.of(H.set(c, 0.5)) - 0.5).abs() < 1e-4);
-        assert_eq!(R.set(c, 1.0)[1..], c[1..], "the others as they were");
-        assert_eq!(A.set(c, 0.1)[..3], c[..3]);
-        assert_eq!((R.set(c, -3.0)[0], G.set(c, 7.0)[1], A.set(c, f32::NAN)[3]), (0.0, 1.0, 0.0), "none past its ends");
-        assert_eq!(L.set(c, 0.5), [0.5, 0.5, 0.5, 0.8]);
-        assert!((L.of([1.0, 1.0, 1.0, 1.0]) - 1.0).abs() < 1e-6 && L.of([0.0, 0.0, 0.0, 1.0]) == 0.0);
+        let (color, turned) = set(H, 0.5);
+        assert!((H.of(color, turned) - 0.5).abs() < 1e-4);
+        assert_eq!(set(R, 1.0).0[1..], c[1..], "the others as they were");
+        assert_eq!(set(A, 0.1).0[..3], c[..3]);
+        assert_eq!((set(R, -3.0).0[0], set(G, 7.0).0[1], set(A, f32::NAN).0[3]), (0.0, 1.0, 0.0), "none past its ends");
+        assert_eq!(set(L, 0.5).0, [0.5, 0.5, 0.5, 0.8]);
+        assert_eq!(set(V, 0.0), ([0.0, 0.0, 0.0, 0.8], [hsv[0], hsv[1], 0.0]), "black, of the hue and the saturation it had");
+        assert_eq!(set(S, 0.0).1, [hsv[0], 0.0, hsv[2]], "a gray, of the hue it had");
+        assert!((L.of([1.0, 1.0, 1.0, 1.0], hsv) - 1.0).abs() < 1e-6 && L.of([0.0, 0.0, 0.0, 1.0], hsv) == 0.0);
         let (bytes, float) = (ColorUnits::default(), ColorUnits { float: true, hsv: false });
         assert_eq!((R.scale(bytes), A.scale(bytes), H.scale(bytes), R.scale(float), H.scale(float)), (255.0, 255.0, 360.0, 1.0, 1.0));
     }

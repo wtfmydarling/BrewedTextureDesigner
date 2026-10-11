@@ -192,8 +192,9 @@ mod x11 {
             .change_property32(PropMode::REPLACE, own, AtomEnum::WM_TRANSIENT_FOR, AtomEnum::WINDOW, &[owner])
             .map_err(x11rb::errors::ReplyError::from)
             .and_then(|cookie| cookie.check());
-        if let Err(e) = said {
-            log::warn!("a window could not be kept with the main one: {e}");
+        match said {
+            Ok(()) => log::info!("the window {own:#x} is kept with the main one, {owner:#x} (transient for it)"),
+            Err(e) => log::warn!("a window could not be kept with the main one: {e}"),
         }
     }
 }

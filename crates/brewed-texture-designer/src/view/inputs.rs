@@ -5,7 +5,7 @@
 //! An image input is one of them: its value is a picture (Image Input nodes of one name
 //! share it), with a picture by default, what it takes and its color while it has none.
 
-use iced::widget::{button, column, container, pick_list, row, scrollable, space, text, text_input, tooltip};
+use iced::widget::{button, column, container, pick_list, row, space, text, text_input, tooltip};
 use iced::{Alignment, Element, Length};
 use brewed_texture_core::graph::{ImageInput, Variable};
 use brewed_texture_core::nodes::ImageKind;
@@ -15,6 +15,7 @@ use brewed_texture_core::{DataType, Edit, Value};
 use crate::app::{App, ColorTarget, DragPayload, FileTarget, Message, VarField};
 use crate::icons::{Icon, icon};
 use crate::style;
+use crate::widget::scroll::scroll_box;
 use crate::view::editors::{file_field, swatch, value_editor};
 use crate::widget::outside::outside;
 use crate::widget::pressable::pressable;
@@ -328,7 +329,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         for (i, v) in vars.iter().enumerate() {
             list = list.push(variable_row(app, v, i));
         }
-        scrollable(container(list).padding([0, 6])).height(Length::Fill).style(style::scrollable).into()
+        scroll_box(container(list).padding([0, 6])).height(Length::Fill).into()
     };
     column![header, body].into()
 }
