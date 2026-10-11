@@ -37,12 +37,15 @@ pub fn socket_icon<'a, Message: 'a>(ty: DataType, filled: bool, size: f32, color
 
 /// The expose toggle at the right end of a parameter row. `None` when the parameter
 /// cannot be exposed (an empty slot of the same width keeps the rows aligned).
+/// How wide the toggle that exposes a parameter is (or the room left for it, where it has none).
+pub const TOGGLE_W: f32 = 22.0;
+
 pub fn expose_toggle<'a, Message: Clone + 'a>(
     ty: Option<DataType>,
     exposed: bool,
     on_toggle: Option<Message>,
 ) -> Element<'a, Message> {
-    const W: f32 = 22.0;
+    const W: f32 = TOGGLE_W;
     let Some(ty) = ty else {
         return iced::widget::space().width(Length::Fixed(W)).into();
     };

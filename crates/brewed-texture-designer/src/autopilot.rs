@@ -1269,6 +1269,49 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
         }),
     });
 
+    // The Color Editor in its window: opened for each color of the graph (its parameters, a stop
+    // of its gradient, its input values), the color dragged in it, then closed.
+    let mut opened = 0;
+    scenes.push_back(Scene {
+        name: "the Color Editor",
+        next: Box::new(move |app: &App, dice: &mut Dice| {
+            use crate::app::{ColorTarget, VarField};
+            let graph = app.graph();
+            let mut colors: Vec<ColorTarget> = graph
+                .nodes
+                .iter()
+                .flat_map(|n| n.params.iter().filter(|p| matches!(p.value, ParamValue::Color(_))).map(|p| ColorTarget::Param(n.id, p.key.clone())))
+                .collect();
+            colors.extend(graph.nodes_of(NodeKind::GRADIENT_MAP).map(|n| ColorTarget::GradientStop(n.id, "gradient".into())));
+            colors.extend(graph.variables.iter().filter(|v| matches!(v.value, Value::Color(_))).map(|v| ColorTarget::Variable(v.name.clone(), VarField::Value)));
+            let target = colors.get(opened)?.clone();
+            opened += 1;
+            let mut steps = Vec::new();
+            if let ColorTarget::GradientStop(node, key) = &target {
+                steps.push(Step::Do(Message::GradientStop(*node, key.clone(), 1)));
+            }
+            steps.extend([Step::Do(Message::ColorPicker(Some(target.clone()))), Step::Pause(Duration::from_millis(600))]);
+            let blue = dice.float(0.0, 1.0);
+            steps.extend((0..30).map(|k| {
+                let t = k as f32 / 29.0;
+                Step::Do(Message::SetColor(target.clone(), [t, 1.0 - t, blue, 1.0]))
+            }));
+            steps.extend([
+                Step::Do(Message::Seal),
+                Step::Wait,
+                Step::Check(Box::new(|app: &App| app.color_window().is_none().then(|| "the Color Editor has no window".into()))),
+                Step::Do(Message::ColorPicker(None)),
+                Step::Pause(Duration::from_millis(300)),
+                Step::Check(Box::new(|app: &App| app.color_window().is_some().then(|| "the Color Editor's window stays after it closed".into()))),
+                Step::Note(format!("the Color Editor of {target:?}")),
+            ]);
+            if opened == colors.len() {
+                steps.extend(back_home("the Color Editor"));
+            }
+            Some(steps)
+        }),
+    });
+
     scenes.extend(more_scenes(folder));
     scenes.push_back(Scene { name: "the settings", next: once(settings_scene()) });
     scenes.push_back(Scene { name: "random", next: Box::new(random_steps) });

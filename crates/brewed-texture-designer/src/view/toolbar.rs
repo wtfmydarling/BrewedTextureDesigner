@@ -368,13 +368,16 @@ pub(crate) const WINDOW_CORNER: f32 = 14.0;
 /// The edges and corners of the window, which size it where the program draws its frame (not
 /// while it fills the screen): over everything, a few pixels deep, the cursor saying which way.
 pub fn window_edges<'a>() -> Element<'a, Message> {
+    window_edges_with(|direction| Message::Window(WindowAction::Resize(direction)))
+}
+
+/// The edges and corners of a window of the program's that size it, each pressed saying
+/// `resize` which way.
+pub fn window_edges_with<'a>(resize: fn(iced::window::Direction) -> Message) -> Element<'a, Message> {
     use iced::mouse::Interaction as I;
     use iced::window::Direction as D;
     let grip = |direction: D, interaction: I, width: Length, height: Length| -> Element<'a, Message> {
-        mouse_area(space().width(width).height(height))
-            .interaction(interaction)
-            .on_press(Message::Window(WindowAction::Resize(direction)))
-            .into()
+        mouse_area(space().width(width).height(height)).interaction(interaction).on_press(resize(direction)).into()
     };
     let edge = Length::Fixed(WINDOW_EDGE);
     let corner = Length::Fixed(WINDOW_CORNER);

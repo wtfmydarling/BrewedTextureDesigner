@@ -358,7 +358,7 @@ impl App {
             }
             Some(key) => {
                 let Some(doc) = self.package_doc_mut(key) else { return };
-                match doc.apply_package(PackageEdit::AddGraph { name, graph }) {
+                match doc.apply_package(PackageEdit::AddGraph { name, graph: Box::new(graph) }) {
                     Ok(result) => {
                         if let Some(graph) = result.graph {
                             self.views.insert((key, graph), view);

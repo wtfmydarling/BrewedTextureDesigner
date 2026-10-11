@@ -86,10 +86,10 @@ uniform_color p:precision = graph
 uniform_color p:precision = unorm8
 uniform_color p:precision = float16
 uniform_color p:precision = float32
-uniform_color p:color color
 uniform_color p:output choice
 uniform_color p:output = color
 uniform_color p:output = gray
+uniform_color p:color color
 uniform_value
 uniform_value o:output image
 uniform_value p:tiling choice

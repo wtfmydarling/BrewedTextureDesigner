@@ -441,9 +441,10 @@ fn the_properties_of_a_graph_a_comment_and_a_selection_show_whole() {
     assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
 }
 
-/// The Color Editor shows whole in the smallest window, of a color and of a level of gray, in
-/// each way channels are said; so do the color fields of Properties at its narrowest (a color
-/// parameter, a gradient's stop, a comment's color, a color input value opened).
+/// The color fields of Properties show whole at its narrowest (a color parameter and a level of
+/// gray, in each way channels are said, a gradient's stop, a comment's color, a color input value
+/// opened); so does the Color Editor in its window at the smallest it is let be, and as it opens,
+/// of each.
 #[test]
 fn colors_show_whole_in_the_smallest_window() {
     use crate::app::{ColorTarget, ColorUnits, VarField};
@@ -462,35 +463,58 @@ fn colors_show_whole_in_the_smallest_window() {
         w.send(Message::Seal);
         for (float, hsv) in [(false, false), (true, false), (false, true), (true, true)] {
             w.app.ui.color_units = ColorUnits { float, hsv };
-            for open in [false, true] {
-                w.app.ui.color_picker = open.then(|| target.clone());
-                newly_cut(&mut w, &before, &format!("a color (gray: {gray}, float: {float}, hsv: {hsv}, editor: {open})"), &mut found);
-            }
+            newly_cut(&mut w, &before, &format!("a color (gray: {gray}, float: {float}, hsv: {hsv})"), &mut found);
+            editor_whole(&mut w, &target, &format!("a color (gray: {gray}, float: {float})"), &mut found);
         }
     }
-    w.app.ui.color_picker = None;
     w.app.ui.color_units = ColorUnits::default();
+    w.send(Message::Edit(Edit::SetParam { node: id, key: "output".into(), value: ParamValue::Enum(0) }));
+    w.snapshot("colors_parameter_narrow");
     found.extend(overlapping(&mut w).into_iter().map(|line| format!("a color parameter: {line}")));
     // A gradient's stop.
     let map = w.app.graph().nodes_of(NodeKind::GRADIENT_MAP).next().map(|n| n.id).expect("the demo colors by a gradient");
     w.send(Message::Graph(GraphMessage::Select { node: map, mode: SelectMode::Replace }));
     w.send(Message::GradientStop(map, "gradient".into(), 1));
     newly_cut(&mut w, &before, "a stop of a gradient", &mut found);
-    w.app.ui.color_picker = Some(ColorTarget::GradientStop(map, "gradient".into()));
-    newly_cut(&mut w, &before, "a stop of a gradient, in the editor", &mut found);
-    w.app.ui.color_picker = None;
+    w.snapshot("colors_gradient_stop_narrow");
+    editor_whole(&mut w, &ColorTarget::GradientStop(map, "gradient".into()), "a stop of a gradient", &mut found);
     // A comment's color.
     let comment = w.app.graph().comments.first().map(|c| c.id).expect("the demo has comments");
     w.send(Message::Graph(GraphMessage::SelectComment(comment)));
     newly_cut(&mut w, &before, "a comment", &mut found);
+    w.snapshot("colors_comment_narrow");
     // A color input value, opened.
     let tint = w.app.graph().variables.iter().find(|v| matches!(v.value, brewed_texture_core::Value::Color(_))).map(|v| v.name.clone()).expect("the demo has a color input");
     w.send(Message::Graph(GraphMessage::ClearSelection));
     w.app.ui.expanded_vars.insert(tint.clone());
     newly_cut(&mut w, &before, "a color input value", &mut found);
-    w.app.ui.color_picker = Some(ColorTarget::Variable(tint, VarField::Value));
-    newly_cut(&mut w, &before, "a color input value, in the editor", &mut found);
+    w.snapshot("colors_input_value_narrow");
+    // Its input node, in Properties.
+    if let Some(input) = w.app.graph().nodes.iter().find(|n| n.variable.as_deref() == Some(tint.as_str())).map(|n| n.id) {
+        w.send(Message::Graph(GraphMessage::Select { node: input, mode: SelectMode::Replace }));
+        newly_cut(&mut w, &before, "the input node of a color", &mut found);
+        w.snapshot("colors_input_node_narrow");
+        w.send(Message::Graph(GraphMessage::ClearSelection));
+    }
+    editor_whole(&mut w, &ColorTarget::Variable(tint, VarField::Value), "a color input value", &mut found);
     assert!(found.is_empty(), "cut short:\n{}", found.join("\n"));
+}
+
+/// Whether the Color Editor of `target` shows whole in its window, as it opens and at the
+/// smallest it is let be (`found` says what does not); the main window looked at again after.
+fn editor_whole(w: &mut Harness, target: &crate::app::ColorTarget, state: &str, found: &mut Vec<String>) {
+    use crate::view::editors::{COLOR_EDITOR, COLOR_EDITOR_MIN};
+    let main = w.size;
+    w.send(Message::ColorPicker(Some(target.clone())));
+    for size in [COLOR_EDITOR, COLOR_EDITOR_MIN] {
+        w.look_at(Box::new(crate::view::editors::color_editor), size);
+        let said = format!("{state}, in the editor {}x{}", size.width, size.height);
+        w.snapshot(&format!("colors_editor_{}", size.width));
+        newly_cut(w, &[], &said, found);
+        found.extend(overlapping(w).into_iter().map(|line| format!("{said}: {line}")));
+    }
+    w.send(Message::ColorPicker(None));
+    w.look_at(Box::new(view::root), main);
 }
 
 /// Every dialog shows whole at the narrowest the window is let be: the settings, each of their

@@ -1311,7 +1311,7 @@ fn a_color_is_set_in_properties_and_a_gray_is_a_level() {
 /// other programs copy it, and says so of what is none; its hexadecimal typed is taken as soon as
 /// it says a color, and kept as typed meanwhile; Invert turns each channel over and To Gray makes
 /// it its gray, a step of undo each; Copy says what it copied. Of a level of gray, what is pasted
-/// is its gray.
+/// is kept as its gray, and Invert turns over the color the editor shows.
 #[test]
 fn the_color_editor_pastes_reads_hexadecimal_inverts_and_grays() {
     use crate::app::{ColorEditorMessage as E, ColorTarget};
@@ -1354,16 +1354,69 @@ fn the_color_editor_pastes_reads_hexadecimal_inverts_and_grays() {
     assert_eq!(color_of(&w, id), [1.0, 0.0, 1.0, 1.0], "gray no more");
     w.send(Message::Undo);
     assert_eq!(color_of(&w, id), [0.0, 1.0, 0.0, 1.0], "turned back over");
+    w.look_at(Box::new(crate::view::editors::color_editor), crate::view::editors::COLOR_EDITOR);
     assert!(text_fits::cut_short(&mut w).is_empty(), "{:?}", text_fits::cut_short(&mut w));
     w.snapshot("color_editor");
 
-    // A level of gray: what is pasted is its gray, and there is no To Gray to press.
+    // A level of gray: what is pasted is kept as its gray, the editor shows it as pasted, and
+    // Invert turns that over.
     w.send(Message::Edit(Edit::SetParam { node: id, key: "output".into(), value: ParamValue::Enum(1) }));
     w.send(Message::Seal);
     step(&mut w, E::Pasted(Some("#0000FF".into())));
     let gray = color_of(&w, id);
     assert!(gray[0] == gray[1] && gray[1] == gray[2] && (gray[0] - 0.0722).abs() < 1e-4, "the gray of blue: {gray:?}");
-    assert!(texts(&mut w, "To Gray").is_empty() && !texts(&mut w, "Invert").is_empty());
+    assert_eq!(w.app.color_shown(&target), Some([0.0, 0.0, 1.0, 1.0]));
+    step(&mut w, E::Invert);
+    let gray = color_of(&w, id);
+    assert!((gray[0] - (0.2126 + 0.7152)).abs() < 1e-4, "the gray of yellow: {gray:?}");
+    assert_eq!(w.app.color_shown(&target), Some([1.0, 1.0, 0.0, 1.0]));
     assert!(text_fits::cut_short(&mut w).is_empty(), "{:?}", text_fits::cut_short(&mut w));
-    w.snapshot("color_editor_gray");
+}
+
+/// The 3D view's model, height and repeat are the graph's: Ctrl+Z undoes a change of them (a
+/// drag of the Height field, one step), the package has changes to save, and each graph has its
+/// own; where the camera is looking from is the view's, not undone (as the graph's view is not).
+#[test]
+fn the_height_of_the_3d_view_is_undone() {
+    use crate::app::PreviewMessage;
+    use crate::view::view3d::{Camera, Shape};
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    let start = w.app.ui.preview.view3d;
+    let camera = |w: &Harness| w.app.ui.preview.view3d;
+    // A drag of Height: several heights, one step.
+    for height in [0.06, 0.08, 0.1] {
+        let now = camera(&w);
+        w.send(Message::Preview(PreviewMessage::Camera(Camera { displacement: height, ..now })));
+    }
+    w.send(Message::Seal);
+    assert_eq!(camera(&w).displacement, 0.1);
+    assert!(w.app.doc.is_dirty(), "the package has a change to save");
+    // The camera turned meanwhile: not a step, and not undone.
+    let now = camera(&w);
+    w.send(Message::Preview(PreviewMessage::Camera(Camera { yaw: 1.0, ..now })));
+    w.send(Message::Undo);
+    assert_eq!(camera(&w).displacement, start.displacement, "the height back");
+    assert_eq!(camera(&w).yaw, 1.0, "the camera where it is");
+    w.send(Message::Redo);
+    assert_eq!(camera(&w).displacement, 0.1);
+    // The model and the repeat: a step each.
+    let now = camera(&w);
+    w.send(Message::Preview(PreviewMessage::Camera(Camera { shape: Shape::Sphere, ..now })));
+    w.send(Message::Seal);
+    let now = camera(&w);
+    w.send(Message::Preview(PreviewMessage::Camera(Camera { tiling: 3.0, ..now })));
+    w.send(Message::Seal);
+    w.send(Message::Undo);
+    assert_eq!((camera(&w).shape, camera(&w).tiling), (Shape::Sphere, start.tiling));
+    w.send(Message::Undo);
+    assert_eq!((camera(&w).shape, camera(&w).displacement), (start.shape, 0.1));
+    // Another graph has its own: a new one, as the view starts; back, the first's again.
+    let key = w.app.doc_key;
+    let first = w.app.doc.current();
+    w.send(Message::Explorer(ExplorerMessage::NewGraph(key)));
+    w.send(Message::Explorer(ExplorerMessage::CommitRename));
+    assert_ne!(w.app.doc.current(), first);
+    assert_eq!(camera(&w).displacement, start.displacement, "a new graph's, as the view starts");
+    w.send(Message::Explorer(ExplorerMessage::OpenGraph(key, first)));
+    assert_eq!(camera(&w).displacement, 0.1, "the first graph's");
 }

@@ -20,8 +20,13 @@ use crate::widget::outside::outside;
 use crate::widget::pressable::pressable;
 use crate::widget::socket_icon;
 
-fn field_row<'a>(label: &'a str, editor: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-    row![text(label).size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(78.0)), editor.into()]
+/// How wide the names of the fields of an input value are in Input Values (in Properties, as
+/// wide as the names of its other rows).
+const FIELD_LABEL_W: f32 = 78.0;
+
+/// A field of an input value, its name `label_w` wide before it.
+fn field_row<'a>(label: &'a str, editor: impl Into<Element<'a, Message>>, label_w: f32) -> Element<'a, Message> {
+    row![text(label).size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)), editor.into()]
         .spacing(6)
         .align_y(Alignment::Center)
         .into()
@@ -62,7 +67,13 @@ fn socket_of<'a>(var: &Variable) -> Element<'a, Message> {
 
 /// The settings of an image input that are not its picture: what it takes, the picture it
 /// has by default, and its color while it has none.
-fn image_settings<'a>(app: &'a App, var: &'a Variable, image: &'a ImageInput, mut col: iced::widget::Column<'a, Message>) -> iced::widget::Column<'a, Message> {
+fn image_settings<'a>(
+    app: &'a App,
+    var: &'a Variable,
+    image: &'a ImageInput,
+    mut col: iced::widget::Column<'a, Message>,
+    label_w: f32,
+) -> iced::widget::Column<'a, Message> {
     let name = var.name.clone();
     let kinds = [ImageKind::Gray, ImageKind::Color];
     let kind = {
@@ -73,12 +84,12 @@ fn image_settings<'a>(app: &'a App, var: &'a Variable, image: &'a ImageInput, mu
             .padding([3, 6])
             .style(style::pick_list)
     };
-    col = col.push(field_row("Kind", crate::view::tip(kind, "What the graph takes here: an image that arrives is made grayscale or color.", tooltip::Position::Top)));
+    col = col.push(field_row("Kind", crate::view::tip(kind, "What the graph takes here: an image that arrives is made grayscale or color.", tooltip::Position::Top), label_w));
     let color = image_color(var);
-    col = col.push(field_row("Default", file_field(app, FileTarget::VariableDefault(name.clone()), "no picture: the color".into(), Some(color))));
+    col = col.push(field_row("Default", file_field(app, FileTarget::VariableDefault(name.clone()), "no picture: the color".into(), Some(color)), label_w));
     let open = app.ui.color_picker == Some(ColorTarget::Variable(name.clone(), VarField::Value));
     let chip = swatch(color, open, Message::ColorPicker(Some(ColorTarget::Variable(name, VarField::Value))));
-    col.push(field_row("Color", crate::view::tip(chip, "What the graph sees here while the input has no picture.", tooltip::Position::Top)))
+    col.push(field_row("Color", crate::view::tip(chip, "What the graph sees here while the input has no picture.", tooltip::Position::Top), label_w))
 }
 
 /// An image kind in a pick list.
@@ -93,7 +104,7 @@ impl std::fmt::Display for Kind {
 
 /// Settings of a variable (also shown in the properties of an Input node). `rename`
 /// adds the Name field, which renames the variable for all its Input nodes.
-pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a, Message> {
+pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool, label_w: f32) -> Element<'a, Message> {
     let name = var.name.clone();
     let renaming = app.ui.renaming_var.as_ref().filter(|(from, _)| *from == var.name).map(|(_, t)| t.as_str());
     let name_input = text_input("name", renaming.unwrap_or(&var.name))
@@ -109,12 +120,13 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
     let name_input = outside(name_input).on_press(renaming.map(|_| Message::CommitRename));
     let mut col = column![].spacing(5);
     if rename {
-        col = col.push(field_row("Name", name_input));
+        col = col.push(field_row("Name", name_input, label_w));
     }
     if rename && renaming.is_some_and(|t| t != var.name) {
         col = col.push(field_row(
             "",
             text("Enter or a click elsewhere renames it everywhere, Esc cancels").size(style::SMALL).color(style::ACCENT_TEXT),
+            label_w,
         ));
     }
     col = col.push(field_row(
@@ -127,16 +139,17 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
             .size(style::TEXT_SIZE)
             .padding([3, 6])
             .style(style::text_input),
+        label_w,
     ));
 
     // A color's value, as a color parameter's: the field, and its channels under it.
     if let (None, Value::Color(c)) = (&var.image, var.value) {
         let target = ColorTarget::Variable(name.clone(), VarField::Value);
-        col = col.push(field_row("Value", crate::view::editors::color_field(app, target.clone(), c, false)));
-        col = col.push(row![space().width(Length::Fixed(78.0)), crate::view::editors::color_channels(app, target, c, false)]);
+        col = col.push(field_row("Value", crate::view::editors::color_field(app, target.clone(), c, false), label_w));
+        col = col.push(crate::view::editors::color_channels(app, target, c, false, label_w + 6.0, 0.0));
     }
     match &var.image {
-        Some(image) => col = image_settings(app, var, image, col),
+        Some(image) => col = image_settings(app, var, image, col, label_w),
         None => {
             let range = var.has_range().then_some((var.min, var.max));
             let default_open = app.ui.color_picker == Some(ColorTarget::Variable(var.name.clone(), VarField::Default));
@@ -152,7 +165,7 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
                 default_open,
                 Message::ColorPicker(Some(ColorTarget::Variable(var.name.clone(), VarField::Default))),
             );
-            col = col.push(field_row("Default", default_editor));
+            col = col.push(field_row("Default", default_editor, label_w));
         }
     }
     if var.has_range() {
@@ -178,8 +191,8 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
             false,
             Message::Seal,
         );
-        col = col.push(field_row("Min", min_editor));
-        col = col.push(field_row("Max", max_editor));
+        col = col.push(field_row("Min", min_editor, label_w));
+        col = col.push(field_row("Max", max_editor, label_w));
     }
     let at_default = var.is_default();
     // Where the two do not fit side by side, the second goes under the first (its name was cut
@@ -201,7 +214,7 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool) -> Element<'a,
     .spacing(6)
     .wrap()
     .vertical_spacing(4);
-    col = col.push(row![space().width(Length::Fixed(78.0)), buttons]);
+    col = col.push(row![space().width(Length::Fixed(label_w)), buttons].spacing(6));
     let users = app.graph().variable_users(&var.name).count();
     let (what, node) = match &var.image {
         Some(image) => (format!("{} image", image.kind.name()), "Image Input node"),
@@ -283,7 +296,7 @@ Changed — middle-click the row to put {} back", var.description, said(var, tru
     .align_y(Alignment::Center);
     let mut col = column![header].spacing(6);
     if expanded {
-        col = col.push(container(details(app, var, true)).padding(iced::Padding { left: 22.0, ..iced::Padding::ZERO }));
+        col = col.push(container(details(app, var, true, FIELD_LABEL_W)).padding(iced::Padding { left: 22.0, ..iced::Padding::ZERO }));
     }
     // The same widget around the row either way, so that a field being dragged is not
     // rebuilt under the mouse; resetting a value that is already the default does nothing.

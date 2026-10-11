@@ -91,11 +91,12 @@ pub static UNIFORM_COLOR: NodeDef = NodeDef {
     inputs: NO_SOCKETS,
     outputs: IMAGE_OUT,
     params: &[
-        // (Grayscale, a level of gray: what it makes is its luminance.)
-        color("color", "Color", [0.5, 0.5, 0.5, 1.0]).gray_when("output", &[1]),
+        // (First: what it makes decides what its color is.)
         choice("output", "Output", 0, UNIFORM_OUTPUTS, UNIFORM_OUTPUT_IDS)
             .fixed()
             .tip("Color: the color. Grayscale: its luminance, in a grayscale image."),
+        // (Grayscale, a level of gray: what it makes is its luminance.)
+        color("color", "Color", [0.5, 0.5, 0.5, 1.0]).gray_when("output", &[1]),
     ],
     role: Role::Image,
 };

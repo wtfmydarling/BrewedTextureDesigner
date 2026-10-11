@@ -237,12 +237,15 @@ pub fn toolbar(app: &App, room: f32) -> (iced::widget::Row<'_, Message>, Option<
     ]
     .spacing(4)
     .align_y(Alignment::Center);
+    // (A drag a step of undo: they are the graph's.)
     let height = number(cam.displacement as f64, 0.0, 0.3)
         .limits(0.0, 1.0)
-        .on_change(move |v| Message::Preview(PreviewMessage::Camera(Camera { displacement: v as f32, ..cam })));
+        .on_change(move |v| Message::Preview(PreviewMessage::Camera(Camera { displacement: v as f32, ..cam })))
+        .on_release(Message::Seal);
     let repeat = number(cam.tiling as f64, 1.0, 8.0)
         .limits(0.25, 32.0)
-        .on_change(move |v| Message::Preview(PreviewMessage::Camera(Camera { tiling: v as f32, ..cam })));
+        .on_change(move |v| Message::Preview(PreviewMessage::Camera(Camera { tiling: v as f32, ..cam })))
+        .on_release(Message::Seal);
     let reset = crate::view::tip(
         button(icon(Icon::Reset, 14.0, style::TEXT_DIM))
             .padding(4)

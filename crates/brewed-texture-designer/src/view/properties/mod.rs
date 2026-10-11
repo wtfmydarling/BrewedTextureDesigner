@@ -24,7 +24,7 @@ use crate::widget::curve::curve_editor;
 use crate::widget::gradient::gradient_editor;
 use crate::widget::number::number;
 use crate::widget::outside::outside;
-use crate::widget::{expose_toggle, socket_icon};
+use crate::widget::{TOGGLE_W, expose_toggle, socket_icon};
 
 /// How wide the names of the rows are at most, and at least: as wide as the panel has room for
 /// between, so that a narrow panel still leaves their fields room.
@@ -199,8 +199,9 @@ fn comment_view(app: &App, id: brewed_texture_core::CommentId, label_w: f32) -> 
                 text("Color").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)),
                 crate::view::editors::color_field(app, ColorTarget::Comment(id), comment.color, false),
             ]
+            .spacing(6)
             .align_y(Alignment::Center),
-            crate::view::editors::color_channels(app, ColorTarget::Comment(id), comment.color, false),
+            crate::view::editors::color_channels(app, ColorTarget::Comment(id), comment.color, false, label_w + 6.0, 0.0),
             row![
                 button(text("Delete Comment").size(style::SMALL))
                     .padding([3, 8])
@@ -432,6 +433,7 @@ fn variable_section<'a>(app: &'a App, node: &'a Node, label_w: f32) -> Element<'
         app.graph().variables.iter().filter(|v| Some(v.ty) == ty && v.name != current).map(|v| v.name.clone()).collect();
     let mut col = column![
         section("Input value"),
+        // (Their fields where the fields of parameters are: after a gap from their names.)
         row![
             text("Name").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)),
             // A click anywhere else in the window takes the name as Enter does.
@@ -445,6 +447,7 @@ fn variable_section<'a>(app: &'a App, node: &'a Node, label_w: f32) -> Element<'
             )
             .on_press(editing.is_some().then_some(Message::CommitBinding)),
         ]
+        .spacing(6)
         .align_y(Alignment::Center),
         text("Enter a name to use another value. Input nodes with the same name share one value.")
             .size(style::SMALL)
@@ -461,10 +464,14 @@ fn variable_section<'a>(app: &'a App, node: &'a Node, label_w: f32) -> Element<'
                     .padding([3, 6])
                     .style(style::pick_list),
             ]
+            .spacing(6)
             .align_y(Alignment::Center),
         );
     }
     if let Some(var) = node.variable.as_deref().and_then(|n| app.graph().variable(n)) {
+        // (A color's value is its field and channels, in the details, as a color parameter's: a
+        // row of its own said it twice.)
+        let color = var.image.is_none() && matches!(var.value, brewed_texture_core::Value::Color(_));
         let color_open = app.ui.color_picker == Some(ColorTarget::Variable(var.name.clone(), crate::app::VarField::Value));
         let name = var.name.clone();
         // The value of an image input is a picture.
@@ -483,8 +490,10 @@ fn variable_section<'a>(app: &'a App, node: &'a Node, label_w: f32) -> Element<'
                 Message::ColorPicker(Some(ColorTarget::Variable(var.name.clone(), crate::app::VarField::Value))),
             ),
         };
-        col = col.push(row![text("Value").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)), editor].align_y(Alignment::Center));
-        col = col.push(crate::view::inputs::details(app, var, false));
+        if !color {
+            col = col.push(row![text("Value").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)), editor].spacing(6).align_y(Alignment::Center));
+        }
+        col = col.push(crate::view::inputs::details(app, var, false, label_w));
     }
     col.into()
 }
@@ -681,16 +690,15 @@ Changed — middle-click the row to put {} back", pd.tooltip, shown(&pd, &defaul
     let editor = container(editor).width(Length::Fill);
     let mut col = column![row![label, editor, toggle].spacing(6).align_y(Alignment::Center)].spacing(6);
 
-    // A gradient is wide enough to need the room under the row; the color picker floats
-    // over the interface instead, so that opening it moves nothing.
+    // A gradient is wide enough to need the room under the row.
     if !exposed && let ParamValue::Gradient(g) = &slot.value {
         col = col.push(gradient_block(app, node, pd.key, g));
     }
     // So are a color's channels, a slider each (a level of gray's, one): set without opening the
-    // Color Editor.
+    // Color Editor. Under the field, as wide as it: of the parameter, not of a row of their own.
     if !exposed && let ParamValue::Color(c) = &slot.value {
         let target = ColorTarget::Param(node.id, pd.key.to_string());
-        col = col.push(crate::view::editors::color_channels(app, target, *c, node.param_gray(&pd)));
+        col = col.push(crate::view::editors::color_channels(app, target, *c, node.param_gray(&pd), label_w + 6.0, TOGGLE_W + 6.0));
     }
     // So is a curve, whose square is under the row.
     if let ParamValue::Curve(c) = &slot.value {
@@ -907,13 +915,17 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'a str, g: &'a Gradien
             .align_y(Alignment::Center),
         );
         // Its color, as a color parameter's: the field, and its channels under it.
+        const STOP_LABEL_W: f32 = 44.0;
         let target = ColorTarget::GradientStop(id, key.to_string());
         col = col.push(
-            row![text("Color").size(style::SMALL).color(style::TEXT_DIM), crate::view::editors::color_field(app, target.clone(), stop.color, false)]
-                .spacing(6)
-                .align_y(Alignment::Center),
+            row![
+                text("Color").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(STOP_LABEL_W)),
+                crate::view::editors::color_field(app, target.clone(), stop.color, false)
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
         );
-        col = col.push(crate::view::editors::color_channels(app, target, stop.color, false));
+        col = col.push(crate::view::editors::color_channels(app, target, stop.color, false, STOP_LABEL_W + 6.0, 0.0));
     } else {
         col = col.push(
             text("Click the ramp to add a stop, or a handle to change its color and position.")

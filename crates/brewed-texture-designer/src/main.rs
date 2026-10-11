@@ -21,6 +21,7 @@ mod settings;
 mod shortcuts;
 mod style;
 mod third_party;
+mod tool_window;
 mod view;
 mod widget;
 mod window_size;

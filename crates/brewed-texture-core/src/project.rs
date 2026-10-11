@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
 use crate::archive::{self, Archive, Method, Prepared, Writer};
-use crate::graph::{Graph, NodeId};
+use crate::graph::{Graph, NodeId, Scene};
 use crate::instance::GraphId;
 use crate::package::{GraphEntry, Package, Resource, ResourceKind, relative_path, resolve_path};
 
@@ -163,7 +163,7 @@ struct FileItem {
 
 /// What a field says, or, when it says what cannot be taken, as it is by default: for what a
 /// reader can do without (not worth refusing a package over).
-fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(d: D) -> Result<T, D::Error> {
+pub(crate) fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(d: D) -> Result<T, D::Error> {
     Ok(serde_json::from_value(Json::deserialize(d)?).unwrap_or_default())
 }
 
@@ -666,6 +666,15 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
                     }
                     _ => {}
                 }
+                // The scene a file of before kept with the view is the graph's (its undo steps
+                // are the graph's now), where the graph says none of its own.
+                let said = Scene { model: view.model.clone(), height: view.relief, repeat: view.repeat }.sanitized();
+                if !said.is_empty()
+                    && entry.graph.scene.is_empty()
+                    && let Some(entry) = package.graph_mut(v.graph)
+                {
+                    Arc::make_mut(&mut entry.graph).scene = said;
+                }
                 views.insert(v.graph, view);
             }
         }
@@ -742,7 +751,17 @@ mod tests {
             }
             let loaded = from_bytes(&bytes, Some(&dir)).unwrap();
             assert_eq!(loaded.views[&open], scene(light));
+            // A file of before says the scene with the view: it is the graph's, read so.
+            let said = Scene { model: Some("matball".into()), height: Some(0.08), repeat: Some(2.0) };
+            assert_eq!(loaded.package.graph(open).unwrap().graph.scene, said);
         }
+        // A graph's own scene is what it is, whatever its view says.
+        let mut own = package.clone();
+        let scene_of_its_own = Scene { model: Some("sphere".into()), height: Some(0.3), repeat: None };
+        Arc::make_mut(&mut own.graph_mut(open).unwrap().graph).scene = scene_of_its_own.clone();
+        let views = [(open, scene(Light::Studio))].into_iter().collect();
+        let loaded = from_bytes(&to_bytes(&own, &views, open, None).unwrap(), None).unwrap();
+        assert_eq!(loaded.package.graph(open).unwrap().graph.scene, scene_of_its_own);
         // An Output no more there.
         let gone = [(open, scene(Light::Panorama { output: NodeId(9999) }))].into_iter().collect();
         let loaded = from_bytes(&to_bytes(&package, &gone, open, None).unwrap(), None).unwrap();

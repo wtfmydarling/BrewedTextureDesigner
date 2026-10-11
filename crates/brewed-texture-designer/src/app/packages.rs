@@ -330,16 +330,8 @@ impl App {
     /// The scene of the 3D view as a view of a graph says it was: what it says of it (a package
     /// written before the scene was said leaves it as it is), as far as the view's fields go.
     fn restore_scene(&mut self, view: &ViewState) {
-        let camera = &mut self.ui.preview.view3d;
-        if let Some(shape) = view.model.as_deref().and_then(crate::view::view3d::Shape::from_id) {
-            camera.shape = shape;
-        }
-        if let Some(relief) = view.relief.filter(|r| r.is_finite()) {
-            camera.displacement = relief.clamp(0.0, 1.0);
-        }
-        if let Some(repeat) = view.repeat.filter(|r| r.is_finite()) {
-            camera.tiling = repeat.clamp(0.25, 32.0);
-        }
+        // (The model, its height and repeat are the graph's: see `App::sync_scene`.)
+        self.sync_scene();
         let l = &mut self.ui.preview.lighting;
         if let Some(exposure) = view.exposure.filter(|e| e.is_finite()) {
             l.exposure = exposure.clamp(-12.0, 12.0);
@@ -1245,7 +1237,7 @@ impl App {
                 self.close_popups();
                 let graph = self.new_graph();
                 let Some(doc) = self.package_doc_mut(key) else { return Task::none() };
-                match doc.apply_package(PackageEdit::AddGraph { name: "Graph".into(), graph }) {
+                match doc.apply_package(PackageEdit::AddGraph { name: "Graph".into(), graph: Box::new(graph) }) {
                     Ok(result) => {
                         if let Some(graph) = result.graph {
                             self.activate(key, Some(graph));

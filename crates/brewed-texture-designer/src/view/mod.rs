@@ -72,10 +72,6 @@ pub fn root(app: &App) -> Element<'_, Message> {
         ],
     };
     let mut layers: Vec<Element<'_, Message>> = vec![window.into()];
-    // The Color Editor, a window over the panels: the menus over it, a dialog over all.
-    if let Some(editor) = editors::color_window(app) {
-        layers.push(blind(editor, menu_open).into());
-    }
     if let Some(ctx) = &app.ui.context {
         layers.push(context_menu::view(app, ctx));
     }

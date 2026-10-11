@@ -1,6 +1,6 @@
 //! Editors for values, shared by the Input Values panel and the properties panel.
 
-use iced::widget::{button, column, container, image, mouse_area, opaque, row, space, text, text_input, toggler, tooltip};
+use iced::widget::{button, column, container, image, mouse_area, row, space, text, text_input, toggler, tooltip};
 use iced::{Alignment, Border, ContentFit, Element, Length, Size};
 use brewed_texture_core::{ResourceKind, Value, files};
 
@@ -9,7 +9,7 @@ use crate::icons::{Icon, icon};
 use crate::picker::PickTarget;
 use crate::style;
 use crate::view::tip;
-use crate::widget::color::{color_picker, color_strip, gray_of, hsv_to_rgb, luminance, rgb_to_hsv, to_hex};
+use crate::widget::color::{color_picker, color_strip, hsv_to_rgb, luminance, rgb_to_hsv, to_hex};
 use crate::widget::number::{NumberField, number};
 
 /// Does a field that takes the files with these extensions (none: any) take the file at `path`?
@@ -248,10 +248,11 @@ pub fn value_editor<'a>(
 
 // ---------------------------------------------------------------------------- colors
 
-/// How large the Color Editor is (its height, at the most: a gray's is lower), and how large
-/// its square.
-pub const COLOR_EDITOR: Size = Size::new(580.0, 316.0);
-const COLOR_SQUARE: f32 = 220.0;
+/// How large the Color Editor's window opens, and how small it is let be.
+pub const COLOR_EDITOR: Size = Size::new(600.0, 340.0);
+pub const COLOR_EDITOR_MIN: Size = Size::new(520.0, 300.0);
+/// How high its own title bar is (where the program draws it).
+const COLOR_EDITOR_BAR: f32 = 30.0;
 
 /// A channel of a color, as its sliders say it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -344,9 +345,9 @@ fn sliders<'a>(target: &ColorTarget, c: [f32; 4], units: ColorUnits, channels: &
     col
 }
 
-/// The buttons that say how channels are said: from 0 to 255, from 0 to 1, and (of a color
-/// that is not a gray) as hue, saturation and value.
-fn unit_buttons<'a>(units: ColorUnits, gray: bool, width: Length) -> Element<'a, Message> {
+/// The switches of how channels are said: Float (on, from 0 to 1; off, from 0 to 255) and, where
+/// `hsv` offers it, HSV (on, hue, saturation and value; off, red, green and blue).
+fn unit_buttons<'a>(units: ColorUnits, hsv: bool, width: Length) -> Element<'a, Message> {
     let toggle = |label: &'a str, on: bool, then: ColorUnits, said: &'a str| {
         tip(
             button(text(label).size(style::SMALL).wrapping(text::Wrapping::None).width(Length::Fill).center())
@@ -358,12 +359,15 @@ fn unit_buttons<'a>(units: ColorUnits, gray: bool, width: Length) -> Element<'a,
             tooltip::Position::Top,
         )
     };
-    let mut buttons: Vec<Element<'a, Message>> = vec![
-        toggle("0–255", !units.float, ColorUnits { float: false, ..units }, "Each channel from 0 to 255"),
-        toggle("Float", units.float, ColorUnits { float: true, ..units }, "Each channel from 0 to 1"),
-    ];
-    if !gray {
-        buttons.push(toggle("HSV", units.hsv, ColorUnits { hsv: !units.hsv, ..units }, "Hue, saturation and value in place of red, green and blue"));
+    let mut buttons: Vec<Element<'a, Message>> =
+        vec![toggle("Float", units.float, ColorUnits { float: !units.float, ..units }, "Each channel from 0 to 1 (off: from 0 to 255)")];
+    if hsv {
+        buttons.push(toggle(
+            "HSV",
+            units.hsv,
+            ColorUnits { hsv: !units.hsv, ..units },
+            "Hue, saturation and value (off: red, green and blue)",
+        ));
     }
     column(buttons).spacing(4).into()
 }
@@ -395,9 +399,11 @@ pub fn color_field<'a>(app: &'a App, target: ColorTarget, c: [f32; 4], gray: boo
     row![pick, chip, strip].spacing(6).align_y(Alignment::Center).into()
 }
 
-/// The channels of a color field, under it: how they are said, and a slider each (of a level of
-/// gray, its level only), so that a color is set without opening the Color Editor.
-pub fn color_channels<'a>(app: &'a App, target: ColorTarget, c: [f32; 4], gray: bool) -> Element<'a, Message> {
+/// The channels of a color field, under it and as wide as it (`left` and `right`: from where the
+/// row of the field begins and ends to where the field does): how they are said, and a slider
+/// each (of a level of gray, its level only), so that a color is set without opening the Color
+/// Editor.
+pub fn color_channels<'a>(app: &'a App, target: ColorTarget, c: [f32; 4], gray: bool, left: f32, right: f32) -> Element<'a, Message> {
     use Channel::*;
     let units = app.ui.color_units;
     let channels: &[Channel] = match (gray, units.hsv) {
@@ -405,12 +411,13 @@ pub fn color_channels<'a>(app: &'a App, target: ColorTarget, c: [f32; 4], gray: 
         (false, true) => &[H, S, V, A],
         (false, false) => &[R, G, B, A],
     };
-    row![unit_buttons(units, gray, Length::Fixed(52.0)), sliders(&target, c, units, channels)].spacing(8).into()
+    let block = row![unit_buttons(units, !gray, Length::Fixed(52.0)), sliders(&target, c, units, channels)].spacing(8);
+    container(block).padding(iced::Padding { left, right, ..iced::Padding::ZERO }).into()
 }
 
 /// What `target` is called in the Color Editor's title: the node and its parameter, the input
 /// value, the stop of a gradient.
-fn target_name(app: &App, target: &ColorTarget) -> String {
+pub fn target_name(app: &App, target: &ColorTarget) -> String {
     let graph = app.graph();
     let node = |id| graph.node(id);
     match target {
@@ -434,24 +441,59 @@ fn target_name(app: &App, target: &ColorTarget) -> String {
     }
 }
 
-/// The Color Editor: a window of its own inside the program's, moved by its title bar, open
-/// until it is closed (a click elsewhere, a turn of the model, leaves it open). The square of the
-/// hue with the hue bar beside it (of a level of gray: the levels, white to black), the color
-/// seen, Pick, Invert, To Gray, Copy and Paste of its hexadecimal (as other programs copy it), how
-/// channels are said, a slider each, and its hexadecimal typed.
-pub fn color_window(app: &App) -> Option<Element<'_, Message>> {
-    use Channel::*;
-    let target = app.ui.color_picker.clone()?;
-    let c = app.target_color(&target)?;
-    let gray = app.target_gray(&target);
-    let c = if gray { gray_of(c) } else { c };
-    let units = app.ui.color_units;
-    let set = target.clone();
-    let picked: Element<'_, Message> = if gray {
-        color_strip(c, true, move |c| Message::SetColor(set.clone(), c)).vertical(COLOR_SQUARE).on_release(Message::Seal).into()
-    } else {
-        color_picker(c, move |c| Message::SetColor(set.clone(), c)).side(COLOR_SQUARE).on_release(Message::Seal).into()
+/// The Color Editor, in a window of its own (see `App::color_window`): the square of the hue with
+/// the hue bar beside it, as large as the window lets it be; the color as it is now over the one
+/// it was when the editor was opened (a click on that one gives it back); Pick, Invert, To Gray,
+/// Copy and Paste (its hexadecimal, as other programs copy it); Float; a slider each channel; its
+/// hexadecimal at the bottom, typed or pasted. A level of gray has the same editor: it keeps the
+/// gray of what it is given (and the editor, the color it was given: see `App::color_shown`).
+/// Where the program draws the window's title bar, it has one (moved by it, closed by its ×) and
+/// edges that size it.
+pub fn color_editor(app: &App) -> Element<'_, Message> {
+    let Some((target, c)) = app.ui.color_picker.clone().and_then(|t| app.target_color(&t).map(|c| (t, c))) else {
+        return container(space()).width(Length::Fill).height(Length::Fill).style(style::window_bar).into();
     };
+    let edited = target.clone();
+    let body = container(iced::widget::responsive(move |room| editor_body(app, &edited, c, room))).padding(10).height(Length::Fill);
+    let mut window = column![];
+    if crate::app::OWN_TITLE_BAR {
+        let title = crate::view::fitted(format!("Color Editor · {}", target_name(app, &target)), style::TEXT_SIZE, style::bold(), Some(style::TEXT));
+        let close = tip(
+            button(icon(Icon::Close, 14.0, style::TEXT_DIM)).padding(6).style(style::flat_button).on_press(Message::ColorPicker(None)),
+            "Close the Color Editor",
+            tooltip::Position::Bottom,
+        );
+        let bar = mouse_area(
+            container(row![title, close].spacing(6).align_y(Alignment::Center))
+                .padding(iced::Padding { left: 10.0, right: 2.0, ..iced::Padding::ZERO })
+                .center_y(Length::Fixed(COLOR_EDITOR_BAR))
+                .width(Length::Fill)
+                .style(style::window_bar),
+        )
+        .on_press(Message::ColorEditor(ColorEditorMessage::Drag));
+        window = window.push(bar);
+    }
+    let window = container(window.push(body)).width(Length::Fill).height(Length::Fill).style(style::tool_window);
+    if crate::app::OWN_TITLE_BAR {
+        iced::widget::stack![window, crate::view::toolbar::window_edges_with(|d| Message::ColorEditor(ColorEditorMessage::Resize(d)))].into()
+    } else {
+        window.into()
+    }
+}
+
+/// What the Color Editor shows of `target` (`c` now) in `room`: the square as large as the room
+/// lets it be, as high as it and the sliders left their width; the buttons; the sliders, the
+/// hexadecimal at the bottom.
+fn editor_body<'a>(app: &'a App, target: &ColorTarget, c: [f32; 4], room: Size) -> Element<'a, Message> {
+    use Channel::*;
+    const MIDDLE_W: f32 = 96.0;
+    const SLIDERS_MIN: f32 = 170.0;
+    const SPACING: f32 = 12.0;
+    let shown = app.color_shown(target).unwrap_or(c);
+    let units = app.ui.color_units;
+    let side = room.height.min(room.width - crate::widget::color::HUE_ROOM - 2.0 * SPACING - MIDDLE_W - SLIDERS_MIN).max(80.0);
+    let set = target.clone();
+    let square = color_picker(shown, move |c| Message::SetColor(set.clone(), c)).side(side).on_release(Message::Seal);
     let doing = |label: &'static str, message: ColorEditorMessage, said: &'static str| {
         tip(
             button(text(label).size(style::SMALL).width(Length::Fill).center().wrapping(text::Wrapping::None))
@@ -482,21 +524,34 @@ pub fn color_window(app: &App) -> Option<Element<'_, Message>> {
         "Click anywhere on any monitor to take its color. Esc or a right click cancels.",
         tooltip::Position::Left,
     );
-    let seen = container(space().width(Length::Fill).height(Length::Fixed(56.0))).style(style::chip(style::color_of(c)));
-    let mut middle = column![seen, pick, doing("Invert", ColorEditorMessage::Invert, "Each channel turned over: dark for light")]
+    // The color as it is now, over the one it was when the editor was opened: a click on that
+    // one gives it back.
+    let swatch = |c: [f32; 4]| container(space().width(Length::Fill).height(Length::Fixed(32.0))).style(style::chip(style::color_of(c)));
+    let before = app.ui.color_before.as_ref().filter(|(of, ..)| of == target).map_or(c, |(.., c)| *c);
+    let was = tip(
+        button(swatch(before))
+            .padding(0)
+            .width(Length::Fill)
+            .style(style::flat_button)
+            .on_press(Message::Step(Box::new(Message::SetColor(target.clone(), before)))),
+        "The color as it was when the editor was opened: click to give it back",
+        tooltip::Position::Left,
+    );
+    let now = tip(swatch(c), "The color as it is now", tooltip::Position::Left);
+    let middle = column![
+        column![now, was],
+        pick,
+        doing("Invert", ColorEditorMessage::Invert, "Each channel turned over: dark for light"),
+        doing("To Gray", ColorEditorMessage::ToGray, "Its gray: the level of gray it looks"),
+        doing("Copy", ColorEditorMessage::Copy, "Its hexadecimal (#RRGGBB) on the clipboard"),
+        doing("Paste", ColorEditorMessage::Paste, "The color the clipboard says (#RRGGBB, as other programs copy it)"),
+        unit_buttons(units, false, Length::Fill),
+    ]
     .spacing(4)
-    .width(Length::Fixed(88.0));
-    if !gray {
-        middle = middle.push(doing("To Gray", ColorEditorMessage::ToGray, "Its gray: the level of gray it looks"));
-    }
-    middle = middle
-        .push(doing("Copy", ColorEditorMessage::Copy, "Its hexadecimal (#RRGGBB) on the clipboard"))
-        .push(doing("Paste", ColorEditorMessage::Paste, "The color the clipboard says (#RRGGBB, as other programs copy it)"))
-        .push(unit_buttons(units, true, Length::Fill));
-    let channels: &[Channel] = if gray { &[L] } else { &[R, G, B, H, S, V, A] };
+    .width(Length::Fixed(MIDDLE_W));
     let hex = match &app.ui.color_hex {
-        Some((typed, at)) if *at == c => typed.clone(),
-        _ => to_hex(c),
+        Some((typed, at)) if *at == shown => typed.clone(),
+        _ => to_hex(shown),
     };
     let hex = text_input("#RRGGBB", &hex)
         .on_input(|t| Message::ColorEditor(ColorEditorMessage::Hex(t)))
@@ -504,19 +559,11 @@ pub fn color_window(app: &App) -> Option<Element<'_, Message>> {
         .size(style::TEXT_SIZE)
         .padding([3, 6])
         .style(style::text_input);
-    let right = sliders(&target, c, units, channels).push(hex);
-    let title = crate::view::fitted(format!("Color Editor · {}", target_name(app, &target)), style::TEXT_SIZE, style::bold(), Some(style::TEXT));
-    let close = tip(
-        button(icon(Icon::Close, 14.0, style::TEXT_DIM)).padding(4).style(style::flat_button).on_press(Message::ColorPicker(None)),
-        "Close the Color Editor",
-        tooltip::Position::Bottom,
-    );
-    let bar = mouse_area(container(row![title, close].spacing(6).align_y(Alignment::Center)).padding([4, 4]).width(Length::Fill).style(style::window_bar))
-        .on_press(Message::ColorEditor(ColorEditorMessage::Grab))
-        .interaction(iced::mouse::Interaction::Grab);
-    let body = row![picked, middle, right].spacing(12).padding(10);
-    let window = container(column![bar, body]).width(Length::Fixed(COLOR_EDITOR.width)).style(style::popup);
-    Some(crate::widget::placed::placed(opaque(window), app.ui.color_picker_at).into())
+    // (Its hexadecimal at the bottom, whatever the height of the window.)
+    let right = column![sliders(target, shown, units, &[R, G, B, H, S, V, A]), space().height(Length::Fill), hex]
+        .height(Length::Fill)
+        .width(Length::Fill);
+    row![square, middle, right].spacing(SPACING).height(Length::Fill).into()
 }
 
 #[cfg(test)]

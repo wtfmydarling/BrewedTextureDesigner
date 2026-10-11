@@ -166,6 +166,8 @@ pub enum Edit {
         id: CommentId,
         color: [f32; 4],
     },
+    /// How the 3D view shows the graph (see [`crate::graph::Scene`]).
+    SetScene(crate::graph::Scene),
     /// Several edits as one undo step, applied in order: all of them or none.
     Batch(Vec<Edit>),
 }
@@ -203,6 +205,7 @@ pub enum MergeKey {
     LocalVar(NodeId, String),
     Variable(String, u8),
     Comment(CommentId, u8),
+    Scene,
 }
 
 /// Would a node of type `kind` accept a link from (`from_output`) or to a socket of
@@ -283,6 +286,7 @@ impl Edit {
             Edit::ResizeComment { .. } => "Resize Comment",
             Edit::SetCommentText { .. } | Edit::SetCommentDescription { .. } => "Edit Comment",
             Edit::SetCommentColor { .. } => "Color Comment",
+            Edit::SetScene(_) => "Change the 3D View",
             Edit::Batch(edits) => edits.last().map_or("Edit", Edit::label),
         }
     }
@@ -307,6 +311,9 @@ impl Edit {
             Edit::ResizeComment { id, .. } => MergeKey::Comment(*id, 1),
             Edit::SetCommentText { id, .. } => MergeKey::Comment(*id, 2),
             Edit::SetCommentDescription { id, .. } => MergeKey::Comment(*id, 3),
+            // (A color dragged in the Color Editor, a step for all of it, not one a move.)
+            Edit::SetCommentColor { id, .. } => MergeKey::Comment(*id, 4),
+            Edit::SetScene(_) => MergeKey::Scene,
             _ => return None,
         })
     }
@@ -652,6 +659,14 @@ impl Edit {
                 comment.color = color;
                 EditResult::changed()
             }
+            Edit::SetScene(scene) => {
+                let scene = scene.sanitized();
+                if graph.scene == scene {
+                    return Ok(EditResult::unchanged());
+                }
+                graph.scene = scene;
+                EditResult::changed()
+            }
             Edit::Batch(edits) => {
                 // On a copy, so that a failing edit leaves the graph as it was.
                 let mut scratch = graph.clone();
@@ -737,7 +752,7 @@ mod tests {
             let shape = crate::instance::param_value(Value::default_for(if roll(seed, 5) == 0 { DataType::Color } else { ty }));
             odd_value(seed, &shape).as_value().unwrap_or(Value::Float(0.5))
         };
-        match roll(seed, 44) {
+        match roll(seed, 45) {
             30 => {
                 let v = var(seed);
                 Edit::SetVariableRange { min: value_for(seed, &v), max: value_for(seed, &v), name: v }
@@ -773,6 +788,11 @@ mod tests {
                 0 => Edit::MakeVariableDefault(var(seed)),
                 _ => Edit::ResetVariable(var(seed)),
             },
+            44 => Edit::SetScene(crate::graph::Scene {
+                model: [None, Some("sphere".to_string()), Some(" \u{7}".to_string()), Some("x".repeat(100))][roll(seed, 4)].clone(),
+                height: [None, Some(odd(seed))][roll(seed, 2)],
+                repeat: [None, Some(odd(seed))][roll(seed, 2)],
+            }),
             0..=3 => Edit::AddNode { kind: NodeKind::ALL[roll(seed, NodeKind::ALL.len())], pos },
             24 => {
                 let output = roll(seed, 2) == 0;
@@ -872,7 +892,7 @@ mod tests {
             None => FILES[roll(seed, FILES.len())].to_string(),
         };
         match roll(seed, 12) {
-            0 => PackageEdit::AddGraph { name: name(seed), graph: Graph::default() },
+            0 => PackageEdit::AddGraph { name: name(seed), graph: Box::default() },
             1 => PackageEdit::RemoveGraph(graph(seed)),
             2 => PackageEdit::RenameGraph { id: graph(seed), name: name(seed) },
             3 => PackageEdit::DuplicateGraph(graph(seed)),
@@ -1208,6 +1228,29 @@ mod tests {
             read.normalize();
             assert_eq!(read, made, "{template:?}");
         }
+    }
+
+    /// How the 3D view shows a graph is the graph's: a drag of a field is one step of undo, a
+    /// change of the document (saved with it), held to what a view takes.
+    #[test]
+    fn the_scene_of_a_graph_is_a_step_of_undo() {
+        use crate::document::Document;
+        use crate::graph::Scene;
+        use std::time::{Duration, Instant};
+        let mut doc = Document::of_graph(Graph::default(), None);
+        let start = Instant::now();
+        for (i, height) in [0.05, 0.1, 0.2].into_iter().enumerate() {
+            let scene = Scene { model: Some("sphere".into()), height: Some(height), repeat: None };
+            doc.apply_at(Edit::SetScene(scene), start + Duration::from_millis(100 * i as u64)).unwrap();
+        }
+        assert_eq!(doc.graph().scene.height, Some(0.2));
+        assert!(doc.is_dirty(), "a change of what is saved");
+        assert!(doc.undo());
+        assert!(doc.graph().scene.is_empty(), "one step for the drag");
+        assert!(!doc.can_undo());
+        doc.apply(Edit::SetScene(Scene { model: Some(" \u{7}".into()), height: Some(5.0), repeat: Some(f32::NAN) })).unwrap();
+        assert_eq!(doc.graph().scene, Scene { model: None, height: Some(1.0), repeat: None }, "held to what a view takes");
+        assert!(!Edit::SetScene(Scene { model: None, height: Some(7.0), repeat: None }).apply(&mut doc.graph().clone()).unwrap().changed);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use iced::{Point, Subscription, Task, Vector, window};
+use iced::{Point, Subscription, Task, window};
 
 use brewed_texture_core::graph::{Graph, NodeId, SocketRef};
 use brewed_texture_core::{Edit, NodeKind, ParamValue};
@@ -187,9 +187,7 @@ impl App {
             "inputs" => {
                 self.ui.expanded_vars.insert("mortar".into());
                 self.ui.expanded_vars.insert("tint".into());
-                // The picker floats where it was opened from: the swatch of the tint value.
-                self.ui.cursor = Point::new(1840.0, 330.0);
-                self.ui.color_picker_at = self.ui.cursor + Vector::new(-120.0, 18.0);
+                // (The Color Editor in its window, the tint's swatch shown open.)
                 self.ui.color_picker = Some(ColorTarget::Variable("tint".into(), VarField::Value));
             }
             "transform" => {
@@ -357,7 +355,10 @@ impl App {
             other if other.starts_with("shape:") => {
                 let name = other["shape:".len()..].replace('-', " ");
                 match view::view3d::Shape::ALL.into_iter().find(|s| s.to_string().eq_ignore_ascii_case(&name)) {
-                    Some(shape) => self.ui.preview.view3d.shape = shape,
+                    Some(shape) => {
+                        let camera = self.ui.preview.view3d;
+                        return self.handle(Message::Preview(super::PreviewMessage::Camera(view::view3d::Camera { shape, ..camera })));
+                    }
                     None => log::warn!("no shape '{name}'"),
                 }
             }

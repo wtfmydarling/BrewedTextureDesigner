@@ -122,15 +122,32 @@ fn quads(base: u32, columns: u32, rows: u32, out: &mut Vec<u32>) {
 
 /// A grid of `n` x `n` quads from `f(u, v) -> (position, normal, tangent)`.
 fn grid(n: u32, uv_scale: [f32; 2], f: impl Fn(f32, f32) -> ([f32; 3], [f32; 3], [f32; 3]), out: &mut (Vec<Vertex>, Vec<u32>)) {
+    let at: Vec<f32> = (0..=n).map(|i| i as f32 / n as f32).collect();
+    grid_at(&at, uv_scale, f, out);
+}
+
+/// A grid of quads from `f(u, v)`, at the `u` and `v` of `at` (from 0 to 1, in order): where
+/// they are close together, the surface is finer, its texture laid on it as evenly as elsewhere
+/// (`u` and `v` are its coordinates, wherever they are taken).
+fn grid_at(at: &[f32], uv_scale: [f32; 2], f: impl Fn(f32, f32) -> ([f32; 3], [f32; 3], [f32; 3]), out: &mut (Vec<Vertex>, Vec<u32>)) {
     let base = out.0.len() as u32;
-    for j in 0..=n {
-        for i in 0..=n {
-            let (u, v) = (i as f32 / n as f32, j as f32 / n as f32);
+    for &v in at {
+        for &u in at {
             let (pos, normal, tangent) = f(u, v);
             out.0.push(Vertex { pos, normal, tangent: [tangent[0], tangent[1], tangent[2], 1.0], uv: [u * uv_scale[0], v * uv_scale[1]] });
         }
     }
+    let n = at.len() as u32 - 1;
     quads(base, n, n, &mut out.1);
+}
+
+/// From 0 to 1, `across` steps between bands of `band` at each end, and `along` steps in each
+/// band: what a face whose edges are rounded is sampled at, finer where it rounds.
+fn banded(band: f32, along: u32, across: u32) -> Vec<f32> {
+    let mut at: Vec<f32> = (0..along).map(|i| band * i as f32 / along as f32).collect();
+    at.extend((0..across).map(|i| band + (1.0 - 2.0 * band) * i as f32 / across as f32));
+    at.extend((0..=along).map(|i| 1.0 - band + band * i as f32 / along as f32));
+    at
 }
 
 /// A piece of the outline of a surface of revolution, in radius and height.
@@ -279,14 +296,15 @@ pub(super) fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
             // The surface of a box of half-size `H - R` grown by a ball of radius `R`:
             // every point of a face is pushed out from the nearest point of that box, which
             // leaves the middle of a face flat and rounds the edges and corners. Its edges are
-            // rounded as little as Substance Designer's are (a quarter of each face was round,
-            // too round), on a grid fine enough to round them smoothly (eight steps a quarter
-            // turn).
+            // rounded as little as Substance Designer's are, a sixteenth of its half-size (a
+            // quarter of each face was round, too round for texture design), on a grid finest
+            // where it rounds: sixteen steps a quarter turn, the flat part as fine as it was.
             const H: f32 = 0.8;
-            const R: f32 = 0.1;
+            const R: f32 = 0.05;
+            let at = banded(R / H / 2.0, 16, 112);
             for (n, a, b) in CUBE_FACES {
-                grid(
-                    128,
+                grid_at(
+                    &at,
                     [1.0, 1.0],
                     |u, v| {
                         let (s, t) = (u * 2.0 - 1.0, v * 2.0 - 1.0);

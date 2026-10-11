@@ -16,6 +16,8 @@ use crate::style;
 /// How wide the hue bar is, and how far from the square.
 const HUE_W: f32 = 18.0;
 const GAP: f32 = 8.0;
+/// How much wider than its square a color picker is: its hue bar, and the gap before it.
+pub const HUE_ROOM: f32 = GAP + HUE_W;
 /// How high the strip of a color field is.
 pub const STRIP_H: f32 = 20.0;
 
@@ -176,6 +178,15 @@ fn outline(renderer: &mut iced::Renderer, bounds: Rectangle, color: Color, width
     );
 }
 
+/// The frame of a field of colors at `bounds` (a line of the border's color, its corners rounded
+/// by `radius`), drawn under it; what is inside it, where its colors go: none goes past the frame
+/// (drawn over them, a frame of rounded corners left their square corners out, and a line of it
+/// lay over their edges).
+fn framed(renderer: &mut iced::Renderer, bounds: Rectangle, radius: f32) -> Rectangle {
+    quad(renderer, bounds, style::BORDER, radius);
+    Rectangle { x: bounds.x + 1.0, y: bounds.y + 1.0, width: (bounds.width - 2.0).max(0.0), height: (bounds.height - 2.0).max(0.0) }
+}
+
 /// Checkerboard behind transparent colors.
 pub fn checker(renderer: &mut iced::Renderer, bounds: Rectangle, cell: f32) {
     quad(renderer, bounds, style::gray(92), 0.0);
@@ -198,7 +209,8 @@ pub fn checker(renderer: &mut iced::Renderer, bounds: Rectangle, cell: f32) {
 }
 
 /// The hues across `r` (`vertical`: down it, from red at its top through magenta), each sixth
-/// a gradient of two.
+/// a gradient of two, inside `r` (each but the last a little into the next, drawn over it, so
+/// that no seam shows between them).
 fn hues(renderer: &mut iced::Renderer, r: Rectangle, vertical: bool) {
     let stops = [0.0, 1.0 / 6.0, 2.0 / 6.0, 3.0 / 6.0, 4.0 / 6.0, 5.0 / 6.0, 1.0];
     for i in 0..6 {
@@ -209,12 +221,13 @@ fn hues(renderer: &mut iced::Renderer, r: Rectangle, vertical: bool) {
         let g = Gradient::Linear(
             Linear::new(angle).add_stop(0.0, Color::from_rgb(c0[0], c0[1], c0[2])).add_stop(1.0, Color::from_rgb(c1[0], c1[1], c1[2])),
         );
+        let over = if i < 5 { 0.5 } else { 0.0 };
         let part = if vertical {
             let seg = r.height / 6.0;
-            Rectangle { y: r.y + i as f32 * seg, height: seg + 0.5, ..r }
+            Rectangle { y: r.y + i as f32 * seg, height: seg + over, ..r }
         } else {
             let seg = r.width / 6.0;
-            Rectangle { x: r.x + i as f32 * seg, width: seg + 0.5, ..r }
+            Rectangle { x: r.x + i as f32 * seg, width: seg + over, ..r }
         };
         quad(renderer, part, g, 0.0);
     }
@@ -325,24 +338,27 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for ColorPicke
         let pure = hsv_to_rgb([h, 1.0, 1.0]);
         let pure = Color::from_rgb(pure[0], pure[1], pure[2]);
 
-        // Saturation (left to right) and value (top to bottom).
+        // Saturation (left to right) and value (top to bottom), in its frame.
+        let inside = framed(renderer, a.sv, 3.0);
         let across = Gradient::Linear(Linear::new(Radians(PI / 2.0)).add_stop(0.0, Color::WHITE).add_stop(1.0, pure));
-        quad(renderer, a.sv, across, 3.0);
+        quad(renderer, inside, across, 2.0);
         let down = Gradient::Linear(
             Linear::new(Radians(PI)).add_stop(0.0, Color::from_rgba(0.0, 0.0, 0.0, 0.0)).add_stop(1.0, Color::BLACK),
         );
-        quad(renderer, a.sv, down, 3.0);
-        outline(renderer, a.sv, style::BORDER, 1.0, 3.0);
+        quad(renderer, inside, down, 2.0);
         let marker = Point::new(a.sv.x + s * a.sv.width, a.sv.y + (1.0 - v) * a.sv.height);
         let m = Rectangle { x: marker.x - 5.0, y: marker.y - 5.0, width: 10.0, height: 10.0 };
         outline(renderer, m, Color::BLACK, 1.0, 5.0);
         outline(renderer, Rectangle { x: m.x + 1.0, y: m.y + 1.0, width: 8.0, height: 8.0 }, Color::WHITE, 1.5, 4.0);
 
-        // The hue bar beside it.
-        hues(renderer, a.hue, true);
-        outline(renderer, a.hue, style::BORDER, 1.0, 2.0);
+        // The hue bar beside it, in its frame; the hue marked across it, as the square's color
+        // is: white, a dark line around it to be seen on any hue.
+        let inside = framed(renderer, a.hue, 2.0);
+        hues(renderer, inside, true);
         let hy = a.hue.y + (1.0 - h) * a.hue.height;
-        outline(renderer, Rectangle { x: a.hue.x - 2.0, y: hy - 3.0, width: HUE_W + 4.0, height: 6.0 }, Color::WHITE, 1.5, 2.0);
+        let m = Rectangle { x: a.hue.x - 3.0, y: hy - 4.0, width: HUE_W + 6.0, height: 8.0 };
+        outline(renderer, m, Color::BLACK, 1.0, 3.0);
+        outline(renderer, Rectangle { x: m.x + 1.0, y: m.y + 1.0, width: m.width - 2.0, height: m.height - 2.0 }, Color::WHITE, 1.5, 2.0);
     }
 }
 
@@ -357,16 +373,13 @@ impl<'a, Message: Clone + 'a> From<ColorPicker<'a, Message>> for Element<'a, Mes
 pub struct ColorStrip<'a, Message> {
     color: [f32; 4],
     gray: bool,
-    /// Down rather than across (the gray of the Color Editor, white at its top).
-    vertical: bool,
-    height: f32,
     on_change: Box<dyn Fn([f32; 4]) -> Message + 'a>,
     on_release: Option<Message>,
 }
 
 /// The strip of `color` (`gray`: of its level of gray): what is picked from it keeps the alpha.
 pub fn color_strip<'a, Message>(color: [f32; 4], gray: bool, on_change: impl Fn([f32; 4]) -> Message + 'a) -> ColorStrip<'a, Message> {
-    ColorStrip { color, gray, vertical: false, height: STRIP_H, on_change: Box::new(on_change), on_release: None }
+    ColorStrip { color, gray, on_change: Box::new(on_change), on_release: None }
 }
 
 impl<Message> ColorStrip<'_, Message> {
@@ -375,20 +388,12 @@ impl<Message> ColorStrip<'_, Message> {
         self
     }
 
-    /// Down, `height` pixels high (only a gray's).
-    pub fn vertical(mut self, height: f32) -> Self {
-        self.vertical = true;
-        self.height = height;
-        self
-    }
-
     fn color_at(&self, bounds: Rectangle, p: Point) -> [f32; 4] {
         let across = clamp01((p.x - bounds.x) / bounds.width.max(1.0));
         let down = clamp01((p.y - bounds.y) / bounds.height.max(1.0));
         let alpha = clamp01(self.color[3]);
         if self.gray {
-            let l = if self.vertical { 1.0 - down } else { across };
-            [l, l, l, alpha]
+            [across, across, across, alpha]
         } else {
             let [r, g, b] = hsv_to_rgb([across.min(0.9999), 1.0, 1.0 - down]);
             [r, g, b, alpha]
@@ -411,11 +416,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for ColorStrip
     }
 
     fn size(&self) -> Size<Length> {
-        if self.vertical {
-            Size::new(Length::Fixed(28.0), Length::Fixed(self.height))
-        } else {
-            Size::new(Length::Fill, Length::Fixed(self.height))
-        }
+        Size::new(Length::Fill, Length::Fixed(STRIP_H))
     }
 
     fn layout(&mut self, _tree: &mut Tree, _renderer: &iced::Renderer, limits: &layout::Limits) -> layout::Node {
@@ -486,25 +487,19 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for ColorStrip
     ) {
         let r = layout.bounds();
         if self.gray {
-            let (angle, from, to) = if self.vertical { (Radians(PI), Color::WHITE, Color::BLACK) } else { (Radians(PI / 2.0), Color::BLACK, Color::WHITE) };
-            quad(renderer, r, Gradient::Linear(Linear::new(angle).add_stop(0.0, from).add_stop(1.0, to)), 2.0);
-            outline(renderer, r, style::BORDER, 1.0, 2.0);
+            let inside = framed(renderer, r, 2.0);
+            quad(renderer, inside, Gradient::Linear(Linear::new(Radians(PI / 2.0)).add_stop(0.0, Color::BLACK).add_stop(1.0, Color::WHITE)), 1.0);
             // The level, marked: white on black, black on white.
             let l = luminance(self.color);
             let mark = if l > 0.5 { Color::BLACK } else { Color::WHITE };
-            let m = if self.vertical {
-                let y = r.y + (1.0 - l) * r.height;
-                Rectangle { x: r.x - 2.0, y: y - 2.0, width: r.width + 4.0, height: 4.0 }
-            } else {
-                let x = r.x + l * r.width;
-                Rectangle { x: x - 2.0, y: r.y - 2.0, width: 4.0, height: r.height + 4.0 }
-            };
+            let x = r.x + l * r.width;
+            let m = Rectangle { x: x - 2.0, y: r.y - 2.0, width: 4.0, height: r.height + 4.0 };
             outline(renderer, m, mark, 1.5, 1.0);
         } else {
-            hues(renderer, r, false);
+            let inside = framed(renderer, r, 2.0);
+            hues(renderer, inside, false);
             let down = Gradient::Linear(Linear::new(Radians(PI)).add_stop(0.0, Color::from_rgba(0.0, 0.0, 0.0, 0.0)).add_stop(1.0, Color::BLACK));
-            quad(renderer, r, down, 0.0);
-            outline(renderer, r, style::BORDER, 1.0, 2.0);
+            quad(renderer, inside, down, 0.0);
         }
     }
 }

@@ -332,8 +332,12 @@ pub struct ColorUnits {
 /// What the Color Editor's own controls do (its colors are set by [`Message::SetColor`]).
 #[derive(Clone, Debug)]
 pub enum ColorEditorMessage {
-    /// Its title bar pressed: it moves with the cursor until the button is let go.
-    Grab,
+    /// Its title bar pressed (where the program draws it): its window moves with the cursor. An
+    /// edge or a corner of it pressed: its window is sized.
+    Drag,
+    Resize(window::Direction),
+    /// Where its window was put and how large it was made, as it closes: it opens so again.
+    Placed(ColorEditorPlace),
     Units(ColorUnits),
     /// Each channel turned over, or the color made its gray: a step of its own each.
     Invert,
@@ -344,6 +348,15 @@ pub enum ColorEditorMessage {
     Pasted(Option<String>),
     /// Its hexadecimal typed: taken as soon as it says a color.
     Hex(String),
+}
+
+/// Where the Color Editor's window was, and how large: in the program's points (and on Windows,
+/// in the screens' pixels too, which every screen agrees on: see [`crate::tool_window`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColorEditorPlace {
+    pub at: Option<Point>,
+    pub size: Size,
+    pub pixels: Option<crate::tool_window::Place>,
 }
 
 /// The open menu of a choice picked by its pictures (see [`crate::view::choices`]).
@@ -443,15 +456,20 @@ pub struct Ui {
     pub lock_square: bool,
     pub status: Option<Status>,
     pub clipboard: Option<Clipboard>,
-    /// What the Color Editor edits, while it is open: a window of its own inside the program's,
-    /// open until it is closed (not by a click elsewhere: the model is turned with it open).
+    /// What the Color Editor edits, while it is open: in a window of its own (see
+    /// `App::color_window_follows`), open until it is closed (not by a click elsewhere: the model
+    /// is turned with it open).
     pub color_picker: Option<ColorTarget>,
-    /// Where its top left corner is: near where it was first opened, then where it was put.
-    pub color_picker_at: Point,
-    /// It was moved by its title bar: it opens there again.
-    pub color_editor_placed: bool,
-    /// Where its title bar was grabbed, from its corner, while it is being moved.
-    pub color_editor_grab: Option<Vector>,
+    /// The color of what it edits as it was when it was opened for it (or for that stop of a
+    /// gradient): what, which stop, the color. A click on it in the editor gives it back.
+    pub color_before: Option<(ColorTarget, Option<usize>, [f32; 4])>,
+    /// The color last given to what, as it was given: a level of gray keeps its gray only, the
+    /// editor shows the color (see `App::color_shown`).
+    pub color_given: Option<(ColorTarget, [f32; 4])>,
+    /// Where its window was put and how large it was made, when it last closed.
+    pub color_editor_place: Option<ColorEditorPlace>,
+    /// Its window, shown cloaked (on Windows, as the main window is): drawn, not yet on screen.
+    pub color_cloaked: Option<window::Id>,
     /// Its hexadecimal as typed, and the color it was typed for (a color set otherwise since is
     /// said anew).
     pub color_hex: Option<(String, [f32; 4])>,
@@ -613,6 +631,8 @@ pub struct App {
     pub ui: Ui,
     opts: StartupOptions,
     window: Option<window::Id>,
+    /// The Color Editor's window, while it is open (see [`App::color_window_follows`]).
+    color_window: Option<window::Id>,
     started: Instant,
     /// What the eyedropper needs to know about the app (its Wayland connection).
     host: eyedropper::Host,
@@ -939,11 +959,12 @@ pub enum Message {
     /// How fast the 3D view draws (it says so a few times a second while it draws).
     FrameRate(FrameRate),
     ToggleRealtime,
-    /// The main window was shown cloaked (see `crate::brand::cloak`).
+    /// A window was shown cloaked (see `crate::brand::cloak`): the main one, or the Color
+    /// Editor's.
     #[cfg(windows)]
     Cloaked(window::Id),
     /// A window drew a frame: the main window shows once it has one to show (or a second
-    /// after it was shown cloaked, whatever happens).
+    /// after it was shown cloaked, whatever happens), and so does the Color Editor's.
     FirstFrame(window::Id),
     /// Quitting: whether the window fills the screen, for the next session.
     Quitting(bool),
@@ -1077,6 +1098,37 @@ fn main_window_settings(workspace: Option<&Workspace>) -> window::Settings {
         // corners.
         #[cfg(windows)]
         platform_specific: window::settings::PlatformSpecific {
+            undecorated_shadow: true,
+            corner_preference: window::settings::platform::CornerPreference::Round,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// The Color Editor's window: where it was put and as large as it was made, else as it opens at
+/// first (on Windows, put near the pointer as it opens: see [`crate::tool_window`]); shown once
+/// it is kept with the main window (see `App::open_color_window`).
+pub(crate) fn color_editor_settings(place: Option<ColorEditorPlace>) -> window::Settings {
+    let size = place.map_or(view::editors::COLOR_EDITOR, |p| p.size);
+    let min = view::editors::COLOR_EDITOR_MIN;
+    window::Settings {
+        size: Size::new(size.width.max(min.width), size.height.max(min.height)),
+        position: match place.and_then(|p| p.at) {
+            Some(at) if !cfg!(windows) => window::Position::Specific(at),
+            _ => window::Position::Default,
+        },
+        min_size: Some(min),
+        visible: false,
+        resizable: true,
+        // Its own title bar, where the program draws it (see `OWN_TITLE_BAR`).
+        decorations: !OWN_TITLE_BAR,
+        // Closing it closes the editor (see `App::color_window_event`).
+        exit_on_close_request: false,
+        icon: crate::brand::window_icon(),
+        #[cfg(windows)]
+        platform_specific: window::settings::PlatformSpecific {
+            skip_taskbar: true,
             undecorated_shadow: true,
             corner_preference: window::settings::platform::CornerPreference::Round,
             ..Default::default()
@@ -1234,9 +1286,10 @@ impl App {
                 status: None,
                 clipboard: None,
                 color_picker: None,
-                color_picker_at: Point::ORIGIN,
-                color_editor_placed: false,
-                color_editor_grab: None,
+                color_before: None,
+                color_given: None,
+                color_editor_place: None,
+                color_cloaked: None,
                 color_hex: None,
                 color_units: ColorUnits {
                     float: opts.workspace.as_ref().and_then(|w| w.color_float).unwrap_or(false),
@@ -1275,6 +1328,7 @@ impl App {
             },
             opts: opts.clone(),
             window: None,
+            color_window: None,
             started: Instant::now(),
             host: eyedropper::Host::default(),
             library: library::Library::default(),
@@ -1353,6 +1407,12 @@ impl App {
     }
 
     pub fn title(&self, window: window::Id) -> String {
+        if Some(window) == self.color_window {
+            return match &self.ui.color_picker {
+                Some(target) => format!("Color Editor — {}", view::editors::target_name(self, target)),
+                None => "Color Editor".into(),
+            };
+        }
         if Some(window) != self.window {
             return format!("{} — pick from the screen", brewed_texture_core::APP_NAME);
         }
@@ -1451,13 +1511,14 @@ impl App {
         }
         // Until the main window shows: it does once it has drawn a frame, or a second after it
         // was shown cloaked whatever happens (should a system not draw a cloaked window).
-        if !self.ui.shown {
+        // So does the Color Editor's window.
+        if !self.ui.shown || self.ui.color_cloaked.is_some() {
             // (Raw: the others leave frames out.)
             subs.push(iced::event::listen_raw(|event, _, window| match event {
                 iced::Event::Window(window::Event::RedrawRequested(_)) => Some(Message::FirstFrame(window)),
                 _ => None,
             }));
-            if let Some(id) = self.ui.cloaked {
+            for id in [self.ui.cloaked.filter(|_| !self.ui.shown), self.ui.color_cloaked].into_iter().flatten() {
                 subs.push(iced::time::every(Duration::from_secs(1)).with(id).map(|(id, _)| Message::FirstFrame(id)));
             }
         }
@@ -1515,6 +1576,7 @@ impl App {
         self.flat = (Arc::new(flat.graph), flat_eval);
         self.owners = Arc::new(flat.owners);
         self.seen = self.laid_out_of();
+        self.sync_scene();
         self.eval_revision += 1;
         let graph = self.doc.graph();
         self.ui.selection.retain(|id| graph.contains(*id));
@@ -2267,6 +2329,7 @@ impl App {
         self.forget_what_is_gone();
         self.sync_expression();
         self.sync_description();
+        task = Task::batch([task, self.color_window_follows()]);
         // A file a package began to use is looked at now, not at the next look.
         if !self.res.looking && self.new_files() {
             return Task::batch([task, self.look_at_files()]);
@@ -2649,11 +2712,23 @@ impl App {
             }
             Message::ToggleRealtime => self.ui.realtime = !self.ui.realtime,
             #[cfg(windows)]
-            Message::Cloaked(id) => self.ui.cloaked = Some(id),
+            Message::Cloaked(id) => {
+                // (The Color Editor's window may be closed by then: it is neither.)
+                if Some(id) == self.window {
+                    self.ui.cloaked = Some(id);
+                } else if Some(id) == self.color_window {
+                    self.ui.color_cloaked = Some(id);
+                }
+            }
             Message::FirstFrame(id) => {
                 if Some(id) == self.window && !self.ui.shown {
                     self.ui.shown = true;
                     log::debug!("the main window shows, {:?} after the start", self.started.elapsed());
+                    #[cfg(windows)]
+                    return window::run(id, |window| crate::brand::cloak(window, false)).discard();
+                }
+                if self.ui.color_cloaked == Some(id) {
+                    self.ui.color_cloaked = None;
                     #[cfg(windows)]
                     return window::run(id, |window| crate::brand::cloak(window, false)).discard();
                 }
@@ -2719,22 +2794,14 @@ impl App {
             Message::Expression(node, action) => self.expression_action(node, action),
             Message::Description(id, action) => self.description_action(id, action),
             Message::ColorPicker(target) => {
-                // The editor opens near where it was asked for, the first time, so that nothing
-                // in the panels moves; then where it was put. Asked for something else while it
-                // is open, it edits that, where it is.
-                if target.is_some() && self.ui.color_picker.is_none() && !self.ui.color_editor_placed {
-                    self.ui.color_picker_at = self.color_editor_kept(self.ui.cursor + Vector::new(-120.0, 18.0));
-                }
+                // (Its window opens and closes with it: see `color_window_follows`.) Asked for
+                // something else while it is open, it edits that, in its window as it is; asked
+                // again for what it edits, it closes.
                 self.ui.color_picker = if self.ui.color_picker == target { None } else { target };
                 self.ui.color_hex = None;
-                self.ui.color_editor_grab = None;
                 self.doc.seal();
             }
-            Message::SetColor(target, color) => {
-                if let Some(edit) = self.color_edit(&target, color) {
-                    self.apply(edit);
-                }
-            }
+            Message::SetColor(target, color) => self.set_color(&target, color),
             Message::ColorEditor(message) => return self.color_editor_message(message),
             Message::GradientStop(node, key, index) => {
                 self.ui.gradient_stop.insert((node, key), index);
@@ -2924,6 +2991,17 @@ impl App {
 
     /// Keep the buffer of the description editor as the selected comment's description, as
     /// `sync_expression` does the expression's: replaced only when it changed from outside.
+    /// The model of the 3D view, its height and repeat, as the graph edited says them (as it
+    /// starts, what it does not say): after an edit, an undo, another graph opened.
+    pub(crate) fn sync_scene(&mut self) {
+        let scene = &self.doc.graph().scene;
+        let start = view::view3d::Camera::default();
+        let camera = &mut self.ui.preview.view3d;
+        camera.shape = scene.model.as_deref().and_then(view::view3d::Shape::from_id).unwrap_or(start.shape);
+        camera.displacement = scene.height.unwrap_or(start.displacement);
+        camera.tiling = scene.repeat.unwrap_or(start.tiling);
+    }
+
     fn sync_description(&mut self) {
         let Some(comment) = self.ui.selected_comment.and_then(|id| self.doc.graph().comment(id)) else {
             self.ui.description = None;
@@ -3139,6 +3217,9 @@ impl App {
 
     fn runtime_event(&mut self, event: iced::Event, status: iced::event::Status, id: window::Id) -> Task<Message> {
         use iced::Event as E;
+        if Some(id) == self.color_window {
+            return self.color_window_event(event, status);
+        }
         if Some(id) != self.window {
             // A picker window: Esc or closing it (Alt+F4) cancels the pick; its own canvas
             // handles the mouse.
@@ -3175,11 +3256,6 @@ impl App {
             E::Window(_) => {}
             E::Mouse(mouse::Event::CursorMoved { position }) => {
                 self.ui.cursor = position;
-                // The Color Editor moved by its title bar, kept in the window.
-                if let Some(grab) = self.ui.color_editor_grab {
-                    self.ui.color_picker_at = self.color_editor_kept(position - grab);
-                    self.ui.color_editor_placed = true;
-                }
                 if let Some((payload, start)) = &self.ui.press
                     && position.distance(*start) > 4.0
                 {
@@ -3191,7 +3267,6 @@ impl App {
                 // Drops on the graph are handled by the canvas (it knows its bounds).
                 self.ui.press = None;
                 self.ui.drag = None;
-                self.ui.color_editor_grab = None;
             }
             E::Mouse(_) => {}
             E::Keyboard(keyboard::Event::ModifiersChanged(m)) => self.ui.modifiers = m,
@@ -3567,6 +3642,19 @@ impl App {
     // ------------------------------------------------------------------ 2D / 3D view
 
     fn preview_message(&mut self, msg: PreviewMessage) -> Task<Message> {
+        // The model, its height and repeat are the graph's (a step of undo, saved with it); where
+        // the camera and the light are, the view's.
+        if let PreviewMessage::Camera(c) = &msg {
+            let shown = &self.ui.preview.view3d;
+            if (c.shape, c.displacement, c.tiling) != (shown.shape, shown.displacement, shown.tiling) {
+                let scene = brewed_texture_core::graph::Scene {
+                    model: Some(c.shape.id().to_string()),
+                    height: Some(c.displacement),
+                    repeat: Some(c.tiling),
+                };
+                self.apply(Edit::SetScene(scene));
+            }
+        }
         let p = &mut self.ui.preview;
         match msg {
             PreviewMessage::Channel(c) => p.channel = c,
@@ -3844,17 +3932,127 @@ impl App {
         }
     }
 
-    /// Put a color picked from the screen where the eyedropper was clicked. A screen has
-    /// no transparency: the target keeps its alpha.
-    /// Where the Color Editor is put to be at `at`: inside the window, under its title bar, as
-    /// it is drawn (kept so, it follows the cursor that moves it from the start).
-    fn color_editor_kept(&self, at: Point) -> Point {
-        let size = view::editors::COLOR_EDITOR;
-        let (w, margin) = (self.ui.window_size, crate::widget::placed::MARGIN);
-        let top = if OWN_TITLE_BAR { view::toolbar::MENU_BAR_H } else { margin };
-        Point::new(at.x.min(w.width - size.width - margin).max(margin), at.y.min(w.height - size.height - margin).max(top))
+    /// The Color Editor's window opens as the editor does, and closes with it, whatever opened or
+    /// closed it (a click, Esc, an undo that took away what it edits, another package opened);
+    /// what it edits keeps the color it had then, to be given back (see `Ui::color_before`).
+    fn color_window_follows(&mut self) -> Task<Message> {
+        self.color_before_follows();
+        match (self.ui.color_picker.is_some(), self.color_window) {
+            (true, None) => match self.window {
+                Some(main) => self.open_color_window(main),
+                None => Task::none(),
+            },
+            (false, Some(id)) => {
+                self.color_window = None;
+                self.ui.color_cloaked = None;
+                self.ui.color_given = None;
+                // Where it was put and how large, read before it closes: it opens so again.
+                let placed = window::size(id).then(move |size| {
+                    window::position(id).then(move |at| {
+                        window::run(id, crate::tool_window::place_of)
+                            .map(move |pixels| Message::ColorEditor(ColorEditorMessage::Placed(ColorEditorPlace { at, size, pixels })))
+                    })
+                });
+                placed.chain(window::close(id))
+            }
+            _ => Task::none(),
+        }
     }
 
+    /// The color of what the Color Editor edits, kept as it opens for it (or for another stop of
+    /// a gradient).
+    fn color_before_follows(&mut self) {
+        let Some(target) = self.ui.color_picker.clone() else {
+            self.ui.color_before = None;
+            return;
+        };
+        let stop = match &target {
+            ColorTarget::GradientStop(node, key) => self.ui.gradient_stop.get(&(*node, key.clone())).copied(),
+            _ => None,
+        };
+        if !self.ui.color_before.as_ref().is_some_and(|(of, at, _)| *of == target && *at == stop) {
+            self.ui.color_before = self.target_color(&target).map(|c| (target, stop, c));
+        }
+    }
+
+    /// The Color Editor's window, opened: kept with the main one (above it, out of the taskbar:
+    /// see [`crate::tool_window`]), where it was last put and as large as it was made (else near
+    /// the pointer, on Windows), shown once it has drawn (on Windows, as the main window is).
+    fn open_color_window(&mut self, main: window::Id) -> Task<Message> {
+        let place = self.ui.color_editor_place;
+        let (id, open) = window::open(color_editor_settings(place));
+        self.color_window = Some(id);
+        #[cfg(windows)]
+        let pixels = place.and_then(|p| p.pixels);
+        open.then(move |id| {
+            let own = window::run(main, crate::tool_window::owner_of)
+                .then(move |owner| window::run(id, move |window| crate::tool_window::own(window, owner)).discard());
+            #[cfg(windows)]
+            let show = window::run(id, crate::brand::use_embedded_icon)
+                .discard()
+                .chain(window::run(id, |window| crate::brand::cloak(window, true)).discard())
+                .chain(window::set_mode(id, window::Mode::Windowed))
+                .chain(window::run(id, move |window| crate::tool_window::put(window, pixels)).discard())
+                .chain(Task::done(Message::Cloaked(id)));
+            #[cfg(not(windows))]
+            let show = window::set_mode(id, window::Mode::Windowed);
+            own.chain(show).chain(crate::window_size::hold(id))
+        })
+    }
+
+    /// What comes to the Color Editor's window: closing it closes the editor; Esc does too, and
+    /// the keys that undo, redo and save do what they do in the main window (nothing else of the
+    /// main window's is done from it: a Delete there took nodes away from the graph); the rest
+    /// is its widgets'.
+    fn color_window_event(&mut self, event: iced::Event, status: iced::event::Status) -> Task<Message> {
+        use iced::Event as E;
+        match event {
+            E::Window(window::Event::CloseRequested) => self.ui.color_picker = None,
+            E::Window(window::Event::Closed) => {
+                self.color_window = None;
+                self.ui.color_picker = None;
+            }
+            E::Keyboard(keyboard::Event::ModifiersChanged(m)) => self.ui.modifiers = m,
+            E::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => {
+                if self.ui.screen_pick.is_some() {
+                    return self.pick_message(PickMessage::Cancel);
+                }
+                self.ui.color_picker = None;
+            }
+            E::Keyboard(keyboard::Event::KeyPressed { key, physical_key, modifiers, .. }) if self.ui.dialog.is_none() && self.ui.screen_pick.is_none() => {
+                let typing = status == iced::event::Status::Captured;
+                let command = Chord::of(&key, physical_key, modifiers).and_then(|chord| self.settings.shortcuts.command(chord, typing, false, false));
+                if let Some(command @ (Command::Undo | Command::Redo | Command::Save)) = command {
+                    return self.command(command);
+                }
+            }
+            _ => {}
+        }
+        Task::none()
+    }
+
+    /// The color the Color Editor shows for `target`: what it is, or for a level of gray, the color
+    /// it was last given whose gray it is (the editor picks colors as for any color; what is kept
+    /// of one is its gray).
+    pub fn color_shown(&self, target: &ColorTarget) -> Option<[f32; 4]> {
+        let c = self.target_color(target)?;
+        Some(match &self.ui.color_given {
+            Some((of, given)) if of == target && self.color_kept(target, *given).iter().zip(c).all(|(a, b)| (a - b).abs() < 1e-4) => *given,
+            _ => c,
+        })
+    }
+
+    /// Give `target` `color` (as it keeps it: see [`App::color_edit`]), as a step of undo with what
+    /// came just before it (a drag of a slider is one step).
+    fn set_color(&mut self, target: &ColorTarget, color: [f32; 4]) {
+        if let Some(edit) = self.color_edit(target, color) {
+            self.ui.color_given = Some((target.clone(), color.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 })));
+            self.apply(edit);
+        }
+    }
+
+    /// Put a color picked from the screen where the eyedropper was clicked. A screen has
+    /// no transparency: the target keeps its alpha.
     /// The color `target` is now (none: it is gone).
     pub fn target_color(&self, target: &ColorTarget) -> Option<[f32; 4]> {
         let graph = self.doc.graph();
@@ -3889,11 +4087,17 @@ impl App {
         }
     }
 
-    /// The edit that makes `target` `color`: its gray where it is a level of gray, its channels
-    /// from 0 to 1. None where it is gone.
-    fn color_edit(&self, target: &ColorTarget, color: [f32; 4]) -> Option<Edit> {
+    /// `color` as `target` keeps it: its channels from 0 to 1, and where it is a level of gray, its
+    /// gray.
+    fn color_kept(&self, target: &ColorTarget, color: [f32; 4]) -> [f32; 4] {
         let color = color.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 });
-        let color = if self.target_gray(target) { crate::widget::color::gray_of(color) } else { color };
+        if self.target_gray(target) { crate::widget::color::gray_of(color) } else { color }
+    }
+
+    /// The edit that makes `target` `color`, as it keeps it (see [`App::color_kept`]). None where
+    /// it is gone.
+    fn color_edit(&self, target: &ColorTarget, color: [f32; 4]) -> Option<Edit> {
+        let color = self.color_kept(target, color);
         let graph = self.doc.graph();
         match target {
             ColorTarget::Param(node, key) => {
@@ -3921,25 +4125,22 @@ impl App {
     /// What the Color Editor's own controls do.
     fn color_editor_message(&mut self, message: ColorEditorMessage) -> Task<Message> {
         let target = self.ui.color_picker.clone();
-        let current = target.as_ref().and_then(|t| self.target_color(t));
+        // (What it shows: of a level of gray, the color it was given.)
+        let current = target.as_ref().and_then(|t| self.color_shown(t));
         // A step of its own (a button pressed right after a drag of the same color is not
         // undone with it).
         let set = |app: &mut App, color: [f32; 4]| {
             let Some(target) = &target else { return };
-            if let Some(edit) = app.color_edit(target, color) {
-                app.doc.seal();
-                if app.apply(edit) {
-                    app.doc.seal();
-                }
-            }
+            app.doc.seal();
+            app.set_color(target, color);
+            app.doc.seal();
         };
         match message {
-            ColorEditorMessage::Grab => {
-                // (From where it is seen: a window made smaller since may have moved it.)
-                let at = self.color_editor_kept(self.ui.color_picker_at);
-                self.ui.color_picker_at = at;
-                self.ui.color_editor_grab = Some(self.ui.cursor - at);
+            ColorEditorMessage::Drag => return self.color_window.map_or_else(Task::none, window::drag),
+            ColorEditorMessage::Resize(direction) => {
+                return self.color_window.map_or_else(Task::none, |id| window::drag_resize(id, direction));
             }
+            ColorEditorMessage::Placed(place) => self.ui.color_editor_place = Some(place),
             ColorEditorMessage::Units(units) => self.ui.color_units = units,
             ColorEditorMessage::Invert => {
                 if let Some(c) = current {
@@ -3980,10 +4181,10 @@ impl App {
             }
             ColorEditorMessage::Hex(text) => {
                 let Some((target, c)) = target.zip(current) else { return Task::none() };
-                match crate::widget::color::parse_hex(&text, c[3]).and_then(|typed| self.color_edit(&target, typed).map(|e| (typed, e))) {
-                    Some((typed, edit)) => {
-                        self.apply(edit);
-                        let now = self.target_color(&target).unwrap_or(typed);
+                match crate::widget::color::parse_hex(&text, c[3]) {
+                    Some(typed) => {
+                        self.set_color(&target, typed);
+                        let now = self.color_shown(&target).unwrap_or(typed);
                         self.ui.color_hex = Some((text, now));
                     }
                     None => self.ui.color_hex = Some((text, c)),
@@ -3996,20 +4197,30 @@ impl App {
     fn apply_picked_color(&mut self, target: &ColorTarget, rgb: [f32; 4]) {
         // (With the alpha it had: the screen has none.)
         let alpha = self.target_color(target).map_or(1.0, |c| c[3]);
-        let edit = self.color_edit(target, [rgb[0], rgb[1], rgb[2], alpha]);
-        match edit {
-            Some(edit) => {
-                if self.apply(edit) {
-                    self.doc.seal();
-                }
-                self.set_status(format!("Picked {}", picker::hex(rgb)), false);
-            }
-            None => self.set_status("The color to set no longer exists", true),
+        if self.color_edit(target, rgb).is_none() {
+            self.set_status("The color to set no longer exists", true);
+            return;
         }
+        self.set_color(target, [rgb[0], rgb[1], rgb[2], alpha]);
+        self.doc.seal();
+        self.set_status(format!("Picked {}", picker::hex(rgb)), false);
     }
 
     pub fn view(&self, window: window::Id) -> iced::Element<'_, Message> {
-        if Some(window) == self.window { view::root(self) } else { view::picker::view(self, window) }
+        if Some(window) == self.window {
+            view::root(self)
+        } else if Some(window) == self.color_window {
+            view::editors::color_editor(self)
+        } else {
+            view::picker::view(self, window)
+        }
+    }
+
+    /// The Color Editor's window (see `App::color_window_follows`), for the tests and the
+    /// autopilot: what it shows is [`view::editors::color_editor`].
+    #[cfg(any(test, feature = "dev-tools"))]
+    pub fn color_window(&self) -> Option<window::Id> {
+        self.color_window
     }
 }
 

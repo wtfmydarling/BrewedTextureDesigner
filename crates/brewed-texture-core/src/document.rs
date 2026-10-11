@@ -314,7 +314,7 @@ mod tests {
         let mut doc = Document::of_graph(Graph::default(), None);
         let first = doc.current();
         let blur = doc.apply(Edit::AddNode { kind: NodeKind::BLUR, pos: [0.0, 0.0] }).unwrap().created[0];
-        let second = doc.apply_package(PackageEdit::AddGraph { name: "Bricks".into(), graph: Graph::default() }).unwrap().graph.unwrap();
+        let second = doc.apply_package(PackageEdit::AddGraph { name: "Bricks".into(), graph: Box::default() }).unwrap().graph.unwrap();
         // Editing another graph is not a change; the undo steps stay.
         let saved = doc.revision();
         doc.mark_saved("p.brewtex".into());

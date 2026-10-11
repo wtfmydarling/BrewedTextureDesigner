@@ -231,6 +231,18 @@ pub fn popup(_: &Theme) -> container::Style {
     }
 }
 
+/// A window of the program's besides the main one (the Color Editor's): of the color of a popup,
+/// with a line around it where the program draws its frame (elsewhere the system does).
+pub fn tool_window(_: &Theme) -> container::Style {
+    let line = if crate::app::OWN_TITLE_BAR { 1.0 } else { 0.0 };
+    container::Style {
+        background: Some(gray(36).into()),
+        border: Border { color: BORDER_LIGHT, width: line, radius: 0.0.into() },
+        text_color: Some(TEXT),
+        ..Default::default()
+    }
+}
+
 pub fn scrim(_: &Theme) -> container::Style {
     container::Style { background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.45).into()), ..Default::default() }
 }

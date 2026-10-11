@@ -846,6 +846,36 @@ impl GraphAttributes {
     }
 }
 
+/// How the 3D view shows the graph: on which model (by its id, `sphere`, `matball` …), how far
+/// apart its height map moves the surface, how many times its texture repeats across the
+/// model. What it does not say, the view has as it starts. Kept with the graph: a change of it
+/// is a step of undo.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Scene {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<f32>,
+}
+
+impl Scene {
+    pub fn is_empty(&self) -> bool {
+        *self == Scene::default()
+    }
+
+    /// Held to what a view takes: a model's id of a few plain characters, a height from 0 to 1,
+    /// a repeat from a quarter to 32 (what a file says past them is held to them).
+    pub fn sanitized(self) -> Scene {
+        Scene {
+            model: self.model.map(|m| m.chars().filter(|c| !c.is_control()).take(64).collect::<String>().trim().to_string()).filter(|m| !m.is_empty()),
+            height: self.height.filter(|h| h.is_finite()).map(|h| h.clamp(0.0, 1.0)),
+            repeat: self.repeat.filter(|r| r.is_finite()).map(|r| r.clamp(0.25, 32.0)),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Graph {
     pub resolution: [u32; 2],
@@ -866,6 +896,10 @@ pub struct Graph {
     /// What it says of itself, for the Library.
     #[serde(default, skip_serializing_if = "GraphAttributes::is_empty")]
     pub attributes: GraphAttributes,
+    /// How the 3D view shows it (a file that says it otherwise than a scene says it is read as
+    /// saying nothing of it: not a graph refused over a view).
+    #[serde(default, skip_serializing_if = "Scene::is_empty", deserialize_with = "crate::project::lenient")]
+    pub scene: Scene,
     /// What other programs keep with the graph (see [`crate::project`]): kept as it is.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extras: serde_json::Map<String, serde_json::Value>,
@@ -882,6 +916,7 @@ impl Default for Graph {
             precision: Precision::Half,
             next_id: 1,
             attributes: GraphAttributes::default(),
+            scene: Scene::default(),
             extras: serde_json::Map::new(),
         }
     }
@@ -1383,6 +1418,7 @@ impl Graph {
 
     /// Repair a graph that was loaded from disk.
     pub fn normalize(&mut self) {
+        self.scene = std::mem::take(&mut self.scene).sanitized();
         let mut seen = HashSet::new();
         // A graph used as a node says which graph; one that does not is nothing.
         self.nodes.retain(|n| seen.insert(n.id) && (n.kind != NodeKind::GRAPH_INSTANCE || n.instance.is_some()));

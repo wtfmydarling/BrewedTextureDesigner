@@ -136,6 +136,15 @@ impl Harness {
         }
     }
 
+    /// Look at another of the program's windows, `size` large: what `view` shows (the Color
+    /// Editor's window, for one). The widgets of the one looked at before forget what they kept.
+    fn look_at(&mut self, view: View, size: Size) {
+        self.view = view;
+        self.size = size;
+        self.cache = Cache::default();
+        self.cursor = mouse::Cursor::Unavailable;
+    }
+
     /// What the window's event subscription reports.
     fn window_event(&mut self, window: window::Id, event: iced::Event) {
         self.send(Message::Runtime(event, iced::event::Status::Ignored, window));
@@ -854,7 +863,6 @@ fn closing_with_unsaved_changes_asks_first() {
 #[test]
 fn a_stop_of_a_gradient_takes_a_color_from_the_picker() {
     let mut w = harness!(view::root, 1680.0, 1000.0);
-    let window = w.app.main_window().expect("the main window");
     let map = w.app.graph().nodes_of(NodeKind::GRADIENT_MAP).next().expect("the demo colors by a gradient").id;
     w.send(Message::Graph(GraphMessage::Select { node: map, mode: SelectMode::Replace }));
     w.send(Message::GradientStop(map, "gradient".into(), 1));
@@ -863,16 +871,15 @@ fn a_stop_of_a_gradient_takes_a_color_from_the_picker() {
     let target = ColorTarget::GradientStop(map, "gradient".into());
     let area = iced::Rectangle::new(Point::new(w.size.width - 400.0, 0.0), Size::new(400.0, w.size.height));
     let square = panels::find_click(&mut w, area, |m| matches!(m, Message::ColorPicker(Some(t)) if *t == target)).expect("the square of the stop");
-    // (The window tells the app where the cursor is: the editor opens near it.)
-    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: square }));
     click(&mut w, square);
     assert_eq!(w.app.ui.color_picker, Some(target));
-    w.snapshot("gradient_stop_picker");
+    let editor = w.app.color_window().expect("the editor's window");
+    assert!(w.app.title(editor).ends_with("stop 2"), "which says the stop it edits: {}", w.app.title(editor));
     // Dragging in the editor's square colors the stop.
+    w.look_at(Box::new(view::editors::color_editor), crate::view::editors::COLOR_EDITOR);
+    w.snapshot("gradient_stop_picker");
     let before = stop(&w);
-    let title = texts_where(&mut w, |t| t.starts_with("Color Editor")).first().map(|(_, r)| *r).expect("the editor's title");
-    assert!(texts_where(&mut w, |t| t.contains("stop 2")).len() == 1, "which says the stop it edits");
-    let square = Point::new(title.x + 100.0, title.y + 110.0);
+    let square = Point::new(110.0, 160.0);
     drag(&mut w, square, square + iced::Vector::new(-40.0, 20.0));
     assert_ne!(stop(&w), before);
     assert_eq!(gradient_of(&w.app, map).stops.len(), 4, "no stop added or taken away");
@@ -1487,92 +1494,168 @@ fn a_value_is_dragged_as_far_as_the_pointer_can_be_pushed() {
     assert!(brewed_texture_core::NodeKind::TRANSFORM_2D.def().param("rotation").expect("rotation").limits.is_none());
 }
 
-/// The Color Editor is a window of its own inside the program's: it opens near where it was
-/// asked for, kept in the window, over everything, and nothing under it moves; its square sets
-/// the color; a click and a drag elsewhere (the model turned in the 3D view) leave it open; it
-/// moves by its title bar, following the cursor, and opens again where it was put; its × closes
-/// it, as Esc does. (A popup, it closed at a click elsewhere: the color was to be found again
-/// for each look at the model.)
+/// The Color Editor is a window of its own, the system's, kept with the main one (see
+/// `crate::tool_window`): it opens as the editor is asked for and closes with it, whatever closes
+/// it (its ×, Esc, the system's close, what it edits taken away); its square sets the color; a
+/// click and a drag in the main window (the model turned in the 3D view) leave it open; its title
+/// bar moves it and its edges size it, where the program draws them (the system does, asked by
+/// them); it opens again where it was put, as large as it was made; its title says what it edits.
+/// The keys that undo and redo do there what they do in the main window, and nothing else of the
+/// main window's is done from it. (Drawn inside the main window, it could not be put elsewhere
+/// nor sized, and the color was to be found again for each look at the model.)
 #[test]
-fn the_color_editor_is_a_window_that_stays_open() {
+fn the_color_editor_is_a_window_of_its_own() {
+    use crate::app::{ColorEditorMessage, ColorEditorPlace};
+    use crate::view::editors::{COLOR_EDITOR, COLOR_EDITOR_MIN};
     let mut w = harness!(view::root, 1680.0, 1000.0);
     let window = w.app.main_window().expect("the main window");
     // A node of its own: the demo's Uniform Color takes its color from an input socket.
     w.send(Message::Edit(Edit::AddNode { kind: NodeKind::UNIFORM_COLOR, pos: [0.0, 0.0] }));
     let uniform = w.app.ui.selection.iter().next().copied().expect("the new node");
+    w.send(Message::Seal);
     let color = |w: &Harness| match w.app.graph().node(uniform).and_then(|n| n.value("color")) {
         Some(ParamValue::Color(c)) => *c,
         _ => panic!("no color"),
     };
     w.send(Message::Graph(GraphMessage::Select { node: uniform, mode: SelectMode::Replace }));
     w.input(&[iced::Event::Window(window::Event::RedrawRequested(std::time::Instant::now()))]);
+    let nodes = w.app.graph().nodes.len();
 
-    // Opened from the swatch: it appears near the cursor, kept in the window.
+    // Asked for, its window opens, saying what it edits; the main window draws nothing of it.
     let target = ColorTarget::Param(uniform, "color".into());
-    let at = Point::new(1500.0, 400.0);
-    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: at }));
     w.send(Message::ColorPicker(Some(target.clone())));
-    w.input(&[]);
-    assert_eq!(w.app.ui.color_picker, Some(target.clone()));
-    let title = |w: &mut Harness| texts_where(w, |t| t.starts_with("Color Editor")).first().map(|(_, r)| *r).expect("its title");
-    let t = title(&mut w);
-    assert!(t.x + crate::view::editors::COLOR_EDITOR.width - 10.0 <= w.size.width, "in the window: {t:?}");
-    assert!((t.x - 4.0 - w.app.ui.color_picker_at.x).abs() < 6.0, "where it is said to be: {t:?}, {:?}", w.app.ui.color_picker_at);
+    let editor = w.app.color_window().expect("its window");
+    assert_ne!(editor, window);
+    assert_eq!(w.app.title(editor), "Color Editor — Uniform Color · Color");
+    assert!(texts_where(&mut w, |t| t.starts_with("Color Editor")).is_empty(), "nothing of it in the main window");
+    // A click and a drag in the main window (the views, as the model is turned) leave it open.
+    drag(&mut w, Point::new(500.0, 900.0), Point::new(560.0, 880.0));
+    assert_eq!((w.app.ui.color_picker.clone(), w.app.color_window()), (Some(target.clone()), Some(editor)), "open, in the same window");
 
-    // Its square, under its title, sets the color: it is there, over the panels.
+    // In its window: its square sets the color.
+    w.look_at(Box::new(view::editors::color_editor), COLOR_EDITOR);
     let before = color(&w);
-    let square = Point::new(t.x + 60.0, t.y + 110.0);
+    let square = Point::new(110.0, 160.0);
     drag(&mut w, square, square + iced::Vector::new(-40.0, 20.0));
     assert_ne!(color(&w), before, "the square is not under the cursor");
-
-    // A click and a drag elsewhere (the views, as the model is turned) leave it open.
+    w.send(Message::Seal);
+    // Ctrl+Z typed in it undoes; Delete there takes nothing away from the graph.
     let changed = color(&w);
-    drag(&mut w, Point::new(500.0, 900.0), Point::new(560.0, 880.0));
-    assert_eq!(w.app.ui.color_picker, Some(target.clone()), "a click elsewhere leaves it open");
-    assert_eq!(color(&w), changed);
+    let typed = |w: &mut Harness, key: Key, physical: keyboard::key::Code, modifiers: keyboard::Modifiers| {
+        let event = key_event(key, keyboard::key::Physical::Code(physical), modifiers, true);
+        w.send(Message::Runtime(event, iced::event::Status::Ignored, editor));
+    };
+    typed(&mut w, Key::Character("z".into()), keyboard::key::Code::KeyZ, keyboard::Modifiers::CTRL);
+    assert_eq!(color(&w), before, "undone");
+    typed(&mut w, Key::Character("y".into()), keyboard::key::Code::KeyY, keyboard::Modifiers::CTRL);
+    assert_eq!(color(&w), changed, "redone");
+    typed(&mut w, Key::Named(keyboard::key::Named::Delete), keyboard::key::Code::Delete, keyboard::Modifiers::default());
+    assert_eq!(w.app.graph().nodes.len(), nodes, "the selected node is still there");
+    // Where the program draws it, its title bar moves the window, its corner sizes it.
+    if crate::app::OWN_TITLE_BAR {
+        let bar = iced::Rectangle::new(Point::ORIGIN, Size::new(COLOR_EDITOR.width - 60.0, 28.0));
+        assert!(panels::find_click(&mut w, bar, |m| matches!(m, Message::ColorEditor(ColorEditorMessage::Drag))).is_some(), "its title bar");
+        w.hover(Point::new(COLOR_EDITOR.width - 2.0, COLOR_EDITOR.height - 2.0));
+        let pressed = w.produced(&[iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))]);
+        assert!(
+            pressed.iter().any(|m| matches!(m, Message::ColorEditor(ColorEditorMessage::Resize(window::Direction::SouthEast)))),
+            "its corner: {pressed:?}"
+        );
+        w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    }
+    // Its × closes it (the system's close does, where the system draws the title bar).
+    if crate::app::OWN_TITLE_BAR {
+        let bar = iced::Rectangle::new(Point::ORIGIN, Size::new(COLOR_EDITOR.width, 28.0));
+        let close = panels::find_click(&mut w, bar, |m| matches!(m, Message::ColorPicker(None))).expect("its ×");
+        click(&mut w, close);
+    } else {
+        w.window_event(editor, iced::Event::Window(window::Event::CloseRequested));
+    }
+    assert_eq!((w.app.ui.color_picker.clone(), w.app.color_window()), (None, None));
+    assert_eq!(color(&w), changed, "closing it changes no color");
 
-    // Moved by its title bar, it follows the cursor (the window says where the cursor is).
-    let grab = Point::new(t.x + 120.0, t.y + t.height / 2.0);
-    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: grab }));
-    w.hover(grab);
-    w.mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
-    assert!(w.app.ui.color_editor_grab.is_some(), "grabbed by its title bar");
-    let to = grab - iced::Vector::new(300.0, 100.0);
-    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: to }));
-    w.window_event(window, iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)));
-    w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
-    let moved = title(&mut w);
-    assert!((moved.x - (t.x - 300.0)).abs() < 1.0 && (moved.y - (t.y - 100.0)).abs() < 1.0, "{t:?} to {moved:?}");
-    assert_eq!(color(&w), changed, "moving it changes no color");
-    // As high as it is said to be, at the most (it is kept in the window by that).
-    let lowest = texts_where(&mut w, |t| t == "Float").into_iter().filter(|(_, r)| r.x < moved.x + 300.0).map(|(_, r)| r.y + r.height).fold(0.0, f32::max);
-    let bottom = w.app.ui.color_picker_at.y + crate::view::editors::COLOR_EDITOR.height;
-    assert!(lowest > moved.y && lowest + 14.0 <= bottom, "its last button ends at {lowest}, it is said to end at {bottom}");
+    // Where it was put and how large it was made, it opens again (the system says, as it closes).
+    let place = ColorEditorPlace { at: Some(Point::new(40.0, 50.0)), size: Size::new(700.0, 420.0), pixels: None };
+    w.send(Message::ColorEditor(ColorEditorMessage::Placed(place)));
+    let settings = crate::app::color_editor_settings(w.app.ui.color_editor_place);
+    assert_eq!(settings.size, place.size);
+    if !cfg!(windows) {
+        assert!(matches!(settings.position, window::Position::Specific(p) if p == Point::new(40.0, 50.0)), "{:?}", settings.position);
+    }
+    assert!(settings.resizable && settings.min_size == Some(COLOR_EDITOR_MIN) && settings.decorations != crate::app::OWN_TITLE_BAR);
+    // (Never smaller than it may be.)
+    let tiny = ColorEditorPlace { size: Size::new(10.0, 10.0), ..place };
+    assert_eq!(crate::app::color_editor_settings(Some(tiny)).size, COLOR_EDITOR_MIN);
 
-    // Its × closes it; opened again, it is where it was put.
-    let area = iced::Rectangle::new(Point::new(moved.x, moved.y - 8.0), Size::new(crate::view::editors::COLOR_EDITOR.width, 28.0));
-    let close = panels::find_click(&mut w, area, |m| matches!(m, Message::ColorPicker(None))).expect("its ×");
-    click(&mut w, close);
-    assert_eq!(w.app.ui.color_picker, None);
-    w.window_event(window, iced::Event::Mouse(mouse::Event::CursorMoved { position: at }));
+    // Esc typed in it closes it, and so does the system's close.
     w.send(Message::ColorPicker(Some(target.clone())));
-    let again = title(&mut w);
-    assert!((again.x - moved.x).abs() < 1.0 && (again.y - moved.y).abs() < 1.0, "where it was put: {again:?}, {moved:?}");
-    // Esc closes it too.
-    w.send(Message::Runtime(
-        iced::Event::Keyboard(keyboard::Event::KeyPressed {
-            key: Key::Named(keyboard::key::Named::Escape),
-            modified_key: Key::Named(keyboard::key::Named::Escape),
-            physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Escape),
-            location: keyboard::Location::Standard,
-            modifiers: keyboard::Modifiers::default(),
-            text: None,
-            repeat: false,
-        }),
-        iced::event::Status::Ignored,
-        window,
-    ));
-    assert_eq!(w.app.ui.color_picker, None);
+    let editor = w.app.color_window().expect("open again");
+    w.send(Message::Runtime(escape(), iced::event::Status::Ignored, editor));
+    assert_eq!((w.app.ui.color_picker.clone(), w.app.color_window()), (None, None), "Esc closes it");
+    w.send(Message::ColorPicker(Some(target.clone())));
+    let editor = w.app.color_window().expect("open again");
+    w.window_event(editor, iced::Event::Window(window::Event::CloseRequested));
+    assert_eq!((w.app.ui.color_picker.clone(), w.app.color_window()), (None, None), "closed by the system");
+    // What it edits taken away (an undo of the node), it closes.
+    w.send(Message::ColorPicker(Some(target.clone())));
+    assert!(w.app.color_window().is_some());
+    for _ in 0..8 {
+        if w.app.graph().node(uniform).is_some() {
+            w.send(Message::Undo);
+        }
+    }
+    assert_eq!((w.app.ui.color_picker.clone(), w.app.color_window()), (None, None), "closed with its node");
+}
+
+/// The Color Editor of a level of gray is the editor of colors (Substance Designer's has no
+/// other): a color is picked as any is, and what is kept of it is its gray; the editor shows the
+/// color picked (its square and sliders where they were put), the field of the parameter its
+/// gray. The color as it was when the editor opened is under the one it is now, and a click on
+/// it gives it back.
+#[test]
+fn a_gray_is_picked_in_the_editor_of_colors_and_the_color_before_comes_back() {
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    w.send(Message::Edit(Edit::AddNode { kind: NodeKind::UNIFORM_COLOR, pos: [0.0, 0.0] }));
+    let uniform = w.app.ui.selection.iter().next().copied().expect("the new node");
+    w.send(Message::Edit(Edit::SetParam { node: uniform, key: "output".into(), value: ParamValue::Enum(1) }));
+    w.send(Message::Seal);
+    let color = |w: &Harness| match w.app.graph().node(uniform).and_then(|n| n.value("color")) {
+        Some(ParamValue::Color(c)) => *c,
+        _ => panic!("no color"),
+    };
+    let target = ColorTarget::Param(uniform, "color".into());
+    let was = color(&w);
+    w.send(Message::ColorPicker(Some(target.clone())));
+    w.look_at(Box::new(view::editors::color_editor), crate::view::editors::COLOR_EDITOR);
+    // The same editor as of a color: its square, its hue bar, To Gray, the channels of colors.
+    for said in ["Pick", "Invert", "To Gray", "Copy", "Paste", "Float"] {
+        assert_eq!(texts(&mut w, said).len(), 1, "{said}");
+    }
+    assert!(texts(&mut w, "HSV").is_empty(), "every channel shown, none to switch to");
+    // A red: kept as its gray, shown as the red it is.
+    w.send(Message::SetColor(target.clone(), [1.0, 0.0, 0.0, 1.0]));
+    w.send(Message::Seal);
+    let gray = color(&w);
+    assert!(gray[0] == gray[1] && gray[1] == gray[2] && (gray[0] - 0.2126).abs() < 1e-4, "the gray of red: {gray:?}");
+    assert_eq!(w.app.color_shown(&target), Some([1.0, 0.0, 0.0, 1.0]), "the editor shows the red");
+    w.snapshot("color_editor_gray");
+    // Changed otherwise (an undo), it shows what it is.
+    w.send(Message::Undo);
+    assert_eq!(w.app.color_shown(&target), Some(was));
+    w.send(Message::Redo);
+    // The color before, under the one now: a click gives it back, a step of its own.
+    let below = panels::find_click(&mut w, iced::Rectangle::new(Point::ORIGIN, crate::view::editors::COLOR_EDITOR), |m| {
+        matches!(m, Message::Step(inner) if matches!(&**inner, Message::SetColor(_, c) if *c == was))
+    })
+    .expect("the color it was");
+    click(&mut w, below);
+    assert_eq!(color(&w), was, "given back");
+    w.send(Message::Undo);
+    assert_eq!(color(&w), gray, "a step of its own");
+    // Opened again, what it was is what it is then.
+    w.send(Message::ColorPicker(None));
+    w.send(Message::ColorPicker(Some(target.clone())));
+    assert_eq!(w.app.ui.color_before.as_ref().map(|(.., c)| *c), Some(gray));
 }
 
 /// Panning the graph keeps the point that was grabbed under the mouse, however fast the
@@ -2106,10 +2189,11 @@ fn stays_inside(message: &Message) -> bool {
     }
 }
 
-/// One event, as the window gives it: to the widgets first, then, with whether they used it,
-/// to the app's event subscription (which only listens to some). The messages the widgets
-/// make go to the app, but not those that would reach outside the test.
-fn feed(w: &mut Harness, event: iced::Event) {
+/// One event, as the window `window` gives it (the main one, else the Color Editor's): to the
+/// widgets first, then, with whether they used it, to the app's event subscription (which only
+/// listens to some). The messages the widgets make go to the app, but not those that would reach
+/// outside the test.
+fn feed(w: &mut Harness, event: iced::Event, window: Option<window::Id>) {
     use iced::Event as E;
     if let E::Mouse(mouse::Event::CursorMoved { position }) = event {
         w.cursor = mouse::Cursor::Available(position);
@@ -2129,7 +2213,7 @@ fn feed(w: &mut Harness, event: iced::Event) {
             | E::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::ButtonReleased(_))
             | E::Window(window::Event::Resized(_) | window::Event::FileDropped(_))
     );
-    if listened && let Some(window) = w.app.main_window() {
+    if listened && let Some(window) = window.or(w.app.main_window()) {
         w.send(Message::Runtime(event, status, window));
     }
 }
@@ -2352,8 +2436,9 @@ fn broken(app: &App) -> Option<String> {
 
 /// A monkey at the window: `steps` random moves, clicks, drags, wheel turns, keys and
 /// shortcuts, typing, window sizes and dropped files, over the whole interface as it is laid
-/// out, on the demo; every few steps a frame is drawn. It stops at the first panic or broken
-/// state, and says what it did last.
+/// out, on the demo; every few steps a frame is drawn. While the Color Editor is open, it goes
+/// to its window now and then, and back. It stops at the first panic or broken state, and says
+/// what it did last.
 fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
     use keyboard::key::{Code, Named, Physical};
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -2384,6 +2469,8 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
     let broken_file = files.join("broken.png");
     std::fs::write(&broken_file, b"not a picture").expect("a broken file");
     let graph_file = files.join("graph.brewtex");
+    // At the Color Editor's window (its own size), or at the main one (`main` large).
+    let (mut at_editor, mut main) = (false, w.size);
     let start = std::time::Instant::now();
     let letters = "abcdefghijklmnopqrstuvwxyz0123456789 .,-+*/()=";
     let shortcut_keys: [(char, Code); 9] = [
@@ -2415,6 +2502,11 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
         Named::F1,
     ];
     for step in 0..steps {
+        // (Its window closed, by whatever closed it: back at the main one.)
+        if at_editor && w.app.color_window().is_none() {
+            at_editor = false;
+            w.look_at(Box::new(view::root), main);
+        }
         let size = w.size;
         let mut events: Vec<iced::Event> = Vec::new();
         let mut direct: Vec<Message> = Vec::new();
@@ -2524,6 +2616,9 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
                 let new = Size::new(dice.float(1000.0, 2560.0).round(), dice.float(640.0, 1440.0).round());
                 what = format!("window {new:?}");
                 w.size = new;
+                if !at_editor {
+                    main = new;
+                }
                 events.push(iced::Event::Window(window::Event::Resized(new)));
             }
             970..=979 => {
@@ -2574,7 +2669,7 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
                 let key = w.app.doc_key;
                 let graphs: Vec<brewed_texture_core::GraphId> = w.app.doc.package().graphs.iter().map(|g| g.id).collect();
                 let graph = graphs[dice.below(graphs.len() as u64) as usize];
-                let message = match dice.below(11) {
+                let message = match dice.below(12) {
                     0 => Message::Undo,
                     1 => Message::Redo,
                     2 => Message::Proceed(PendingAction::LoadDemo),
@@ -2590,6 +2685,21 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
                         payload: DragPayload::Graph { key, graph, name: "Graph".into() },
                         graph_pos: [dice.float(-400.0, 400.0), dice.float(-400.0, 400.0)],
                     }),
+                    // The Color Editor, of a color of the graph (its window then gone to now
+                    // and then: see above).
+                    10 => {
+                        let colors: Vec<ColorTarget> = w
+                            .app
+                            .graph()
+                            .nodes
+                            .iter()
+                            .flat_map(|n| n.params.iter().filter(|p| matches!(p.value, ParamValue::Color(_))).map(|p| ColorTarget::Param(n.id, p.key.clone())))
+                            .collect();
+                        match colors.len() {
+                            0 => Message::Seal,
+                            n => Message::ColorPicker(Some(colors[dice.below(n as u64) as usize].clone())),
+                        }
+                    }
                     _ => {
                         open(&mut w, &mut dice);
                         w.app.ui.home = None;
@@ -2598,6 +2708,17 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
                 };
                 what = format!("{message:?}");
                 direct.push(message);
+            }
+            990..=993 if w.app.color_window().is_some() => {
+                at_editor = !at_editor;
+                if at_editor {
+                    what = "to the Color Editor's window".into();
+                    main = w.size;
+                    w.look_at(Box::new(view::editors::color_editor), view::editors::COLOR_EDITOR);
+                } else {
+                    what = "to the main window".into();
+                    w.look_at(Box::new(view::root), main);
+                }
             }
             _ => {
                 what = "a frame".into();
@@ -2611,8 +2732,9 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
             log.pop_front();
         }
         let result = catch_unwind(AssertUnwindSafe(|| {
+            let window = if at_editor { w.app.color_window() } else { w.app.main_window() };
             for e in events {
-                feed(&mut w, e);
+                feed(&mut w, e, window);
             }
             for m in direct {
                 w.send(m);
@@ -2647,7 +2769,6 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
                     || ui.add_menu.is_some()
                     || ui.dialog.is_some()
                     || ui.choice_menu.is_some()
-                    || ui.color_picker.is_some()
                     || ui.preview.lighting.menu
                     || ui.drag.is_some();
                 let over = if floating { Vec::new() } else { text_fits::overlapping(&mut w) };

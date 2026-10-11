@@ -526,7 +526,7 @@ pub enum PackageEdit {
     /// A new graph, named `name` or after it.
     AddGraph {
         name: String,
-        graph: Graph,
+        graph: Box<Graph>,
     },
     RemoveGraph(GraphId),
     RenameGraph {
@@ -607,7 +607,7 @@ impl PackageEdit {
         let changed = PackageResult { changed: true, ..Default::default() };
         Ok(match self {
             PackageEdit::AddGraph { name, graph } => {
-                let id = package.add_graph(&name, graph);
+                let id = package.add_graph(&name, *graph);
                 package.sync_resources();
                 PackageResult { graph: Some(id), ..changed }
             }
@@ -2563,7 +2563,7 @@ mod tests {
         assert!(package.missing().iter().any(|m| m.path == "/fonts/a.ttf"));
         // Graphs of a package: names of their own, at least one.
         let first = package.first();
-        let second = PackageEdit::AddGraph { name: "Main".into(), graph: Graph::default() }
+        let second = PackageEdit::AddGraph { name: "Main".into(), graph: Box::default() }
             .apply(&mut package)
             .unwrap()
             .graph
