@@ -14,7 +14,7 @@ struct U {
     view_proj: mat4x4<f32>,
     eye: vec4<f32>,
     light: vec4<f32>,
-    params: vec4<f32>,      // displacement, texture repeat, exposure (a factor), _
+    params: vec4<f32>,      // displacement, texture repeat, exposure (a factor), the model's vertices to a unit of its texture
     flags: vec4<u32>,       // _, sRGB target, _, lit by an environment image
     turn: vec4<f32>,        // cosine and sine of how far the environment image is turned
     levels: vec4<f32>,      // the level of the image behind the model, the top level of the glossy light, _, _
@@ -55,6 +55,8 @@ struct VIn {
     @location(1) normal: vec3<f32>,
     @location(2) tangent: vec4<f32>,
     @location(3) uv: vec2<f32>,
+    // Where the height that moves the vertex is read (models.rs: `weld`).
+    @location(4) height_uv: vec2<f32>,
 };
 
 struct VOut {
@@ -95,20 +97,28 @@ fn slot_grad(s: u32, uv: vec2<f32>, gx: vec2<f32>, gy: vec2<f32>) -> vec4<f32> {
     }
 }
 
+// The level of a map `across` pixels wide at which a pixel is as large as the model's vertices
+// are far apart on it: where the height that moves the vertices is read. Read sharp, each
+// vertex took whatever pixel it fell on, and a step of the height (the edge of a brick) came
+// out as teeth along it.
+fn vertex_level(across: u32) -> f32 {
+    return max(log2(f32(across) * u.params.y / max(u.params.w, 1.0)), 0.0);
+}
+
 fn slot_level(s: u32, uv: vec2<f32>) -> vec4<f32> {
     switch s {
-        case 0u: { return textureSampleLevel(m0, samp, uv, 0.0); }
-        case 1u: { return textureSampleLevel(m1, samp, uv, 0.0); }
-        case 2u: { return textureSampleLevel(m2, samp, uv, 0.0); }
-        case 3u: { return textureSampleLevel(m3, samp, uv, 0.0); }
-        case 4u: { return textureSampleLevel(m4, samp, uv, 0.0); }
-        case 5u: { return textureSampleLevel(m5, samp, uv, 0.0); }
-        case 6u: { return textureSampleLevel(m6, samp, uv, 0.0); }
-        case 7u: { return textureSampleLevel(m7, samp, uv, 0.0); }
-        case 8u: { return textureSampleLevel(m8, samp, uv, 0.0); }
-        case 9u: { return textureSampleLevel(m9, samp, uv, 0.0); }
-        case 10u: { return textureSampleLevel(m10, samp, uv, 0.0); }
-        default: { return textureSampleLevel(extra, samp, uv, i32(s - SLOTS), 0.0); }
+        case 0u: { return textureSampleLevel(m0, samp, uv, vertex_level(textureDimensions(m0).x)); }
+        case 1u: { return textureSampleLevel(m1, samp, uv, vertex_level(textureDimensions(m1).x)); }
+        case 2u: { return textureSampleLevel(m2, samp, uv, vertex_level(textureDimensions(m2).x)); }
+        case 3u: { return textureSampleLevel(m3, samp, uv, vertex_level(textureDimensions(m3).x)); }
+        case 4u: { return textureSampleLevel(m4, samp, uv, vertex_level(textureDimensions(m4).x)); }
+        case 5u: { return textureSampleLevel(m5, samp, uv, vertex_level(textureDimensions(m5).x)); }
+        case 6u: { return textureSampleLevel(m6, samp, uv, vertex_level(textureDimensions(m6).x)); }
+        case 7u: { return textureSampleLevel(m7, samp, uv, vertex_level(textureDimensions(m7).x)); }
+        case 8u: { return textureSampleLevel(m8, samp, uv, vertex_level(textureDimensions(m8).x)); }
+        case 9u: { return textureSampleLevel(m9, samp, uv, vertex_level(textureDimensions(m9).x)); }
+        case 10u: { return textureSampleLevel(m10, samp, uv, vertex_level(textureDimensions(m10).x)); }
+        default: { return textureSampleLevel(extra, samp, uv, i32(s - SLOTS), vertex_level(textureDimensions(extra).x)); }
     }
 }
 
@@ -166,7 +176,9 @@ fn vs(v: VIn) -> VOut {
         if ((e & 31u) == 31u) {
             h = textureLoad(values, vec2<i32>(i32(IN_HEIGHT), 0), 0).r;
         } else {
-            h = widen(slot_level(e & 31u, uv), (e & 32u) != 0u).r;
+            // (Where the vertex is one with those it is joined to: the pieces of the model
+            // hold together.)
+            h = widen(slot_level(e & 31u, v.height_uv * u.params.y), (e & 32u) != 0u).r;
         }
         // As in Substance Designer: middle gray (128) leaves the surface where it is, white
         // moves it out and black in, as far apart as the view says (it only moved out, from

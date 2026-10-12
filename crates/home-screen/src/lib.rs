@@ -18,7 +18,7 @@ mod style;
 
 use std::time::SystemTime;
 
-use iced::widget::{Row, button, column, container, image, row, rule, scrollable, space, text, tooltip};
+use iced::widget::{Row, button, column, container, image, row, rule, space, text, tooltip};
 use iced::{Alignment, ContentFit, Element, Length, Padding};
 
 pub use glyph::{Glyph, glyph};
@@ -321,15 +321,11 @@ pub fn view<'a>(content: Content<'a>, state: State, style: Style) -> Element<'a,
         Page::Home => home(&content, state, style),
         Page::Learn => learn(&content, style),
     };
-    // The bar of the page beside the page, never over it: its room is taken from the page while
-    // there is something to scroll (as every box of the program that scrolls has it; this screen
-    // knows nothing of the program, and says it for itself).
-    let bar = scrollable::Scrollbar::new().width(8).scroller_width(8).spacing(2);
-    let page = scrollable(container(page).padding(Padding { top: 30.0, right: 30.0, bottom: 34.0, left: 40.0 }).width(Length::Fill))
-        .direction(scrollable::Direction::Vertical(bar))
+    // (The box of what scrolls of the set: its bar beside the page, never over it.)
+    let page = scroll_box::scroll_box(container(page).padding(Padding { top: 30.0, right: 30.0, bottom: 34.0, left: 40.0 }).width(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(style.scrollable());
+        .style(scroll_box::look(style.page, style.dim));
     row![
         sidebar(&content, state, style),
         rule::vertical(1).style(style.rule()),

@@ -44,6 +44,9 @@ pub struct DevOptions {
 #[derive(Default)]
 pub struct Dev {
     screenshot_requested: bool,
+    /// The frames of the window drawn since all a screenshot waits for arrived (none: it has
+    /// not yet).
+    drawn: Option<u32>,
     /// The export of `--export` was asked for.
     exported: bool,
     /// The autopilot, when the app drives itself.
@@ -56,7 +59,7 @@ impl Dev {
             let pilot = crate::autopilot::Autopilot::new(flight);
             pilot.map_err(|e| log::error!("the autopilot cannot start: {e}")).ok()
         });
-        Dev { screenshot_requested: false, exported: false, pilot }
+        Dev { screenshot_requested: false, drawn: None, exported: false, pilot }
     }
 }
 
@@ -104,6 +107,18 @@ impl App {
         if self.dev.pilot.as_ref().is_some_and(|p| !p.is_done()) {
             subs.push(iced::time::every(Duration::from_millis(16)).map(|_| Message::Autopilot));
         }
+        // The frames of the window, while a screenshot waits for one of what arrived last.
+        if self.dev.drawn.is_some() && !self.dev.screenshot_requested {
+            subs.push(window::frames().map(|_| Message::Drawn));
+        }
+    }
+
+    /// A frame of the window is drawn (see `maybe_screenshot`).
+    pub(super) fn drawn(&mut self) -> Task<Message> {
+        if let Some(frames) = &mut self.dev.drawn {
+            *frames += 1;
+        }
+        self.maybe_screenshot()
     }
 
     /// The autopilot's turn: what it does now, as the interface does it; once it has done
@@ -357,7 +372,7 @@ impl App {
                 match view::view3d::Shape::ALL.into_iter().find(|s| s.to_string().eq_ignore_ascii_case(&name)) {
                     Some(shape) => {
                         let camera = self.ui.preview.view3d;
-                        return self.handle(Message::Preview(super::PreviewMessage::Camera(view::view3d::Camera { shape, ..camera })));
+                        return self.handle(Message::Preview(super::PreviewMessage::Camera(camera.with_shape(shape))));
                     }
                     None => log::warn!("no shape '{name}'"),
                 }
@@ -400,8 +415,11 @@ impl App {
                     n.def().param(m.key).is_none_or(|pd| !pd.pictured) || self.res.choices.contains_key(&(n.kind.id(), m.key))
                 })
             });
+        // (A machine that draws without a GPU — a virtual one — is waited for as long as
+        // BREWED_SCREENSHOT_WAIT says, in seconds.)
+        let patience = Duration::from_secs(std::env::var("BREWED_SCREENSHOT_WAIT").ok().and_then(|s| s.parse().ok()).unwrap_or(30));
         if !settled || self.started.elapsed() < Duration::from_secs(3) {
-            if self.started.elapsed() > Duration::from_secs(30) {
+            if self.started.elapsed() > patience {
                 log::error!("screenshot: gave up waiting for the engine");
                 return iced::exit();
             }
@@ -423,6 +441,14 @@ impl App {
                 return iced::exit();
             }
         }
+        if self.opts.dev.picture.is_none() && !self.shown_for_a_screenshot() {
+            // (A window that is not drawn — hidden, its screen locked or dark — is waited for
+            // no longer than the engine is: the screenshot is then of what it showed last.)
+            if self.started.elapsed() < patience + Duration::from_secs(10) {
+                return Task::none();
+            }
+            log::warn!("screenshot: the window is not being drawn (hidden, or its screen locked?): this is what it showed last");
+        }
         self.dev.screenshot_requested = true;
         if let Some(path) = self.opts.dev.picture.clone() {
             let picture = self.gpu.clone().and_then(|gpu| {
@@ -440,6 +466,21 @@ impl App {
         }
         let Some(id) = self.window else { return Task::none() };
         window::screenshot(id).map(Message::Screenshot)
+    }
+
+    /// Whether the window shows what a screenshot is of: a screenshot is of the frame drawn
+    /// last, which is of before what arrived last (on a machine that draws a frame in seconds —
+    /// one without a GPU — of long before: the nodes without their pictures, the model
+    /// without its maps). Two frames are waited for since all had arrived: the first is being
+    /// drawn as it is told of.
+    fn shown_for_a_screenshot(&mut self) -> bool {
+        match self.dev.drawn {
+            Some(frames) => frames >= 2,
+            None => {
+                self.dev.drawn = Some(0);
+                false
+            }
+        }
     }
 
     pub(super) fn save_screenshot(&mut self, shot: window::Screenshot) -> Task<Message> {

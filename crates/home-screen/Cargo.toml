@@ -8,3 +8,4 @@ license.workspace = true
 
 [dependencies]
 iced.workspace = true
+scroll-box.workspace = true

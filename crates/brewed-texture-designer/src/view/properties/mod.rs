@@ -32,9 +32,23 @@ use crate::widget::{TOGGLE_W, expose_toggle, socket_icon};
 const LABEL_W: f32 = 118.0;
 const LABEL_MIN: f32 = 60.0;
 
+/// The margins of the panel, left and right of its rows (its bar has room of its own beside
+/// them: see `crate::widget::scroll`), and the gap between the parts of a row.
+const MARGIN_LEFT: f32 = 10.0;
+const MARGIN_RIGHT: f32 = 6.0;
+const GAP: f32 = 6.0;
+
+/// The room of a row's name and its editor together in a panel `width` wide: what the panel's
+/// margins, the toggle of the row's socket and the gaps between the three leave, the room of
+/// the panel's bar counted out — whether the bar shows or not, so that nothing is cut short
+/// when it comes.
+pub(crate) fn row_room(width: f32) -> f32 {
+    width - MARGIN_LEFT - MARGIN_RIGHT - TOGGLE_W - 2.0 * GAP - crate::widget::scroll::ROOM
+}
+
 /// How wide the names of the rows are in a panel `width` wide.
 pub(crate) fn label_width(width: f32) -> f32 {
-    ((width - 50.0) * 0.42).clamp(LABEL_MIN, LABEL_W)
+    (row_room(width) * 0.44).clamp(LABEL_MIN, LABEL_W)
 }
 
 /// An enum entry for pick lists.
@@ -78,8 +92,7 @@ fn body(app: &App, label_w: f32) -> Element<'_, Message> {
     };
     // Whatever it shows scrolls in a short panel (a comment's and several nodes' were cut at its
     // bottom, their fields and buttons out of reach).
-    // (Its bar has its own room, see `scroll_box`: the margin on the right was kept for it.)
-    scroll_box(container(content).padding(iced::Padding { top: 0.0, right: 6.0, bottom: 16.0, left: 10.0 })).height(Length::Fill).into()
+    scroll_box(container(content).padding(iced::Padding { top: 0.0, right: MARGIN_RIGHT, bottom: 16.0, left: MARGIN_LEFT })).height(Length::Fill).into()
 }
 
 /// Id of the text field of a comment (for focusing it from the graph).
@@ -546,16 +559,7 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value
                 .height(Length::Shrink)
                 .into()
             }
-            None => row![
-                socket_icon(DataType::Image, false, 12.0, style::WARNING),
-                text(format!("not connected · uses {}", graph_picture(node, pd.key, slot_value, app.doc.package()).0))
-                    .size(style::SMALL)
-                    .color(style::WARNING)
-                    .wrapping(text::Wrapping::None),
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center)
-            .into(),
+            None => not_connected(DataType::Image, graph_picture(node, pd.key, slot_value, app.doc.package()).0),
         };
         return container(says).padding([4, 6]).width(Length::Fill).clip(true).style(style::field_box).into();
     }
@@ -594,21 +598,31 @@ fn locked_editor<'a>(app: &'a App, node: &'a Node, pd: &ParamDef<'a>, slot_value
                 ParamValue::Enum(i) => pd.enum_options().get(*i as usize).copied().unwrap_or("?").to_string(),
                 other => other.as_value().map_or_else(String::new, |x| x.display()),
             };
-            container(
-                row![
-                    socket_icon(ty, false, 12.0, style::WARNING),
-                    // (In a narrow field, on two lines.)
-                    text(format!("not connected · uses {stored}")).size(style::SMALL).color(style::WARNING),
-                ]
-                .spacing(6)
-                .align_y(Alignment::Center),
-            )
-            .padding([4, 6])
-            .width(Length::Fill)
-            .style(style::field_box)
-            .into()
+            container(not_connected(ty, stored)).padding([4, 6]).width(Length::Fill).clip(true).style(style::field_box).into()
         }
     }
+}
+
+/// What a field says of an input nothing is connected to: that, and what it uses instead
+/// (`uses`). One line, whatever the field's width: the words give way before the value does
+/// ("uses 0.5", then the value alone: the hollow socket in the color of a warning says the
+/// rest), and the tip says all of it. (Wrapped, a pair of numbers stood four lines high in the
+/// narrowest panel; cut at the field's edge, the value was what went.)
+fn not_connected<'a>(ty: DataType, uses: String) -> Element<'a, Message> {
+    let whole = format!("not connected · uses {uses}");
+    iced::widget::responsive(move |room| {
+        // (Beside the socket.)
+        let (font, room) = (style::ui_font(), room.width - 12.0 - 6.0);
+        let fits = |said: &String| crate::view::text_width_in(said, style::SMALL, font) <= room;
+        let shown = [whole.clone(), format!("uses {uses}"), uses.clone()].into_iter().find(fits).unwrap_or_else(|| crate::view::cut(&uses, style::SMALL, font, room));
+        let short = shown != whole;
+        let line = row![socket_icon(ty, false, 12.0, style::WARNING), text(shown).size(style::SMALL).color(style::WARNING).wrapping(text::Wrapping::None)]
+            .spacing(6)
+            .align_y(Alignment::Center);
+        if short { tip(line, whole.clone(), tooltip::Position::Top) } else { line.into() }
+    })
+    .height(Length::Shrink)
+    .into()
 }
 
 /// What the picture of an image input of the graph a node uses is, in a few words, and the
@@ -698,7 +712,7 @@ Changed — middle-click the row to put {} back", pd.tooltip, shown(&pd, &defaul
     // The editor fills the row, so the expose toggles line up whatever the editor's own width
     // (a toggler, for instance, is narrow).
     let editor = container(editor).width(Length::Fill);
-    let mut col = column![row![label, editor, toggle].spacing(6).align_y(Alignment::Center)].spacing(6);
+    let mut col = column![row![label, editor, toggle].spacing(GAP).align_y(Alignment::Center)].spacing(6);
 
     // A gradient is wide enough to need the room under the row.
     if !exposed && let ParamValue::Gradient(g) = &slot.value {
@@ -708,7 +722,7 @@ Changed — middle-click the row to put {} back", pd.tooltip, shown(&pd, &defaul
     // Color Editor. Under the field, as wide as it: of the parameter, not of a row of their own.
     if !exposed && let ParamValue::Color(c) = &slot.value {
         let target = ColorTarget::Param(node.id, pd.key.to_string());
-        col = col.push(crate::view::editors::color_channels(app, target, *c, node.param_gray(&pd), label_w + 6.0, TOGGLE_W + 6.0));
+        col = col.push(crate::view::editors::color_channels(app, target, *c, node.param_gray(&pd), label_w + GAP, TOGGLE_W + GAP));
     }
     // So is a curve, whose square is under the row.
     if let ParamValue::Curve(c) = &slot.value {

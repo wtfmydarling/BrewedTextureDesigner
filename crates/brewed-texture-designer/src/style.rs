@@ -600,26 +600,8 @@ pub fn toggler(_: &Theme, status: toggler_w::Status) -> toggler_w::Style {
     }
 }
 
-pub fn scrollable(_: &Theme, status: scrollable_w::Status) -> scrollable_w::Style {
-    let hovered = matches!(status, scrollable_w::Status::Hovered { .. } | scrollable_w::Status::Dragged { .. });
-    let rail = scrollable_w::Rail {
-        background: None,
-        border: border::rounded(3),
-        scroller: scrollable_w::Scroller {
-            background: if hovered { gray(92) } else { gray(64) }.into(),
-            border: border::rounded(3),
-        },
-    };
-    scrollable_w::Style {
-        container: container::Style::default(),
-        vertical_rail: rail,
-        horizontal_rail: rail,
-        gap: None,
-        auto_scroll: scrollable_w::AutoScroll {
-            background: alpha(PANEL, 0.9).into(),
-            border: border::rounded(u32::MAX).width(1).color(TEXT_DIM),
-            shadow: Shadow::default(),
-            icon: TEXT_DIM,
-        },
-    }
+/// What a box of what scrolls looks like (see `crate::widget::scroll`): the set's, on this
+/// program's panels.
+pub fn scrollable(theme: &Theme, status: scrollable_w::Status) -> scrollable_w::Style {
+    scroll_box::look(PANEL, TEXT_DIM)(theme, status)
 }

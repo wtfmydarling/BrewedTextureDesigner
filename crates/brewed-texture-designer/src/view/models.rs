@@ -103,6 +103,68 @@ pub(super) struct Vertex {
     normal: [f32; 3],
     tangent: [f32; 4],
     uv: [f32; 2],
+    /// Where the height that moves it is read: its own place in the texture, or that of the
+    /// vertex it is one with (see [`weld`]).
+    height_uv: [f32; 2],
+}
+
+/// The vertices of a model that are at the same place and face the same way are one where the
+/// height moves them: each reads the height where the first of them does. A model is laid out
+/// in pieces — the faces of a cube, the ends of a surface that closes on itself, the rows that
+/// meet at a pole, the islands a modeler cut it into — whose vertices at the joins have each
+/// their own place in the texture: moved each by its own height, the pieces came apart (cracks
+/// along the edges of the cube wherever two faces did not show the same of the texture, a star
+/// at the poles of the sphere).
+fn weld(vertices: &mut [Vertex]) {
+    use std::collections::HashMap;
+    // Where a vertex is, to a fifth of a thousandth of the model, and which way it faces, to a
+    // few degrees. (On two grids, the second half a cell off: two vertices nearer than half a
+    // cell are in one cell of one of them.)
+    const CELL: f32 = 2e-4;
+    let key = |v: &Vertex, off: f32| {
+        let p = v.pos.map(|c| (c / CELL + off).floor() as i32);
+        let n = v.normal.map(|c| (c * 8.0).round() as i32);
+        [p[0], p[1], p[2], n[0], n[1], n[2]]
+    };
+    let mut firsts: [HashMap<[i32; 6], u32>; 2] = [HashMap::with_capacity(vertices.len()), HashMap::with_capacity(vertices.len())];
+    for i in 0..vertices.len() {
+        let mut one = None;
+        for (first, off) in firsts.iter_mut().zip([0.0, 0.5]) {
+            match first.entry(key(&vertices[i], off)) {
+                std::collections::hash_map::Entry::Occupied(found) => one = one.or(Some(*found.get())),
+                std::collections::hash_map::Entry::Vacant(free) => drop(free.insert(i as u32)),
+            }
+        }
+        if let Some(first) = one {
+            vertices[i].height_uv = vertices[first as usize].height_uv;
+        }
+    }
+}
+
+/// How finely a model is laid over its texture: how many of its vertices a unit of the texture
+/// has across it (by the middle one of the sides of its triangles). The height that moves the
+/// vertices is read as blurred as they are far apart (see the shader's `vertex_level`): read
+/// sharp, each vertex took whatever pixel it fell on, and a step of the height — the edge of a
+/// brick — came out as teeth along it.
+pub(super) fn density(vertices: &[Vertex], indices: &[u32]) -> f32 {
+    let mut sides: Vec<f32> = indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|t| {
+            [(0, 1), (1, 2), (2, 0)].map(|(a, b)| {
+                let (p, q) = (vertices[t[a] as usize].uv, vertices[t[b] as usize].uv);
+                (p[0] - q[0]).hypot(p[1] - q[1])
+            })
+        })
+        .filter(|side| *side > 1e-7)
+        .collect();
+    if sides.is_empty() {
+        return 1.0;
+    }
+    let middle = sides.len() / 2;
+    let (_, side, _) = sides.select_nth_unstable_by(middle, f32::total_cmp);
+    1.0 / *side
 }
 
 /// The two triangles of each quad of a grid of `columns` × `rows` quads whose vertices start at
@@ -120,25 +182,64 @@ fn quads(base: u32, columns: u32, rows: u32, out: &mut Vec<u32>) {
     }
 }
 
-/// A grid of `n` x `n` quads from `f(u, v) -> (position, normal, tangent)`.
-fn grid(n: u32, uv_scale: [f32; 2], f: impl Fn(f32, f32) -> ([f32; 3], [f32; 3], [f32; 3]), out: &mut (Vec<Vertex>, Vec<u32>)) {
-    let at: Vec<f32> = (0..=n).map(|i| i as f32 / n as f32).collect();
-    grid_at(&at, uv_scale, f, out);
+/// A grid of `columns` x `rows` quads from `f(u, v) -> (position, normal, tangent)`: as many
+/// each way as leave its quads about square in the texture (the height is read as blurred as
+/// the vertices are far apart the coarser way: see [`density`]).
+fn grid(columns: u32, rows: u32, uv_scale: [f32; 2], f: impl Fn(f32, f32) -> ([f32; 3], [f32; 3], [f32; 3]), out: &mut (Vec<Vertex>, Vec<u32>)) {
+    let even = |n: u32| -> Vec<f32> { (0..=n).map(|i| i as f32 / n as f32).collect() };
+    grid_at(&even(columns), &even(rows), uv_scale, f, out);
 }
 
-/// A grid of quads from `f(u, v)`, at the `u` and `v` of `at` (from 0 to 1, in order): where
-/// they are close together, the surface is finer, its texture laid on it as evenly as elsewhere
-/// (`u` and `v` are its coordinates, wherever they are taken).
-fn grid_at(at: &[f32], uv_scale: [f32; 2], f: impl Fn(f32, f32) -> ([f32; 3], [f32; 3], [f32; 3]), out: &mut (Vec<Vertex>, Vec<u32>)) {
+/// A grid of quads from `f(u, v)`, at the `u` of `across` and the `v` of `down` (each from 0 to
+/// 1, in order): where they are close together, the surface is finer, its texture laid on it as
+/// evenly as elsewhere (`u` and `v` are its coordinates, wherever they are taken).
+fn grid_at(
+    across: &[f32],
+    down: &[f32],
+    uv_scale: [f32; 2],
+    f: impl Fn(f32, f32) -> ([f32; 3], [f32; 3], [f32; 3]),
+    out: &mut (Vec<Vertex>, Vec<u32>),
+) {
     let base = out.0.len() as u32;
-    for &v in at {
-        for &u in at {
+    for &v in down {
+        for &u in across {
             let (pos, normal, tangent) = f(u, v);
-            out.0.push(Vertex { pos, normal, tangent: [tangent[0], tangent[1], tangent[2], 1.0], uv: [u * uv_scale[0], v * uv_scale[1]] });
+            let uv = [u * uv_scale[0], v * uv_scale[1]];
+            out.0.push(Vertex { pos, normal, tangent: [tangent[0], tangent[1], tangent[2], 1.0], uv, height_uv: uv });
         }
     }
-    let n = at.len() as u32 - 1;
-    quads(base, n, n, &mut out.1);
+    quads(base, across.len() as u32 - 1, down.len() as u32 - 1, &mut out.1);
+}
+
+/// A box of half-size `half` whose edges are rounded by `radius`: the surface of a box smaller
+/// by `radius` grown by a ball of it. Every point of a face is pushed out from the nearest point
+/// of that box, which leaves the middle of a face flat and rounds the edges and corners; the
+/// grid has `across` steps over the flat of a face and `round` over each rounded end, finest
+/// where it rounds. Two faces meet along the middle of an edge facing the same way (halfway
+/// between them), so that what a height makes of them holds together there (see [`weld`]).
+fn rounded_box(half: f32, radius: f32, across: u32, round: u32, out: &mut (Vec<Vertex>, Vec<u32>)) {
+    let (h, r) = (half, radius);
+    let at = banded(r / h / 2.0, round, across);
+    for (n, a, b) in CUBE_FACES {
+        grid_at(
+            &at,
+            &at,
+            [1.0, 1.0],
+            |u, v| {
+                let (s, t) = (u * 2.0 - 1.0, v * 2.0 - 1.0);
+                let q = [(n[0] + a[0] * s + b[0] * t) * h, (n[1] + a[1] * s + b[1] * t) * h, (n[2] + a[2] * s + b[2] * t) * h];
+                let core = q.map(|c| c.clamp(-(h - r), h - r));
+                let out = [q[0] - core[0], q[1] - core[1], q[2] - core[2]];
+                let normal = normalize(out);
+                let p = [core[0] + normal[0] * r, core[1] + normal[1] * r, core[2] + normal[2] * r];
+                // The face's own u axis, along the surface: it turns with the edges.
+                let along = dot(a, normal);
+                let tangent = normalize([a[0] - normal[0] * along, a[1] - normal[1] * along, a[2] - normal[2] * along]);
+                (p, normal, tangent)
+            },
+            out,
+        );
+    }
 }
 
 /// From 0 to 1, `across` steps between bands of `band` at each end, and `along` steps in each
@@ -193,14 +294,18 @@ impl Piece {
 /// A surface turned around the y axis, its outline drawn in `pieces` from the top of the axis
 /// down: `u` goes round `repeats` times, `v` along the outline, once every `size` of its length
 /// (square where the circumference is `repeats * size`). The rows are spread by length, so the
-/// surface is as fine all over. Where two pieces meet at an angle, it has an edge.
+/// surface is as fine all over. (Pieces meet facing the same way — an edge is an arc, however
+/// small: where two met at an angle, each side of the edge moved its own way with the height,
+/// and the surface opened along it.)
 fn lathe(pieces: &[Piece], rows: u32, around: u32, repeats: f32, size: f32, out: &mut (Vec<Vertex>, Vec<u32>)) {
     use std::f32::consts::TAU;
     let total: f32 = pieces.iter().map(|p| p.length()).sum();
     let mut along = 0.0;
     for piece in pieces {
         let length = piece.length();
-        let n = ((length / total * rows as f32).ceil() as u32).max(1);
+        // (An arc has rows enough to turn in, however short it is.)
+        let least = if matches!(piece, Piece::Arc { .. }) { 4 } else { 1 };
+        let n = ((length / total * rows as f32).ceil() as u32).max(least);
         let base = out.0.len() as u32;
         for j in 0..=n {
             let s = j as f32 / n as f32;
@@ -213,12 +318,8 @@ fn lathe(pieces: &[Piece], rows: u32, around: u32, repeats: f32, size: f32, out:
             for i in 0..=around {
                 let u = i as f32 / around as f32;
                 let (sin, cos) = (u * TAU).sin_cos();
-                out.0.push(Vertex {
-                    pos: [sin * r, y, cos * r],
-                    normal: [sin * nr, ny, cos * nr],
-                    tangent: [cos, 0.0, -sin, 1.0],
-                    uv: [u * repeats, v],
-                });
+                let uv = [u * repeats, v];
+                out.0.push(Vertex { pos: [sin * r, y, cos * r], normal: [sin * nr, ny, cos * nr], tangent: [cos, 0.0, -sin, 1.0], uv, height_uv: uv });
             }
         }
         quads(base, around, n, &mut out.1);
@@ -233,7 +334,8 @@ fn torus(major: f32, minor: f32, center: [f32; 3], tilt: f32, uv_scale: [f32; 2]
     let (st, ct) = tilt.sin_cos();
     let turn = |p: [f32; 3]| [p[0], p[1] * ct - p[2] * st, p[1] * st + p[2] * ct];
     grid(
-        192,
+        384,
+        128,
         uv_scale,
         |u, v| {
             let (sa, ca) = (u * TAU).sin_cos();
@@ -260,7 +362,8 @@ const CUBE_FACES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
 /// (its modifiers applied, made triangles, its tangents MikkTSpace's), turned to stand up as the
 /// view has it, made the size of the other models and its texture as large on it as on the
 /// sphere; kept as b"BTDM", a version (1), then deflated (zlib): the number of vertices and of
-/// indices, the vertices as twelve floats each (as [`Vertex`] is), the indices.
+/// indices, the vertices as twelve floats each (position, normal, tangent, texture coordinates),
+/// the indices.
 const MATBALL: &[u8] = include_bytes!("../../assets/models/matball.bin");
 
 /// The triangles of a model kept as [`MATBALL`] is.
@@ -275,12 +378,22 @@ fn read_model(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u32>), String> {
     flate2::read::ZlibDecoder::new(packed).read_to_end(&mut data).map_err(|e| e.to_string())?;
     let word = |i: usize| data.get(i * 4..i * 4 + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
     let (vertices, indices) = (word(0).ok_or("cut short")? as usize, word(1).ok_or("cut short")? as usize);
-    const SIZE: usize = std::mem::size_of::<Vertex>();
+    // (Twelve floats a vertex: where it is, how it faces, its tangent, its place in the texture.)
+    const SIZE: usize = 12 * std::mem::size_of::<f32>();
     let (from, to) = (8, 8 + vertices * SIZE);
     if data.len() != to + indices * 4 {
         return Err("of another size".into());
     }
-    let vs = data[from..to].as_chunks::<SIZE>().0.iter().map(|b| bytemuck::pod_read_unaligned::<Vertex>(b)).collect();
+    let vs = data[from..to]
+        .as_chunks::<SIZE>()
+        .0
+        .iter()
+        .map(|b| {
+            let f = bytemuck::pod_read_unaligned::<[f32; 12]>(b);
+            let uv = [f[10], f[11]];
+            Vertex { pos: [f[0], f[1], f[2]], normal: [f[3], f[4], f[5]], tangent: [f[6], f[7], f[8], f[9]], uv, height_uv: uv }
+        })
+        .collect();
     let is: Vec<u32> = data[to..].as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
     if is.iter().any(|&i| i as usize >= vertices) {
         return Err("a triangle of a vertex it has not".into());
@@ -288,47 +401,26 @@ fn read_model(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u32>), String> {
     Ok((vs, is))
 }
 
+/// The model of `shape`: its vertices and its triangles, its vertices one where its pieces meet
+/// (see [`weld`]).
 pub(super) fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
+    let mut mesh = pieces_of(shape);
+    weld(&mut mesh.0);
+    mesh
+}
+
+fn pieces_of(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
     use std::f32::consts::{FRAC_PI_2, PI, TAU};
     let mut out = (Vec::new(), Vec::new());
     match shape {
-        Shape::RoundedCube => {
-            // The surface of a box of half-size `H - R` grown by a ball of radius `R`:
-            // every point of a face is pushed out from the nearest point of that box, which
-            // leaves the middle of a face flat and rounds the edges and corners. Its edges are
-            // rounded by a sixty-fourth of its side: enough to catch the light as the edge of a
-            // real thing does, the faces flat to their ends for a texture to be judged on (a
-            // quarter of each face was round, then a sixteenth and a thirty-second of the
-            // side). The grid is finest where it rounds: sixteen steps an eighth of a turn.
-            const H: f32 = 0.8;
-            const R: f32 = 2.0 * H / 64.0;
-            let at = banded(R / H / 2.0, 16, 112);
-            for (n, a, b) in CUBE_FACES {
-                grid_at(
-                    &at,
-                    [1.0, 1.0],
-                    |u, v| {
-                        let (s, t) = (u * 2.0 - 1.0, v * 2.0 - 1.0);
-                        let q = [
-                            (n[0] + a[0] * s + b[0] * t) * H,
-                            (n[1] + a[1] * s + b[1] * t) * H,
-                            (n[2] + a[2] * s + b[2] * t) * H,
-                        ];
-                        let core = q.map(|c| c.clamp(-(H - R), H - R));
-                        let out = [q[0] - core[0], q[1] - core[1], q[2] - core[2]];
-                        let normal = normalize(out);
-                        let p = [core[0] + normal[0] * R, core[1] + normal[1] * R, core[2] + normal[2] * R];
-                        // The face's own u axis, along the surface: it turns with the edges.
-                        let along = dot(a, normal);
-                        let tangent = normalize([a[0] - normal[0] * along, a[1] - normal[1] * along, a[2] - normal[2] * along]);
-                        (p, normal, tangent)
-                    },
-                    &mut out,
-                );
-            }
-        }
+        // Its edges rounded by a sixty-fourth of its side: enough to catch the light as the
+        // edge of a real thing does, the faces flat to their ends for a texture to be judged
+        // on (a quarter of each face was round, then a sixteenth and a thirty-second of the
+        // side).
+        Shape::RoundedCube => rounded_box(0.8, 1.6 / 64.0, 192, 16, &mut out),
         Shape::Sphere => grid(
-            160,
+            384,
+            192,
             [2.0, 1.0],
             |u, v| {
                 let (theta, phi) = (v * PI, u * TAU);
@@ -345,24 +437,15 @@ pub(super) fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
         },
         Shape::Plane => grid(
             256,
+            256,
             [1.0, 1.0],
             |u, v| ([u * 2.4 - 1.2, 1.2 - v * 2.4, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
             &mut out,
         ),
-        Shape::Cube => {
-            for (n, a, b) in CUBE_FACES {
-                grid(
-                    64,
-                    [1.0, 1.0],
-                    |u, v| {
-                        let (s, t) = ((u * 2.0 - 1.0) * 0.8, (v * 2.0 - 1.0) * 0.8);
-                        let p = [n[0] * 0.8 + a[0] * s + b[0] * t, n[1] * 0.8 + a[1] * s + b[1] * t, n[2] * 0.8 + a[2] * s + b[2] * t];
-                        (p, n, a)
-                    },
-                    &mut out,
-                );
-            }
-        }
+        // Its edges as sharp as an edge is seen: rounded by a five-hundredth of its side, which
+        // no eye takes for round. (Square, each face moved its own way with the height: the
+        // cube opened along every edge.)
+        Shape::Cube => rounded_box(0.8, 1.6 / 512.0, 192, 3, &mut out),
         Shape::RoundedCylinder => {
             // Across the top, round the edge, down the side, round the edge, across the bottom.
             const R: f32 = 0.78;
@@ -377,20 +460,31 @@ pub(super) fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
                     Piece::Line([R - E, -H], [0.0, -H]),
                 ],
                 256,
-                192,
+                384,
                 3.0,
                 TAU * R / 3.0,
                 &mut out,
             );
         }
-        Shape::Cylinder => lathe(
-            &[Piece::Line([0.0, 1.0], [0.8, 1.0]), Piece::Line([0.8, 1.0], [0.8, -1.0]), Piece::Line([0.8, -1.0], [0.0, -1.0])],
-            256,
-            160,
-            2.0,
-            TAU * 0.8 / 2.0,
-            &mut out,
-        ),
+        Shape::Cylinder => {
+            // (Its edges as sharp as an edge is seen: see the cube.)
+            const R: f32 = 0.8;
+            const E: f32 = 0.004;
+            lathe(
+                &[
+                    Piece::Line([0.0, 1.0], [R - E, 1.0]),
+                    Piece::Arc { center: [R - E, 1.0 - E], radius: E, from: 0.0, to: FRAC_PI_2 },
+                    Piece::Line([R, 1.0 - E], [R, -(1.0 - E)]),
+                    Piece::Arc { center: [R - E, -(1.0 - E)], radius: E, from: FRAC_PI_2, to: PI },
+                    Piece::Line([R - E, -1.0], [0.0, -1.0]),
+                ],
+                256,
+                320,
+                2.0,
+                TAU * R / 2.0,
+                &mut out,
+            );
+        }
         // Tilted toward the camera, which sees through it.
         Shape::Torus => torus(0.68, 0.3, [0.0; 3], 0.5, [3.0, 1.0], &mut out),
         Shape::Cloth => {
@@ -403,6 +497,7 @@ pub(super) fn build_mesh(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
                 folds + fine - (u - 0.5) * (u - 0.5) * 0.9
             };
             grid(
+                256,
                 256,
                 [1.0, 1.0],
                 |u, v| {
@@ -431,6 +526,75 @@ mod tests {
             assert_eq!(i.len() % 3, 0);
             assert!(v.iter().all(|x| x.pos.iter().chain(&x.uv).all(|c| c.is_finite())), "{shape:?}");
             assert!(v.iter().all(|x| (dot(x.normal, x.normal) - 1.0).abs() < 1e-3), "{shape:?}: a normal is not of length 1");
+        }
+    }
+
+    /// The pieces of every model hold together whatever height moves them: the vertices that are
+    /// at one place face one way and read the height at one place of the texture, so that a
+    /// height (any: one that does not even tile) moves them to one place again. The faces of the
+    /// cube, the ends of what closes on itself, the poles of the sphere, the edges of the
+    /// cylinder (rounded as little as an edge is seen: square, each side moved its own way and
+    /// the surface opened). The Matball, made elsewhere, has edges it is creased along: there
+    /// its sides face their own ways, and only what faces one way holds together.
+    #[test]
+    fn the_pieces_of_every_model_hold_together_under_a_height() {
+        use std::collections::HashMap;
+        // A height that is the same nowhere twice: of the place in the texture alone.
+        let height = |uv: [f32; 2]| (uv[0] * 12.9898 + uv[1] * 78.233).sin() * 0.5 + (uv[0] * 3.7 - uv[1] * 5.1).cos() * 0.5;
+        for shape in Shape::ALL {
+            let (v, _) = build_mesh(shape);
+            // The vertices by where they are (to less than their models are fine).
+            let mut places: HashMap<[i32; 3], Vec<usize>> = HashMap::new();
+            for (i, x) in v.iter().enumerate() {
+                places.entry(x.pos.map(|c| (c * 5000.0).round() as i32)).or_default().push(i);
+            }
+            let (mut joined, mut creased, mut apart) = (0, 0, Vec::new());
+            for at in places.values().filter(|at| at.len() > 1) {
+                let first = v[at[0]];
+                for &i in &at[1..] {
+                    let x = v[i];
+                    if sub(x.pos, first.pos).iter().any(|d| d.abs() > 1e-4) {
+                        continue;
+                    }
+                    if dot(x.normal, first.normal) < 0.9999 {
+                        creased += 1;
+                        continue;
+                    }
+                    joined += 1;
+                    let moved = |x: &Vertex| [0, 1, 2].map(|k| x.pos[k] + x.normal[k] * height(x.height_uv) * 0.1);
+                    let gap = sub(moved(&x), moved(&first)).iter().fold(0.0f32, |m, d| m.max(d.abs()));
+                    // (The Matball's sides at a join face nearly one way, where a modeler's
+                    // normals lean a little apart: as near as that, at ten times the height a
+                    // view moves a model by.)
+                    if gap > if shape == Shape::MatBall { 2e-3 } else { 1e-4 } {
+                        apart.push(format!("at {:?}: {gap} apart, reading the height at {:?} and {:?}", x.pos, x.height_uv, first.height_uv));
+                    }
+                }
+            }
+            assert!(apart.is_empty(), "{shape:?} comes apart in {} places: {:?}", apart.len(), &apart[..apart.len().min(3)]);
+            // What has joins has them joined, and nothing built here is creased.
+            match shape {
+                Shape::Plane | Shape::Cloth => assert_eq!(joined, 0, "{shape:?} is of one piece"),
+                Shape::MatBall => assert!(joined > 100, "{shape:?}: {joined} joined, {creased} creased"),
+                _ => assert!(joined > 100 && creased == 0, "{shape:?}: {joined} joined, {creased} creased"),
+            }
+        }
+    }
+
+    /// How finely each model is laid over its texture (see [`density`]): the cube as its grid
+    /// says, every model fine enough for a relief, and about as fine both ways (the height is
+    /// read as blurred as the coarser way asks).
+    #[test]
+    fn models_are_fine_enough_for_a_relief() {
+        for shape in Shape::ALL {
+            let (v, i) = build_mesh(shape);
+            let d = density(&v, &i);
+            assert!((90.0..=1200.0).contains(&d), "{shape:?}: {d} vertices to a unit of the texture");
+            if shape == Shape::RoundedCube {
+                // (192 steps over what its rounded ends leave of the texture.)
+                assert!((d - 192.0 / (1.0 - 1.0 / 32.0)).abs() < 2.0, "{d}");
+            }
+            assert!(v.iter().all(|x| x.height_uv.iter().all(|c| c.is_finite())), "{shape:?}");
         }
     }
 

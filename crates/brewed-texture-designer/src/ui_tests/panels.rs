@@ -1485,6 +1485,60 @@ fn the_color_editor_pastes_reads_hexadecimal_inverts_and_grays() {
     assert!(text_fits::cut_short(&mut w).is_empty(), "{:?}", text_fits::cut_short(&mut w));
 }
 
+/// What a field says of an input nothing is connected to is one line, whatever the panel's
+/// width: whole where it has room, its words giving way before the value it uses where it has
+/// not (wrapped, a pair of numbers stood four lines high in the narrowest panel: the monkey
+/// found it), and never without the value.
+#[test]
+fn an_input_not_connected_says_so_on_one_line() {
+    let whole = "not connected · uses (0.9, 0.9)";
+    let mut shown = Vec::new();
+    for width in [1000.0, 1300.0, 1680.0, 2600.0] {
+        let mut w = harness!(view::root, width, 640.0);
+        // (A Tile Generator of its own: the demo's has its size connected.)
+        let before: Vec<_> = w.app.graph().nodes_of(NodeKind::TILE_GENERATOR).map(|n| n.id).collect();
+        w.send(Message::Edit(Edit::AddNode { kind: NodeKind::TILE_GENERATOR, pos: [900.0, 900.0] }));
+        let node = w.app.graph().nodes_of(NodeKind::TILE_GENERATOR).map(|n| n.id).find(|id| !before.contains(id)).expect("the node added");
+        w.send(Message::Edit(Edit::SetExposed { node, key: "size".into(), exposed: true }));
+        w.send(Message::Graph(GraphMessage::Select { node, mode: SelectMode::Replace }));
+        draw_frame(&mut w, std::time::Instant::now());
+        let said = texts_where(&mut w, |t| t.contains("(0.9, 0.9)") && (t.starts_with("not connected") || t.starts_with("uses") || t.starts_with('(')));
+        assert_eq!(said.len(), 1, "at {width}: {said:?}");
+        let (text, bounds) = &said[0];
+        assert!([whole, "uses (0.9, 0.9)", "(0.9, 0.9)"].contains(&text.as_str()), "at {width}: {text:?}");
+        assert!(bounds.height < 1.6 * crate::style::SMALL, "at {width}: {} high: {text:?}", bounds.height);
+        assert!(text_fits::squeezed(&mut w).is_empty(), "at {width}: {:?}", text_fits::squeezed(&mut w));
+        shown.push(text.clone());
+    }
+    assert!(shown.iter().any(|t| t == whole), "whole in a wide panel: {shown:?}");
+}
+
+/// What the line under the 3D view says is one line, whatever the view's width: whole where it
+/// fits, cut short where it does not (wrapped, it was five lines of a narrow view — a window on
+/// a small screen of a large scale — and the model had a strip of what was left).
+#[test]
+fn the_line_under_the_3d_view_is_one_line() {
+    for (width, height) in [(3200.0, 1400.0), (1680.0, 1000.0), (960.0, 540.0), (800.0, 480.0)] {
+        let mut w = harness!(view::root, width, height);
+        let whole = crate::view::preview::footer_3d_words(&w.app);
+        let said = {
+            let whole = whole.clone();
+            texts_where(&mut w, move |t| t == whole || t.strip_suffix('…').is_some_and(|head| head.len() > 8 && whole.starts_with(head)))
+        };
+        assert_eq!(said.len(), 1, "at {width}×{height}: {said:?}");
+        let (text, bounds) = &said[0];
+        assert!(bounds.height < 1.6 * crate::style::SMALL, "at {width}×{height}: {} high: {text:?}", bounds.height);
+        let room = view::pane_width(&w.app, crate::app::Pane::View3D);
+        assert!(bounds.width <= room, "at {width}×{height}: {} wide in {room}", bounds.width);
+        // Whole in a view wide enough for it, and only there cut.
+        let fits = view::text_width(&whole, crate::style::SMALL) + 20.0 <= room;
+        assert_eq!(*text == whole, fits, "at {width}×{height}: {text:?} in {room}");
+        if width >= 3200.0 {
+            assert!(fits, "the widest window has room for all of it: {room}");
+        }
+    }
+}
+
 /// The 3D view's model, height and repeat are the graph's: Ctrl+Z undoes a change of them (a
 /// drag of the Height field, one step), the package has changes to save, and each graph has its
 /// own; where the camera is looking from is the view's, not undone (as the graph's view is not).

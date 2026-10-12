@@ -56,17 +56,7 @@ pub struct Camera {
 
 impl Default for Camera {
     fn default() -> Self {
-        Camera {
-            target: [0.0; 3],
-            yaw: 0.0,
-            pitch: 0.25,
-            distance: 3.6,
-            light_yaw: -0.7,
-            light_pitch: 0.6,
-            shape: Shape::RoundedCube,
-            displacement: 0.04,
-            tiling: 1.0,
-        }
+        Camera::start(Shape::RoundedCube)
     }
 }
 
@@ -86,6 +76,39 @@ pub enum Move {
 }
 
 impl Camera {
+    /// The camera as the view starts, of the model `shape`: looking at the model's axis from a
+    /// little above, from as far as shows the model whole in the middle of the view, filling
+    /// 0.86 of a square one in its longer way across (a view of any other shape shows more
+    /// around it: see [`half_height`]). From one place for every model, the cylinder and the material ball were
+    /// cut off at the bottom of the view, the plane at its sides, and no model was in the middle.
+    /// How high on its axis a model is looked at, and from how far, are measured from the model
+    /// (a test holds them to it); on its axis, so that turned, the model does not swing.
+    pub fn start(shape: Shape) -> Camera {
+        let (height, distance) = match shape {
+            Shape::RoundedCube => (-0.145, 3.886),
+            Shape::Sphere => (0.0, 3.765),
+            Shape::MatBall => (-0.132, 4.07),
+            Shape::Cube => (-0.149, 3.91),
+            Shape::RoundedCylinder => (-0.095, 3.786),
+            Shape::Cylinder => (-0.133, 4.322),
+            Shape::Torus => (-0.108, 3.674),
+            Shape::Plane => (0.077, 4.634),
+            Shape::Cloth => (0.038, 3.65),
+        };
+        Camera { target: [0.0, height, 0.0], yaw: 0.0, pitch: 0.25, distance, light_yaw: -0.7, light_pitch: 0.6, shape, displacement: 0.04, tiling: 1.0 }
+    }
+
+    /// The camera with the model `shape`: looking at it as the view starts to, where it looked
+    /// at its model so (turned, it may be: neither moved off nor neared), and as it is where it
+    /// did not — a view that was moved or neared is left where it was put.
+    pub fn with_shape(self, shape: Shape) -> Camera {
+        let (was, start) = (Camera::start(self.shape), Camera::start(shape));
+        match (self.target, self.distance) == (was.target, was.distance) {
+            true => Camera { shape, target: start.target, distance: start.distance, ..self },
+            false => Camera { shape, ..self },
+        }
+    }
+
     /// Where the camera is.
     fn eye(&self) -> [f32; 3] {
         let d = spherical(self.yaw, self.pitch);
@@ -228,7 +251,7 @@ pub fn toolbar(app: &App, room: f32) -> (iced::widget::Row<'_, Message>, Option<
     // As wide as its longest shape where there is room: one line.
     let list = if named || under { 132.0 } else { 110.0 };
     let r = row![
-        pick_list(Shape::ALL, Some(cam.shape), move |shape| Message::Preview(PreviewMessage::Camera(Camera { shape, ..cam })))
+        pick_list(Shape::ALL, Some(cam.shape), move |shape| Message::Preview(PreviewMessage::Camera(cam.with_shape(shape))))
             .text_size(style::SMALL)
             .padding([2, 6])
             .width(Length::Fixed(list))
@@ -250,7 +273,7 @@ pub fn toolbar(app: &App, room: f32) -> (iced::widget::Row<'_, Message>, Option<
         button(icon(Icon::Reset, 14.0, style::TEXT_DIM))
             .padding(4)
             .style(style::flat_button)
-            .on_press(Message::Preview(PreviewMessage::Camera(Camera { shape: cam.shape, ..Camera::default() }))),
+            .on_press(Message::Preview(PreviewMessage::Camera(Camera::start(cam.shape)))),
         "Put the camera, the light and the height back where they started",
         Position::Bottom,
     );
@@ -468,7 +491,7 @@ pub const PICTURE_FILL: f32 = 0.82;
 /// far as makes the model fill [`PICTURE_FILL`] of it: as much room above it as below, on the
 /// left as on the right.
 pub fn picture_camera(view: Camera, aspect: f32) -> Camera {
-    let mut camera = Camera { shape: view.shape, displacement: view.displacement, tiling: view.tiling, ..Camera::default() };
+    let mut camera = Camera { displacement: view.displacement, tiling: view.tiling, ..Camera::start(view.shape) };
     let (vertices, _) = build_mesh(camera.shape);
     // (Perspective is not linear: a few steps bring it there.)
     for _ in 0..6 {
@@ -481,7 +504,7 @@ pub fn picture_camera(view: Camera, aspect: f32) -> Camera {
         let forward = normalize(sub(camera.target, eye));
         let right = normalize(cross(forward, [0.0, 1.0, 0.0]));
         let up = cross(right, forward);
-        let half_height = camera.distance * (FOV / 2.0).tan();
+        let half_height = camera.distance * half_height(aspect);
         let shift = [middle[0] * half_height * aspect, middle[1] * half_height];
         for (axis, (r, u)) in right.iter().zip(up).enumerate() {
             camera.target[axis] += r * shift[0] + u * shift[1];
@@ -494,7 +517,7 @@ pub fn picture_camera(view: Camera, aspect: f32) -> Camera {
 /// Where `points` are in the picture of `camera`, `aspect` wide for its height: the corners of
 /// what they cover, from -1 to 1 across and up.
 fn projected(camera: &Camera, aspect: f32, points: impl Iterator<Item = [f32; 3]>) -> ([[f32; 2]; 2], usize) {
-    let m = mul(&perspective(FOV, aspect, 0.05, 50.0), &look_at(camera.eye(), camera.target, [0.0, 1.0, 0.0]));
+    let m = mul(&lens(aspect), &look_at(camera.eye(), camera.target, [0.0, 1.0, 0.0]));
     let (mut lo, mut hi, mut n) = ([f32::MAX; 2], [f32::MIN; 2], 0);
     for p in points {
         let p = [p[0], p[1], p[2], 1.0];
@@ -542,12 +565,40 @@ pub fn picture(app: &App, pipeline: &mut Option<Pipeline>, gpu: &crate::gpu::Gpu
 
 /// `primitive` drawn on its own, `size` pixels wide and high, over the view's background.
 fn render(primitive: &Primitive, pipeline: &mut Option<Pipeline>, device: &wgpu::Device, queue: &wgpu::Queue, size: [u32; 2]) -> Option<::image::RgbaImage> {
+    let bounds = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(size[0] as f32, size[1] as f32));
+    let mut drawn = render_in(primitive, pipeline, device, queue, size, bounds, 1.0)?;
+    let height = size[1] as f32;
+    for (_, y, px) in drawn.enumerate_pixels_mut() {
+        // The view's background where the model is not: from 48 at the top to 18 at the
+        // bottom, as the view is drawn on.
+        let back = (48.0 - 30.0 * y as f32 / height.max(1.0)).round();
+        let a = f32::from(px[3]) / 255.0;
+        let over = |c: u8| (f32::from(c) + back * (1.0 - a)).round().min(255.0) as u8;
+        *px = ::image::Rgba([over(px[0]), over(px[1]), over(px[2]), 255]);
+    }
+    Some(drawn)
+}
+
+/// `primitive` drawn as the framework has it drawn: as the view at `bounds` (in the program's
+/// points) of a window `size` pixels wide and high, on a screen of the scale `scale`; over
+/// nothing (what is not drawn is left clear).
+fn render_in(
+    primitive: &Primitive,
+    pipeline: &mut Option<Pipeline>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    size: [u32; 2],
+    bounds: Rectangle,
+    scale: f32,
+) -> Option<::image::RgbaImage> {
     use shader::Primitive as _;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let pipeline = pipeline.get_or_insert_with(|| <Pipeline as shader::Pipeline>::new(device, queue, format));
     let [width, height] = size;
-    let bounds = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(width as f32, height as f32));
-    primitive.prepare(pipeline, device, queue, &bounds, &Viewport::with_physical_size(iced::Size::new(width, height), 1.0));
+    // (What the framework lets a view draw on: its place in whole pixels, within the window.)
+    let window = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(width as f32, height as f32));
+    let clip = (bounds * scale).intersection(&window).and_then(Rectangle::snap)?;
+    primitive.prepare(pipeline, device, queue, &bounds, &Viewport::with_physical_size(iced::Size::new(width, height), scale));
     let extent = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("brewed 3d picture"),
@@ -574,7 +625,7 @@ fn render(primitive: &Primitive, pipeline: &mut Option<Pipeline>, device: &wgpu:
         timestamp_writes: None,
         occlusion_query_set: None,
     }));
-    primitive.render(pipeline, &mut encoder, &target, &Rectangle { x: 0, y: 0, width, height });
+    primitive.render(pipeline, &mut encoder, &target, &clip);
     let row = width * 4;
     let padded = row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -601,15 +652,8 @@ fn render(primitive: &Primitive, pipeline: &mut Option<Pipeline>, device: &wgpu:
     let mut rgba = Vec::with_capacity((row * height) as usize);
     {
         let mapped = buffer.slice(..).get_mapped_range();
-        for (y, line) in mapped.chunks(padded as usize).enumerate() {
-            // The view's background where the model is not: from 48 at the top to 18 at the
-            // bottom, as the view is drawn on.
-            let back = (48.0 - 30.0 * y as f32 / (height as f32).max(1.0)).round() as u8;
-            for px in line[..row as usize].chunks(4) {
-                let a = f32::from(px[3]) / 255.0;
-                let over = |c: u8| (f32::from(c) + f32::from(back) * (1.0 - a)).round().min(255.0) as u8;
-                rgba.extend_from_slice(&[over(px[0]), over(px[1]), over(px[2]), 255]);
-            }
+        for line in mapped.chunks(padded as usize) {
+            rgba.extend_from_slice(&line[..row as usize]);
         }
     }
     buffer.unmap();
@@ -759,7 +803,7 @@ impl shader::Program<Message> for Scene {
                 if let Some(last) = &mut state.pan {
                     // The scene follows the mouse: a pixel of the view is this much of the scene
                     // at the distance of the target.
-                    let scale = 2.0 * self.camera.distance * (FOV / 2.0).tan() / bounds.height.max(1.0);
+                    let scale = 2.0 * self.camera.distance * half_height(bounds.width / bounds.height.max(1.0)) / bounds.height.max(1.0);
                     return publish(Move::Pan(step(last) * scale));
                 }
                 None
@@ -823,8 +867,22 @@ fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
     r
 }
 
-/// Vertical field of view of the 3D view, in radians.
+/// How wide the 3D view looks, in radians: across the smaller of its sides (see
+/// [`half_height`]).
 const FOV: f32 = 0.62;
+
+/// Half of what a view `aspect` wide for its height shows up and down, at a distance of 1. The
+/// view looks [`FOV`] wide across the smaller of its sides: what is whole in a square view is
+/// whole in a view of any shape (looking so wide up and down whatever its shape, a view
+/// narrower than it is high cut the model off at its sides).
+fn half_height(aspect: f32) -> f32 {
+    (FOV / 2.0).tan() / aspect.clamp(0.01, 1.0)
+}
+
+/// What a view `aspect` wide for its height is seen through (see [`half_height`]).
+fn lens(aspect: f32) -> Mat4 {
+    perspective(2.0 * half_height(aspect).atan(), aspect, 0.05, 50.0)
+}
 
 /// Right handed perspective with depth in [0, 1].
 fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
@@ -854,11 +912,14 @@ struct Mesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
+    /// How many of its vertices a unit of the texture has across it (see `models::density`).
+    density: f32,
 }
 
 impl Mesh {
     fn new(device: &wgpu::Device, shape: Shape) -> Mesh {
         let (v, i) = build_mesh(shape);
+        let density = super::models::density(&v, &i);
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("brewed 3d mesh"),
             contents: bytemuck::cast_slice(&v),
@@ -869,7 +930,7 @@ impl Mesh {
             contents: bytemuck::cast_slice(&i),
             usage: wgpu::BufferUsages::INDEX,
         });
-        Mesh { vertices, indices, count: i.len() as u32 }
+        Mesh { vertices, indices, count: i.len() as u32, density }
     }
 }
 
@@ -1087,7 +1148,7 @@ impl shader::Pipeline for Pipeline {
                     buffers: &[wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Vertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x2],
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x2, 4 => Float32x2],
                     }],
                     compilation_options: Default::default(),
                 },
@@ -1213,12 +1274,14 @@ impl shader::Primitive for Primitive {
 
     fn prepare(&self, pipeline: &mut Pipeline, device: &wgpu::Device, queue: &wgpu::Queue, bounds: &Rectangle, viewport: &Viewport) {
         let scale = viewport.scale_factor();
-        // The view in whole pixels of what it is shown in, and inside it (a view that ends on a
-        // part of a pixel ends before it): what it is drawn into is as large.
+        // The view in whole pixels of what it is shown in — the pixels the framework lets it
+        // draw on, and puts what is beside it up to: each edge at the nearest pixel, whatever
+        // the scale of the screen (ended a pixel before, a line of what is under the view
+        // showed along its edge at some scales and sizes). What it is drawn into is as large.
         let physical = viewport.physical_size();
-        let (left, top) = ((bounds.x * scale).floor().max(0.0), (bounds.y * scale).floor().max(0.0));
-        let right = ((bounds.x + bounds.width) * scale).floor().min(physical.width as f32);
-        let bottom = ((bounds.y + bounds.height) * scale).floor().min(physical.height as f32);
+        let (left, top) = ((bounds.x * scale).round().max(0.0), (bounds.y * scale).round().max(0.0));
+        let right = ((bounds.x + bounds.width) * scale).round().min(physical.width as f32);
+        let bottom = ((bounds.y + bounds.height) * scale).round().min(physical.height as f32);
         let largest = device.limits().max_texture_dimension_2d;
         let size = [((right - left).max(1.0) as u32).min(largest), ((bottom - top).max(1.0) as u32).min(largest)];
         if pipeline.drawn.as_ref().is_none_or(|d| d.size != size) {
@@ -1229,6 +1292,7 @@ impl shader::Primitive for Primitive {
         if !pipeline.meshes.iter().any(|(s, _)| *s == self.camera.shape) {
             pipeline.meshes.push((self.camera.shape, Mesh::new(device, self.camera.shape)));
         }
+        let density = pipeline.meshes.iter().find(|(s, _)| *s == self.camera.shape).map_or(1.0, |(_, mesh)| mesh.density);
         // An environment image is made ready once, and let go when it is no longer shown.
         match &self.environment {
             Some(hdri) if pipeline.environment.as_ref().is_none_or(|m| m.id != hdri.id) => {
@@ -1242,8 +1306,11 @@ impl shader::Primitive for Primitive {
 
         let c = &self.camera;
         let eye = c.eye();
-        let aspect = (bounds.width / bounds.height.max(1.0)).max(0.01);
-        let view_proj = mul(&perspective(FOV, aspect, 0.05, 50.0), &look_at(eye, c.target, [0.0, 1.0, 0.0]));
+        // (As wide for its height as the pixels it is drawn into are: by its size in points,
+        // whose edges fall between the pixels, a sphere was a pixel or two out of round at
+        // some scales.)
+        let aspect = (size[0] as f32 / size[1].max(1) as f32).max(0.01);
+        let view_proj = mul(&lens(aspect), &look_at(eye, c.target, [0.0, 1.0, 0.0]));
         let light = light_direction(c);
         let placed = shading::place(&self.maps);
         pipeline.material.prepare(device, queue, &self.maps, &placed);
@@ -1252,13 +1319,13 @@ impl shader::Primitive for Primitive {
         let forward = normalize(sub(c.target, eye));
         let right = normalize(cross(forward, [0.0, 1.0, 0.0]));
         let up = cross(right, forward);
-        let half = (FOV / 2.0).tan();
+        let half = half_height(aspect);
         // The level of the image behind the model: sharp, the one whose pixels are as large as
         // the view's; fully blurred, the one 32 pixels wide (11° a pixel).
         let background = match (env, self.background) {
             (Some(m), Some(blur)) => {
                 let width = m.source.width() as f32;
-                let sharp = (FOV / (bounds.height * scale).max(1.0) * width / std::f32::consts::TAU).log2().max(0.0);
+                let sharp = (2.0 * half.atan() / (bounds.height * scale).max(1.0) * width / std::f32::consts::TAU).log2().max(0.0);
                 let most = (width.log2() - 5.0).max(0.0);
                 Some(sharp.max(blur * most))
             }
@@ -1276,7 +1343,7 @@ impl shader::Primitive for Primitive {
             view_proj,
             eye: [eye[0], eye[1], eye[2], 1.0],
             light: [light[0], light[1], light[2], 1.0],
-            params: [c.displacement, c.tiling, self.exposure, 0.0],
+            params: [c.displacement, c.tiling, self.exposure, density],
             flags: [u32::from(self.key), u32::from(pipeline.srgb), 0, u32::from(env.is_some())],
             turn: [c.light_yaw.cos(), c.light_yaw.sin(), 0.0, 0.0],
             levels: [background.unwrap_or_default(), glossy_top as f32, 0.0, 0.0],
@@ -1919,5 +1986,129 @@ mod tests {
             }
         }
         assert!(between > (SIZE[1] / 2) as usize / 3, "rows whose edge has a pixel in between: {between} of {}", SIZE[1] / 2);
+    }
+
+    /// The view is drawn the same on a screen of any scale (100 %, 125 %, 150 %, 175 %, 200 %,
+    /// 300 %: a window moved from one screen to another of several is redrawn at the other's),
+    /// wherever its edges fall between the pixels: on every pixel the framework gives it and on
+    /// no other (ended a pixel short, a line of what is under the view showed along an edge),
+    /// the model as large a part of it and as round, and drawn in the pixels of that screen
+    /// (twice as many across at twice the scale, not a smaller picture stretched).
+    #[test]
+    fn the_view_is_drawn_at_any_scale_of_the_screen() {
+        let Ok(gpu) = brewed_texture_engine::Gpu::headless() else { return };
+        let (device, queue) = (gpu.device.clone(), gpu.queue.clone());
+        let mut pipeline = None;
+        let of = |camera: Camera| Primitive { camera, maps: Vec::new(), environment: None, exposure: 1.0, background: None, key: false };
+        // A plane so near that it is all the view shows; and a sphere, whole in it.
+        let near = of(Camera { shape: Shape::Plane, yaw: 0.0, pitch: 0.0, distance: 1.0, displacement: 0.0, ..Camera::default() });
+        let sphere = of(Camera { shape: Shape::Sphere, displacement: 0.0, ..Camera::default() });
+        // Where a view is in a window of 640 by 480 points: its edges between the points, as
+        // the panels' are once they are dragged.
+        let views = [Rectangle::new(iced::Point::new(37.3, 21.7), iced::Size::new(301.4, 222.2)), Rectangle::new(iced::Point::new(0.0, 30.0), iced::Size::new(413.5, 317.25))];
+        for bounds in views {
+            let mut at_one: Option<[f32; 4]> = None;
+            for scale in [1.0f32, 1.25, 1.5, 1.75, 2.0, 3.0] {
+                let size = [(640.0 * scale).round() as u32, (480.0 * scale).round() as u32];
+                let window = Rectangle::new(iced::Point::ORIGIN, iced::Size::new(size[0] as f32, size[1] as f32));
+                let given = (bounds * scale).intersection(&window).and_then(Rectangle::snap).expect("the view's pixels");
+                let within = |x: u32, y: u32| x >= given.x && y >= given.y && x < given.x + given.width && y < given.y + given.height;
+
+                let filled = render_in(&near, &mut pipeline, &device, &queue, size, bounds, scale).expect("a picture");
+                for (x, y, px) in filled.enumerate_pixels() {
+                    match within(x, y) {
+                        true => assert_eq!(px[3], 255, "at {scale}: the view's pixel {x},{y} is not drawn (the view has {given:?})"),
+                        false => assert_eq!(px.0, [0; 4], "at {scale}: {x},{y} is drawn on, outside the view ({given:?})"),
+                    }
+                }
+
+                let round = render_in(&sphere, &mut pipeline, &device, &queue, size, bounds, scale).expect("a picture");
+                let drawn = || round.enumerate_pixels().filter(|(_, _, px)| px[3] > 127);
+                assert!(drawn().all(|(x, y, _)| within(x, y)), "at {scale}: the model is drawn outside the view");
+                let (left, right) = (drawn().map(|p| p.0).min().expect("the model"), drawn().map(|p| p.0).max().expect("the model") + 1);
+                let (top, bottom) = (drawn().map(|p| p.1).min().expect("the model"), drawn().map(|p| p.1).max().expect("the model") + 1);
+                let (wide, high) = ((right - left) as f32, (bottom - top) as f32);
+                assert!((wide - high).abs() <= 1.0, "at {scale}: the sphere is {wide} by {high} pixels");
+                // In points of the view: where the model is, and how large.
+                let shown = [(left - given.x) as f32 / scale, (top - given.y) as f32 / scale, wide / scale, high / scale];
+                match at_one {
+                    None => at_one = Some(shown),
+                    Some(first) => {
+                        for (now, then) in shown.iter().zip(first) {
+                            // (Each edge, of the view and of the model, is at a whole pixel: of half
+                            // a pixel's doubt at either scale.)
+                            assert!((now - then).abs() <= 2.0, "at {scale}: the model is at {shown:?} of the view, and at {first:?} at 100 %");
+                        }
+                    }
+                }
+                // In the screen's pixels: its edge is a pixel or two of the screen wide at any
+                // scale (a picture of fewer pixels stretched has an edge as many times wider).
+                let y = (top + bottom) / 2;
+                let edge = (given.x..left + (right - left) / 2).filter(|x| (16..240).contains(&round.get_pixel(*x, y)[3])).count();
+                assert!(edge <= 2, "at {scale}: the model's edge is {edge} pixels wide");
+            }
+        }
+    }
+
+    /// How much of a square view a model fills as the view starts, in its longer way across.
+    const START_FILL: f32 = 0.86;
+
+    /// What [`Camera::start`] is to say of `shape`, measured from the model: how high on its
+    /// axis it is looked at for it to be in the middle of the view, and from how far for it to
+    /// fill [`START_FILL`] of a square one.
+    fn measured_start(shape: Shape) -> (f32, f32) {
+        let mut camera = Camera::start(shape);
+        let (vertices, _) = build_mesh(shape);
+        // (Perspective is not linear: a few steps bring it there.)
+        for _ in 0..16 {
+            let ([lo, hi], ..) = projected(&camera, 1.0, vertices.iter().map(|v| v.pos));
+            let half = ((hi[0] - lo[0]) / 2.0).max((hi[1] - lo[1]) / 2.0).max(1e-3);
+            camera.target[1] += (lo[1] + hi[1]) / 2.0 * camera.distance * half_height(1.0) / camera.pitch.cos();
+            camera.distance *= half / START_FILL;
+        }
+        (camera.target[1], camera.distance)
+    }
+
+    /// As the view starts, every model is whole in it and in its middle, filling as much of a
+    /// square view as the others do; whole in a view of any other shape too, wide or narrow;
+    /// and looked at on its own axis (turned, it does not swing). The camera of a model picked
+    /// in a view not moved yet is that model's; of one picked in a view moved off or neared,
+    /// the one it was.
+    #[test]
+    fn every_model_is_whole_in_the_view_as_it_starts() {
+        // (All that are not, said at once: with what each is to start at.)
+        let mut off = Vec::new();
+        for shape in Shape::ALL {
+            let camera = Camera::start(shape);
+            assert_eq!((camera.shape, camera.target[0], camera.target[2]), (shape, 0.0, 0.0), "{shape:?}: on its axis");
+            let points: Vec<[f32; 3]> = build_mesh(shape).0.iter().map(|v| v.pos).collect();
+            let ([lo, hi], _) = projected(&camera, 1.0, points.iter().copied());
+            let middle = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+            let half = ((hi[0] - lo[0]) / 2.0).max((hi[1] - lo[1]) / 2.0);
+            let (height, distance) = measured_start(shape);
+            if middle[0].abs() > 0.02 || middle[1].abs() > 0.01 || (half - START_FILL).abs() > 0.01 {
+                off.push(format!("{shape:?}: its middle is at {middle:?} and it fills {half}; measured, it is to start at ({height:.3}, {distance:.3})"));
+            }
+            for aspect in [0.4, 0.75, 1.0, 1.6, 3.0] {
+                let ([lo, hi], _) = projected(&camera, aspect, points.iter().copied());
+                if lo[0] < -0.9 || hi[0] > 0.9 || lo[1] < -0.9 || hi[1] > 0.9 {
+                    off.push(format!("{shape:?} in a view {aspect} wide for its height: from {lo:?} to {hi:?}"));
+                }
+            }
+        }
+        assert!(off.is_empty(), "{}", off.join("; "));
+        // Another model picked: its own start, where the view was only turned.
+        let turned = Camera { yaw: 1.0, pitch: 0.6, light_yaw: 2.0, ..Camera::start(Shape::RoundedCube) };
+        let (picked, start) = (turned.with_shape(Shape::Cylinder), Camera::start(Shape::Cylinder));
+        assert_eq!((picked.shape, picked.target, picked.distance), (Shape::Cylinder, start.target, start.distance));
+        assert_eq!((picked.yaw, picked.pitch, picked.light_yaw), (1.0, 0.6, 2.0), "turned as it was");
+        assert_ne!((start.target, start.distance), (turned.target, turned.distance), "the models start apart");
+        // ... and the view as it was put, where it was moved off or neared.
+        for moved in [turned.moved(Move::Zoom(0.7)), turned.moved(Move::Pan(Vector::new(0.3, 0.1)))] {
+            let picked = moved.with_shape(Shape::Cylinder);
+            assert_eq!(picked, Camera { shape: Shape::Cylinder, ..moved });
+        }
+        // The same model picked again changes nothing.
+        assert_eq!(turned.with_shape(Shape::RoundedCube), turned);
     }
 }

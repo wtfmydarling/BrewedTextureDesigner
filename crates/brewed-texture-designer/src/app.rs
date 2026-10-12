@@ -364,8 +364,9 @@ pub struct Given {
     pub hsv: [f32; 3],
 }
 
-/// Where the Color Editor's window was, and how large: in the program's points (and on Windows,
-/// in the screens' pixels too, which every screen agrees on: see [`crate::tool_window`]).
+/// Where the Color Editor's window was, and how large: in the program's points (and on Windows
+/// and X11, in the screens' pixels too, which every screen agrees on: see
+/// [`crate::tool_window`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorEditorPlace {
     pub at: Option<Point>,
@@ -1037,6 +1038,10 @@ pub enum Message {
     Host(eyedropper::Host),
     #[cfg(any(test, feature = "dev-tools"))]
     Screenshot(window::Screenshot),
+    /// A frame of the window is drawn, while a screenshot waits for what it is of to be on it
+    /// (see `App::maybe_screenshot`).
+    #[cfg(any(test, feature = "dev-tools"))]
+    Drawn,
     /// The autopilot's turn (see [`crate::autopilot`]).
     #[cfg(any(test, feature = "dev-tools"))]
     Autopilot,
@@ -2936,6 +2941,8 @@ impl App {
             #[cfg(any(test, feature = "dev-tools"))]
             Message::Screenshot(shot) => return self.save_screenshot(shot),
             #[cfg(any(test, feature = "dev-tools"))]
+            Message::Drawn => return self.drawn(),
+            #[cfg(any(test, feature = "dev-tools"))]
             Message::Autopilot => return self.fly(),
         }
         Task::none()
@@ -3036,7 +3043,9 @@ impl App {
         let scene = &self.doc.graph().scene;
         let start = view::view3d::Camera::default();
         let camera = &mut self.ui.preview.view3d;
-        camera.shape = scene.model.as_deref().and_then(view::view3d::Shape::from_id).unwrap_or(start.shape);
+        // (Looked at as the view starts to look at it, where the view was not moved: see
+        // `Camera::with_shape`.)
+        *camera = camera.with_shape(scene.model.as_deref().and_then(view::view3d::Shape::from_id).unwrap_or(start.shape));
         camera.displacement = scene.height.unwrap_or(start.displacement);
         camera.tiling = scene.repeat.unwrap_or(start.tiling);
     }
@@ -4023,12 +4032,13 @@ impl App {
 
     /// The Color Editor's window, opened: kept with the main one (above it, out of the taskbar:
     /// see [`crate::tool_window`]), where it was last put and as large as it was made (else near
-    /// the pointer, on Windows), shown once it has drawn (on Windows, as the main window is).
+    /// the pointer, on Windows and X11), on a screen that is there; shown once it has drawn (on
+    /// Windows, as the main window is).
     fn open_color_window(&mut self, main: window::Id) -> Task<Message> {
         let place = self.ui.color_editor_place;
         let (id, open) = window::open(color_editor_settings(place));
         self.color_window = Some(id);
-        #[cfg(windows)]
+        #[cfg(any(windows, free_unix))]
         let pixels = place.and_then(|p| p.pixels);
         open.then(move |id| {
             let own = window::run(main, crate::tool_window::owner_of)
@@ -4040,7 +4050,11 @@ impl App {
                 .chain(window::set_mode(id, window::Mode::Windowed))
                 .chain(window::run(id, move |window| crate::tool_window::put(window, pixels)).discard())
                 .chain(Task::done(Message::Cloaked(id)));
-            #[cfg(not(windows))]
+            // (Put before it is shown: an X11 window manager looks where a window is to be as it
+            // shows.)
+            #[cfg(free_unix)]
+            let show = window::run(id, move |window| crate::tool_window::put(window, pixels)).discard().chain(window::set_mode(id, window::Mode::Windowed));
+            #[cfg(not(any(windows, free_unix)))]
             let show = window::set_mode(id, window::Mode::Windowed);
             own.chain(show).chain(crate::window_size::hold(id))
         })

@@ -2730,26 +2730,29 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
             985..=989 => {
                 let key = w.app.doc_key;
                 let graphs: Vec<brewed_texture_core::GraphId> = w.app.doc.package().graphs.iter().map(|g| g.id).collect();
-                let graph = graphs[dice.below(graphs.len() as u64) as usize];
-                let message = match dice.below(12) {
-                    0 => Message::Undo,
-                    1 => Message::Redo,
-                    2 => Message::Proceed(PendingAction::LoadDemo),
-                    3 => Message::Proceed(PendingAction::New),
-                    4 => Message::SavePicked(Some(graph_file.clone())),
-                    5 => Message::Proceed(PendingAction::OpenPath(graph_file.clone())),
+                // (A package may have no graph — the monkey deletes its last one, or makes a
+                // package without any: nothing is asked of a graph of it then.)
+                let graph = (!graphs.is_empty()).then(|| graphs[dice.below(graphs.len() as u64) as usize]);
+                let message = match (dice.below(12), graph) {
+                    (0, _) => Message::Undo,
+                    (1, _) => Message::Redo,
+                    (2, _) => Message::Proceed(PendingAction::LoadDemo),
+                    (3, _) => Message::Proceed(PendingAction::New),
+                    (4, _) => Message::SavePicked(Some(graph_file.clone())),
+                    (5, _) => Message::Proceed(PendingAction::OpenPath(graph_file.clone())),
                     // Graphs of graphs: what is selected made a graph of its own, a graph
                     // copied, another one edited, a graph dropped on the one edited as a node.
-                    6 => Message::GraphFromSelection,
-                    7 => Message::Explorer(ExplorerMessage::DuplicateGraph(key, graph)),
-                    8 => Message::Explorer(ExplorerMessage::OpenGraph(key, graph)),
-                    9 => Message::Graph(GraphMessage::Drop {
+                    (6, _) => Message::GraphFromSelection,
+                    (7, Some(graph)) => Message::Explorer(ExplorerMessage::DuplicateGraph(key, graph)),
+                    (8, Some(graph)) => Message::Explorer(ExplorerMessage::OpenGraph(key, graph)),
+                    (9, Some(graph)) => Message::Graph(GraphMessage::Drop {
                         payload: DragPayload::Graph { key, graph, name: "Graph".into() },
                         graph_pos: [dice.float(-400.0, 400.0), dice.float(-400.0, 400.0)],
                     }),
+                    (7..=9, None) => Message::Seal,
                     // The Color Editor, of a color of the graph (its window then gone to now
                     // and then: see above).
-                    10 => {
+                    (10, _) => {
                         let colors: Vec<ColorTarget> = w
                             .app
                             .graph()
@@ -3479,7 +3482,11 @@ fn image_inputs_are_input_values_and_drags_say_what_cannot_be() {
     let socket = w.app.graph().input_socket(node, &param_socket_key("albedo")).expect("a socket");
     assert_eq!(socket.ty, brewed_texture_core::DataType::Image);
     draw_frame(&mut w, now());
-    assert_eq!(texts(&mut w, "not connected · uses bricks.png").len(), 1);
+    // (On one line: whole where the field has room for it, its words giving way before the
+    // picture's name where it has not.)
+    let said = texts_where(&mut w, |t| t.contains("uses bricks.png"));
+    assert!(said.len() == 1 && ["not connected · uses bricks.png", "uses bricks.png"].contains(&said[0].0.as_str()), "{said:?}");
+    assert!(said[0].1.height < 1.6 * crate::style::SMALL, "{said:?}");
     w.snapshot("image-inputs-exposed");
     w.send(Message::Edit(Edit::SetExposed { node, key: "albedo".into(), exposed: false }));
     assert!(w.app.graph().input_socket(node, &param_socket_key("albedo")).is_none());

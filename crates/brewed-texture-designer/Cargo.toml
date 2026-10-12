@@ -21,6 +21,7 @@ dev-tools = ["brewed-texture-engine/dev-tools"]
 brewed-texture-core.workspace = true
 brewed-texture-engine.workspace = true
 home-screen.workspace = true
+scroll-box.workspace = true
 iced.workspace = true
 rfd.workspace = true
 futures.workspace = true
@@ -65,11 +66,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
-# The eyedropper on X11 and Wayland. All of these are pure Rust or load the system
+# The eyedropper on X11 and Wayland, and the windows kept with the main one on X11 (see
+# `tool_window`). All of these are pure Rust or load the system
 # libraries at run time (the same versions winit already uses): nothing to install to
 # build.
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
-x11rb = { version = "0.13", features = ["render", "shape"] }
+x11rb = { version = "0.13", features = ["randr", "render", "shape"] }
 libc = "0.2"
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }

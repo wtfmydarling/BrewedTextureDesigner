@@ -545,6 +545,51 @@ pub(super) fn scroll_boxes(w: &mut Harness) -> (usize, Vec<String>) {
     (find.0, find.1)
 }
 
+/// Nothing in the program, nor in the Home screen it shares with the others of its set, makes a
+/// box that scrolls but through the set's own (the `scroll-box` crate: `scroll_box`), which
+/// alone says how the bar is. The sources are read for the framework's: one made any other way
+/// is a bar over its rows waiting to be found again (seventeen places each said their own).
+#[test]
+fn every_box_that_scrolls_is_the_sets() {
+    fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("a folder of sources").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("the folder of the crates").to_path_buf();
+    let mut files = Vec::new();
+    for of in ["brewed-texture-designer", "home-screen"] {
+        sources(&crates.join(of).join("src"), &mut files);
+    }
+    assert!(files.len() > 40, "the sources are read: {}", files.len());
+    let mut found = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("a source");
+        for (n, line) in text.lines().enumerate() {
+            // (What is said in a comment makes nothing; a function named so is no call of it.)
+            let code = line.split("//").next().unwrap_or_default();
+            // (Said in pieces: this line is read too.)
+            let made = [concat!("scrollable", "("), concat!("Scrollable::new", "("), concat!("Scrollable::with_direction", "(")].iter().any(|call| {
+                code.match_indices(call).any(|(at, _)| {
+                    let before = &code[..at];
+                    let named = before.chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_');
+                    !named && !before.trim_end().ends_with("fn")
+                })
+            });
+            // (The one place that may: the program's box, which is the set's in its look.)
+            if made && !file.ends_with("widget/scroll.rs") && !code.contains("scroll_box::scroll_box(") {
+                found.push(format!("{}:{}: {}", file.display(), n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(found.is_empty(), "a box that scrolls made without `scroll_box`:\n{}", found.join("\n"));
+}
+
 /// No bar of a box that scrolls lies over what the box holds, wherever the program has one: the
 /// panels in a small window (the Library, Input Values with a value opened, Properties of a
 /// node), the menu of nodes, the menus of choices (pictured, and under headings), the lighting
@@ -855,7 +900,7 @@ pub(super) fn overlapping(w: &mut Harness) -> Vec<String> {
 /// text scrolled out of sight under another.
 #[test]
 fn texts_over_one_another_are_seen_and_scrolled_ones_are_not() {
-    use iced::widget::{column, scrollable, stack, text};
+    use iced::widget::{column, stack, text};
     let over: View = Box::new(|_| stack![text("A text of the window"), text("Another text on it")].into());
     let mut w = match Harness::new(over, Size::new(400.0, 300.0)) {
         Some(w) => w,
@@ -865,7 +910,7 @@ fn texts_over_one_another_are_seen_and_scrolled_ones_are_not() {
     // A text far down a scrollable, under a text beside the scrollable: not seen there.
     let scrolled: View = Box::new(|_| {
         stack![
-            iced::widget::container(scrollable(column![text("Seen at the top"), iced::widget::space().height(233), text("Far down, out of sight")]).height(200))
+            iced::widget::container(crate::widget::scroll::scroll_box(column![text("Seen at the top"), iced::widget::space().height(233), text("Far down, out of sight")]).height(200))
                 .height(iced::Length::Fill),
             column![iced::widget::space().height(250), text("Under the scrollable")],
         ]

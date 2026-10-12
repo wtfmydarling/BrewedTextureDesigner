@@ -160,7 +160,7 @@ const GROUPED_W: f32 = 290.0;
 /// room, less the field's padding, its arrow and the gaps.
 fn grouped_room(app: &App) -> f32 {
     let panel = crate::view::pane_width(app, crate::app::Pane::Properties);
-    let editor = panel - crate::view::properties::label_width(panel) - 50.0;
+    let editor = crate::view::properties::row_room(panel) - crate::view::properties::label_width(panel);
     editor - 12.0 - 12.0 - 2.0 * 6.0
 }
 

@@ -129,8 +129,24 @@ fn footer_2d(app: &App) -> Element<'_, Message> {
     footer(numbers, Vec::new())
 }
 
-/// The line under the 3D view: the maps on the model, and how to move it.
+/// The line under the 3D view: the maps on the model, and how to move it. One line, whatever
+/// the view's width: what does not fit is cut short there, and said whole in its tip (wrapped,
+/// it was five lines of a narrow view, and the model had a strip of what was left).
 fn footer_3d(app: &App) -> Element<'_, Message> {
+    let whole = footer_3d_words(app);
+    let room = crate::view::pane_width(app, crate::app::Pane::View3D) - 2.0 * FOOTER_PAD;
+    let shown = crate::view::cut(&whole, style::SMALL, style::ui_font(), room);
+    let cut_short = shown != whole;
+    let line = container(text(shown).size(style::SMALL).color(style::TEXT_FAINT).wrapping(text::Wrapping::None))
+        .padding([4.0, FOOTER_PAD])
+        .width(Length::Fill)
+        .clip(true)
+        .style(style::panel_dark);
+    if cut_short { tip(line, whole, Position::Top) } else { line.into() }
+}
+
+/// What the line under the 3D view says, whole.
+pub(crate) fn footer_3d_words(app: &App) -> String {
     let maps = crate::view::view3d::map_names(app);
     let lighting = &app.ui.preview.lighting;
     let mut words = vec![if maps.is_empty() { "no maps: give an Output a Usage".to_string() } else { maps.join(" · ") }];
@@ -139,8 +155,11 @@ fn footer_3d(app: &App) -> Element<'_, Message> {
     }
     let light = if app.environment_shown().is_some() { "the environment" } else { "the light" };
     words.push(format!("left drag orbits, middle drag moves, right drag turns {light}, the wheel zooms"));
-    footer(Vec::new(), words)
+    words.join("   ·   ")
 }
+
+/// The room left and right of what a view's footer says.
+const FOOTER_PAD: f32 = 10.0;
 
 fn footer<'a>(numbers: Vec<String>, words: Vec<String>) -> Element<'a, Message> {
     let line = row![
@@ -149,7 +168,7 @@ fn footer<'a>(numbers: Vec<String>, words: Vec<String>) -> Element<'a, Message> 
     ]
     .spacing(if numbers.is_empty() || words.is_empty() { 0 } else { 14 })
     .align_y(Alignment::Center);
-    container(line).padding([4, 10]).width(Length::Fill).style(style::panel_dark).into()
+    container(line).padding([4.0, FOOTER_PAD]).width(Length::Fill).style(style::panel_dark).into()
 }
 
 fn content_2d(app: &App) -> Element<'_, Message> {

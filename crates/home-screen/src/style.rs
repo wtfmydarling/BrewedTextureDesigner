@@ -3,7 +3,7 @@
 
 use iced::border::{self, Border};
 use iced::font::Weight;
-use iced::widget::{button, container, rule, scrollable};
+use iced::widget::{button, container, rule};
 use iced::{Background, Color, Font, Shadow, Theme, Vector};
 
 /// The look of the Home screen.
@@ -216,29 +216,6 @@ impl Style {
             background: Some(gray(21).into()),
             border: Border { color: self.line, width: 1.0, radius: 4.0.into() },
             ..Default::default()
-        }
-    }
-
-    pub(crate) fn scrollable(self) -> impl Fn(&Theme, scrollable::Status) -> scrollable::Style {
-        move |_, status| {
-            let hovered = matches!(status, scrollable::Status::Hovered { .. } | scrollable::Status::Dragged { .. });
-            let rail = scrollable::Rail {
-                background: None,
-                border: border::rounded(3),
-                scroller: scrollable::Scroller { background: if hovered { gray(92) } else { gray(64) }.into(), border: border::rounded(3) },
-            };
-            scrollable::Style {
-                container: container::Style::default(),
-                vertical_rail: rail,
-                horizontal_rail: rail,
-                gap: None,
-                auto_scroll: scrollable::AutoScroll {
-                    background: Color { a: 0.9, ..self.page }.into(),
-                    border: border::rounded(u32::MAX).width(1).color(self.dim),
-                    shadow: Shadow::default(),
-                    icon: self.dim,
-                },
-            }
         }
     }
 }

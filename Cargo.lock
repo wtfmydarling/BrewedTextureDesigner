@@ -460,6 +460,7 @@ dependencies = [
  "resvg",
  "rfd",
  "rustix 1.1.5",
+ "scroll-box",
  "serde",
  "serde_json",
  "smithay-client-toolkit 0.19.2",
@@ -1723,6 +1724,7 @@ name = "home-screen"
 version = "0.2.0"
 dependencies = [
  "iced",
+ "scroll-box",
 ]
 
 [[package]]
@@ -3826,6 +3828,13 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "scroll-box"
+version = "0.2.0"
+dependencies = [
+ "iced",
+]
 
 [[package]]
 name = "sctk-adwaita"
