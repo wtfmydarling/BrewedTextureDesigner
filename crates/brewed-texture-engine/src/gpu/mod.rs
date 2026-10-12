@@ -1288,9 +1288,7 @@ impl Gpu {
         let found = result.map(|()| {
             let rb = self.encode_readback_region(encoder, &current, [0, 0]);
             self.finish(encoder);
-            rb.map();
-            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-            matches!(rb.poll(), Some(Ok(()))) && rb.to_f32().first().is_some_and(|v| *v > 0.0)
+            rb.wait(&self.device).is_ok() && rb.to_f32().first().is_some_and(|v| *v > 0.0)
         });
         for level in levels {
             self.recycle(level);
@@ -1409,13 +1407,8 @@ impl Gpu {
             let mut encoder = self.encoder();
             let rb = self.encode_readback_rect(&mut encoder, img, [0, y], [w, rows.min(h - y)]);
             self.submit(encoder);
-            rb.map();
-            self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU poll failed: {e}"))?;
-            match rb.poll() {
-                Some(Ok(())) => rb.rows_into(&mut bytes),
-                Some(Err(e)) => return Err(e),
-                None => return Err("GPU readback did not finish".into()),
-            }
+            rb.wait(&self.device)?;
+            rb.rows_into(&mut bytes);
         }
         Ok(StoredImage { width: w, height: h, format, bytes })
     }
@@ -1429,6 +1422,10 @@ impl Gpu {
         self.errors.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default()
     }
 }
+
+/// How long a copy the device is done with is waited for to be said mapped (see
+/// [`Readback::wait`]): far longer than another thread takes to say so.
+const READBACK_PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);
 
 const STATE_IDLE: u8 = 0;
 const STATE_PENDING: u8 = 1;
@@ -1461,6 +1458,42 @@ impl Readback {
             STATE_READY => Some(Ok(())),
             STATE_FAILED => Some(Err("Mapping the readback buffer failed".into())),
             _ => None,
+        }
+    }
+
+    /// Block until the copy is on the CPU, or mapping it failed (mapping it first, if it was
+    /// not: see [`Readback::map`]). The device being done with all it was given is not that
+    /// yet: a mapped buffer is said to be so by whichever thread polls the device first — the
+    /// window's drawing polls the same device — a moment after the device let this thread go.
+    /// Looked at right then, the copy was "not there": the pictures of all the nodes an
+    /// evaluation changed were dropped at once (the nodes stayed black, or as they were
+    /// before), a menu's pictures were black for good, an export failed. So it is waited for.
+    pub fn wait(&self, device: &wgpu::Device) -> Result<(), String> {
+        if self.state.load(Ordering::SeqCst) == STATE_IDLE {
+            self.map();
+        }
+        // (Said mapped already — one of several mapped together and waited for one by one:
+        // nothing to wait for. The device is waited for once: each wait is for all that was
+        // given to it by then, the window's frames too, and a frame can take its time.)
+        if let Some(done) = self.poll() {
+            return done;
+        }
+        let polled = device.poll(wgpu::PollType::wait_indefinitely());
+        let started = std::time::Instant::now();
+        loop {
+            if let Some(done) = self.poll() {
+                return done;
+            }
+            // (A device that cannot be polled says no more.)
+            if let Err(e) = &polled {
+                return Err(format!("GPU poll failed: {e}"));
+            }
+            if started.elapsed() > READBACK_PATIENCE {
+                return Err("GPU readback did not finish".into());
+            }
+            std::thread::sleep(std::time::Duration::from_micros(50));
+            // (Whoever polls is told: this thread too.)
+            let _ = device.poll(wgpu::PollType::Poll);
         }
     }
 
@@ -1756,5 +1789,62 @@ mod tests {
             assert!((p[0] - e).abs() < 1e-3 && p[3] == 1.0, "{next:?}");
         }
     }
-}
 
+    /// A copy is read back whole while other threads poll the device and submit to it, as the
+    /// window's drawing does while the engine works: the device done with all it was given, a
+    /// copy can still be a moment from being said mapped (by the other thread, which the device
+    /// told first), and what looked at it right then took it for not there — a batch of nodes'
+    /// pictures dropped, an export failed. Every one arrives, with what was put in it.
+    #[test]
+    fn a_copy_is_waited_for_while_another_thread_polls_the_device() {
+        let Ok(gpu) = Gpu::headless() else { return };
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let others: Vec<_> = (0..3)
+            .map(|i| {
+                let (device, queue, stop) = (gpu.device.clone(), gpu.queue.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::SeqCst) {
+                        let _ = device.poll(wgpu::PollType::Poll);
+                        // (One of them submits too, as a frame does.)
+                        if i == 0 {
+                            let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                            queue.submit([encoder.finish()]);
+                        }
+                    }
+                })
+            })
+            .collect();
+        let image = gpu.take_scratch(4, 4, COLOR_FORMAT);
+        let (rounds, mut early, mut wrong) = (3000u32, 0, Vec::new());
+        for round in 0..rounds {
+            let level = (round % 251) as f32 / 250.0;
+            gpu.upload_rgba_f32(&image, &[level, 0.5, 1.0 - level, 1.0].repeat(16));
+            let mut encoder = gpu.encoder();
+            let rb = gpu.encode_readback_region(&mut encoder, &image, [1, 2]);
+            gpu.submit(encoder);
+            rb.map();
+            // (How it was looked at before: after the device's wait alone.)
+            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+            if rb.poll().is_none() {
+                early += 1;
+            }
+            match rb.wait(&gpu.device) {
+                Ok(()) => {
+                    let px = rb.to_f32();
+                    if (px[0] - level).abs() > 2e-3 || (px[2] - (1.0 - level)).abs() > 2e-3 {
+                        wrong.push(format!("round {round}: {px:?} for {level}"));
+                    }
+                }
+                Err(e) => wrong.push(format!("round {round}: {e}")),
+            }
+        }
+        stop.store(true, Ordering::SeqCst);
+        for other in others {
+            other.join().expect("the other thread");
+        }
+        assert!(wrong.is_empty(), "{} of {rounds} ({early} were not there yet after the device's wait): {:?}", wrong.len(), &wrong[..wrong.len().min(5)]);
+        if std::env::var("BREWED_READBACK_RACE").is_ok() {
+            eprintln!("not there yet after the device's wait: {early} of {rounds}");
+        }
+    }
+}

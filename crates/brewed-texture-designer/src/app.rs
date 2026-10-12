@@ -645,6 +645,12 @@ pub struct App {
     pub ui: Ui,
     opts: StartupOptions,
     window: Option<window::Id>,
+    /// The smallest the main window is let be now: what its screen has room for (see
+    /// [`smallest_window`]).
+    pub(crate) window_min: Size,
+    /// The frames of the main window to be drawn yet before it is asked to fill its screen
+    /// again (see [`Message::Screen`]): none, when it is not to be.
+    pub(crate) fill_after: Option<u8>,
     /// The Color Editor's window, while it is open (see [`App::color_window_follows`]).
     color_window: Option<window::Id>,
     started: Instant,
@@ -973,6 +979,16 @@ pub enum Message {
     ToggleHeading(String),
     /// An option of such a choice was picked.
     PickChoice(NodeId, &'static str, u32),
+    /// How large the screen the main window is on is, in points (not known: none): the window
+    /// is let be no smaller than it has room for (see [`smallest_window`]). And whether the
+    /// window filled its screen when the screen's scale changed: found larger than the screen
+    /// then, it is made to fill it again (a system that cannot fill a screen with a window
+    /// held larger than the screen leaves the window as large as it was, and says it fills
+    /// the screen still: GNOME on Wayland does).
+    Screen(Option<Size>, bool),
+    /// A frame of the main window is drawn, while it waits to be asked to fill its screen
+    /// again (see [`Message::Screen`]).
+    FillFrame,
     // status bar
     /// How fast the 3D view draws (it says so a few times a second while it draws).
     FrameRate(FrameRate),
@@ -1067,7 +1083,31 @@ fn answered_from(message: &Message) -> Option<PathBuf> {
 
 // ---------------------------------------------------------------------------- boot
 
-const MIN_WINDOW: Size = Size::new(1000.0, 640.0);
+/// The smallest the main window is let be, on a screen with room for it (see
+/// [`smallest_window`]).
+pub(crate) const MIN_WINDOW: Size = Size::new(1000.0, 640.0);
+
+/// What a screen keeps of itself, at the most: its taskbar, its top bar, its dock.
+const SCREEN_BARS: f32 = 72.0;
+
+/// How much larger than its screen a window that fills it may be said to be (the edges some
+/// systems give a window that fills the screen, past the screen's own).
+const SCREEN_SLACK: f32 = 24.0;
+
+/// The smallest the main window is let be on a screen `screen` points wide and high (not
+/// known: [`MIN_WINDOW`]): never more than that screen has room for. Held to more, the window
+/// is larger than its screen and stays so — its buttons, its edges and what is under them out
+/// of reach — on a screen of 1920 by 1080 at 200 % (960 by 540 points), of 1366 by 768 at
+/// 125 %, or when the scale of its screen is raised under it; the system, asked to fill the
+/// screen with it, cannot.
+pub(crate) fn smallest_window(screen: Option<Size>) -> Size {
+    // (No less than four tenths of it, whatever a screen says of itself.)
+    let on = |least: f32, screen: f32| match screen.is_finite() && screen > 0.0 {
+        true => least.min((screen - SCREEN_BARS).max(least * 0.4)),
+        false => least,
+    };
+    screen.map_or(MIN_WINDOW, |s| Size::new(on(MIN_WINDOW.width, s.width), on(MIN_WINDOW.height, s.height)))
+}
 
 /// Whether the program draws the window's title bar itself: its buttons at the right of the menu
 /// bar, the rest of the bar what moves the window, the edges what size it. Not on macOS, whose
@@ -1354,6 +1394,8 @@ impl App {
             },
             opts: opts.clone(),
             window: None,
+            window_min: MIN_WINDOW,
+            fill_after: None,
             color_window: None,
             started: Instant::now(),
             host: eyedropper::Host::default(),
@@ -1508,6 +1550,7 @@ impl App {
                             | window::Event::Closed
                             | window::Event::Opened { .. }
                             | window::Event::Resized(_)
+                            | window::Event::Rescaled(_)
                             | window::Event::Focused
                             | window::Event::FileDropped(_),
                     )
@@ -1529,6 +1572,10 @@ impl App {
         // The files the packages use, on disk: they can come, go or change.
         if !self.res.looked.is_empty() {
             subs.push(iced::time::every(Duration::from_secs(2)).map(|_| Message::LookAtFiles));
+        }
+        // The frames of the window, for the few of them it waits to fill its screen again.
+        if self.fill_after.is_some() {
+            subs.push(window::frames().map(|_| Message::FillFrame));
         }
         #[cfg(any(test, feature = "dev-tools"))]
         self.dev_subscriptions(&mut subs);
@@ -2740,6 +2787,40 @@ impl App {
                 self.ui.choice_menu = None;
                 self.ui.context = c;
             }
+            Message::Screen(screen, fill) => {
+                let Some(id) = self.window else { return Task::none() };
+                let least = smallest_window(screen);
+                let mut told = Task::none();
+                if least != self.window_min {
+                    log::info!("the window is let be as small as {} by {}: its screen is {screen:?}", least.width, least.height);
+                    self.window_min = least;
+                    told = window::set_min_size(id, Some(least));
+                }
+                // A window that fills its screen is never larger than the screen: where it is, it
+                // is made to fill it again once it may be as small as the screen — which the
+                // system knows of only with a frame of the window.
+                let size = self.ui.window_size;
+                let larger = screen.is_some_and(|s| size.width > s.width + SCREEN_SLACK || size.height > s.height + SCREEN_SLACK);
+                if fill && larger {
+                    self.fill_after = Some(2);
+                }
+                return told;
+            }
+            Message::FillFrame => {
+                match self.fill_after {
+                    Some(left) if left > 1 => self.fill_after = Some(left - 1),
+                    Some(_) => {
+                        self.fill_after = None;
+                        if let Some(id) = self.window {
+                            // (Taken off filling it and put back: asked to fill a screen it is
+                            // said to fill already, the system does nothing.)
+                            log::info!("the window, left larger than its screen as the screen's scale changed, is made to fill it again");
+                            return window::maximize(id, false).chain(window::maximize(id, true));
+                        }
+                    }
+                    None => {}
+                }
+            }
             Message::FrameRate(rate) => {
                 self.ui.frame_rate = rate;
                 self.ui.frame_rate_at = Some(Instant::now());
@@ -3263,6 +3344,12 @@ impl App {
         }
     }
 
+    /// How large the screen of the window `id` is, asked (see [`Message::Screen`]); `fill`: the
+    /// window is to fill it again once that is known.
+    fn ask_screen(&self, id: window::Id, fill: bool) -> Task<Message> {
+        window::monitor_size(id).map(move |screen| Message::Screen(screen, fill))
+    }
+
     fn runtime_event(&mut self, event: iced::Event, status: iced::event::Status, id: window::Id) -> Task<Message> {
         use iced::Event as E;
         if Some(id) == self.color_window {
@@ -3282,6 +3369,7 @@ impl App {
             );
             return if cancel { self.pick_message(PickMessage::Cancel) } else { Task::none() };
         }
+        let opened = matches!(event, E::Window(window::Event::Opened { .. }));
         match event {
             E::Window(window::Event::CloseRequested) => return self.close_requested(),
             E::Window(window::Event::Opened { size, .. } | window::Event::Resized(size)) => {
@@ -3291,16 +3379,28 @@ impl App {
                 if size.width < 1.0 || size.height < 1.0 {
                     return Task::none();
                 }
+                // The screen it is on is asked how large it is as the window opens, and when
+                // the system made the window smaller than it is let be: the screen has less
+                // room than that (see `smallest_window`).
+                let screen = match opened || size.width < self.window_min.width || size.height < self.window_min.height {
+                    true => self.ask_screen(id, false),
+                    false => Task::none(),
+                };
                 self.ui.window_size = size;
                 self.fit_columns();
                 // Whether it fills the screen now (the system, or a key, may have made it).
                 if OWN_TITLE_BAR {
-                    return window::is_maximized(id).map(|m| Message::Window(WindowAction::Maximized(m)));
+                    return Task::batch([window::is_maximized(id).map(|m| Message::Window(WindowAction::Maximized(m))), screen]);
                 }
+                return screen;
             }
+            // The scale of its screen changed, or it is on a screen of another scale now: where
+            // it filled its screen, it is to fill it still (the system says it no longer does
+            // only after this).
+            E::Window(window::Event::Rescaled(_)) => return self.ask_screen(id, self.ui.maximized),
             E::Window(window::Event::FileDropped(path)) => return self.file_dropped(path),
             // Come back to: what was put in the library folders meanwhile shows.
-            E::Window(window::Event::Focused) => return self.window_come_back(),
+            E::Window(window::Event::Focused) => return Task::batch([self.window_come_back(), self.ask_screen(id, false)]),
             E::Window(_) => {}
             E::Mouse(mouse::Event::CursorMoved { position }) => {
                 self.ui.cursor = position;

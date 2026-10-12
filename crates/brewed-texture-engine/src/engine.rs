@@ -1202,10 +1202,10 @@ impl Engine {
         for (_, _, _, rb) in &jobs {
             rb.map();
         }
-        self.wait_idle();
         let mut out = Vec::with_capacity(jobs.len());
         for (node, version, thumb, rb) in jobs {
-            if let Some(Ok(())) = rb.poll() {
+            // (Waited for, each: see `Readback::wait`.)
+            if rb.wait(&self.gpu.device).is_ok() {
                 let rgba = rb.to_f32();
                 let mut bytes = vec![0u8; rgba.len()];
                 simd::quantize_u8(&rgba, &mut bytes);
@@ -1281,11 +1281,10 @@ impl Engine {
         for (_, rb) in &jobs {
             rb.map();
         }
-        self.wait_idle();
         let mut pictures = Vec::with_capacity(options);
         for (thumb, rb) in jobs {
             let mut bytes = vec![0u8; (THUMB_SIZE * THUMB_SIZE * 4) as usize];
-            if let Some(Ok(())) = rb.poll() {
+            if rb.wait(&self.gpu.device).is_ok() {
                 simd::quantize_u8(&rb.to_f32(), &mut bytes);
             }
             pictures.push(bytes);
@@ -1472,14 +1471,12 @@ impl Engine {
         let mut encoder = self.gpu.encoder();
         let rb = self.gpu.encode_readback_region(&mut encoder, image, at);
         self.gpu.submit(encoder);
-        rb.map();
-        self.wait_idle();
-        match rb.poll() {
-            Some(Ok(())) => {
+        match rb.wait(&self.gpu.device) {
+            Ok(()) => {
                 let px = rb.to_f32();
                 (px.len() >= 4).then(|| [px[0], px[1], px[2], px[3]])
             }
-            _ => None,
+            Err(_) => None,
         }
     }
 }

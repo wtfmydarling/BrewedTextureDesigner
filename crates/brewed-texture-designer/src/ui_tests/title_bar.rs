@@ -270,3 +270,71 @@ fn a_window_made_small_to_the_taskbar_keeps_its_size() {
     w.window_event(id, iced::Event::Window(window::Event::Resized(size)));
     assert_eq!(crate::app::splits_of(&w.app.ui.panes), splits);
 }
+
+/// The smallest the window is let be is what its screen has room for: 1000 by 640 points on a
+/// screen with room for that, less on one without — 1920 by 1080 at 200 %, 1366 by 768 at
+/// 125 %, a screen whose scale was raised under the window (held to more, the window was larger
+/// than its screen for good: found on Wayland, a display taken from 100 % to 200 %) — and the
+/// least again on a larger screen. A screen that says nonsense of itself changes nothing much;
+/// and the window is drawn, and nothing in it breaks, as small as it is let be.
+#[test]
+fn the_window_is_never_held_larger_than_its_screen() {
+    use crate::app::{MIN_WINDOW, smallest_window};
+    assert_eq!(smallest_window(None), MIN_WINDOW);
+    for roomy in [Size::new(1280.0, 720.0), Size::new(1707.0, 960.0), Size::new(1920.0, 1080.0), Size::new(3840.0, 2160.0)] {
+        assert_eq!(smallest_window(Some(roomy)), MIN_WINDOW, "{roomy:?}");
+    }
+    let tight = [Size::new(960.0, 540.0), Size::new(1092.8, 614.4), Size::new(1024.0, 600.0), Size::new(640.0, 1136.0)];
+    for screen in tight {
+        let least = smallest_window(Some(screen));
+        // (Less its taskbar, its top bar or its dock: 48 points of it at the most, here.)
+        assert!(least.width <= screen.width && least.height <= screen.height - 48.0, "{least:?} on {screen:?}");
+        assert!(least.width <= MIN_WINDOW.width && least.height <= MIN_WINDOW.height && least != MIN_WINDOW, "{least:?} on {screen:?}");
+    }
+    assert_eq!(smallest_window(Some(tight[0])), Size::new(888.0, 468.0));
+    for odd in [Size::new(0.0, 0.0), Size::new(-5.0, f32::NAN), Size::new(f32::INFINITY, 10.0), Size::new(1.0, 1.0)] {
+        let least = smallest_window(Some(odd));
+        assert!((400.0..=1000.0).contains(&least.width) && (256.0..=640.0).contains(&least.height), "{least:?} of {odd:?}");
+    }
+
+    // Told of its screen, the program holds the window to what it has room for; of a larger
+    // one, to the least it is let be anywhere.
+    let mut w = harness!(view::root, 1680.0, 1000.0);
+    assert_eq!(w.app.window_min, MIN_WINDOW);
+    w.send(Message::Screen(Some(tight[0]), false));
+    assert_eq!(w.app.window_min, Size::new(888.0, 468.0));
+    w.send(Message::Screen(Some(Size::new(2560.0, 1440.0)), false));
+    assert_eq!(w.app.window_min, MIN_WINDOW);
+    w.send(Message::Screen(Some(tight[1]), false));
+    w.send(Message::Screen(None, false));
+    assert_eq!(w.app.window_min, MIN_WINDOW, "a screen not known holds it to no less");
+    // A window that filled its screen as the screen's scale was raised under it, and is left
+    // larger than the screen (1680 by 1000 points on one of 960 by 540), is made to fill it
+    // again: two frames later, once the system knows how small it may be. One that fits its
+    // screen is left alone, and so is one that did not fill its screen.
+    assert_eq!(w.app.fill_after, None);
+    w.send(Message::Screen(Some(Size::new(1920.0, 1080.0)), true));
+    assert_eq!(w.app.fill_after, None, "it fits its screen");
+    w.send(Message::Screen(Some(tight[0]), false));
+    assert_eq!(w.app.fill_after, None, "it did not fill its screen");
+    w.send(Message::Screen(Some(Size::new(2560.0, 1440.0)), false));
+    w.send(Message::Screen(Some(tight[0]), true));
+    assert_eq!((w.app.window_min, w.app.fill_after), (Size::new(888.0, 468.0), Some(2)));
+    w.send(Message::FillFrame);
+    assert_eq!(w.app.fill_after, Some(1));
+    w.send(Message::FillFrame);
+    assert_eq!(w.app.fill_after, None);
+    w.send(Message::FillFrame);
+    assert_eq!(w.app.fill_after, None, "asked once");
+    w.send(Message::Screen(Some(Size::new(2560.0, 1440.0)), false));
+    // As small as that, it is drawn and nothing breaks.
+    for screen in tight {
+        let least = smallest_window(Some(screen));
+        let id = w.main_window();
+        w.look_at(Box::new(view::root), least);
+        w.window_event(id, iced::Event::Window(window::Event::Resized(least)));
+        draw_frame(&mut w, Instant::now());
+        assert_eq!(w.app.ui.window_size, least);
+        assert!(crate::ui_tests::broken(&w.app).is_none(), "{least:?}: {:?}", crate::ui_tests::broken(&w.app));
+    }
+}
