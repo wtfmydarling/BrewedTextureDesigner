@@ -9,6 +9,7 @@ mod brand;
 mod clock;
 #[cfg(feature = "dev-tools")]
 mod compose;
+mod copied_files;
 mod environment;
 mod eyedropper;
 mod gpu;

@@ -1019,6 +1019,41 @@ fn a_file_dropped_while_a_dialog_is_open_waits_for_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Pictures copied in a file manager and pasted are taken as dropped ones are: each a Bitmap
+/// node, stacked, whether the clipboard says them as GNOME Files does (a uri-list, CRLF) or as
+/// paths; text that is neither nodes nor files is not pasted, and the status bar says so.
+#[test]
+fn files_copied_in_a_file_manager_are_pasted_as_if_dropped() {
+    let dir = scratch("paste-files");
+    let (bricks, wood) = (dir.join("bricks.png"), dir.join("old wood.png"));
+    for picture in [&bricks, &wood] {
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 80, 40, 255])).save(picture).unwrap();
+    }
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    w.app.settings.new_files = crate::settings::NewFiles::Link;
+    let bitmaps = |w: &Harness| w.app.graph().nodes_of(NodeKind::BITMAP).count();
+    let before = bitmaps(&w);
+    // (`file:///home/…`; `file:///C:/…` on Windows.)
+    let uri = |p: &std::path::Path| {
+        let path = p.display().to_string().replace('\\', "/").replace(' ', "%20");
+        format!("file://{}{path}", if path.starts_with('/') { "" } else { "/" })
+    };
+    w.send(Message::ClipboardText(Some(format!("{}\r\n{}\r\n", uri(&bricks), uri(&wood)))));
+    assert_eq!(bitmaps(&w), before + 2, "a uri-list: {:?}", w.app.ui.status);
+    w.send(Message::ClipboardText(Some(format!("{}\n{}", bricks.display(), wood.display()))));
+    assert_eq!(bitmaps(&w), before + 4, "paths: {:?}", w.app.ui.status);
+    // Each below the one before, as several dropped at once are.
+    let mut ys: Vec<f32> = w.app.graph().nodes_of(NodeKind::BITMAP).map(|n| n.pos[1]).collect();
+    ys.sort_by(f32::total_cmp);
+    ys.dedup();
+    assert!(ys.len() >= 2, "stacked: {ys:?}");
+
+    w.send(Message::ClipboardText(Some(format!("{}\nbricks", bricks.display()))));
+    assert_eq!(bitmaps(&w), before + 4, "not files");
+    assert!(w.app.ui.status.as_ref().is_some_and(|s| s.text == "The clipboard holds no nodes and no files"), "said: {:?}", w.app.ui.status);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The buttons of the 2D view's header, clicked: each channel shows that channel (the one shown
 /// stands out), and 1:1 puts a pixel of the image on a pixel of the screen, in the middle.
 #[test]
