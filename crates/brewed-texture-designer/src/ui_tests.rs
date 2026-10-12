@@ -1586,6 +1586,21 @@ fn the_color_editor_is_a_window_of_its_own() {
     // (Never smaller than it may be.)
     let tiny = ColorEditorPlace { size: Size::new(10.0, 10.0), ..place };
     assert_eq!(crate::app::color_editor_settings(Some(tiny)).size, COLOR_EDITOR_MIN);
+    // Closed and asked for at once, it is open again before the system has said where it was:
+    // said then, that is where it is from now on (and its window is put there: it had opened
+    // where it was the time before).
+    w.send(Message::ColorPicker(Some(target.clone())));
+    let again = w.app.color_window().expect("open again");
+    w.send(Message::ColorPicker(None));
+    w.send(Message::ColorPicker(Some(target.clone())));
+    let at_once = w.app.color_window().expect("open at once");
+    assert_ne!(again, at_once, "a window of its own each time");
+    let moved = ColorEditorPlace { at: Some(Point::new(900.0, 300.0)), size: Size::new(640.0, 400.0), pixels: None };
+    w.send(Message::ColorEditor(ColorEditorMessage::Placed(moved)));
+    assert_eq!(w.app.ui.color_editor_place, Some(moved));
+    assert_eq!(w.app.color_window(), Some(at_once), "the window it has stays open");
+    w.send(Message::ColorPicker(None));
+    w.send(Message::ColorEditor(ColorEditorMessage::Placed(place)));
 
     // Esc typed in it closes it, and so does the system's close.
     w.send(Message::ColorPicker(Some(target.clone())));

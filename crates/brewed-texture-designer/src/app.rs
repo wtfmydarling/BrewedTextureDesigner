@@ -980,12 +980,13 @@ pub enum Message {
     /// An option of such a choice was picked.
     PickChoice(NodeId, &'static str, u32),
     /// How large the screen the main window is on is, in points (not known: none): the window
-    /// is let be no smaller than it has room for (see [`smallest_window`]). And whether the
-    /// window filled its screen when the screen's scale changed: found larger than the screen
-    /// then, it is made to fill it again (a system that cannot fill a screen with a window
-    /// held larger than the screen leaves the window as large as it was, and says it fills
-    /// the screen still: GNOME on Wayland does).
-    Screen(Option<Size>, bool),
+    /// is let be no smaller than it has room for (see [`smallest_window`]). A window that opens
+    /// larger than its screen is made to fit it (see [`fitted_window`]); and one that filled
+    /// its screen when the screen's scale changed, found larger than the screen then, is made
+    /// to fill it again (a system that cannot fill a screen with a window held larger than
+    /// the screen leaves the window as large as it was, and says it fills the screen still:
+    /// GNOME on Wayland does).
+    Screen(Option<Size>, ScreenAsked),
     /// A frame of the main window is drawn, while it waits to be asked to fill its screen
     /// again (see [`Message::Screen`]).
     FillFrame,
@@ -1094,6 +1095,36 @@ const SCREEN_BARS: f32 = 72.0;
 /// systems give a window that fills the screen, past the screen's own).
 const SCREEN_SLACK: f32 = 24.0;
 
+/// Whether a window of `size` points is larger than a screen of `screen` points can show (a
+/// screen not known holds any).
+fn larger_than(size: Size, screen: Option<Size>) -> bool {
+    screen.is_some_and(|s| s.width > 0.0 && s.height > 0.0 && (size.width > s.width + SCREEN_SLACK || size.height > s.height + SCREEN_SLACK))
+}
+
+/// What a window of `size` points is made as it opens on a screen of `screen` points: nothing
+/// where the screen shows it whole; else what the screen has room for (and it is then made to
+/// fill the screen). The size the program starts at — or the one it was left at, on a larger
+/// screen or at a smaller scale — is more than a screen of 1920 by 1080 at 150 % holds, or one
+/// of 1366 by 768: the window opened with its lower part, the views and the status bar, off
+/// the screen.
+pub(crate) fn fitted_window(size: Size, screen: Option<Size>) -> Option<Size> {
+    let s = screen.filter(|_| larger_than(size, screen))?;
+    let least = smallest_window(Some(s));
+    Some(Size::new(size.width.min(s.width - SCREEN_BARS).max(least.width), size.height.min(s.height - SCREEN_BARS).max(least.height)))
+}
+
+/// Why the screen of the main window was asked how large it is (see [`Message::Screen`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenAsked {
+    /// The window opened.
+    Opened,
+    /// The scale of its screen changed (or it is on a screen of another scale): whether the
+    /// window filled its screen then.
+    Rescaled(bool),
+    /// The system made the window smaller than it is let be, or the window is come back to.
+    Looked,
+}
+
 /// The smallest the main window is let be on a screen `screen` points wide and high (not
 /// known: [`MIN_WINDOW`]): never more than that screen has room for. Held to more, the window
 /// is larger than its screen and stays so — its buttons, its edges and what is under them out
@@ -1175,6 +1206,21 @@ fn main_window_settings(workspace: Option<&Workspace>) -> window::Settings {
 /// The Color Editor's window: where it was put and as large as it was made, else as it opens at
 /// first (on Windows, put near the pointer as it opens: see [`crate::tool_window`]); shown once
 /// it is kept with the main window (see `App::open_color_window`).
+/// The Color Editor's window `id`, open, put where `place` says and made as large: in the
+/// screens' pixels where the system has them (see [`crate::tool_window`]), else in points.
+fn place_color_window(id: window::Id, place: ColorEditorPlace) -> Task<Message> {
+    let min = view::editors::COLOR_EDITOR_MIN;
+    let sized = window::resize(id, Size::new(place.size.width.max(min.width), place.size.height.max(min.height)));
+    #[cfg(any(windows, free_unix))]
+    let put = match place.pixels {
+        Some(pixels) => window::run(id, move |window| crate::tool_window::put(window, Some(pixels))).discard(),
+        None => Task::none(),
+    };
+    #[cfg(not(any(windows, free_unix)))]
+    let put = place.at.map_or_else(Task::none, |at| window::move_to(id, at));
+    sized.chain(put)
+}
+
 pub(crate) fn color_editor_settings(place: Option<ColorEditorPlace>) -> window::Settings {
     let size = place.map_or(view::editors::COLOR_EDITOR, |p| p.size);
     let min = view::editors::COLOR_EDITOR_MIN;
@@ -2787,7 +2833,7 @@ impl App {
                 self.ui.choice_menu = None;
                 self.ui.context = c;
             }
-            Message::Screen(screen, fill) => {
+            Message::Screen(screen, asked) => {
                 let Some(id) = self.window else { return Task::none() };
                 let least = smallest_window(screen);
                 let mut told = Task::none();
@@ -2800,9 +2846,18 @@ impl App {
                 // is made to fill it again once it may be as small as the screen — which the
                 // system knows of only with a frame of the window.
                 let size = self.ui.window_size;
-                let larger = screen.is_some_and(|s| size.width > s.width + SCREEN_SLACK || size.height > s.height + SCREEN_SLACK);
-                if fill && larger {
-                    self.fill_after = Some(2);
+                match asked {
+                    ScreenAsked::Rescaled(true) if larger_than(size, screen) => self.fill_after = Some(2),
+                    // Opened larger than its screen (and not filling it): made what the screen
+                    // has room for, and to fill the screen — the system knows what it keeps
+                    // of the screen for itself.
+                    ScreenAsked::Opened if !self.ui.maximized => {
+                        if let Some(fitted) = fitted_window(size, screen) {
+                            log::info!("the window opened larger than its screen ({screen:?}): it is made {} by {}, and to fill the screen", fitted.width, fitted.height);
+                            return told.chain(window::resize(id, fitted)).chain(window::maximize(id, true));
+                        }
+                    }
+                    _ => {}
                 }
                 return told;
             }
@@ -3344,10 +3399,9 @@ impl App {
         }
     }
 
-    /// How large the screen of the window `id` is, asked (see [`Message::Screen`]); `fill`: the
-    /// window is to fill it again once that is known.
-    fn ask_screen(&self, id: window::Id, fill: bool) -> Task<Message> {
-        window::monitor_size(id).map(move |screen| Message::Screen(screen, fill))
+    /// How large the screen of the window `id` is, asked (see [`Message::Screen`]).
+    fn ask_screen(&self, id: window::Id, asked: ScreenAsked) -> Task<Message> {
+        window::monitor_size(id).map(move |screen| Message::Screen(screen, asked))
     }
 
     fn runtime_event(&mut self, event: iced::Event, status: iced::event::Status, id: window::Id) -> Task<Message> {
@@ -3382,9 +3436,10 @@ impl App {
                 // The screen it is on is asked how large it is as the window opens, and when
                 // the system made the window smaller than it is let be: the screen has less
                 // room than that (see `smallest_window`).
-                let screen = match opened || size.width < self.window_min.width || size.height < self.window_min.height {
-                    true => self.ask_screen(id, false),
-                    false => Task::none(),
+                let screen = match (opened, size.width < self.window_min.width || size.height < self.window_min.height) {
+                    (true, _) => self.ask_screen(id, ScreenAsked::Opened),
+                    (false, true) => self.ask_screen(id, ScreenAsked::Looked),
+                    (false, false) => Task::none(),
                 };
                 self.ui.window_size = size;
                 self.fit_columns();
@@ -3397,10 +3452,10 @@ impl App {
             // The scale of its screen changed, or it is on a screen of another scale now: where
             // it filled its screen, it is to fill it still (the system says it no longer does
             // only after this).
-            E::Window(window::Event::Rescaled(_)) => return self.ask_screen(id, self.ui.maximized),
+            E::Window(window::Event::Rescaled(_)) => return self.ask_screen(id, ScreenAsked::Rescaled(self.ui.maximized)),
             E::Window(window::Event::FileDropped(path)) => return self.file_dropped(path),
             // Come back to: what was put in the library folders meanwhile shows.
-            E::Window(window::Event::Focused) => return Task::batch([self.window_come_back(), self.ask_screen(id, false)]),
+            E::Window(window::Event::Focused) => return Task::batch([self.window_come_back(), self.ask_screen(id, ScreenAsked::Looked)]),
             E::Window(_) => {}
             E::Mouse(mouse::Event::CursorMoved { position }) => {
                 self.ui.cursor = position;
@@ -4321,7 +4376,15 @@ impl App {
             ColorEditorMessage::Resize(direction) => {
                 return self.color_window.map_or_else(Task::none, |id| window::drag_resize(id, direction));
             }
-            ColorEditorMessage::Placed(place) => self.ui.color_editor_place = Some(place),
+            ColorEditorMessage::Placed(place) => {
+                self.ui.color_editor_place = Some(place);
+                // Open again already — closed and asked for at once, before the system had said
+                // where it was: its window is put there now (it opened where it had been the
+                // time before).
+                if let Some(id) = self.color_window {
+                    return place_color_window(id, place);
+                }
+            }
             ColorEditorMessage::Units(units) => self.ui.color_units = units,
             ColorEditorMessage::Invert => {
                 if let Some(c) = current {

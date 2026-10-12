@@ -279,8 +279,21 @@ fn a_window_made_small_to_the_taskbar_keeps_its_size() {
 /// and the window is drawn, and nothing in it breaks, as small as it is let be.
 #[test]
 fn the_window_is_never_held_larger_than_its_screen() {
-    use crate::app::{MIN_WINDOW, smallest_window};
+    use crate::app::{MIN_WINDOW, ScreenAsked, fitted_window, smallest_window};
     assert_eq!(smallest_window(None), MIN_WINDOW);
+    // A window that opens larger than its screen is made what the screen has room for (and
+    // then to fill it): the size the program starts at on a screen of 1920 by 1080 at 150 %,
+    // or of 1366 by 768; one the screen shows whole is left as it is, as on a screen not known.
+    let start = Size::new(1680.0, 1000.0);
+    assert_eq!(fitted_window(start, Some(Size::new(1280.0, 720.0))), Some(Size::new(1208.0, 648.0)));
+    assert_eq!(fitted_window(start, Some(Size::new(1366.0, 768.0))), Some(Size::new(1294.0, 696.0)));
+    assert_eq!(fitted_window(start, Some(Size::new(960.0, 540.0))), Some(Size::new(888.0, 468.0)));
+    assert_eq!(fitted_window(Size::new(1900.0, 1030.0), Some(Size::new(1920.0, 1080.0))), None, "sized to its screen by hand");
+    for roomy in [Size::new(1920.0, 1080.0), Size::new(2048.0, 1152.0), Size::new(1707.0, 1067.0)] {
+        assert_eq!(fitted_window(start, Some(roomy)), None, "{roomy:?}");
+    }
+    assert_eq!(fitted_window(start, None), None);
+    assert_eq!(fitted_window(start, Some(Size::new(0.0, 0.0))), None);
     for roomy in [Size::new(1280.0, 720.0), Size::new(1707.0, 960.0), Size::new(1920.0, 1080.0), Size::new(3840.0, 2160.0)] {
         assert_eq!(smallest_window(Some(roomy)), MIN_WINDOW, "{roomy:?}");
     }
@@ -301,24 +314,24 @@ fn the_window_is_never_held_larger_than_its_screen() {
     // one, to the least it is let be anywhere.
     let mut w = harness!(view::root, 1680.0, 1000.0);
     assert_eq!(w.app.window_min, MIN_WINDOW);
-    w.send(Message::Screen(Some(tight[0]), false));
+    w.send(Message::Screen(Some(tight[0]), ScreenAsked::Looked));
     assert_eq!(w.app.window_min, Size::new(888.0, 468.0));
-    w.send(Message::Screen(Some(Size::new(2560.0, 1440.0)), false));
+    w.send(Message::Screen(Some(Size::new(2560.0, 1440.0)), ScreenAsked::Looked));
     assert_eq!(w.app.window_min, MIN_WINDOW);
-    w.send(Message::Screen(Some(tight[1]), false));
-    w.send(Message::Screen(None, false));
+    w.send(Message::Screen(Some(tight[1]), ScreenAsked::Looked));
+    w.send(Message::Screen(None, ScreenAsked::Looked));
     assert_eq!(w.app.window_min, MIN_WINDOW, "a screen not known holds it to no less");
     // A window that filled its screen as the screen's scale was raised under it, and is left
     // larger than the screen (1680 by 1000 points on one of 960 by 540), is made to fill it
     // again: two frames later, once the system knows how small it may be. One that fits its
     // screen is left alone, and so is one that did not fill its screen.
     assert_eq!(w.app.fill_after, None);
-    w.send(Message::Screen(Some(Size::new(1920.0, 1080.0)), true));
+    w.send(Message::Screen(Some(Size::new(1920.0, 1080.0)), ScreenAsked::Rescaled(true)));
     assert_eq!(w.app.fill_after, None, "it fits its screen");
-    w.send(Message::Screen(Some(tight[0]), false));
+    w.send(Message::Screen(Some(tight[0]), ScreenAsked::Looked));
     assert_eq!(w.app.fill_after, None, "it did not fill its screen");
-    w.send(Message::Screen(Some(Size::new(2560.0, 1440.0)), false));
-    w.send(Message::Screen(Some(tight[0]), true));
+    w.send(Message::Screen(Some(Size::new(2560.0, 1440.0)), ScreenAsked::Looked));
+    w.send(Message::Screen(Some(tight[0]), ScreenAsked::Rescaled(true)));
     assert_eq!((w.app.window_min, w.app.fill_after), (Size::new(888.0, 468.0), Some(2)));
     w.send(Message::FillFrame);
     assert_eq!(w.app.fill_after, Some(1));
@@ -326,7 +339,7 @@ fn the_window_is_never_held_larger_than_its_screen() {
     assert_eq!(w.app.fill_after, None);
     w.send(Message::FillFrame);
     assert_eq!(w.app.fill_after, None, "asked once");
-    w.send(Message::Screen(Some(Size::new(2560.0, 1440.0)), false));
+    w.send(Message::Screen(Some(Size::new(2560.0, 1440.0)), ScreenAsked::Looked));
     // As small as that, it is drawn and nothing breaks.
     for screen in tight {
         let least = smallest_window(Some(screen));
