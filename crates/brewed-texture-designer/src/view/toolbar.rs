@@ -270,6 +270,8 @@ fn help_menu(app: &App) -> Vec<Entry<'_>> {
     vec![
         item("Keyboard Shortcuts", app.key_of(Command::Help), Some(Message::Dialog(Some(Dialog::Shortcuts)))),
         item("Third-Party Notices…", "", Some(Message::Dialog(Some(Dialog::Notices(Default::default()))))),
+        // (Where a log file could be made.)
+        item("Reveal Log File", "", app.log.is_some().then_some(Message::RevealLog)),
         item(format!("About {}", brewed_texture_core::APP_NAME), "", Some(Message::Dialog(Some(Dialog::About)))),
     ]
 }

@@ -444,6 +444,12 @@ impl App {
     /// answered). It is read off the UI thread, with the package files its graphs use that are
     /// not read yet: a large one takes a while (see [`App::opened`]).
     pub(crate) fn open_file(&mut self, path: PathBuf, replace: bool) -> Task<Message> {
+        // The program keeps the paths of its files as text: one whose name is not (in another
+        // encoding, which a file manager on Linux can give) is said, not read as another name.
+        if path.to_str().is_none() {
+            self.set_status(format!("{} was not opened: its name is not Unicode text; renamed, it can be", path.display()), true);
+            return Task::none();
+        }
         let file = clean(&path);
         if !replace && let Some(open) = self.open_key(&file) {
             self.activate(open, None);

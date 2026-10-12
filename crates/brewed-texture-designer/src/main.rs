@@ -14,6 +14,7 @@ mod eyedropper;
 mod gpu;
 mod highlight;
 mod icons;
+mod log_file;
 mod picker;
 mod previews;
 mod scrub;
@@ -30,6 +31,7 @@ mod workspace;
 #[cfg(test)]
 mod ui_tests;
 
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 use app::{App, StartupOptions};
@@ -101,160 +103,55 @@ fn usage() -> String {
     format!("{USAGE}\n{DEV_USAGE}")
 }
 
+/// What is logged when `RUST_LOG` does not say.
+const LOG_FILTER: &str = "warn,brewed_texture_designer=info";
+
+/// What the command line asks for.
+enum Asked {
+    /// Something done at once, with no window: what the command line takes said, a tool for
+    /// developing the program run.
+    Now(Box<dyn FnOnce() -> Result<(), String>>),
+    /// The window (or a render without one).
+    Run(Box<Run>),
+}
+
+/// What the program is started with.
+struct Run {
+    options: StartupOptions,
+    /// A render from the command line, with no window.
+    render: Option<Job>,
+    #[cfg(any(test, feature = "dev-tools"))]
+    flight: Option<f32>,
+    #[cfg(any(test, feature = "dev-tools"))]
+    seed: u64,
+}
+
 fn main() -> iced::Result {
     #[cfg(target_arch = "x86_64")]
     if !runs_x86_64_v3() {
         cannot_run();
     }
     attach_console();
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,brewed_texture_designer=info")).init();
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut options = StartupOptions::default();
-    #[cfg(any(test, feature = "dev-tools"))]
-    let (mut flight, mut seed) = (None, 1);
-    let mut render: Option<Job> = None;
-    let mut i = 0;
-    while i < args.len() {
-        let value = |i: usize| args.get(i + 1).cloned();
-        match args[i].as_str() {
-            "--help" | "-h" => {
-                println!("{}", usage());
-                return Ok(());
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let Run {
+        mut options,
+        render,
+        #[cfg(any(test, feature = "dev-tools"))]
+        flight,
+        #[cfg(any(test, feature = "dev-tools"))]
+        seed,
+    } = match read_args(&args) {
+        Asked::Now(now) => {
+            log_file::start(None, LOG_FILTER);
+            if let Err(e) = now() {
+                eprintln!("{e}");
+                std::process::exit(1);
             }
-            #[cfg(feature = "dev-tools")]
-            "--bench" => {
-                if let Err(e) = brewed_texture_engine::tools::bench() {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                }
-                return Ok(());
-            }
-            #[cfg(feature = "dev-tools")]
-            "--third-party" => {
-                let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/third-party/crates.json.z");
-                if let Err(e) = third_party::write_crates(&out) {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                }
-                return Ok(());
-            }
-            #[cfg(feature = "dev-tools")]
-            "--compose" => {
-                if let Err(e) = compose::run(&args[i + 1..]) {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                }
-                return Ok(());
-            }
-            #[cfg(feature = "dev-tools")]
-            "--contact-sheet" => {
-                let out = value(i).unwrap_or_else(|| "contact_sheet.png".into());
-                let (graph, nodes) = if args.get(i + 2).map(String::as_str) == Some("demo") {
-                    let (g, _) = brewed_texture_core::demo::graph();
-                    let nodes = g
-                        .nodes
-                        .iter()
-                        .filter(|n| n.def().has_image())
-                        .map(|n| (n.id, n.def().name.to_string()))
-                        .collect();
-                    (g, nodes)
-                } else {
-                    brewed_texture_engine::tools::gallery_graph()
-                };
-                if let Err(e) = brewed_texture_engine::tools::contact_sheet(&graph, &nodes, std::path::Path::new(&out)) {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                }
-                return Ok(());
-            }
-            #[cfg(any(test, feature = "dev-tools"))]
-            "--screenshot" => {
-                options.dev.screenshot = value(i).map(PathBuf::from);
-                i += 1;
-            }
-            #[cfg(any(test, feature = "dev-tools"))]
-            "--picture" => {
-                options.dev.picture = value(i).map(PathBuf::from);
-                i += 1;
-            }
-            #[cfg(any(test, feature = "dev-tools"))]
-            "--picture-lit" => options.dev.picture_lit = true,
-            #[cfg(any(test, feature = "dev-tools"))]
-            "--export" => {
-                options.dev.export = value(i).map(PathBuf::from);
-                i += 1;
-            }
-            #[cfg(any(test, feature = "dev-tools"))]
-            "--picture-size" => {
-                // WIDTH or WIDTHxHEIGHT.
-                options.dev.picture_size = value(i).and_then(|s| {
-                    let mut sides = s.split('x').map(|n| n.trim().parse::<u32>().ok());
-                    let width = sides.next()??;
-                    Some([width, sides.next().flatten().unwrap_or(width)])
-                });
-                i += 1;
-            }
-            #[cfg(any(test, feature = "dev-tools"))]
-            "--scenario" => {
-                options.dev.scenario = value(i);
-                i += 1;
-            }
-            #[cfg(any(test, feature = "dev-tools"))]
-            "--select" => {
-                options.dev.select = value(i);
-                i += 1;
-            }
-            #[cfg(any(test, feature = "dev-tools"))]
-            "--preview" => {
-                options.dev.preview = value(i);
-                i += 1;
-            }
-            #[cfg(any(test, feature = "dev-tools"))]
-            "--autopilot" => {
-                // How long is optional.
-                let minutes = value(i).and_then(|m| m.parse::<f32>().ok());
-                if minutes.is_some() {
-                    i += 1;
-                }
-                flight = Some(minutes.unwrap_or(10.0));
-            }
-            #[cfg(any(test, feature = "dev-tools"))]
-            "--seed" => {
-                seed = value(i).and_then(|s| s.parse().ok()).unwrap_or(seed);
-                i += 1;
-            }
-            "--render" | "--graph" | "--set" | "--size" | "--precision" | "--out" => {
-                let Some(v) = value(i) else { usage_error(&format!("{} needs a value", args[i])) };
-                let job = render.get_or_insert_with(Job::default);
-                match args[i].as_str() {
-                    "--render" => job.package = PathBuf::from(v),
-                    "--graph" => job.graphs.push(v),
-                    "--set" => match v.split_once('=') {
-                        Some((name, text)) => job.values.push((name.trim().to_string(), text.to_string())),
-                        None => usage_error(&format!("--set {v}: write NAME=VALUE")),
-                    },
-                    "--size" => job.size = Some(size(&v).unwrap_or_else(|| usage_error(&format!("--size {v}: write 2048 or 2048x1024")))),
-                    "--precision" => {
-                        job.precision = Some(match v.as_str() {
-                            "8" => brewed_texture_core::Precision::Bits8,
-                            "16" | "half" => brewed_texture_core::Precision::Half,
-                            "32" | "full" => brewed_texture_core::Precision::Full,
-                            _ => usage_error(&format!("--precision {v}: write 8, 16 or 32")),
-                        })
-                    }
-                    _ => job.out = PathBuf::from(v),
-                }
-                i += 1;
-            }
-            other if other.starts_with("--") => {
-                eprintln!("unknown option {other}\n\n{}", usage());
-                std::process::exit(2);
-            }
-            other => options.open.push(PathBuf::from(other)),
+            return Ok(());
         }
-        i += 1;
-    }
+        Asked::Run(run) => *run,
+    };
 
     // The settings and the layout of the last session, kept for the next one (not for
     // screenshots, which show the program as it starts the first time, nor for the autopilot).
@@ -265,6 +162,11 @@ fn main() -> iced::Result {
     };
     #[cfg(not(any(test, feature = "dev-tools")))]
     let as_it_was = true;
+    // The log: on standard error, and in a file beside the settings for a user's window (not for
+    // a render from the command line, which would put away the log of the window's last run);
+    // a panic is written in it before it is said as it was.
+    options.log = log_file::start(workspace::folder().filter(|_| as_it_was && render.is_none()).as_deref(), LOG_FILTER);
+    log_file::install_panic_hook();
     // (Read before anything else runs: they say the graphics API, which the environment
     // gives iced and the engine.)
     options.settings = settings::Store::open(workspace::folder().filter(|_| as_it_was).map(|f| f.join("settings.toml")));
@@ -355,6 +257,175 @@ fn cannot_run() -> ! {
     std::process::exit(1);
 }
 
+/// Read the command line (the arguments after the program's name). Options are read as text,
+/// paths are kept as they are given: a file manager on Linux can give a file named in another
+/// encoding than Unicode, which is opened, or said not to be (see `App::open_file`).
+fn read_args(args: &[OsString]) -> Asked {
+    let mut options = StartupOptions::default();
+    #[cfg(any(test, feature = "dev-tools"))]
+    let (mut flight, mut seed) = (None, 1);
+    let mut render: Option<Job> = None;
+    let mut i = 0;
+    while i < args.len() {
+        // The argument after this one: as text, or as the path it is.
+        #[cfg(any(test, feature = "dev-tools"))]
+        let value = |i: usize| args.get(i + 1).map(|v| text(v).to_string());
+        #[cfg(any(test, feature = "dev-tools"))]
+        let path = |i: usize| args.get(i + 1).map(PathBuf::from);
+        let Some(arg) = args[i].to_str() else {
+            options.open.push(PathBuf::from(&args[i]));
+            i += 1;
+            continue;
+        };
+        match arg {
+            "--help" | "-h" => {
+                return Asked::Now(Box::new(|| {
+                    println!("{}", usage());
+                    Ok(())
+                }));
+            }
+            #[cfg(feature = "dev-tools")]
+            "--bench" => return Asked::Now(Box::new(brewed_texture_engine::tools::bench)),
+            #[cfg(feature = "dev-tools")]
+            "--third-party" => {
+                let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/third-party/crates.json.z");
+                return Asked::Now(Box::new(move || third_party::write_crates(&out)));
+            }
+            #[cfg(feature = "dev-tools")]
+            "--compose" => {
+                let rest: Vec<String> = args[i + 1..].iter().map(|a| text(a).to_string()).collect();
+                return Asked::Now(Box::new(move || compose::run(&rest)));
+            }
+            #[cfg(feature = "dev-tools")]
+            "--contact-sheet" => {
+                let out = path(i).unwrap_or_else(|| "contact_sheet.png".into());
+                let demo = args.get(i + 2).and_then(|a| a.to_str()) == Some("demo");
+                return Asked::Now(Box::new(move || {
+                    let (graph, nodes) = if demo {
+                        let (g, _) = brewed_texture_core::demo::graph();
+                        let nodes = g
+                            .nodes
+                            .iter()
+                            .filter(|n| n.def().has_image())
+                            .map(|n| (n.id, n.def().name.to_string()))
+                            .collect();
+                        (g, nodes)
+                    } else {
+                        brewed_texture_engine::tools::gallery_graph()
+                    };
+                    brewed_texture_engine::tools::contact_sheet(&graph, &nodes, &out)
+                }));
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--screenshot" => {
+                options.dev.screenshot = path(i);
+                i += 1;
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--picture" => {
+                options.dev.picture = path(i);
+                i += 1;
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--picture-lit" => options.dev.picture_lit = true,
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--export" => {
+                options.dev.export = path(i);
+                i += 1;
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--picture-size" => {
+                // WIDTH or WIDTHxHEIGHT.
+                options.dev.picture_size = value(i).and_then(|s| {
+                    let mut sides = s.split('x').map(|n| n.trim().parse::<u32>().ok());
+                    let width = sides.next()??;
+                    Some([width, sides.next().flatten().unwrap_or(width)])
+                });
+                i += 1;
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--scenario" => {
+                options.dev.scenario = value(i);
+                i += 1;
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--select" => {
+                options.dev.select = value(i);
+                i += 1;
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--preview" => {
+                options.dev.preview = value(i);
+                i += 1;
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--autopilot" => {
+                // How long is optional.
+                let minutes = args.get(i + 1).and_then(|m| m.to_str()?.parse::<f32>().ok());
+                if minutes.is_some() {
+                    i += 1;
+                }
+                flight = Some(minutes.unwrap_or(10.0));
+            }
+            #[cfg(any(test, feature = "dev-tools"))]
+            "--seed" => {
+                seed = value(i).and_then(|s| s.parse().ok()).unwrap_or(seed);
+                i += 1;
+            }
+            "--render" | "--graph" | "--set" | "--size" | "--precision" | "--out" => {
+                let Some(given) = args.get(i + 1) else { usage_error(&format!("{arg} needs a value")) };
+                let job = render.get_or_insert_with(Job::default);
+                match arg {
+                    "--render" => job.package = PathBuf::from(given),
+                    "--out" => job.out = PathBuf::from(given),
+                    _ => {
+                        let v = text(given);
+                        match arg {
+                            "--graph" => job.graphs.push(v.to_string()),
+                            "--set" => match v.split_once('=') {
+                                Some((name, text)) => job.values.push((name.trim().to_string(), text.to_string())),
+                                None => usage_error(&format!("--set {v}: write NAME=VALUE")),
+                            },
+                            "--size" => job.size = Some(size(v).unwrap_or_else(|| usage_error(&format!("--size {v}: write 2048 or 2048x1024")))),
+                            _ => {
+                                job.precision = Some(match v {
+                                    "8" => brewed_texture_core::Precision::Bits8,
+                                    "16" | "half" => brewed_texture_core::Precision::Half,
+                                    "32" | "full" => brewed_texture_core::Precision::Full,
+                                    _ => usage_error(&format!("--precision {v}: write 8, 16 or 32")),
+                                })
+                            }
+                        }
+                    }
+                }
+                i += 1;
+            }
+            other if other.starts_with("--") => usage_error(&format!("unknown option {other}")),
+            _ => options.open.push(PathBuf::from(&args[i])),
+        }
+        i += 1;
+    }
+    Asked::Run(Box::new(Run {
+        options,
+        render,
+        #[cfg(any(test, feature = "dev-tools"))]
+        flight,
+        #[cfg(any(test, feature = "dev-tools"))]
+        seed,
+    }))
+}
+
+/// An argument read as text (an option, or a value that is not a path); not Unicode, it is a
+/// mistake, which names it as well as it can be written.
+fn unicode(arg: &OsStr) -> Result<&str, String> {
+    arg.to_str().ok_or_else(|| format!("{}: not Unicode text (only a file to open may be named otherwise)", arg.to_string_lossy()))
+}
+
+/// [`unicode`], or stop at the mistake.
+fn text(arg: &OsStr) -> &str {
+    unicode(arg).unwrap_or_else(|e| usage_error(&e))
+}
+
 /// Stop at a mistake in the command line.
 fn usage_error(message: &str) -> ! {
     eprintln!("{message}\n\n{}", usage());
@@ -411,5 +482,73 @@ fn attach_console() {
     // SAFETY: no preconditions; fails harmlessly without a parent console.
     unsafe {
         windows_sys::Win32::System::Console::AttachConsole(windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    /// A file name that is not Unicode text: "café.brewtex" in Latin-1 on Unix, with a lone half
+    /// of a surrogate pair on Windows (what each system can give a program).
+    pub(crate) fn not_unicode() -> OsString {
+        #[cfg(unix)]
+        let name = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(b"caf\xe9.brewtex".to_vec())
+        };
+        #[cfg(windows)]
+        let name = {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[0x63, 0x61, 0x66, 0xD800, 0x2E, 0x62, 0x72, 0x65, 0x77, 0x74, 0x65, 0x78])
+        };
+        assert!(name.to_str().is_none());
+        name
+    }
+
+    fn run(args: &[&OsStr]) -> Run {
+        match read_args(&args.iter().map(OsString::from).collect::<Vec<_>>()) {
+            Asked::Run(run) => *run,
+            Asked::Now(_) => panic!("the window, or a render, is asked for"),
+        }
+    }
+
+    /// A file to open whose name is not Unicode text (a file manager on Linux can give one) is
+    /// kept as it was given, beside the others: no panic before the window opens.
+    #[test]
+    fn a_file_named_in_another_encoding_is_kept_as_given() {
+        let odd = not_unicode();
+        let run = run(&[&odd, OsStr::new("walls.brewtex")]);
+        assert_eq!(run.options.open, [PathBuf::from(&odd), PathBuf::from("walls.brewtex")]);
+        assert!(run.render.is_none());
+        assert!(matches!(read_args(&[odd, OsString::from("--help")]), Asked::Now(_)), "and the options after it are read");
+    }
+
+    /// Options are read as text, the paths they take as they are given.
+    #[test]
+    fn options_are_read_as_text_and_their_paths_as_given() {
+        let odd = not_unicode();
+        let run = run(&[
+            OsStr::new("--render"),
+            &odd,
+            OsStr::new("--graph"),
+            OsStr::new("Walls"),
+            OsStr::new("--size"),
+            OsStr::new("512"),
+            OsStr::new("--out"),
+            &odd,
+        ]);
+        let job = run.render.expect("a render");
+        assert_eq!((job.package, job.out), (PathBuf::from(&odd), PathBuf::from(&odd)));
+        assert_eq!((job.graphs, job.size), (vec!["Walls".to_string()], Some([512, 512])));
+        assert!(run.options.open.is_empty());
+    }
+
+    /// What has to be text and is not is a mistake that names it, as well as it can be written.
+    #[test]
+    fn a_value_that_is_not_text_is_named_as_a_mistake() {
+        assert_eq!(unicode(OsStr::new("Walls")), Ok("Walls"));
+        let said = unicode(&not_unicode()).expect_err("not text");
+        assert!(said.starts_with("caf\u{FFFD}") && said.contains("not Unicode"), "{said}");
     }
 }

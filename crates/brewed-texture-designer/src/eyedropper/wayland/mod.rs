@@ -444,7 +444,7 @@ impl State {
             } else if let Some(xdg) = &self.xdg_shell {
                 let window = xdg.create_window(surface, WindowDecorations::None, &self.qh);
                 window.set_title("Brewed Texture Designer eyedropper");
-                window.set_app_id("brewed-texture-designer");
+                window.set_app_id(crate::brand::APP_ID);
                 window.set_fullscreen(Some(&output));
                 window.commit();
                 Shell::Window(window)

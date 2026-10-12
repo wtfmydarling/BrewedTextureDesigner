@@ -6,6 +6,11 @@
 
 pub mod art;
 
+/// What the program is to the desktop on Linux and the BSDs: the id of its windows on Wayland
+/// and their class on X11, as its desktop entry is named (`brewed-texture-designer.desktop`).
+#[cfg(free_unix)]
+pub const APP_ID: &str = "brewed-texture-designer";
+
 /// The icon as an image for the interface (drawn at 32 px, shown at 16 px: sharp on
 /// high-DPI screens).
 pub fn logo() -> iced::widget::image::Handle {
