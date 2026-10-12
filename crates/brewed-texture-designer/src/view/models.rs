@@ -413,11 +413,11 @@ fn pieces_of(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
     use std::f32::consts::{FRAC_PI_2, PI, TAU};
     let mut out = (Vec::new(), Vec::new());
     match shape {
-        // Its edges rounded by a sixty-fourth of its side: enough to catch the light as the
+        // Its edges rounded by a thirty-second of its side: enough to catch the light as the
         // edge of a real thing does, the faces flat to their ends for a texture to be judged
-        // on (a quarter of each face was round, then a sixteenth and a thirty-second of the
-        // side).
-        Shape::RoundedCube => rounded_box(0.8, 1.6 / 64.0, 192, 16, &mut out),
+        // on (a quarter of each face was round, then a sixteenth, a thirty-second and a
+        // sixty-fourth of the side).
+        Shape::RoundedCube => rounded_box(0.8, 1.6 / 32.0, 192, 16, &mut out),
         Shape::Sphere => grid(
             384,
             192,
@@ -591,8 +591,9 @@ mod tests {
             let d = density(&v, &i);
             assert!((90.0..=1200.0).contains(&d), "{shape:?}: {d} vertices to a unit of the texture");
             if shape == Shape::RoundedCube {
-                // (192 steps over what its rounded ends leave of the texture.)
-                assert!((d - 192.0 / (1.0 - 1.0 / 32.0)).abs() < 2.0, "{d}");
+                // (192 steps over what its rounded ends, a thirty-second of the side each,
+                // leave of the texture.)
+                assert!((d - 192.0 / (1.0 - 2.0 / 32.0)).abs() < 2.0, "{d}");
             }
             assert!(v.iter().all(|x| x.height_uv.iter().all(|c| c.is_finite())), "{shape:?}");
         }
