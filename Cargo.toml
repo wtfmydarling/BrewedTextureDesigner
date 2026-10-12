@@ -6,8 +6,8 @@ members = ["crates/brewed-texture-core", "crates/brewed-texture-engine", "crates
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
-license = "MIT"
-repository = "https://example.invalid/brewed-texture-designer"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/wtfmydarling/BrewedTextureDesigner"
 
 [workspace.dependencies]
 brewed-texture-core = { path = "crates/brewed-texture-core" }

@@ -168,6 +168,8 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
                 text(format!("GPU: {gpu}")).size(style::TEXT_SIZE),
                 text(format!("CPU threads: {}", std::thread::available_parallelism().map_or(1, |n| n.get())))
                     .size(style::TEXT_SIZE),
+                // Whose the program is: anyone's (see LICENSE-MIT, LICENSE-APACHE and NOTICE).
+                text(crate::third_party::OWN_LICENSE).size(style::TEXT_SIZE).color(style::TEXT_DIM),
                 row![
                     space().width(Length::Fill),
                     button(text("Third-Party Notices…").size(style::TEXT_SIZE))

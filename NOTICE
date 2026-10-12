@@ -1,0 +1,25 @@
+Brewed Texture Designer
+Copyright (c) 2026 The Brewed Texture Designer contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT, LICENSE-APACHE).
+
+Third-party material
+
+The program holds the work of others, each under its own license:
+
+The Matball model (crates/brewed-texture-designer/assets/models/matball.bin) — made of
+"Shader Ball JL 01" by Craneo (https://skfb.ly/ozVxI), changed: its modifiers applied, made
+triangles, turned, made the size of the program's other models. Creative Commons Attribution 4.0
+(https://creativecommons.org/licenses/by/4.0/).
+
+The Inter font (crates/brewed-texture-designer/assets/fonts/InterVariable.ttf and
+InterVariable-Italic.ttf, crates/brewed-texture-engine/assets/fonts/Inter-Regular.ttf) —
+Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter). SIL Open Font License 1.1;
+see Inter-LICENSE.txt beside each.
+
+The Rust crates the program is built of — each with its license and a link to where it is — are
+listed in the program itself: Help → Third-Party Notices.
+
+Substance 3D Designer is a trademark of Adobe Inc. Brewed Texture Designer is made on its own,
+of none of Adobe's code, shaders or files, and is not affiliated with, sponsored or endorsed by
+Adobe Inc.; the name is used only to say what kind of work the program is for.

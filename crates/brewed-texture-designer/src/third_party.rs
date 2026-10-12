@@ -17,6 +17,11 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+/// Under what the program itself is, as About says it: free to use, study, change and share,
+/// under either license of the two Rust's own crates are under (LICENSE-MIT and LICENSE-APACHE
+/// beside the sources; NOTICE names what in it is others').
+pub const OWN_LICENSE: &str = "Free and open source, under the MIT License or the Apache License 2.0, as you choose.";
+
 /// What a work is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -272,6 +277,41 @@ mod tests {
         assert_eq!(names.iter().filter(|n| **n == "wgpu").count(), 1, "each crate once, whatever its versions");
         let ball = &works[0];
         assert!(ball.name.contains("Shader Ball JL 01") && ball.name.contains("Craneo") && ball.license == "CC BY 4.0" && ball.link == "https://skfb.ly/ozVxI");
+    }
+
+    /// The program is under the two licenses it says it is: what cargo is told, what About says,
+    /// and the texts beside the sources; NOTICE names every work in it that is not a crate, with
+    /// its license.
+    #[test]
+    fn the_program_is_under_the_licenses_it_says() {
+        assert_eq!(env!("CARGO_PKG_LICENSE"), "MIT OR Apache-2.0");
+        assert!(env!("CARGO_PKG_REPOSITORY").starts_with("https://github.com/"), "where the sources are");
+        assert!(OWN_LICENSE.contains("MIT License") && OWN_LICENSE.contains("Apache License 2.0"));
+        let mit = include_str!("../../../LICENSE-MIT");
+        assert!(mit.starts_with("MIT License") && mit.contains("Permission is hereby granted, free of charge") && mit.contains("Brewed Texture Designer"));
+        let apache = include_str!("../../../LICENSE-APACHE");
+        assert!(apache.contains("Apache License") && apache.contains("Version 2.0, January 2004") && apache.trim_end().ends_with("END OF TERMS AND CONDITIONS"));
+        let notice = include_str!("../../../NOTICE");
+        assert!(notice.contains("LICENSE-MIT") && notice.contains("LICENSE-APACHE"));
+        for (named, license) in [("Shader Ball JL 01", "Creative Commons Attribution 4.0"), ("Inter", "SIL Open Font License 1.1")] {
+            assert!(works().iter().any(|w| w.kind != Kind::Software && w.name.contains(named)), "{named} is in the program");
+            assert!(notice.contains(named) && notice.contains(license), "NOTICE names {named}, under {license}");
+        }
+        assert_eq!(works().iter().filter(|w| w.kind != Kind::Software).count(), 2, "a work that is not a crate is named in NOTICE too");
+    }
+
+    /// No crate built into the program asks that the program be under its own license (the
+    /// GPL's kind), or keeps anyone from using it: each may be taken under licenses that only
+    /// ask to be named. The program could not be under MIT or Apache-2.0 otherwise.
+    #[test]
+    fn every_crate_lets_the_program_be_under_its_own_licenses() {
+        const NAMED_ONLY: &[&str] = &["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Unicode-DFS-2016", "NCSA", "OFL-1.1"];
+        let crates = read_crates().crates;
+        assert!(crates.len() > 20);
+        for (name, license, _) in &crates {
+            let free = choices(license).iter().any(|taken| taken.iter().all(|l| NAMED_ONLY.contains(&l.as_str()) || ASK_NOTHING.contains(&l.as_str())));
+            assert!(free, "{name} is under {license}: not a license the program may be built of");
+        }
     }
 
     /// Of a choice, one license that asks nothing leaves the crate out; licenses taken together

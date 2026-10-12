@@ -1,6 +1,6 @@
 # Brewed Texture Designer
 
-Нодовый процедурный редактор текстур в духе Substance Designer — первая программа семейства Brewed.
+Нодовый процедурный редактор текстур в духе Substance Designer — первая программа семейства Brewed. Свободная, с открытым исходным кодом: [MIT](LICENSE-MIT) или [Apache-2.0](LICENSE-APACHE), на выбор ([подробнее](#лицензия)).
 Rust · **wgpu** (ноды рисуются на GPU шейдерами WGSL) · **iced** (интерфейс) · **SIMD + многопоточность** (`wide` + `rayon`) для CPU-части.
 
 ![Brewed Texture Designer](docs/screenshot.png)
@@ -305,7 +305,7 @@ Output хранит то, что он записывает: свой вход в
 ## Проверка
 
 ```bash
-cargo test --workspace                                            # 470 тестов
+cargo test --workspace                                            # 472 теста
 WGPU_BACKEND=dx12 cargo test --workspace                          # они же на другом бэкенде (vulkan, dx12, metal)
 cargo test --workspace -- --ignored                               # живые тесты пипетки и захвата указателя (нужен рабочий стол), замеры, стресс-тесты
 cargo run --release --features dev-tools -- --autopilot 30 --seed 3                  # программа 30 минут гоняет себя сама (ниже)
@@ -347,3 +347,13 @@ cargo run --release --features dev-tools -- --third-party                       
 | миниатюры всех нод | 4.3 ms |
 | квантование f32→u8, SIMD+потоки против скаляра | 2.4 ms против 13.0 ms (×5.5) |
 | гистограмма + min/max/mean | 2.5 ms против 23.5 ms (×9.4) |
+
+## Лицензия
+
+Brewed Texture Designer — свободная программа с открытым исходным кодом: её можно использовать, изучать, менять и распространять, в том числе в своих продуктах, по лицензии [MIT](LICENSE-MIT) или [Apache-2.0](LICENSE-APACHE), на выбор — как сам Rust и большинство его крейтов. Copyright (c) 2026 The Brewed Texture Designer contributors. То же говорит окно About.
+
+Чужое в программе остаётся под своими лицензиями и названо в [NOTICE](NOTICE): модель Matball (сделана из Shader Ball JL 01, автор Craneo, CC BY 4.0) и шрифт Inter (SIL OFL 1.1). Крейты, из которых программа собрана, перечислены в ней самой: Help → Third-Party Notices — у каждого лицензия и ссылка.
+
+Два теста следят, чтобы так и оставалось. `the_program_is_under_the_licenses_it_says`: манифест, окно About, тексты лицензий и NOTICE говорят одно и то же, и всё, что в программе не крейт, названо в NOTICE. `every_crate_lets_the_program_be_under_its_own_licenses`: среди крейтов, из которых программа собрана, нет ни одного под лицензией, которая требует того же от всей программы (GPL и ей подобные) — каждый можно взять под лицензией, которая просит только назвать его.
+
+Программа написана с нуля: в ней нет ни кода, ни шейдеров, ни файлов Adobe — только то, как такие программы ведут себя, из общедоступной документации и из работы с ними. Substance 3D Designer — товарный знак Adobe Inc.; Brewed Texture Designer с Adobe не связан и ею не одобрен, а название упомянуто, только чтобы сказать, для какой работы программа.

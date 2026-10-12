@@ -4571,7 +4571,7 @@ fn the_graphs_panorama_lights_the_3d_view_when_asked() {
 /// made with, its license, and a link to where it is: Matball's model (its author), the font,
 /// Rust's standard library and every crate; searched, only what is found. A click on one opens
 /// its link (not in the tests). About says no more of what the program is built with, but opens
-/// this window.
+/// this window; and says under what the program itself is.
 #[test]
 fn the_third_party_notices_say_whose_work_is_used() {
     use crate::app::NoticesMessage;
@@ -4591,6 +4591,7 @@ fn the_third_party_notices_say_whose_work_is_used() {
     w.snapshot("third_party_notices");
     w.send(Message::Dialog(Some(Dialog::About)));
     assert!(!shown(&mut w, "Rust · wgpu · iced"), "About says no more of what the program is built with");
+    assert!(shown(&mut w, crate::third_party::OWN_LICENSE), "About says under what the program itself is");
     let notices = *texts(&mut w, "Third-Party Notices…").last().expect("About opens the notices");
     click(&mut w, notices.center());
     assert!(matches!(w.app.ui.dialog, Some(Dialog::Notices(_))));
