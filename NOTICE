@@ -17,6 +17,10 @@ InterVariable-Italic.ttf, crates/brewed-texture-engine/assets/fonts/Inter-Regula
 Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter). SIL Open Font License 1.1;
 see Inter-LICENSE.txt beside each.
 
+The winit crate (patches/winit) — winit 0.30.13 (https://github.com/rust-windowing/winit), changed:
+it takes files dropped on the window on Wayland (src/platform_impl/linux/wayland/seat/dnd.rs, of
+https://github.com/MixaDoDs/photocraft/tree/wayland-dnd). Apache License 2.0; see LICENSE beside it.
+
 The Rust crates the program is built of — each with its license and a link to where it is — are
 listed in the program itself: Help → Third-Party Notices.
 
