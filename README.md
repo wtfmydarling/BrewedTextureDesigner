@@ -313,7 +313,7 @@ The interface does not need changing: the Library, the search, the properties, s
 ## Testing
 
 ```bash
-cargo test --workspace                                            # 492 tests
+cargo test --workspace                                            # 493 tests
 WGPU_BACKEND=dx12 cargo test --workspace                          # the same on another backend (vulkan, dx12, metal)
 cargo test --workspace -- --ignored                               # live tests of the eyedropper and of pointer capture (a desktop is needed), measurements, stress tests
 cargo run --release --features dev-tools -- --autopilot 30 --seed 3                  # the program drives itself for 30 minutes (below)
