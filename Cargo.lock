@@ -466,6 +466,7 @@ dependencies = [
  "smithay-client-toolkit 0.19.2",
  "smithay-clipboard",
  "toml_edit",
+ "unicode-script",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
