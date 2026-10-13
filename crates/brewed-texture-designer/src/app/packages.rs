@@ -22,6 +22,7 @@ use brewed_texture_core::{
 };
 
 use super::{App, Collected, ContextMenu, Dialog, DragPayload, ExplorerMessage, FileTarget, Fold, Message, MissingFiles, PendingAction, blocking};
+use crate::file_dialogs::Filters;
 
 /// A package open in the Explorer, other than the one being edited.
 pub struct OpenPackage {
@@ -1035,7 +1036,7 @@ impl App {
         let title = format!("Where is {}?", package::file_name(&path));
         Task::perform(
             blocking(move || {
-                let mut dialog = rfd::FileDialog::new().set_title(title).add_filter(label, &extensions);
+                let mut dialog = rfd::FileDialog::new().set_title(title).filter_to_open(label, &extensions);
                 if let Some(folder) = folder {
                     dialog = dialog.set_directory(folder);
                 }
@@ -1358,9 +1359,9 @@ impl App {
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new()
                             .set_title("Import and link files")
-                            .add_filter("Images, vector graphics and fonts", &extensions);
+                            .filter_to_open("Images, vector graphics and fonts", &extensions);
                         for kind in ResourceKind::ALL {
-                            dialog = dialog.add_filter(kind.name(), kind.extensions());
+                            dialog = dialog.filter_to_open(kind.name(), kind.extensions());
                         }
                         if let Some(folder) = folder {
                             dialog = dialog.set_directory(folder);
@@ -1397,9 +1398,9 @@ impl App {
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new()
                             .set_title("Import and embed files")
-                            .add_filter("Images, vector graphics and fonts", &extensions);
+                            .filter_to_open("Images, vector graphics and fonts", &extensions);
                         for kind in ResourceKind::ALL {
-                            dialog = dialog.add_filter(kind.name(), kind.extensions());
+                            dialog = dialog.filter_to_open(kind.name(), kind.extensions());
                         }
                         if let Some(folder) = folder {
                             dialog = dialog.set_directory(folder);

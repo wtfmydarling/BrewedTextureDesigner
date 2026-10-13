@@ -11,6 +11,7 @@ mod clock;
 mod compose;
 mod environment;
 mod eyedropper;
+mod file_dialogs;
 mod gpu;
 mod highlight;
 mod icons;
