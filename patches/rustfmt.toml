@@ -1,0 +1,3 @@
+# The crates kept here are other projects' code, each byte for byte as released but for the changes
+# README.md lists: they are never formatted with this repository's settings.
+disable_all_formatting = true
