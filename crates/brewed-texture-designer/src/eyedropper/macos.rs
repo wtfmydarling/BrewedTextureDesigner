@@ -81,8 +81,7 @@ pub fn symbol<F: Copy>(name: &CStr) -> Option<F> {
 /// only show the desktop picture.
 pub fn screen_capture_allowed() -> Result<(), String> {
     type Check = unsafe extern "C" fn() -> bool;
-    let (Some(preflight), Some(request)): (Option<Check>, Option<Check>) =
-        (symbol(c"CGPreflightScreenCaptureAccess"), symbol(c"CGRequestScreenCaptureAccess"))
+    let (Some(preflight), Some(request)): (Option<Check>, Option<Check>) = (symbol(c"CGPreflightScreenCaptureAccess"), symbol(c"CGRequestScreenCaptureAccess"))
     else {
         // Older systems ask for no permission.
         return Ok(());

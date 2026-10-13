@@ -302,13 +302,9 @@ impl Template {
     /// What kind of graph it makes.
     pub fn kind(self) -> &'static str {
         match self {
-            Template::Pbr
-            | Template::Anisotropy
-            | Template::Coat
-            | Template::Subsurface
-            | Template::Fuzz
-            | Template::Complete
-            | Template::ScanProcessing => "Standard material",
+            Template::Pbr | Template::Anisotropy | Template::Coat | Template::Subsurface | Template::Fuzz | Template::Complete | Template::ScanProcessing => {
+                "Standard material"
+            }
             Template::StudioPanorama => "Environment light",
             Template::Convolution | Template::GrayFilter | Template::ColorFilter => "Filter",
             Template::Grid | Template::Noise => "Generator",
@@ -335,7 +331,9 @@ impl Template {
                 "An environment light of a studio, made of HDRI tools (a softbox overhead, a strip light, a large panel \
                  behind, in the dark of the room): a panorama in 32-bit floats whose usage, Panorama, lights the 3D view."
             }
-            Template::Convolution => "A convolution filter of a grayscale image: each pixel the average of those around it, as far as a map says (a box blur that is not the same everywhere).",
+            Template::Convolution => {
+                "A convolution filter of a grayscale image: each pixel the average of those around it, as far as a map says (a box blur that is not the same everywhere)."
+            }
             Template::Grid => "A grid of squares, as many across and down as its input values say, drawn by one FX-Map.",
             Template::Noise => "Noise of splats: one at every split of the image, the finer the weaker, added up (as clouds are).",
             Template::ScanProcessing => {
@@ -523,7 +521,12 @@ impl Template {
                 set(&mut g, background, "color", ParamValue::Color(gray(0.5)));
                 set(&mut g, background, "output", ParamValue::Enum(1));
                 let fx = g.add_node(NodeKind::FX_MAP, [0.0, 0.0]);
-                set(&mut g, fx, "program", ParamValue::Text("# A splat at every depth, each finer one weaker.\nsize = 1.4\nvalue = (rand(1) - 0.5) * 0.6^depth".into()));
+                set(
+                    &mut g,
+                    fx,
+                    "program",
+                    ParamValue::Text("# A splat at every depth, each finer one weaker.\nsize = 1.4\nvalue = (rand(1) - 0.5) * 0.6^depth".into()),
+                );
                 set(&mut g, fx, "count", ParamValue::Int(1));
                 set(&mut g, fx, "from_depth", ParamValue::Int(0));
                 set(&mut g, fx, "depth", ParamValue::Int(8));

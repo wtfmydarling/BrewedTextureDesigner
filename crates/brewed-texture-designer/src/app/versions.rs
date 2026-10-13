@@ -31,7 +31,14 @@ pub enum VersionsMessage {
     /// A version was read: to be restored in place of the package open as `key` (saved as
     /// `path`), as it was when it was asked for (`revision`), or opened beside it; when it was
     /// kept.
-    Read { key: u64, path: PathBuf, restore: bool, revision: Option<u64>, time: u64, result: Result<Arc<Loaded>, String> },
+    Read {
+        key: u64,
+        path: PathBuf,
+        restore: bool,
+        revision: Option<u64>,
+        time: u64,
+        result: Result<Arc<Loaded>, String>,
+    },
 }
 
 impl App {
@@ -62,10 +69,7 @@ impl App {
                 self.ui.dialog = None;
                 // The unsaved changes the version takes the place of: kept as a version too, once
                 // it is read (keeping it may let the oldest go), even where none are kept.
-                let replaced = self
-                    .package_doc(key)
-                    .filter(|d| restore && d.is_dirty())
-                    .map(|d| (d.package().clone(), self.views_of(key), d.current()));
+                let replaced = self.package_doc(key).filter(|d| restore && d.is_dirty()).map(|d| (d.package().clone(), self.views_of(key), d.current()));
                 // (Changed while the version is read, the package is not replaced: what changed
                 // was not kept.)
                 let revision = self.package_doc(key).map(|d| d.revision());

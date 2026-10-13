@@ -5,8 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
-use brewed_texture_core::export_presets::{self, Planned, PlannedFile, Preset, Source};
 use brewed_texture_core::NodeKind;
+use brewed_texture_core::export_presets::{self, Planned, PlannedFile, Preset, Source};
 use brewed_texture_core::nodes::DEPTH_8;
 use brewed_texture_engine::export::{self, Packed};
 use brewed_texture_engine::{ExportJob, Request};

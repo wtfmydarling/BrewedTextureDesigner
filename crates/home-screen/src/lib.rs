@@ -326,13 +326,9 @@ pub fn view<'a>(content: Content<'a>, state: State, style: Style) -> Element<'a,
         .width(Length::Fill)
         .height(Length::Fill)
         .style(scroll_box::look(style.page, style.dim));
-    row![
-        sidebar(&content, state, style),
-        rule::vertical(1).style(style.rule()),
-        container(page).width(Length::Fill).height(Length::Fill).style(style.page()),
-    ]
-    .height(Length::Fill)
-    .into()
+    row![sidebar(&content, state, style), rule::vertical(1).style(style.rule()), container(page).width(Length::Fill).height(Length::Fill).style(style.page()),]
+        .height(Length::Fill)
+        .into()
 }
 
 fn line<'a>(style: Style) -> Element<'a, Event> {
@@ -356,11 +352,12 @@ fn sidebar<'a>(content: &Content<'a>, state: State, style: Style) -> Element<'a,
         .padding([9, 12])
         .style(style.primary())
         .on_press(Event::New);
-    let open = button(row![glyph(Glyph::Open, 15.0, style.text), text("Open…").size(style.text_size).font(style.medium())].spacing(9).align_y(Alignment::Center))
-        .width(Length::Fill)
-        .padding([9, 12])
-        .style(style.secondary())
-        .on_press(Event::Open);
+    let open =
+        button(row![glyph(Glyph::Open, 15.0, style.text), text("Open…").size(style.text_size).font(style.medium())].spacing(9).align_y(Alignment::Center))
+            .width(Length::Fill)
+            .padding([9, 12])
+            .style(style.secondary())
+            .on_press(Event::Open);
     let mut side = column![
         name,
         space().height(12),
@@ -548,7 +545,8 @@ fn info<'a, M: 'a>(start: &'a Start, style: Style) -> Element<'a, M> {
 fn layout_toggle<'a>(layout: Layout, style: Style) -> Element<'a, Event> {
     let option = |this: Layout, g: Glyph, said: &'static str| {
         let chosen = layout == this;
-        let b = button(glyph(g, 15.0, if chosen { style.bright } else { style.dim })).padding([4, 7]).style(style.segment(chosen)).on_press(Event::Layout(this));
+        let b =
+            button(glyph(g, 15.0, if chosen { style.bright } else { style.dim })).padding([4, 7]).style(style.segment(chosen)).on_press(Event::Layout(this));
         tooltip(b, container(text(said).size(style.small_size)).padding(6).style(style.tooltip()), tooltip::Position::Bottom)
     };
     container(row![option(Layout::Grid, Glyph::Grid, "As pictures"), option(Layout::List, Glyph::List, "As a list")].spacing(2))
@@ -597,10 +595,7 @@ fn card<'a>(recent: &'a Recent, style: Style) -> Element<'a, Event> {
     ]
     .spacing(3)
     .width(Length::Fixed(PICTURE));
-    let tile = button(container(body).clip(true))
-        .padding(10)
-        .style(style.tile())
-        .on_press_maybe(recent.there.then(|| Event::Recent(recent.path.clone())));
+    let tile = button(container(body).clip(true)).padding(10).style(style.tile()).on_press_maybe(recent.there.then(|| Event::Recent(recent.path.clone())));
     tooltip(tile, container(text(recent.path.as_str()).size(style.small_size)).padding(6).style(style.tooltip()), tooltip::Position::Bottom).into()
 }
 
@@ -700,10 +695,16 @@ fn learn<'a>(content: &Content<'a>, style: Style) -> Element<'a, Event> {
         };
         let item = row![
             container(picture).style(style.frame()).clip(true),
-            column![text(lesson.title.as_str()).size(15).font(style.heavy()).color(style.bright), text(lesson.about.as_str()).size(style.text_size).color(style.dim)]
-                .spacing(6)
-                .width(Length::Fill),
-            button(text("Open").size(style.text_size).font(style.medium())).padding([7, 18]).style(style.secondary()).on_press(Event::Lesson(lesson.id.clone())),
+            column![
+                text(lesson.title.as_str()).size(15).font(style.heavy()).color(style.bright),
+                text(lesson.about.as_str()).size(style.text_size).color(style.dim)
+            ]
+            .spacing(6)
+            .width(Length::Fill),
+            button(text("Open").size(style.text_size).font(style.medium()))
+                .padding([7, 18])
+                .style(style.secondary())
+                .on_press(Event::Lesson(lesson.id.clone())),
         ]
         .spacing(18)
         .align_y(Alignment::Center);

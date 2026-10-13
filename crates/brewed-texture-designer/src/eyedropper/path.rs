@@ -60,7 +60,6 @@ impl PathSampler {
     pub fn last_pixel(&self) -> Option<Pixel> {
         self.last_pixel
     }
-
 }
 
 fn pixel(p: (f32, f32)) -> Pixel {
@@ -149,11 +148,8 @@ impl Trace {
 
 /// The gradient made by the colors along a path: as few stops as reproduce them closely.
 pub fn gradient_from_path(colors: &[[f32; 4]]) -> Gradient {
-    let resampled: Vec<[f32; 4]> = if colors.len() > MAX_SAMPLES {
-        (0..MAX_SAMPLES).map(|i| colors[i * (colors.len() - 1) / (MAX_SAMPLES - 1)]).collect()
-    } else {
-        colors.to_vec()
-    };
+    let resampled: Vec<[f32; 4]> =
+        if colors.len() > MAX_SAMPLES { (0..MAX_SAMPLES).map(|i| colors[i * (colors.len() - 1) / (MAX_SAMPLES - 1)]).collect() } else { colors.to_vec() };
     Gradient::from_samples(&smooth(&resampled, SMOOTHING), TOLERANCE, Gradient::MAX_STOPS)
 }
 
@@ -246,8 +242,7 @@ mod tests {
 
     #[test]
     fn noise_does_not_make_many_stops() {
-        let colors: Vec<[f32; 4]> =
-            (0..400).map(|i| if i % 2 == 0 { [0.50, 0.5, 0.5, 1.0] } else { [0.52, 0.5, 0.5, 1.0] }).collect();
+        let colors: Vec<[f32; 4]> = (0..400).map(|i| if i % 2 == 0 { [0.50, 0.5, 0.5, 1.0] } else { [0.52, 0.5, 0.5, 1.0] }).collect();
         assert!(gradient_from_path(&colors).stops.len() <= 3);
     }
 

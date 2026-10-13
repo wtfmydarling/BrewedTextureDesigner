@@ -1,8 +1,8 @@
 //! Editors for values, shared by the Input Values panel and the properties panel.
 
+use brewed_texture_core::{ResourceKind, Value, files};
 use iced::widget::{button, column, container, image, mouse_area, row, space, text, text_input, toggler, tooltip};
 use iced::{Alignment, Border, ContentFit, Element, Length, Size};
-use brewed_texture_core::{ResourceKind, Value, files};
 
 use crate::app::{App, ColorEditorMessage, ColorTarget, ColorUnits, DragPayload, FileTarget, Message, PickMessage, VarField};
 use crate::icons::{Icon, icon};
@@ -15,10 +15,7 @@ use crate::widget::number::{NumberField, number};
 /// Does a field that takes the files with these extensions (none: any) take the file at `path`?
 pub fn takes_file(extensions: &[&str], path: &str) -> bool {
     extensions.is_empty()
-        || std::path::Path::new(path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| extensions.iter().any(|x| x.eq_ignore_ascii_case(e)))
+        || std::path::Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| extensions.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// The kind of the files with these extensions, if they are the files of one.
@@ -64,10 +61,7 @@ pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String, color: Opt
     let preview = state.and_then(|s| s.preview.as_ref());
     let picture: Element<'a, Message> = match (preview, color.filter(|_| path.is_empty())) {
         (Some(p), _) => image(p.image.clone()).width(22).height(22).content_fit(ContentFit::Contain).into(),
-        (None, Some(c)) => container(container(space().width(16).height(14)).style(style::chip(style::color_of(c))))
-            .width(22)
-            .center_x(22)
-            .into(),
+        (None, Some(c)) => container(container(space().width(16).height(14)).style(style::chip(style::color_of(c)))).width(22).center_x(22).into(),
         (None, None) => {
             let glyph = match kind {
                 Some(ResourceKind::Svg) => Icon::Vector,
@@ -97,13 +91,11 @@ pub fn file_field<'a>(app: &'a App, target: FileTarget, none: String, color: Opt
         about.push("Edited elsewhere, it is read again by itself.".into());
     }
     about.push("Drag a file onto it from the Explorer, or choose one.".into());
-    let shown = container(
-        row![picture, crate::view::fitted(name, style::SMALL, style::ui_font(), Some(color))].spacing(6).align_y(Alignment::Center),
-    )
-    .padding([1, 6])
-    .width(Length::Fill)
-    .clip(true)
-    .style(style::field_box);
+    let shown = container(row![picture, crate::view::fitted(name, style::SMALL, style::ui_font(), Some(color))].spacing(6).align_y(Alignment::Center))
+        .padding([1, 6])
+        .width(Length::Fill)
+        .clip(true)
+        .style(style::field_box);
     let mut buttons = row![tip(
         button(icon(Icon::Folder, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(Message::BrowseFile(target.clone())),
         if path.is_empty() { "Choose a file" } else { "Choose another file" },
@@ -360,12 +352,7 @@ fn unit_buttons<'a>(units: ColorUnits, hsv: bool, width: Length) -> Element<'a, 
     let mut buttons: Vec<Element<'a, Message>> =
         vec![toggle("Float", units.float, ColorUnits { float: !units.float, ..units }, "Each channel from 0 to 1 (off: from 0 to 255)")];
     if hsv {
-        buttons.push(toggle(
-            "HSV",
-            units.hsv,
-            ColorUnits { hsv: !units.hsv, ..units },
-            "Hue, saturation and value (off: red, green and blue)",
-        ));
+        buttons.push(toggle("HSV", units.hsv, ColorUnits { hsv: !units.hsv, ..units }, "Hue, saturation and value (off: red, green and blue)"));
     }
     column(buttons).spacing(4).into()
 }
@@ -560,9 +547,7 @@ fn editor_body<'a>(app: &'a App, target: &ColorTarget, c: [f32; 4], room: Size) 
         .padding([3, 6])
         .style(style::text_input);
     // (Its hexadecimal at the bottom, whatever the height of the window.)
-    let right = column![sliders(target, shown, hsv, units, &[R, G, B, H, S, V, A]), space().height(Length::Fill), hex]
-        .height(Length::Fill)
-        .width(Length::Fill);
+    let right = column![sliders(target, shown, hsv, units, &[R, G, B, H, S, V, A]), space().height(Length::Fill), hex].height(Length::Fill).width(Length::Fill);
     row![square, middle, right].spacing(SPACING).height(Length::Fill).into()
 }
 

@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
 use crate::files;
 use crate::project::{FILE_EXTENSION, Loaded, Unsaved};
 
@@ -94,11 +93,7 @@ impl Session {
                 let hash = f.file_stem()?.to_str()?.to_string();
                 let to = self.held(&hash);
                 let taken = to.exists()
-                    || if copy {
-                        files::replace(&to, |beside| std::fs::copy(&f, beside).map(drop)).is_ok()
-                    } else {
-                        std::fs::rename(&f, &to).is_ok()
-                    };
+                    || if copy { files::replace(&to, |beside| std::fs::copy(&f, beside).map(drop)).is_ok() } else { std::fs::rename(&f, &to).is_ok() };
                 taken.then_some(hash)
             })
             .collect()
@@ -219,8 +214,7 @@ fn is_session(dir: &Path) -> bool {
 
 /// Is `file` a file a package held, kept apart: `<hash>.held`?
 fn is_held(file: &Path) -> bool {
-    file.extension().is_some_and(|e| e == HELD)
-        && file.file_stem().and_then(|s| s.to_str()).is_some_and(files::is_hash)
+    file.extension().is_some_and(|e| e == HELD) && file.file_stem().and_then(|s| s.to_str()).is_some_and(files::is_hash)
 }
 
 /// Is `file` a snapshot of a session: `<key>.brewtex`?

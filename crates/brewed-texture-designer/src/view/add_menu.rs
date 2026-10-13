@@ -1,9 +1,9 @@
 //! Node search popup (Space, double-click on the canvas, or a link dropped on empty space).
 
-use iced::widget::{Id, column, container, row, space, text, text_input};
-use iced::{Alignment, Element, Length};
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::edit::accepts_link;
+use iced::widget::{Id, column, container, row, space, text, text_input};
+use iced::{Alignment, Element, Length};
 
 use crate::app::{AddMenu, AddMenuMessage, App, Message, menu_index};
 use crate::style;
@@ -32,12 +32,8 @@ pub fn items(app: &App) -> Vec<NodeKind> {
     let Some(menu) = &app.ui.add_menu else { return Vec::new() };
     let query = menu.query.trim().to_lowercase();
     let pending = menu.pending.as_ref().and_then(|s| app.graph().socket(s).map(|info| (info.ty, s.output)));
-    let mut kinds: Vec<NodeKind> = NodeKind::ALL
-        .iter()
-        .copied()
-        .filter(|k| k.def().matches(&query))
-        .filter(|k| pending.is_none_or(|(ty, output)| accepts_link(*k, ty, output)))
-        .collect();
+    let mut kinds: Vec<NodeKind> =
+        NodeKind::ALL.iter().copied().filter(|k| k.def().matches(&query)).filter(|k| pending.is_none_or(|(ty, output)| accepts_link(*k, ty, output))).collect();
     // Names that start with the query first.
     if !query.is_empty() {
         kinds.sort_by_key(|k| !k.def().name.to_lowercase().starts_with(&query));

@@ -19,12 +19,12 @@ pub mod picker;
 pub mod preview;
 pub mod properties;
 pub mod settings;
-pub mod toolbar;
 pub mod shading;
+pub mod toolbar;
 pub mod view3d;
 
-use iced::widget::{column, container, mouse_area, opaque, pane_grid, pin, row, space, stack, text, tooltip};
 use crate::widget::blind::blind;
+use iced::widget::{column, container, mouse_area, opaque, pane_grid, pin, row, space, stack, text, tooltip};
 use iced::{Alignment, Element, Length, Point};
 
 use crate::app::{App, Message, Pane};
@@ -92,11 +92,7 @@ pub fn root(app: &App) -> Element<'_, Message> {
         // Where the program draws the window's title bar, a dialog covers what is under it, not
         // it (see `toolbar::menu_bar`).
         let dialog = dialogs::view(app, dialog);
-        layers.push(if crate::app::OWN_TITLE_BAR {
-            column![space().height(Length::Fixed(toolbar::MENU_BAR_H)), dialog].into()
-        } else {
-            dialog
-        });
+        layers.push(if crate::app::OWN_TITLE_BAR { column![space().height(Length::Fixed(toolbar::MENU_BAR_H)), dialog].into() } else { dialog });
     }
     // Over everything, the dialogs too (the settings dialog shows it itself).
     if app.ui.restart_offer && !matches!(app.ui.dialog, Some(crate::app::Dialog::Settings(_))) {
@@ -113,10 +109,7 @@ pub fn root(app: &App) -> Element<'_, Message> {
 /// clicking anywhere else sends `dismiss`.
 pub fn popup_layer<'a>(content: impl Into<Element<'a, Message>>, at: Point, width: f32, dismiss: Message) -> Element<'a, Message> {
     stack![
-        mouse_area(space().width(Length::Fill).height(Length::Fill))
-            .on_press(dismiss.clone())
-            .on_right_press(dismiss)
-            .on_middle_press(Message::Menu(None)),
+        mouse_area(space().width(Length::Fill).height(Length::Fill)).on_press(dismiss.clone()).on_right_press(dismiss).on_middle_press(Message::Menu(None)),
         crate::widget::placed::placed(opaque(container(content).width(Length::Fixed(width))), at),
     ]
     .into()
@@ -233,20 +226,14 @@ pub fn tip<'a>(content: impl Into<Element<'a, Message>>, tip: impl Into<String>,
         return content.into();
     }
     // (A path in it breaks where it has to: a folder's name longer than the tip ran out of it.)
-    tooltip(
-        content,
-        container(text(tip).size(style::SMALL).wrapping(text::Wrapping::WordOrGlyph)).padding(6).max_width(320).style(style::tooltip),
-        position,
-    )
-    .delay(std::time::Duration::from_millis(450))
-    .into()
+    tooltip(content, container(text(tip).size(style::SMALL).wrapping(text::Wrapping::WordOrGlyph)).padding(6).max_width(320).style(style::tooltip), position)
+        .delay(std::time::Duration::from_millis(450))
+        .into()
 }
 
 /// Section header inside panels: an upper-case caption over a hairline.
 pub fn section<'a>(title: &'a str) -> Element<'a, Message> {
-    container(column![caption(title), hairline()].spacing(4))
-        .padding(iced::Padding { top: 12.0, bottom: 4.0, left: 2.0, right: 0.0 })
-        .into()
+    container(column![caption(title), hairline()].spacing(4)).padding(iced::Padding { top: 12.0, bottom: 4.0, left: 2.0, right: 0.0 }).into()
 }
 
 /// Upper-case caption (pane titles, sections).

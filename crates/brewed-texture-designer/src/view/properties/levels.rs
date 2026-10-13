@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
-use iced::widget::{button, column, row, text};
-use iced::{Alignment, Color, Element, Length, Point, Rectangle, Size, mouse};
 use brewed_texture_core::graph::{Node, NodeId};
 use brewed_texture_core::{Edit, ParamValue};
 use brewed_texture_engine::simd::ImageStats;
+use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
+use iced::widget::{button, column, row, text};
+use iced::{Alignment, Color, Element, Length, Point, Rectangle, Size, mouse};
 
 use crate::app::{App, Message};
 use crate::style;
@@ -44,21 +44,17 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                 .padding([3, 8])
                 .style(style::button)
                 .on_press_maybe((!locked[0] && !locked[2]).then_some(Message::AutoLevels(node.id))),
-            text(format!("{}×{}{}", stats.width, stats.height, if fresh { "" } else { " · updating…" }))
-                .size(style::SMALL)
-                .color(style::TEXT_FAINT),
+            text(format!("{}×{}{}", stats.width, stats.height, if fresh { "" } else { " · updating…" })).size(style::SMALL).color(style::TEXT_FAINT),
         ]
         .spacing(10)
         .align_y(Alignment::Center),
     );
-    let mut table = column![
-        row![
-            text("").width(Length::Fixed(24.0)),
-            text("min").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fill),
-            text("max").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fill),
-            text("mean").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fill),
-        ]
-    ]
+    let mut table = column![row![
+        text("").width(Length::Fixed(24.0)),
+        text("min").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fill),
+        text("max").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fill),
+        text("mean").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fill),
+    ]]
     .spacing(2);
     let colors = [style::rgb(240, 110, 110), style::rgb(110, 220, 130), style::rgb(110, 160, 250), style::TEXT];
     for (c, name) in ["R", "G", "B", "A"].iter().enumerate() {
@@ -159,11 +155,7 @@ impl canvas::Program<Message> for Histogram {
     }
 
     fn mouse_interaction(&self, state: &State, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
-        if state.drag.is_some() || cursor.is_over(bounds) {
-            mouse::Interaction::ResizingHorizontally
-        } else {
-            mouse::Interaction::default()
-        }
+        if state.drag.is_some() || cursor.is_over(bounds) { mouse::Interaction::ResizingHorizontally } else { mouse::Interaction::default() }
     }
 
     fn draw(&self, _state: &State, renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<Geometry> {
@@ -239,14 +231,7 @@ mod tests {
     fn histogram(lo: f32, hi: f32, gamma: f32) -> Histogram {
         Histogram {
             node: NodeId(1),
-            stats: Arc::new(ImageStats {
-                width: 4,
-                height: 4,
-                hist: Box::new([[0; 256]; 5]),
-                min: [0.0; 4],
-                max: [1.0; 4],
-                mean: [0.5; 4],
-            }),
+            stats: Arc::new(ImageStats { width: 4, height: 4, hist: Box::new([[0; 256]; 5]), min: [0.0; 4], max: [1.0; 4], mean: [0.5; 4] }),
             lo,
             hi,
             gamma,

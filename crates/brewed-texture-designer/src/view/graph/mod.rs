@@ -8,14 +8,14 @@ pub mod layout;
 
 use std::collections::HashSet;
 
-use iced::alignment::Vertical;
-use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
-use iced::widget::text::{Alignment as TextAlign, LineHeight, Shaping};
-use iced::advanced::mouse;
-use iced::{Color, Element, Pixels, Point, Rectangle, Size, Vector, keyboard};
 use brewed_texture_core::graph::{Comment, CommentId, Link, Node, NodeId, SocketRef};
 use brewed_texture_core::nodes::{ImageKind, OUTPUT_FORMATS, Role, Slot};
 use brewed_texture_core::{DataType, NodeKind, Value, can_connect};
+use iced::advanced::mouse;
+use iced::alignment::Vertical;
+use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
+use iced::widget::text::{Alignment as TextAlign, LineHeight, Shaping};
+use iced::{Color, Element, Pixels, Point, Rectangle, Size, Vector, keyboard};
 
 use crate::app::{App, ContextTarget, GraphMessage, Message, SelectMode};
 use crate::style;
@@ -205,12 +205,7 @@ impl GraphCanvas<'_> {
     fn nodes_in_comment(&self, id: CommentId) -> Vec<NodeId> {
         let graph = self.app.graph();
         let Some(comment) = graph.comment(id) else { return Vec::new() };
-        graph
-            .nodes
-            .iter()
-            .filter(|n| comment.holds(n.pos, layout::node_size(graph, n)))
-            .map(|n| n.id)
-            .collect()
+        graph.nodes.iter().filter(|n| comment.holds(n.pos, layout::node_size(graph, n))).map(|n| n.id).collect()
     }
     /// Can a link dragged from `from` (of type `ty`) end at `to`? `blocked`: the nodes it cannot
     /// end at without a cycle (see [`Self::blocked`]), found once for all the sockets asked about.
@@ -243,13 +238,7 @@ impl GraphCanvas<'_> {
 impl canvas::Program<Message> for GraphCanvas<'_> {
     type State = State;
 
-    fn update(
-        &self,
-        state: &mut State,
-        event: &iced::Event,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> Option<canvas::Action<Message>> {
+    fn update(&self, state: &mut State, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) -> Option<canvas::Action<Message>> {
         use iced::Event;
         if state.bounds != bounds {
             state.bounds = bounds;
@@ -332,11 +321,7 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                         let hovered = match local {
                             Some(p) => {
                                 let layouts = self.layouts(None);
-                                if self.node_at(&layouts, p).is_some() || self.socket_at(&layouts, p).is_some() {
-                                    None
-                                } else {
-                                    self.link_at(&layouts, p)
-                                }
+                                if self.node_at(&layouts, p).is_some() || self.socket_at(&layouts, p).is_some() { None } else { self.link_at(&layouts, p) }
                             }
                             None => None,
                         };
@@ -468,11 +453,8 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                                 publish(GraphMessage::Connect { from, to, replacing: detached })
                             }
                             Some(target) if target.node != from.node && target.output != from.output => {
-                                let (o, i, on, inn) = if from.output {
-                                    (ty, target.ty, from.node, target.node)
-                                } else {
-                                    (target.ty, ty, target.node, from.node)
-                                };
+                                let (o, i, on, inn) =
+                                    if from.output { (ty, target.ty, from.node, target.node) } else { (target.ty, ty, target.node, from.node) };
                                 let msg = if self.app.graph().depends_on(on, inn) {
                                     "This connection would create a cycle".to_string()
                                 } else {
@@ -481,12 +463,9 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                                 publish(GraphMessage::Error(msg))
                             }
                             Some(_) => Some(canvas::Action::request_redraw()),
-                            None if local.is_some() => publish(GraphMessage::LinkDropped {
-                                from,
-                                at: window(current),
-                                graph_pos: t.to_graph(current),
-                                detached,
-                            }),
+                            None if local.is_some() => {
+                                publish(GraphMessage::LinkDropped { from, at: window(current), graph_pos: t.to_graph(current), detached })
+                            }
                             None => Some(canvas::Action::request_redraw()),
                         }
                     }
@@ -537,11 +516,7 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
             _ => {
                 let Some(p) = cursor.position_in(bounds) else { return mouse::Interaction::default() };
                 if let Some(payload) = &self.app.ui.drag {
-                    return if self.app.drop_refusal(payload).is_some() {
-                        mouse::Interaction::NotAllowed
-                    } else {
-                        mouse::Interaction::Copy
-                    };
+                    return if self.app.drop_refusal(payload).is_some() { mouse::Interaction::NotAllowed } else { mouse::Interaction::Copy };
                 }
                 let layouts = self.layouts(None);
                 if self.socket_at(&layouts, p).is_some() || state.hovered_link.is_some() {
@@ -562,14 +537,7 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
         }
     }
 
-    fn draw(
-        &self,
-        state: &State,
-        renderer: &iced::Renderer,
-        _theme: &iced::Theme,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
+    fn draw(&self, state: &State, renderer: &iced::Renderer, _theme: &iced::Theme, bounds: Rectangle, cursor: mouse::Cursor) -> Vec<Geometry> {
         // Layers, bottom to top: grid and links, every node, then what is being dragged.
         let mut frame = Frame::new(renderer, bounds.size());
         let t = self.transform();
@@ -590,9 +558,7 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
         }
 
         let moving = match &state.interaction {
-            Interaction::Moving { ids, origin, current } => {
-                Some((ids.as_slice(), Vector::new((current.x - origin.x) / z, (current.y - origin.y) / z)))
-            }
+            Interaction::Moving { ids, origin, current } => Some((ids.as_slice(), Vector::new((current.x - origin.x) / z, (current.y - origin.y) / z))),
             _ => None,
         };
         let layouts = self.layouts(moving);
@@ -665,10 +631,8 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
 
         // Selection rectangle.
         if let Interaction::Boxing { start, current, .. } = &state.interaction {
-            let r = Rectangle::new(
-                Point::new(start.x.min(current.x), start.y.min(current.y)),
-                Size::new((start.x - current.x).abs(), (start.y - current.y).abs()),
-            );
+            let r =
+                Rectangle::new(Point::new(start.x.min(current.x), start.y.min(current.y)), Size::new((start.x - current.x).abs(), (start.y - current.y).abs()));
             frame.fill_rectangle(r.position(), r.size(), style::alpha(style::ACCENT, 0.08));
             frame.stroke_rectangle(r.position(), r.size(), Stroke::default().with_width(1.0).with_color(style::ACCENT));
         }
@@ -693,23 +657,9 @@ impl canvas::Program<Message> for GraphCanvas<'_> {
                 true => "Drag nodes from the library, double-click or press Space to add one",
                 false => "This package has no graph: right-click it in the Explorer for New Graph…",
             };
-            text_at(
-                &mut frame,
-                says.to_string(),
-                Point::new(bounds.width / 2.0, bounds.height / 2.0),
-                15.0,
-                style::TEXT_FAINT,
-                TextAlign::Center,
-            );
+            text_at(&mut frame, says.to_string(), Point::new(bounds.width / 2.0, bounds.height / 2.0), 15.0, style::TEXT_FAINT, TextAlign::Center);
         }
-        text_at(
-            &mut frame,
-            format!("{:.0}%", z * 100.0),
-            Point::new(bounds.width - 10.0, bounds.height - 12.0),
-            12.0,
-            style::TEXT_FAINT,
-            TextAlign::Right,
-        );
+        text_at(&mut frame, format!("{:.0}%", z * 100.0), Point::new(bounds.width - 10.0, bounds.height - 12.0), 12.0, style::TEXT_FAINT, TextAlign::Right);
         geometries.push(frame.into_geometry());
         geometries
     }
@@ -778,11 +728,7 @@ fn draw_grid(frame: &mut Frame, t: &Transform, size: Size) {
 }
 
 pub fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() > max_chars {
-        s.chars().take(max_chars.saturating_sub(1)).collect::<String>() + "…"
-    } else {
-        s.to_string()
-    }
+    if s.chars().count() > max_chars { s.chars().take(max_chars.saturating_sub(1)).collect::<String>() + "…" } else { s.to_string() }
 }
 
 /// What the node is: the input value an Input node (an Image Input too) reads, the name of an
@@ -880,10 +826,7 @@ impl GraphCanvas<'_> {
         // What the nodes do, under the title, wrapped to the frame and as far down as it goes.
         let small = scaled(layout::DESCRIPTION_SIZE, z);
         if !comment.description.is_empty() && small >= 5.0 {
-            let body = Rectangle::new(
-                Point::new(l.rect.x, l.header.y + l.header.height),
-                Size::new(l.rect.width, (l.rect.height - l.header.height).max(0.0)),
-            );
+            let body = Rectangle::new(Point::new(l.rect.x, l.header.y + l.header.height), Size::new(l.rect.width, (l.rect.height - l.header.height).max(0.0)));
             let content = comment.description.clone();
             // Clipped to the comment and to the canvas: a part of the frame is clipped to what it
             // is given only, and a comment reaching above the view drew its words over the menu
@@ -917,14 +860,7 @@ impl GraphCanvas<'_> {
             frame.stroke(&path, Stroke::default().with_width(1.6).with_color(grip));
         }
     }
-    fn draw_node(
-        &self,
-        frame: &mut Frame,
-        node: &Node,
-        l: &NodeLayout,
-        linking: Option<&(SocketRef, DataType, HashSet<NodeId>)>,
-        detached: Option<&Link>,
-    ) {
+    fn draw_node(&self, frame: &mut Frame, node: &Node, l: &NodeLayout, linking: Option<&(SocketRef, DataType, HashSet<NodeId>)>, detached: Option<&Link>) {
         let app = self.app;
         let graph = app.graph();
         let input_linked = |key: &str| graph.link_into(node.id, key).is_some_and(|link| Some(link) != detached);
@@ -932,22 +868,14 @@ impl GraphCanvas<'_> {
         let d = node.def();
         let eval = app.eval.node(node.id);
         let report = app.res.reports.get(&node.id);
-        let error = eval
-            .and_then(|e| e.error().map(str::to_string))
-            .or_else(|| report.and_then(|r| r.error.clone()))
-            .or_else(|| app.res.inner.get(&node.id).cloned());
-        let warning = eval
-            .and_then(|e| e.warnings.first().cloned())
-            .or_else(|| report.and_then(|r| r.warning.clone()));
+        let error =
+            eval.and_then(|e| e.error().map(str::to_string)).or_else(|| report.and_then(|r| r.error.clone())).or_else(|| app.res.inner.get(&node.id).cloned());
+        let warning = eval.and_then(|e| e.warnings.first().cloned()).or_else(|| report.and_then(|r| r.warning.clone()));
         let selected = app.ui.selection.contains(&node.id);
         let radius = (6.0 * z).clamp(1.0, 12.0);
 
         // Shadow, body, header.
-        let shadow = Path::rounded_rectangle(
-            l.rect.position() + Vector::new(3.0 * z, 4.0 * z),
-            l.rect.size(),
-            radius.into(),
-        );
+        let shadow = Path::rounded_rectangle(l.rect.position() + Vector::new(3.0 * z, 4.0 * z), l.rect.size(), radius.into());
         frame.fill(&shadow, Color::from_rgba(0.0, 0.0, 0.0, 0.28));
         let category = style::category_color(d.category);
         // Where the graph ends: an output node is tinted with its category all over, so the
@@ -1044,11 +972,7 @@ impl GraphCanvas<'_> {
             let room = |shared: bool| if shared { l.rect.width * 0.5 - 14.0 * z } else { l.rect.width - 20.0 * z };
             for (i, (s, p)) in l.inputs.iter().enumerate() {
                 let linked = input_linked(&s.key);
-                let color = if linked && s.kind == brewed_texture_core::SocketKind::Param {
-                    style::type_color(s.ty)
-                } else {
-                    style::NODE_TEXT
-                };
+                let color = if linked && s.kind == brewed_texture_core::SocketKind::Param { style::type_color(s.ty) } else { style::NODE_TEXT };
                 let label = fit(&s.label, SMALL_AT, small, style::ui_font(), room(i < l.outputs.len()));
                 text_at(frame, label, *p + Vector::new(10.0 * z, 0.0), small, color, TextAlign::Left);
             }
@@ -1127,11 +1051,7 @@ impl GraphCanvas<'_> {
         let r = (SOCKET_R * z).max(2.5);
         for (list, output) in [(&l.inputs, false), (&l.outputs, true)] {
             for (s, p) in list {
-                let linked = if output {
-                    graph.links.iter().any(|lk| lk.from == node.id && lk.from_socket == s.key)
-                } else {
-                    input_linked(&s.key)
-                };
+                let linked = if output { graph.links.iter().any(|lk| lk.from == node.id && lk.from_socket == s.key) } else { input_linked(&s.key) };
                 let mut color = if s.ty != DataType::Image {
                     style::type_color(s.ty)
                 } else if output {
@@ -1167,12 +1087,10 @@ impl GraphCanvas<'_> {
 /// The kind of image `node` makes as far as it is known: what the engine last made, or else
 /// what the node always makes.
 pub fn made_kind(app: &App, node: NodeId) -> Option<ImageKind> {
-    app.res.reports.get(&node).and_then(|r| r.kind).or_else(|| {
-        match app.graph().node(node)?.def().outputs.first()?.slot {
-            Slot::Gray => Some(ImageKind::Gray),
-            Slot::Color => Some(ImageKind::Color),
-            Slot::Any => None,
-        }
+    app.res.reports.get(&node).and_then(|r| r.kind).or_else(|| match app.graph().node(node)?.def().outputs.first()?.slot {
+        Slot::Gray => Some(ImageKind::Gray),
+        Slot::Color => Some(ImageKind::Color),
+        Slot::Any => None,
     })
 }
 
@@ -1180,8 +1098,5 @@ pub fn made_kind(app: &App, node: NodeId) -> Option<ImageKind> {
 /// graph units.
 fn resized(from: [f32; 2], origin: Point, current: Point, zoom: f32) -> [f32; 2] {
     let d = current - origin;
-    [
-        (from[0] + d.x / zoom).max(Comment::MIN_SIZE[0]),
-        (from[1] + d.y / zoom).max(Comment::MIN_SIZE[1]),
-    ]
+    [(from[0] + d.x / zoom).max(Comment::MIN_SIZE[0]), (from[1] + d.y / zoom).max(Comment::MIN_SIZE[1])]
 }

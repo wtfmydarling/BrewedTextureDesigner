@@ -66,9 +66,11 @@ const CRATES: &[u8] = include_bytes!("../assets/third-party/crates.json.z");
 fn read_crates() -> Crates {
     use std::io::Read;
     let mut json = Vec::new();
-    match flate2::read::ZlibDecoder::new(CRATES).read_to_end(&mut json).map_err(|e| e.to_string()).and_then(|_| {
-        serde_json::from_slice::<Crates>(&json).map_err(|e| e.to_string())
-    }) {
+    match flate2::read::ZlibDecoder::new(CRATES)
+        .read_to_end(&mut json)
+        .map_err(|e| e.to_string())
+        .and_then(|_| serde_json::from_slice::<Crates>(&json).map_err(|e| e.to_string()))
+    {
         Ok(crates) => crates,
         Err(e) => {
             log::error!("the list of the crates: {e}");
@@ -186,9 +188,10 @@ pub fn write_crates(out: &std::path::Path) -> Result<(), String> {
             if !seen.insert(id.clone()) {
                 continue;
             }
-            let macros = packages.get(&id).and_then(|p| p["targets"].as_array()).is_some_and(|t| {
-                t.iter().any(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "proc-macro")))
-            });
+            let macros = packages
+                .get(&id)
+                .and_then(|p| p["targets"].as_array())
+                .is_some_and(|t| t.iter().any(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "proc-macro"))));
             if macros {
                 continue;
             }
@@ -292,7 +295,9 @@ mod tests {
         let mit = include_str!("../../../LICENSE-MIT");
         assert!(mit.starts_with("MIT License") && mit.contains("Permission is hereby granted, free of charge") && mit.contains("Brewed Texture Designer"));
         let apache = include_str!("../../../LICENSE-APACHE");
-        assert!(apache.contains("Apache License") && apache.contains("Version 2.0, January 2004") && apache.trim_end().ends_with("END OF TERMS AND CONDITIONS"));
+        assert!(
+            apache.contains("Apache License") && apache.contains("Version 2.0, January 2004") && apache.trim_end().ends_with("END OF TERMS AND CONDITIONS")
+        );
         let notice = include_str!("../../../NOTICE");
         assert!(notice.contains("LICENSE-MIT") && notice.contains("LICENSE-APACHE"));
         for (named, license) in [("Shader Ball JL 01", "Creative Commons Attribution 4.0"), ("Inter", "SIL Open Font License 1.1")] {
@@ -357,7 +362,12 @@ mod tests {
         assert_eq!(choices("MIT/Apache-2.0").len(), 2);
         assert_eq!(choices("(MIT OR Apache-2.0) AND Unicode-3.0"), [s(&["MIT", "Unicode-3.0"]), s(&["Apache-2.0", "Unicode-3.0"])]);
         assert_eq!(choices("Apache-2.0 WITH LLVM-exception OR MIT"), [s(&["Apache-2.0"]), s(&["MIT"])]);
-        assert!(asks_nothing("Zlib OR Apache-2.0 OR MIT") && asks_nothing("Unlicense OR MIT") && asks_nothing("BSL-1.0") && asks_nothing("0BSD OR MIT OR Apache-2.0"));
+        assert!(
+            asks_nothing("Zlib OR Apache-2.0 OR MIT")
+                && asks_nothing("Unlicense OR MIT")
+                && asks_nothing("BSL-1.0")
+                && asks_nothing("0BSD OR MIT OR Apache-2.0")
+        );
         assert!(!asks_nothing("MIT OR Apache-2.0") && !asks_nothing("(MIT OR Apache-2.0) AND Unicode-3.0"));
     }
 }

@@ -7,9 +7,9 @@
 
 use std::fmt;
 
+use brewed_texture_core::graph::NodeId;
 use bytes::Bytes;
 use iced::widget::image;
-use brewed_texture_core::graph::NodeId;
 
 use crate::app::ColorTarget;
 use crate::eyedropper::Mode;
@@ -138,9 +138,8 @@ pub fn capture() -> Result<Vec<Shot>, String> {
     let monitors = xcap::Monitor::all().map_err(|e| format!("Cannot list the monitors: {e}"))?;
     let mut shots = Vec::new();
     for monitor in monitors {
-        let geometry = (|| -> xcap::XCapResult<_> {
-            Ok((monitor.x()?, monitor.y()?, monitor.width()?, monitor.height()?, monitor.scale_factor().unwrap_or(1.0)))
-        })();
+        let geometry =
+            (|| -> xcap::XCapResult<_> { Ok((monitor.x()?, monitor.y()?, monitor.width()?, monitor.height()?, monitor.scale_factor().unwrap_or(1.0))) })();
         let (x, y, width, height, scale) = geometry.map_err(|e| format!("Cannot read the monitor layout: {e}"))?;
         let image = monitor.capture_image().map_err(|e| format!("Cannot capture the screen: {e}"))?;
         let pixel_size = [image.width(), image.height()];

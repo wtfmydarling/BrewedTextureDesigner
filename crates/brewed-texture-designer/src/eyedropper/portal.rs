@@ -220,12 +220,7 @@ pub fn screen_cast(cancel: &Cancel) -> Result<Option<ScreenCast>, Error> {
 }
 
 /// Choose the monitors, start the cast and open its PipeWire socket.
-async fn start_cast(
-    conn: &zbus::Connection,
-    cast: &str,
-    session: &str,
-    cancel: &Cancel,
-) -> Result<Option<(std::os::fd::OwnedFd, Vec<CastStream>)>, Error> {
+async fn start_cast(conn: &zbus::Connection, cast: &str, session: &str, cancel: &Cancel) -> Result<Option<(std::os::fd::OwnedFd, Vec<CastStream>)>, Error> {
     let handle = || zbus::zvariant::ObjectPath::try_from(session.to_owned()).unwrap_or_default().to_owned();
     // Every monitor, without the pointer, remembered for the next time.
     let selected = request(
@@ -269,9 +264,7 @@ async fn start_cast(
         return Err(Error::Failed("the desktop shared no monitor".into()));
     }
 
-    let reply = conn
-        .call_method(Some(DESTINATION), PATH, Some(cast), "OpenPipeWireRemote", &(handle(), HashMap::<&str, Value<'_>>::new()))
-        .await?;
+    let reply = conn.call_method(Some(DESTINATION), PATH, Some(cast), "OpenPipeWireRemote", &(handle(), HashMap::<&str, Value<'_>>::new())).await?;
     let socket: zbus::zvariant::OwnedFd = reply.body().deserialize()?;
     Ok(Some((socket.into(), streams)))
 }

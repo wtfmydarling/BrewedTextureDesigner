@@ -3,9 +3,9 @@
 //! engine's `widen`), with channel isolation, a checkerboard for transparency and repeated
 //! copies for the tiling preview.
 
+use brewed_texture_engine::wgpu;
 use iced::widget::shader::{self, Viewport};
 use iced::{Rectangle, mouse};
-use brewed_texture_engine::wgpu;
 
 use crate::app::Message;
 
@@ -177,11 +177,7 @@ impl shader::Pipeline for Pipeline {
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
@@ -210,20 +206,11 @@ impl shader::Pipeline for Pipeline {
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("brewed 2d view"),
             layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
+            vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
@@ -270,14 +257,7 @@ impl shader::Pipeline for Pipeline {
 impl shader::Primitive for Primitive {
     type Pipeline = Pipeline;
 
-    fn prepare(
-        &self,
-        pipeline: &mut Pipeline,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        bounds: &Rectangle,
-        viewport: &Viewport,
-    ) {
+    fn prepare(&self, pipeline: &mut Pipeline, device: &wgpu::Device, queue: &wgpu::Queue, bounds: &Rectangle, viewport: &Viewport) {
         let Some(view) = &self.image else {
             pipeline.bind_group = None;
             return;

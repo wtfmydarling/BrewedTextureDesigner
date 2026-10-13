@@ -3,10 +3,10 @@
 //! chosen.
 
 use iced::advanced::layout::{self, Layout};
+use iced::advanced::mouse;
 use iced::advanced::renderer::{self, Renderer as _};
 use iced::advanced::widget::{Operation, Tree, Widget, tree};
 use iced::advanced::{Clipboard, Shell};
-use iced::advanced::mouse;
 use iced::{Background, Border, Element, Event, Length, Padding, Rectangle, Size};
 
 use crate::style;
@@ -21,14 +21,7 @@ pub struct Pressable<'a, Message> {
 }
 
 pub fn pressable<'a, Message>(content: impl Into<Element<'a, Message>>) -> Pressable<'a, Message> {
-    Pressable {
-        content: content.into(),
-        on_press: None,
-        on_double_click: None,
-        on_right_press: None,
-        selected: false,
-        padding: Padding::from([3, 8]),
-    }
+    Pressable { content: content.into(), on_press: None, on_double_click: None, on_right_press: None, selected: false, padding: Padding::from([3, 8]) }
 }
 
 impl<Message> Pressable<'_, Message> {
@@ -126,21 +119,10 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for Pressable<
         }
     }
 
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &iced::Renderer,
-    ) -> mouse::Interaction {
+    fn mouse_interaction(&self, tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle, renderer: &iced::Renderer) -> mouse::Interaction {
         let child = layout.children().next().expect("padded layout has a child");
         let inner = self.content.as_widget().mouse_interaction(&tree.children[0], child, cursor, viewport, renderer);
-        if inner == mouse::Interaction::None && cursor.is_over(layout.bounds()) && self.on_press.is_some() {
-            mouse::Interaction::Grab
-        } else {
-            inner
-        }
+        if inner == mouse::Interaction::None && cursor.is_over(layout.bounds()) && self.on_press.is_some() { mouse::Interaction::Grab } else { inner }
     }
 
     fn draw(
@@ -156,11 +138,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for Pressable<
         let hovered = cursor.is_over(layout.bounds());
         if hovered || self.selected {
             renderer.fill_quad(
-                renderer::Quad {
-                    bounds: layout.bounds(),
-                    border: Border { radius: 3.0.into(), ..Border::default() },
-                    ..Default::default()
-                },
+                renderer::Quad { bounds: layout.bounds(), border: Border { radius: 3.0.into(), ..Border::default() }, ..Default::default() },
                 Background::Color(if hovered { style::HOVER } else { style::RAISED }),
             );
         }

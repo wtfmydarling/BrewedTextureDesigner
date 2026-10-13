@@ -92,10 +92,7 @@ impl App {
 
     /// Has the engine done all it was asked, every export too?
     pub fn engine_idle(&self) -> bool {
-        self.engine.is_some()
-            && self.res.busy_since.is_none()
-            && self.res.finished_revision >= self.eval_revision
-            && self.res.exports_pending == 0
+        self.engine.is_some() && self.res.busy_since.is_none() && self.res.finished_revision >= self.eval_revision && self.res.exports_pending == 0
     }
 
     /// Ticks to see when a screenshot can be taken, and the autopilot's turns.
@@ -154,25 +151,17 @@ impl App {
             // names the GPU: the engine started on the Home screen).
             "home" => self.ui.home = Some(super::home::HomePage::Home),
             "learn" => self.ui.home = Some(super::home::HomePage::Learn),
-            other if other.starts_with("example:") => {
-                match brewed_texture_core::templates::Example::from_id(&other["example:".len()..]) {
-                    Some(example) => return self.home_message(super::home::HomeMessage::Example(example)),
-                    None => log::warn!("unknown example '{other}'"),
-                }
-            }
+            other if other.starts_with("example:") => match brewed_texture_core::templates::Example::from_id(&other["example:".len()..]) {
+                Some(example) => return self.home_message(super::home::HomeMessage::Example(example)),
+                None => log::warn!("unknown example '{other}'"),
+            },
             "home-about" => {
                 self.ui.home = Some(super::home::HomePage::Home);
                 self.ui.dialog = Some(Dialog::About);
             }
             "add-menu" => {
-                self.ui.add_menu = Some(AddMenu {
-                    at: Point::new(700.0, 300.0),
-                    graph_pos: [0.0, 0.0],
-                    query: "bl".into(),
-                    selected: 0,
-                    scroll: 0.0,
-                    pending: None,
-                });
+                self.ui.add_menu =
+                    Some(AddMenu { at: Point::new(700.0, 300.0), graph_pos: [0.0, 0.0], query: "bl".into(), selected: 0, scroll: 0.0, pending: None });
             }
             "context-menu" => {
                 if let Some(id) = first(NodeKind::LEVELS) {
@@ -295,7 +284,9 @@ impl App {
             // The value of the uniform color that feeds the Output called NAME: uniform:NAME=V or
             // uniform:NAME=R,G,B.
             other if other.starts_with("uniform:") => {
-                let said = other["uniform:".len()..].split_once('=').map(|(name, v)| (name.to_string(), v.split(',').filter_map(|c| c.trim().parse::<f32>().ok()).collect::<Vec<_>>()));
+                let said = other["uniform:".len()..]
+                    .split_once('=')
+                    .map(|(name, v)| (name.to_string(), v.split(',').filter_map(|c| c.trim().parse::<f32>().ok()).collect::<Vec<_>>()));
                 let graph = self.graph();
                 let output = said.as_ref().and_then(|(name, _)| graph.nodes_of(NodeKind::OUTPUT).find(|n| n.text("name") == name).map(|n| n.id));
                 let fed = output.and_then(|o| graph.link_into(o, "i:input")).map(|l| l.from);
@@ -571,11 +562,7 @@ fn param_value(param: &brewed_texture_core::nodes::ParamDef<'_>, text: &str) -> 
 
 fn find_kind(graph: &Graph, name: &str) -> Option<NodeId> {
     let name = name.to_lowercase().replace([' ', '-'], "_");
-    graph
-        .nodes
-        .iter()
-        .find(|n| n.kind.id() == name || n.def().name.to_lowercase().replace(' ', "_") == name)
-        .map(|n| n.id)
+    graph.nodes.iter().find(|n| n.kind.id() == name || n.def().name.to_lowercase().replace(' ', "_") == name).map(|n| n.id)
 }
 
 /// Save a picture: as PNG, or as JPEG (of quality 90) where the name says .jpg.

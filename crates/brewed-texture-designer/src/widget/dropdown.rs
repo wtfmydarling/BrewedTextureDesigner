@@ -17,11 +17,7 @@ pub struct DropDown<'a, Message> {
     beside: bool,
 }
 
-pub fn dropdown<'a, Message>(
-    underlay: impl Into<Element<'a, Message>>,
-    menu: impl Into<Element<'a, Message>>,
-    expanded: bool,
-) -> DropDown<'a, Message> {
+pub fn dropdown<'a, Message>(underlay: impl Into<Element<'a, Message>>, menu: impl Into<Element<'a, Message>>, expanded: bool) -> DropDown<'a, Message> {
     DropDown { underlay: underlay.into(), menu: menu.into(), expanded, on_dismiss: None, beside: false }
 }
 
@@ -67,26 +63,10 @@ impl<'a, Message: Clone + 'a> Widget<Message, iced::Theme, iced::Renderer> for D
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        self.underlay.as_widget_mut().update(
-            &mut tree.children[0],
-            event,
-            layout,
-            cursor,
-            renderer,
-            clipboard,
-            shell,
-            viewport,
-        );
+        self.underlay.as_widget_mut().update(&mut tree.children[0], event, layout, cursor, renderer, clipboard, shell, viewport);
     }
 
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &iced::Renderer,
-    ) -> mouse::Interaction {
+    fn mouse_interaction(&self, tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle, renderer: &iced::Renderer) -> mouse::Interaction {
         self.underlay.as_widget().mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
     }
 
@@ -103,13 +83,7 @@ impl<'a, Message: Clone + 'a> Widget<Message, iced::Theme, iced::Renderer> for D
         self.underlay.as_widget().draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
     }
 
-    fn operate(
-        &mut self,
-        tree: &mut Tree,
-        layout: Layout<'_>,
-        renderer: &iced::Renderer,
-        operation: &mut dyn Operation,
-    ) {
+    fn operate(&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &iced::Renderer, operation: &mut dyn Operation) {
         self.underlay.as_widget_mut().operate(&mut tree.children[0], layout, renderer, operation);
     }
 
@@ -124,8 +98,7 @@ impl<'a, Message: Clone + 'a> Widget<Message, iced::Theme, iced::Renderer> for D
         let mut children = tree.children.iter_mut();
         let underlay_tree = children.next()?;
         let menu_tree = children.next()?;
-        let underlay_overlay =
-            self.underlay.as_widget_mut().overlay(underlay_tree, layout, renderer, viewport, translation);
+        let underlay_overlay = self.underlay.as_widget_mut().overlay(underlay_tree, layout, renderer, viewport, translation);
         if !self.expanded {
             return underlay_overlay;
         }
@@ -186,14 +159,7 @@ impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer> for 
         node.move_to(Point::new(x, y))
     }
 
-    fn draw(
-        &self,
-        renderer: &mut iced::Renderer,
-        theme: &iced::Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-    ) {
+    fn draw(&self, renderer: &mut iced::Renderer, theme: &iced::Theme, style: &renderer::Style, layout: Layout<'_>, cursor: mouse::Cursor) {
         self.menu.as_widget().draw(self.tree, renderer, theme, style, layout, cursor, &layout.bounds());
     }
 
@@ -236,11 +202,7 @@ impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer> for 
     }
 
     /// What floats over the menu: a submenu of one of its items.
-    fn overlay<'c>(
-        &'c mut self,
-        layout: Layout<'c>,
-        renderer: &iced::Renderer,
-    ) -> Option<overlay::Element<'c, Message, iced::Theme, iced::Renderer>> {
+    fn overlay<'c>(&'c mut self, layout: Layout<'c>, renderer: &iced::Renderer) -> Option<overlay::Element<'c, Message, iced::Theme, iced::Renderer>> {
         let viewport = layout.bounds();
         self.menu.as_widget_mut().overlay(self.tree, layout, renderer, &viewport, Vector::ZERO)
     }

@@ -8,9 +8,9 @@
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use brewed_texture_engine::{EngineService, Event, wgpu};
 use futures::channel::mpsc;
 use iced::Subscription;
-use brewed_texture_engine::{EngineService, Event, wgpu};
 
 #[derive(Clone)]
 pub struct GpuHandles {
@@ -54,21 +54,14 @@ pub fn take() -> Option<GpuHandles> {
 /// device was in use.
 pub fn adapter_name() -> String {
     let backends = wgpu::Backends::VULKAN | wgpu::Backends::METAL;
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends,
-        flags: wgpu::InstanceFlags::empty(),
-        ..Default::default()
-    });
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor { backends, flags: wgpu::InstanceFlags::empty(), ..Default::default() });
     let adapters = instance.enumerate_adapters(backends);
-    let best = adapters
-        .iter()
-        .map(|a| a.get_info())
-        .max_by_key(|info| match info.device_type {
-            wgpu::DeviceType::DiscreteGpu => 3,
-            wgpu::DeviceType::IntegratedGpu => 2,
-            wgpu::DeviceType::VirtualGpu => 1,
-            _ => 0,
-        });
+    let best = adapters.iter().map(|a| a.get_info()).max_by_key(|info| match info.device_type {
+        wgpu::DeviceType::DiscreteGpu => 3,
+        wgpu::DeviceType::IntegratedGpu => 2,
+        wgpu::DeviceType::VirtualGpu => 1,
+        _ => 0,
+    });
     best.map_or_else(|| "GPU".to_string(), |info| info.name)
 }
 

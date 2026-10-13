@@ -8,16 +8,16 @@
 //! heading with its options under it, in columns, each option saying what it is where it is
 //! pointed at; the same search, the same keys.
 
-use iced::widget::{Id, button, column, container, image, row, space, text, text_input};
-use iced::{Alignment, Element, Length};
 use brewed_texture_core::graph::Node;
 use brewed_texture_core::nodes::ParamDef;
+use iced::widget::{Id, button, column, container, image, row, space, text, text_input};
+use iced::{Alignment, Element, Length};
 
 use crate::app::{App, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
-use crate::widget::scroll::scroll_box;
 use crate::widget::dropdown::dropdown;
+use crate::widget::scroll::scroll_box;
 
 /// Side of an option's picture in the menu.
 const PICTURE: f32 = 56.0;
@@ -116,15 +116,11 @@ fn menu<'a>(app: &'a App, node: &'a Node, pd: &'static ParamDef, current: u32) -
         let mut line = row![].spacing(GAP);
         for &i in chunk {
             line = line.push(
-                button(
-                    row![picture(pictures.and_then(|p| p.get(i)), PICTURE), text(options[i]).size(style::TEXT_SIZE)]
-                        .spacing(10)
-                        .align_y(Alignment::Center),
-                )
-                .width(Length::Fixed(OPTION_W))
-                .padding(4)
-                .style(style::option_button(i == current as usize, i == lit))
-                .on_press(Message::PickChoice(id, pd.key, i as u32)),
+                button(row![picture(pictures.and_then(|p| p.get(i)), PICTURE), text(options[i]).size(style::TEXT_SIZE)].spacing(10).align_y(Alignment::Center))
+                    .width(Length::Fixed(OPTION_W))
+                    .padding(4)
+                    .style(style::option_button(i == current as usize, i == lit))
+                    .on_press(Message::PickChoice(id, pd.key, i as u32)),
             );
         }
         grid = grid.push(line);

@@ -447,9 +447,8 @@ impl Shortcuts {
         let mut given: Vec<(Command, Chord)> = Vec::new();
         for command in named.clone().into_iter().chain(others) {
             let chords = shortcuts.of(command);
-            let (kept, lost): (Vec<Chord>, Vec<Chord>) = chords
-                .into_iter()
-                .partition(|chord| !given.iter().any(|(other, c)| c == chord && other.place().meets(command.place())));
+            let (kept, lost): (Vec<Chord>, Vec<Chord>) =
+                chords.into_iter().partition(|chord| !given.iter().any(|(other, c)| c == chord && other.place().meets(command.place())));
             for chord in &lost {
                 let first = given.iter().find(|(other, c)| c == chord && other.place().meets(command.place())).map(|(o, _)| *o);
                 let first = first.map_or("another command", Command::label);

@@ -98,16 +98,7 @@ pub fn u8_to_f32(src: &[u8], dst: &mut [f32]) {
         let (s_chunks, s_rest) = s.as_chunks::<8>();
         let (d_chunks, d_rest) = d.as_chunks_mut::<8>();
         for (sc, dc) in s_chunks.iter().zip(d_chunks) {
-            let i = i32x8::new([
-                sc[0] as i32,
-                sc[1] as i32,
-                sc[2] as i32,
-                sc[3] as i32,
-                sc[4] as i32,
-                sc[5] as i32,
-                sc[6] as i32,
-                sc[7] as i32,
-            ]);
+            let i = i32x8::new([sc[0] as i32, sc[1] as i32, sc[2] as i32, sc[3] as i32, sc[4] as i32, sc[5] as i32, sc[6] as i32, sc[7] as i32]);
             dc.copy_from_slice(&(f32x8::from_i32x8(i) * inv).to_array());
         }
         for (o, v) in d_rest.iter_mut().zip(s_rest) {
@@ -124,16 +115,7 @@ pub fn u16_to_f32(src: &[u16], dst: &mut [f32]) {
         let (s_chunks, s_rest) = s.as_chunks::<8>();
         let (d_chunks, d_rest) = d.as_chunks_mut::<8>();
         for (sc, dc) in s_chunks.iter().zip(d_chunks) {
-            let i = i32x8::new([
-                sc[0] as i32,
-                sc[1] as i32,
-                sc[2] as i32,
-                sc[3] as i32,
-                sc[4] as i32,
-                sc[5] as i32,
-                sc[6] as i32,
-                sc[7] as i32,
-            ]);
+            let i = i32x8::new([sc[0] as i32, sc[1] as i32, sc[2] as i32, sc[3] as i32, sc[4] as i32, sc[5] as i32, sc[6] as i32, sc[7] as i32]);
             dc.copy_from_slice(&(f32x8::from_i32x8(i) * inv).to_array());
         }
         for (o, v) in d_rest.iter_mut().zip(s_rest) {
@@ -262,12 +244,7 @@ struct Partial {
 
 impl Partial {
     fn new() -> Self {
-        Self {
-            hist: Box::new([[0; 256]; 5]),
-            min: f32x8::splat(f32::INFINITY),
-            max: f32x8::splat(f32::NEG_INFINITY),
-            sum: [0.0; 8],
-        }
+        Self { hist: Box::new([[0; 256]; 5]), min: f32x8::splat(f32::INFINITY), max: f32x8::splat(f32::NEG_INFINITY), sum: [0.0; 8] }
     }
 
     fn merge(mut self, other: Partial) -> Partial {
@@ -314,8 +291,7 @@ pub fn stored_stats(image: &StoredImage) -> ImageStats {
 fn partial_stats(rgba: &[f32]) -> Partial {
     let pixels = rgba.len() / 4;
     let rgba = &rgba[..pixels * 4];
-    rgba
-        .par_chunks(TASK)
+    rgba.par_chunks(TASK)
         .fold(Partial::new, |mut p, chunk| {
             let zero = f32x8::splat(0.0);
             let bins = f32x8::splat(256.0);

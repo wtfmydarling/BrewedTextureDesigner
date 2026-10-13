@@ -1,8 +1,8 @@
 //! Right-click menus of the graph canvas.
 
+use brewed_texture_core::{Edit, NodeKind};
 use iced::widget::{button, container, row, space, text};
 use iced::{Alignment, Element, Length};
-use brewed_texture_core::{Edit, NodeKind};
 
 use crate::app::{App, ColorTarget, ContextMenu, ContextTarget, ExplorerMessage, GraphMessage, Message};
 use crate::shortcuts::Command;
@@ -35,13 +35,7 @@ fn item<'a>(label: impl Into<String>, shortcut: impl Into<String>, message: Opti
 fn file_items<'a>(app: &App, key: u64) -> Vec<Entry<'a>> {
     let package = app.package_doc(key).map(|d| d.package());
     let linked: Vec<String> = package
-        .map(|p| {
-            p.resources
-                .iter()
-                .filter(|r| !r.is_embedded() && app.res.files.get(&r.path).is_none_or(|f| f.there))
-                .map(|r| r.path.clone())
-                .collect()
-        })
+        .map(|p| p.resources.iter().filter(|r| !r.is_embedded() && app.res.files.get(&r.path).is_none_or(|f| f.there)).map(|r| r.path.clone()).collect())
         .unwrap_or_default();
     let unused = package.is_some_and(|p| !p.unused_resources().is_empty());
     let explorer = |m: ExplorerMessage| Message::Explorer(m);
@@ -75,11 +69,7 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
                 item("Cut", app.key_of(Command::Cut), Some(Message::Cut)),
                 item("Disconnect Inputs", "", Some(Message::Edit(Edit::DisconnectInputs(*id)))),
                 item("Frame in a Comment", app.key_of(Command::AddComment), Some(Message::AddComment)),
-                item(
-                    "Export Output…",
-                    "",
-                    node.filter(|n| n.kind == NodeKind::OUTPUT).map(|n| Message::ExportNode(n.id)),
-                ),
+                item("Export Output…", "", node.filter(|n| n.kind == NodeKind::OUTPUT).map(|n| Message::ExportNode(n.id))),
                 separator(),
                 item("Delete", app.key_of(Command::Delete), Some(Message::Delete)),
             ]
@@ -141,11 +131,7 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
             if held {
                 items.push(item("Save as a File and Link It…", "", explorer(ExplorerMessage::SaveResourceAs(key, path.clone()))));
             } else {
-                items.push(item(
-                    "Embed in the Package",
-                    "",
-                    there.then(|| Message::Explorer(ExplorerMessage::Embed(key, vec![path.clone()]))),
-                ));
+                items.push(item("Embed in the Package", "", there.then(|| Message::Explorer(ExplorerMessage::Embed(key, vec![path.clone()])))));
                 items.push(item(if there { "Relink…" } else { "Locate…" }, "", explorer(ExplorerMessage::Locate(key, path.clone()))));
                 // (A file edited elsewhere is read again by itself; a disk that says nothing of
                 // it, on the network say, may need asking.)
@@ -155,11 +141,7 @@ pub fn view<'a>(app: &'a App, menu: &'a ContextMenu) -> Element<'a, Message> {
             items
         }
         ContextTarget::Canvas { graph_pos } => vec![
-            item(
-                "Add Node…",
-                app.key_of(Command::AddNode),
-                Some(Message::Graph(GraphMessage::OpenAddMenu { at: menu.at, graph_pos: *graph_pos })),
-            ),
+            item("Add Node…", app.key_of(Command::AddNode), Some(Message::Graph(GraphMessage::OpenAddMenu { at: menu.at, graph_pos: *graph_pos }))),
             item("Paste", app.key_of(Command::Paste), Some(Message::Paste)),
             separator(),
             item("Select All", app.key_of(Command::SelectAll), Some(Message::SelectAll)),

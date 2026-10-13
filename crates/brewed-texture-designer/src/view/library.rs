@@ -2,29 +2,24 @@
 //! add a node in the middle of the graph view). After the program's own nodes, the graphs of
 //! the library folders (Settings → Library), under the categories they say.
 
+use brewed_texture_core::{Category, NodeKind};
 use iced::widget::{button, column, container, row, space, text, text_input, tooltip};
 use iced::{Alignment, Element, Length};
-use brewed_texture_core::{Category, NodeKind};
 
 use crate::app::library::LibraryGraph;
 use crate::app::{App, DragPayload, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
-use crate::widget::scroll::scroll_box;
 use crate::widget::pressable::pressable;
+use crate::widget::scroll::scroll_box;
 
 fn item(kind: NodeKind) -> Element<'static, Message> {
     let d = kind.def();
-    let content = row![
-        container(space().width(3).height(14)).style(style::chip(style::category_color(d.category))),
-        text(d.name).size(style::TEXT_SIZE),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-    let entry = pressable(content)
-        .padding([4, 8])
-        .on_press(Message::PanelPress(DragPayload::Node(kind)))
-        .on_double_click(Message::PanelAdd(DragPayload::Node(kind)));
+    let content = row![container(space().width(3).height(14)).style(style::chip(style::category_color(d.category))), text(d.name).size(style::TEXT_SIZE),]
+        .spacing(8)
+        .align_y(Alignment::Center);
+    let entry =
+        pressable(content).padding([4, 8]).on_press(Message::PanelPress(DragPayload::Node(kind))).on_double_click(Message::PanelAdd(DragPayload::Node(kind)));
     crate::view::tip(entry, d.description, tooltip::Position::Right)
 }
 
@@ -46,16 +41,12 @@ fn header<'a>(folded: bool, name: String, marker: Option<Icon>, count: usize, on
     // The name has the room the others leave it, on as many lines as it takes: what fills a row
     // is given its room last, so the count keeps the room of its digits however the name wraps.
     // (Laid out before the count, a name whose longest line took the row left it three pixels.)
-    button(
-        label
-            .push(crate::view::caption(&name).width(Length::Fill))
-            .push(text(count.to_string()).size(style::SMALL).color(style::TEXT_FAINT)),
-    )
-    .width(Length::Fill)
-    .padding([5, 6])
-    .style(style::flat_button)
-    .on_press(on_press)
-    .into()
+    button(label.push(crate::view::caption(&name).width(Length::Fill)).push(text(count.to_string()).size(style::SMALL).color(style::TEXT_FAINT)))
+        .width(Length::Fill)
+        .padding([5, 6])
+        .style(style::flat_button)
+        .on_press(on_press)
+        .into()
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -97,11 +88,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
         list = list.push(container(text("No matching node").size(style::SMALL).color(style::TEXT_DIM)).padding(8));
     }
 
-    let search = text_input("Search nodes…", &app.ui.library_search)
-        .on_input(Message::LibrarySearch)
-        .padding([5, 8])
-        .size(style::TEXT_SIZE)
-        .style(style::text_input);
+    let search =
+        text_input("Search nodes…", &app.ui.library_search).on_input(Message::LibrarySearch).padding([5, 8]).size(style::TEXT_SIZE).style(style::text_input);
 
     // Looked at again on a click (what was put in the library folders meanwhile shows); none
     // while there is no folder.
@@ -110,17 +98,16 @@ pub fn view(app: &App) -> Element<'_, Message> {
     } else {
         let spin = if app.library.looking() { style::TEXT_FAINT } else { style::TEXT_DIM };
         crate::view::tip(
-            button(icon(Icon::Reset, 13.0, spin)).padding(3).style(style::flat_button).on_press_maybe((!app.library.looking()).then_some(Message::LookAtLibrary)),
+            button(icon(Icon::Reset, 13.0, spin))
+                .padding(3)
+                .style(style::flat_button)
+                .on_press_maybe((!app.library.looking()).then_some(Message::LookAtLibrary)),
             "Look at the library folders again",
             tooltip::Position::Bottom,
         )
     };
 
-    column![
-        crate::view::pane_header("Library", tools),
-        container(search).padding([2, 8]),
-        scroll_box(container(list).padding([6, 6])).height(Length::Fill),
-    ]
-    .spacing(6)
-    .into()
+    column![crate::view::pane_header("Library", tools), container(search).padding([2, 8]), scroll_box(container(list).padding([6, 6])).height(Length::Fill),]
+        .spacing(6)
+        .into()
 }

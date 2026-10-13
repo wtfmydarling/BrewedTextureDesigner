@@ -1,8 +1,8 @@
 //! Geometry of nodes on the canvas: sizes, socket positions, hit testing.
 
-use iced::{Point, Rectangle, Size, Vector};
 use brewed_texture_core::graph::{Comment, CommentId, Graph, Link, Node, NodeId, SocketInfo};
 use brewed_texture_core::nodes::Role;
+use iced::{Point, Rectangle, Size, Vector};
 
 pub const NODE_W: f32 = 168.0;
 pub const WIDE_NODE_W: f32 = 196.0;
@@ -74,18 +74,9 @@ pub fn layout(graph: &Graph, node: &Node, t: &Transform, offset: Vector) -> Node
     let rect = Rectangle::new(min, Size::new(w * z, h * z));
     let header = Rectangle::new(min, Size::new(rect.width, HEADER_H * z));
     let row_y = |i: usize| min.y + (HEADER_H + 2.0 + (i as f32 + 0.5) * ROW_H) * z;
-    let inputs: Vec<(SocketInfo, Point)> = graph
-        .input_sockets(node)
-        .into_iter()
-        .enumerate()
-        .map(|(i, s)| (s, Point::new(rect.x, row_y(i))))
-        .collect();
-    let outputs: Vec<(SocketInfo, Point)> = graph
-        .output_sockets(node)
-        .into_iter()
-        .enumerate()
-        .map(|(i, s)| (s, Point::new(rect.x + rect.width, row_y(i))))
-        .collect();
+    let inputs: Vec<(SocketInfo, Point)> = graph.input_sockets(node).into_iter().enumerate().map(|(i, s)| (s, Point::new(rect.x, row_y(i)))).collect();
+    let outputs: Vec<(SocketInfo, Point)> =
+        graph.output_sockets(node).into_iter().enumerate().map(|(i, s)| (s, Point::new(rect.x + rect.width, row_y(i)))).collect();
     let rows = inputs.len().max(outputs.len()).max(1) as f32;
     let mut body_top = min.y + (HEADER_H + 4.0 + rows * ROW_H) * z;
     let mut thumb = None;
@@ -117,10 +108,7 @@ pub fn bezier(a: Point, b: Point, zoom: f32) -> [Point; 4] {
 fn cubic(p: &[Point; 4], t: f32) -> Point {
     let u = 1.0 - t;
     let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-    Point::new(
-        a * p[0].x + b * p[1].x + c * p[2].x + d * p[3].x,
-        a * p[0].y + b * p[1].y + c * p[2].y + d * p[3].y,
-    )
+    Point::new(a * p[0].x + b * p[1].x + c * p[2].x + d * p[3].x, a * p[0].y + b * p[1].y + c * p[2].y + d * p[3].y)
 }
 
 /// Distance from `p` to the curve (sampled).
@@ -169,10 +157,7 @@ pub fn comment_layout(comment: &Comment, t: &Transform, offset: Vector, resize: 
     let rect = Rectangle::new(min, Size::new(size[0] * z, size[1] * z));
     let header = Rectangle::new(min, Size::new(rect.width, (COMMENT_HEADER_H * z).min(rect.height)));
     let side = (COMMENT_GRIP * z).min(rect.width).min(rect.height);
-    let grip = Rectangle::new(
-        Point::new(rect.x + rect.width - side, rect.y + rect.height - side),
-        Size::new(side, side),
-    );
+    let grip = Rectangle::new(Point::new(rect.x + rect.width - side, rect.y + rect.height - side), Size::new(side, side));
     CommentLayout { id: comment.id, rect, header, grip }
 }
 

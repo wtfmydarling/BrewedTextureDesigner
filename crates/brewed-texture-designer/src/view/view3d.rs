@@ -10,14 +10,14 @@
 
 use std::sync::Arc;
 
-use iced::widget::shader::{self, Viewport};
-use iced::widget::tooltip::Position;
-use iced::widget::{button, column, container, pick_list, row, rule, shader as shader_widget, text};
-use iced::{Alignment, Element, Length, Rectangle, Vector, mouse, window};
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::nodes::{Usage, UsageGroup};
 use brewed_texture_core::package::file_name;
 use brewed_texture_engine::wgpu;
+use iced::widget::shader::{self, Viewport};
+use iced::widget::tooltip::Position;
+use iced::widget::{button, column, container, pick_list, row, rule, shader as shader_widget, text};
+use iced::{Alignment, Element, Length, Rectangle, Vector, mouse, window};
 use wgpu::util::DeviceExt;
 
 use crate::app::{App, Message, PreviewMessage};
@@ -282,14 +282,9 @@ pub fn toolbar(app: &App, room: f32) -> (iced::widget::Row<'_, Message>, Option<
     // between, below.)
     let named = named || (under && room >= NAMED_FIELDS);
     if named {
-        let fields = row![
-            label("Height"),
-            container(height).width(Length::Fixed(70.0)),
-            label("Repeat"),
-            container(repeat).width(Length::Fixed(60.0)),
-        ]
-        .spacing(4)
-        .align_y(Alignment::Center);
+        let fields = row![label("Height"), container(height).width(Length::Fixed(70.0)), label("Repeat"), container(repeat).width(Length::Fixed(60.0)),]
+            .spacing(4)
+            .align_y(Alignment::Center);
         if under {
             return (r.push(reset), Some(fields));
         }
@@ -335,16 +330,11 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
     let choice = |on: bool, label: String, hint: String, message: Message| -> Element<'_, Message> {
         crate::view::tip(
             // (A long name of a file shortened in its middle: the menu is as wide as it is.)
-            button(crate::view::fitted(
-                format!("{}  {label}", if on { "●" } else { "○" }),
-                style::TEXT_SIZE,
-                style::ui_font(),
-                Some(style::TEXT),
-            ))
-            .width(Length::Fill)
-            .padding([4, 10])
-            .style(style::row_button(on))
-            .on_press(message),
+            button(crate::view::fitted(format!("{}  {label}", if on { "●" } else { "○" }), style::TEXT_SIZE, style::ui_font(), Some(style::TEXT)))
+                .width(Length::Fill)
+                .padding([4, 10])
+                .style(style::row_button(on))
+                .on_press(message),
             hint,
             Position::Right,
         )
@@ -391,9 +381,7 @@ fn lighting_menu(app: &App) -> Element<'_, Message> {
     }
     items.push(
         button(
-            row![icon(Icon::Folder, 13.0, style::TEXT_DIM), text("Load an Environment Image…").size(style::TEXT_SIZE)]
-                .spacing(8)
-                .align_y(Alignment::Center),
+            row![icon(Icon::Folder, 13.0, style::TEXT_DIM), text("Load an Environment Image…").size(style::TEXT_SIZE)].spacing(8).align_y(Alignment::Center),
         )
         .width(Length::Fill)
         .padding([4, 10])
@@ -475,8 +463,7 @@ pub fn map_names(app: &App) -> Vec<String> {
 
 /// The maps the model wears (see [`Scene::maps`]).
 fn maps_of(app: &App) -> Vec<shading::Map> {
-    let found: Vec<(Usage, &brewed_texture_engine::DisplayImage)> =
-        app.res.materials.iter().filter_map(|img| usage_of(app, img).map(|u| (u, img))).collect();
+    let found: Vec<(Usage, &brewed_texture_engine::DisplayImage)> = app.res.materials.iter().filter_map(|img| usage_of(app, img).map(|u| (u, img))).collect();
     shading::of(found.iter().map(|(u, img)| (*u, *img)))
 }
 
@@ -698,12 +685,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let mut said = column![];
     if missing {
         said = said.push(
-            container(
-                text("Set the Usage of Output nodes (Base Color, Normal, Height …) to see them here")
-                    .size(style::SMALL)
-                    .color(style::TEXT_DIM),
-            )
-            .padding(8),
+            container(text("Set the Usage of Output nodes (Base Color, Normal, Height …) to see them here").size(style::SMALL).color(style::TEXT_DIM))
+                .padding(8),
         );
     }
     said = said.push(iced::widget::space().height(Length::Fill)).push(container(frames).padding([6, 8]).width(Length::Fill).align_right(Length::Fill));
@@ -713,9 +696,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .height(Length::Fill)
         .style(|_| container::Style {
             background: Some(iced::Background::Gradient(iced::Gradient::Linear(
-                iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI))
-                    .add_stop(0.0, style::gray(48))
-                    .add_stop(1.0, style::gray(18)),
+                iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI)).add_stop(0.0, style::gray(48)).add_stop(1.0, style::gray(18)),
             ))),
             ..Default::default()
         })
@@ -755,13 +736,7 @@ impl shader::Program<Message> for Scene {
     type State = DragState;
     type Primitive = Primitive;
 
-    fn update(
-        &self,
-        state: &mut DragState,
-        event: &iced::Event,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> Option<shader::Action<Message>> {
+    fn update(&self, state: &mut DragState, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) -> Option<shader::Action<Message>> {
         // Every move is sent as a change, never as the camera it makes: several moves can
         // arrive in one frame, and each has to add to the one before.
         let publish = |m: Move| Some(shader::Action::publish(Message::Preview(PreviewMessage::Move3d(m))).and_capture());
@@ -894,12 +869,7 @@ fn look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> Mat4 {
     let f = normalize(sub(target, eye));
     let s = normalize(cross(f, up));
     let u = cross(s, f);
-    [
-        [s[0], u[0], -f[0], 0.0],
-        [s[1], u[1], -f[1], 0.0],
-        [s[2], u[2], -f[2], 0.0],
-        [-dot(s, eye), -dot(u, eye), dot(f, eye), 1.0],
-    ]
+    [[s[0], u[0], -f[0], 0.0], [s[1], u[1], -f[1], 0.0], [s[2], u[2], -f[2], 0.0], [-dot(s, eye), -dot(u, eye), dot(f, eye), 1.0]]
 }
 
 fn spherical(yaw: f32, pitch: f32) -> [f32; 3] {
@@ -1134,8 +1104,16 @@ impl shader::Pipeline for Pipeline {
         });
         // What the shader writes is multiplied by how much of the surface is there.
         let blend = wgpu::BlendState {
-            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
-            alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
         };
         let target = [Some(wgpu::ColorTargetState { format, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })];
         let model = |cull_mode: Option<wgpu::Face>| {
@@ -1152,12 +1130,7 @@ impl shader::Pipeline for Pipeline {
                     }],
                     compilation_options: Default::default(),
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some("fs"),
-                    targets: &target,
-                    compilation_options: Default::default(),
-                }),
+                fragment: Some(wgpu::FragmentState { module: &module, entry_point: Some("fs"), targets: &target, compilation_options: Default::default() }),
                 primitive: wgpu::PrimitiveState { cull_mode, ..Default::default() },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
@@ -1178,12 +1151,7 @@ impl shader::Pipeline for Pipeline {
             label: Some("brewed 3d background"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState { module: &module, entry_point: Some("behind_vs"), buffers: &[], compilation_options: Default::default() },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("behind_fs"),
-                targets: &target,
-                compilation_options: Default::default(),
-            }),
+            fragment: Some(wgpu::FragmentState { module: &module, entry_point: Some("behind_fs"), targets: &target, compilation_options: Default::default() }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
@@ -1197,7 +1165,8 @@ impl shader::Pipeline for Pipeline {
             cache: None,
         });
         // What shows the view drawn: over what is there, as much as the model is there.
-        let show_module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("brewed 3d shown"), source: wgpu::ShaderSource::Wgsl(SHOW.into()) });
+        let show_module =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("brewed 3d shown"), source: wgpu::ShaderSource::Wgsl(SHOW.into()) });
         let show_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("brewed 3d shown"),
             entries: &[texture(0, fragment, true, flat), sampler_entry(1, fragment)],
@@ -1371,13 +1340,7 @@ impl shader::Primitive for Primitive {
             Some(device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("brewed 3d view"), layout: &pipeline.layout, entries: &entries }));
     }
 
-    fn render(
-        &self,
-        pipeline: &Pipeline,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        clip_bounds: &Rectangle<u32>,
-    ) {
+    fn render(&self, pipeline: &Pipeline, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, clip_bounds: &Rectangle<u32>) {
         let (Some(bind_group), Some(drawn)) = (&pipeline.bind_group, &pipeline.drawn) else { return };
         let Some((_, mesh)) = pipeline.meshes.iter().find(|(s, _)| *s == pipeline.shape) else { return };
         if clip_bounds.width == 0 || clip_bounds.height == 0 {
@@ -1405,8 +1368,7 @@ impl shader::Primitive for Primitive {
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        let passes: &[&wgpu::RenderPipeline] =
-            if pipeline.see_through { &[&pipeline.back_faces, &pipeline.front_faces] } else { &[&pipeline.pipeline] };
+        let passes: &[&wgpu::RenderPipeline] = if pipeline.see_through { &[&pipeline.back_faces, &pipeline.front_faces] } else { &[&pipeline.pipeline] };
         for p in passes {
             pass.set_pipeline(p);
             pass.set_bind_group(0, bind_group, &[]);
@@ -1497,10 +1459,8 @@ mod tests {
             engine.set_materials(&outputs);
             brewed_texture_engine::engine::evaluate_blocking(&mut engine, g);
             let shown = engine.prepare_materials(&outputs).expect("the maps");
-            let found: Vec<(Usage, &brewed_texture_engine::DisplayImage)> = shown
-                .iter()
-                .filter_map(|img| Usage::of(g.node(img.node)?.enum_value("usage")).filter(|u| u.shown_in_3d()).map(|u| (u, img)))
-                .collect();
+            let found: Vec<(Usage, &brewed_texture_engine::DisplayImage)> =
+                shown.iter().filter_map(|img| Usage::of(g.node(img.node)?.enum_value("usage")).filter(|u| u.shown_in_3d()).map(|u| (u, img))).collect();
             let maps = shading::of(found.iter().map(|(u, img)| (*u, *img)));
             let camera = picture_camera(Camera { shape: Shape::Sphere, ..Camera::default() }, 1.0);
             let primitive = Primitive { camera, maps, environment: None, exposure: 1.0, background: None, key: false };
@@ -1532,8 +1492,7 @@ mod tests {
             pixels.iter().map(|(_, _, p)| f(p)).sum::<f32>() / pixels.len().max(1) as f32
         };
         let differ = |a: &::image::RgbaImage, b: &::image::RgbaImage| {
-            a.pixels().zip(b.pixels()).map(|(p, q)| (0..3).map(|c| (f32::from(p[c]) - f32::from(q[c])).abs()).sum::<f32>()).sum::<f32>()
-                / (SIDE * SIDE) as f32
+            a.pixels().zip(b.pixels()).map(|(p, q)| (0..3).map(|c| (f32::from(p[c]) - f32::from(q[c])).abs()).sum::<f32>()).sum::<f32>() / (SIDE * SIDE) as f32
         };
 
         // (The GPU finds nothing wrong with the shaders and what they are given.)
@@ -1626,9 +1585,7 @@ mod tests {
             assert!(differ(&changed, &complete) > 4.0, "{what}: {}", differ(&changed, &complete));
         }
         // The thin film colors the reflection: more colorful than the metal without it.
-        let colorful = |img: &::image::RgbaImage| {
-            mean(&sphere(img), &|p| f32::from(p[0].max(p[1]).max(p[2])) - f32::from(p[0].min(p[1]).min(p[2])))
-        };
+        let colorful = |img: &::image::RgbaImage| mean(&sphere(img), &|p| f32::from(p[0].max(p[1]).max(p[2])) - f32::from(p[0].min(p[1]).min(p[2])));
         let film = draw(&with(Template::Complete, &[("thin_film_weight", gray(1.0)), ("base_metalness", gray(1.0))]));
         let silver = draw(&with(Template::Complete, &[("base_metalness", gray(1.0))]));
         assert!(colorful(&film) > colorful(&silver) + 5.0, "{} against {}", colorful(&film), colorful(&silver));
@@ -1671,11 +1628,9 @@ mod tests {
                     Noise => g.add_node(NodeKind::NOISE, [0.0, y]),
                 };
                 let out = g.add_node(NodeKind::OUTPUT, [340.0, y]);
-                for (key, value) in [
-                    ("name", ParamValue::Text(usage.id().into())),
-                    ("usage", ParamValue::Enum(usage.index())),
-                    ("bit_depth", ParamValue::Enum(DEPTH_16F)),
-                ] {
+                for (key, value) in
+                    [("name", ParamValue::Text(usage.id().into())), ("usage", ParamValue::Enum(usage.index())), ("bit_depth", ParamValue::Enum(DEPTH_16F))]
+                {
                     g.node_mut(out).and_then(|n| n.param_mut(key)).expect(key).value = value;
                 }
                 assert!(g.connect(from, "o:output", out, "i:input").is_ok());
@@ -1690,18 +1645,15 @@ mod tests {
             brewed_texture_engine::engine::evaluate_blocking(&mut engine, &g);
             // (None where there are no maps at all, as there were none before.)
             let shown = engine.prepare_materials(&outputs).unwrap_or_default();
-            let found: Vec<(Usage, &brewed_texture_engine::DisplayImage)> = shown
-                .iter()
-                .filter_map(|img| Usage::of(g.node(img.node)?.enum_value("usage")).filter(|u| u.shown_in_3d()).map(|u| (u, img)))
-                .collect();
+            let found: Vec<(Usage, &brewed_texture_engine::DisplayImage)> =
+                shown.iter().filter_map(|img| Usage::of(g.node(img.node)?.enum_value("usage")).filter(|u| u.shown_in_3d()).map(|u| (u, img))).collect();
             let maps = shading::of(found.iter().map(|(u, img)| (*u, *img)));
             let camera = picture_camera(Camera { shape: Shape::Sphere, ..Camera::default() }, 1.0);
             let primitive = Primitive { camera, maps, environment: None, exposure: 1.0, background: None, key: false };
             render(&primitive, &mut pipeline, &device, &queue, [SIDE, SIDE]).expect("a picture")
         };
         let differ = |a: &::image::RgbaImage, b: &::image::RgbaImage| {
-            a.pixels().zip(b.pixels()).map(|(p, q)| (0..3).map(|c| (f32::from(p[c]) - f32::from(q[c])).abs()).sum::<f32>()).sum::<f32>()
-                / (SIDE * SIDE) as f32
+            a.pixels().zip(b.pixels()).map(|(p, q)| (0..3).map(|c| (f32::from(p[c]) - f32::from(q[c])).abs()).sum::<f32>()).sum::<f32>() / (SIDE * SIDE) as f32
         };
         let gray = |v: f32| Value([v, v, v, 1.0]);
         let red = Value([0.9, 0.12, 0.08, 1.0]);
@@ -1866,7 +1818,10 @@ mod tests {
             cam = cam.moved(Move::Light(Vector::new(97.0, 0.0)));
         }
         assert!((-std::f32::consts::PI..=std::f32::consts::PI).contains(&cam.light_yaw), "{}", cam.light_yaw);
-        assert!((wrapped(3.0 * std::f32::consts::PI) - std::f32::consts::PI).abs() < 1e-4 || (wrapped(3.0 * std::f32::consts::PI) + std::f32::consts::PI).abs() < 1e-4);
+        assert!(
+            (wrapped(3.0 * std::f32::consts::PI) - std::f32::consts::PI).abs() < 1e-4
+                || (wrapped(3.0 * std::f32::consts::PI) + std::f32::consts::PI).abs() < 1e-4
+        );
         assert_eq!(wrapped(f32::NAN), 0.0);
     }
 
@@ -1908,10 +1863,8 @@ mod tests {
             engine.set_materials(&outputs);
             brewed_texture_engine::engine::evaluate_blocking(&mut engine, g);
             let shown = engine.prepare_materials(&outputs).expect("the maps");
-            let found: Vec<(Usage, &brewed_texture_engine::DisplayImage)> = shown
-                .iter()
-                .filter_map(|img| Usage::of(g.node(img.node)?.enum_value("usage")).filter(|u| u.shown_in_3d()).map(|u| (u, img)))
-                .collect();
+            let found: Vec<(Usage, &brewed_texture_engine::DisplayImage)> =
+                shown.iter().filter_map(|img| Usage::of(g.node(img.node)?.enum_value("usage")).filter(|u| u.shown_in_3d()).map(|u| (u, img))).collect();
             let maps = shading::of(found.iter().map(|(u, img)| (*u, *img)));
             let primitive = Primitive { camera, maps, environment: None, exposure: 1.0, background: None, key: false };
             render(&primitive, &mut pipeline, &device, &queue, SIZE).expect("a picture")
@@ -1965,10 +1918,7 @@ mod tests {
         let glossy = draw(&with(&[("specular_roughness", 0.15)]), turned);
         keep("glossy-cube", &glossy);
         for (x, y, p) in glossy.enumerate_pixels().filter(|(x, y, _)| *x > 0 && *y > 0 && *x + 1 < SIZE[0] && *y + 1 < SIZE[1]) {
-            let around = (0..9u32)
-                .filter(|k| *k != 4)
-                .map(|k| lum(glossy.get_pixel(x + k % 3 - 1, y + k / 3 - 1)))
-                .fold(0.0f32, f32::max);
+            let around = (0..9u32).filter(|k| *k != 4).map(|k| lum(glossy.get_pixel(x + k % 3 - 1, y + k / 3 - 1))).fold(0.0f32, f32::max);
             assert!(lum(p) < around + 60.0, "a spark at {x},{y}: {} among {around}", lum(p));
         }
 
@@ -2005,7 +1955,10 @@ mod tests {
         let sphere = of(Camera { shape: Shape::Sphere, displacement: 0.0, ..Camera::default() });
         // Where a view is in a window of 640 by 480 points: its edges between the points, as
         // the panels' are once they are dragged.
-        let views = [Rectangle::new(iced::Point::new(37.3, 21.7), iced::Size::new(301.4, 222.2)), Rectangle::new(iced::Point::new(0.0, 30.0), iced::Size::new(413.5, 317.25))];
+        let views = [
+            Rectangle::new(iced::Point::new(37.3, 21.7), iced::Size::new(301.4, 222.2)),
+            Rectangle::new(iced::Point::new(0.0, 30.0), iced::Size::new(413.5, 317.25)),
+        ];
         for bounds in views {
             let mut at_one: Option<[f32; 4]> = None;
             for scale in [1.0f32, 1.25, 1.5, 1.75, 2.0, 3.0] {

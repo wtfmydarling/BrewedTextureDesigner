@@ -89,10 +89,7 @@ pub fn precision_of(format: wgpu::TextureFormat) -> Precision {
 /// does not promise), so what is shown of them, and what such a kernel reads, is a copy in half
 /// floats.
 pub fn filterable(format: wgpu::TextureFormat) -> bool {
-    !matches!(
-        format,
-        wgpu::TextureFormat::R32Float | wgpu::TextureFormat::Rg32Float | wgpu::TextureFormat::Rgba32Float
-    )
+    !matches!(format, wgpu::TextureFormat::R32Float | wgpu::TextureFormat::Rg32Float | wgpu::TextureFormat::Rgba32Float)
 }
 
 /// The format an output keeps the image it writes in, from its channels (see
@@ -103,12 +100,7 @@ pub fn filterable(format: wgpu::TextureFormat) -> bool {
 /// for 8 bits and DXT, in half floats and floats for 16 and 32 bits float, and for 16 bits (a
 /// PNG of 16 bits) as precisely as it arrives, in half floats at least: a file of 16 bits of an
 /// image of floats has all its steps.
-pub fn output_format(
-    channels: u32,
-    depth: u32,
-    arriving: ImageKind,
-    arriving_format: Option<wgpu::TextureFormat>,
-) -> wgpu::TextureFormat {
+pub fn output_format(channels: u32, depth: u32, arriving: ImageKind, arriving_format: Option<wgpu::TextureFormat>) -> wgpu::TextureFormat {
     use brewed_texture_core::nodes::{DEPTH_16, DEPTH_16F, DEPTH_32F};
     use wgpu::TextureFormat as F;
     let channels = match (channels, arriving) {
@@ -475,11 +467,7 @@ impl GpuImage {
     }
     /// One mip level of the image, as an image of its own (for writing mip chains).
     pub fn level(&self, level: u32) -> GpuImage {
-        let view = self.texture.create_view(&wgpu::TextureViewDescriptor {
-            base_mip_level: level,
-            mip_level_count: Some(1),
-            ..Default::default()
-        });
+        let view = self.texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: level, mip_level_count: Some(1), ..Default::default() });
         GpuImage { texture: self.texture.clone(), view, level }
     }
 }
@@ -638,14 +626,7 @@ impl Gpu {
         })
     }
 
-    fn create_image_raw(
-        device: &wgpu::Device,
-        w: u32,
-        h: u32,
-        mips: u32,
-        format: wgpu::TextureFormat,
-        label: &str,
-    ) -> GpuImage {
+    fn create_image_raw(device: &wgpu::Device, w: u32, h: u32, mips: u32, format: wgpu::TextureFormat, label: &str) -> GpuImage {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
@@ -671,13 +652,7 @@ impl Gpu {
 
     /// An image of `mips` levels, as the pool makes them (for measurements).
     #[cfg(test)]
-    pub(crate) fn create_image_raw_for_tests(
-        &self,
-        w: u32,
-        h: u32,
-        mips: u32,
-        format: wgpu::TextureFormat,
-    ) -> GpuImage {
+    pub(crate) fn create_image_raw_for_tests(&self, w: u32, h: u32, mips: u32, format: wgpu::TextureFormat) -> GpuImage {
         Self::create_image_raw(&self.device, w, h, mips, format, "measured")
     }
 
@@ -694,13 +669,7 @@ impl Gpu {
     /// Record `src` as its node shows it (as the output of `format`, see
     /// [`brewed_texture_core::nodes::OUTPUT_FORMATS`]; 0 shows it as it is) into mip 0 of
     /// `dst`, resampled to its size and converted to its format, then rebuild the mip chain.
-    pub fn encode_copy_with_mips(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        src: &GpuImage,
-        dst: &GpuImage,
-        format: u32,
-    ) -> Result<(), String> {
+    pub fn encode_copy_with_mips(&self, encoder: &mut wgpu::CommandEncoder, src: &GpuImage, dst: &GpuImage, format: u32) -> Result<(), String> {
         self.encode_show(encoder, src, &dst.level(0), format)?;
         self.encode_mips(encoder, dst)
     }
@@ -769,9 +738,7 @@ impl Gpu {
 
     fn take_pooled(&self, w: u32, h: u32, format: wgpu::TextureFormat, mips: u32) -> Option<GpuImage> {
         let mut pool = self.pool.borrow_mut();
-        let i = pool
-            .iter()
-            .position(|(img, _)| img.size() == [w, h] && img.format() == format && img.texture.mip_level_count() == mips)?;
+        let i = pool.iter().position(|(img, _)| img.size() == [w, h] && img.format() == format && img.texture.mip_level_count() == mips)?;
         Some(pool.swap_remove(i).0)
     }
 
@@ -857,18 +824,9 @@ impl Gpu {
     fn upload(&self, img: &GpuImage, data: &[u8]) {
         let (w, h) = (img.width(), img.height());
         self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &img.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
+            wgpu::TexelCopyTextureInfo { texture: &img.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(w * bytes_per_pixel(img.format())),
-                rows_per_image: Some(h),
-            },
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * bytes_per_pixel(img.format())), rows_per_image: Some(h) },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
     }
@@ -969,14 +927,7 @@ impl Gpu {
 
     /// The bindings of a draw into `output`: `params`, `inputs`, the sampler for `tiling` of a
     /// kernel that filters, and the size of the image drawn with which inputs are grayscale.
-    fn bind_group(
-        &self,
-        layout: &wgpu::BindGroupLayout,
-        params: &[u8],
-        inputs: &[&GpuImage],
-        output: &GpuImage,
-        sampler: Option<u32>,
-    ) -> wgpu::BindGroup {
+    fn bind_group(&self, layout: &wgpu::BindGroupLayout, params: &[u8], inputs: &[&GpuImage], output: &GpuImage, sampler: Option<u32>) -> wgpu::BindGroup {
         // The parameters, then the size of the image drawn, where a binding may start.
         let target = u64::from(self.device.limits().min_uniform_buffer_offset_alignment);
         let params_size = (params.len().div_ceil(16).max(1) * 16) as u64;
@@ -1007,15 +958,7 @@ impl Gpu {
 
     /// Record drawing all of `output` (one level of it) with `kernel`; a kernel that filters
     /// its inputs gets the sampler for `tiling`.
-    fn draw(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        kernel: &Kernel,
-        params: &[u8],
-        inputs: &[&GpuImage],
-        output: &GpuImage,
-        tiling: u32,
-    ) {
+    fn draw(&self, encoder: &mut wgpu::CommandEncoder, kernel: &Kernel, params: &[u8], inputs: &[&GpuImage], output: &GpuImage, tiling: u32) {
         debug_assert_eq!(inputs.len(), kernel.inputs, "kernel input count mismatch");
         let bind_group = self.bind_group(&kernel.layout, params, inputs, output, kernel.filtered.then_some(tiling));
         let [w, h] = output.level_size();
@@ -1026,10 +969,7 @@ impl Gpu {
                 depth_slice: None,
                 resolve_target: None,
                 // Every pixel is drawn: what was there is not read.
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
@@ -1078,10 +1018,8 @@ impl Gpu {
         for entry in &mut entries {
             entry.visibility = wgpu::ShaderStages::VERTEX_FRAGMENT;
         }
-        let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("layout_{inputs}_splats")),
-            entries: &entries,
-        });
+        let layout =
+            self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(&format!("layout_{inputs}_splats")), entries: &entries });
         self.splat_layouts.borrow_mut().insert(inputs, layout.clone());
         layout
     }
@@ -1097,8 +1035,11 @@ impl Gpu {
         let layout = self.splat_layout(inputs);
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(LABEL), source: wgpu::ShaderSource::Wgsl(source.into()) });
-        let pipeline_layout =
-            self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(LABEL), bind_group_layouts: &[&layout], push_constant_ranges: &[] });
+        let pipeline_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(LABEL),
+            bind_group_layouts: &[&layout],
+            push_constant_ranges: &[],
+        });
         let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(LABEL),
             layout: Some(&pipeline_layout),
@@ -1178,14 +1119,7 @@ impl Gpu {
     }
 
     /// Run a built-in kernel over `output`, built for the images it reads and writes.
-    pub fn run(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        kernel: &str,
-        params: &[u8],
-        inputs: &[&GpuImage],
-        output: &GpuImage,
-    ) -> Result<(), String> {
+    pub fn run(&self, encoder: &mut wgpu::CommandEncoder, kernel: &str, params: &[u8], inputs: &[&GpuImage], output: &GpuImage) -> Result<(), String> {
         let k = self.kernel_variant(kernel, output.format(), 0)?;
         self.draw(encoder, &k, params, inputs, output, 0);
         Ok(())
@@ -1246,14 +1180,7 @@ impl Gpu {
     }
 
     /// Run a kernel generated at runtime (see [`Gpu::dynamic_kernel`]) over `output`.
-    pub fn run_dynamic(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        kernel: &Kernel,
-        params: &[u8],
-        inputs: &[&GpuImage],
-        output: &GpuImage,
-    ) {
+    pub fn run_dynamic(&self, encoder: &mut wgpu::CommandEncoder, kernel: &Kernel, params: &[u8], inputs: &[&GpuImage], output: &GpuImage) {
         self.draw(encoder, kernel, params, inputs, output, 0);
     }
 
@@ -1352,13 +1279,7 @@ impl Gpu {
         self.encode_readback_rect(encoder, img, pixel, [1, 1])
     }
 
-    fn encode_readback_rect(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        img: &GpuImage,
-        origin: [u32; 2],
-        [w, h]: [u32; 2],
-    ) -> Readback {
+    fn encode_readback_rect(&self, encoder: &mut wgpu::CommandEncoder, img: &GpuImage, origin: [u32; 2], [w, h]: [u32; 2]) -> Readback {
         let format = img.format();
         let row = w * bytes_per_pixel(format);
         let padded_row = row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -1377,11 +1298,7 @@ impl Gpu {
             },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_row),
-                    rows_per_image: Some(h),
-                },
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(h) },
             },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
@@ -1553,9 +1470,7 @@ impl StoredImage {
         let bytes = &self.bytes[rows.start as usize * row..rows.end as usize * row];
         let values: Vec<f32> = match self.format {
             F::R8Unorm | F::Rg8Unorm | F::Rgba8Unorm => bytes.iter().map(|b| f32::from(*b) / 255.0).collect(),
-            F::R32Float | F::Rg32Float | F::Rgba32Float => {
-                bytes.as_chunks::<4>().0.iter().map(|b| f32::from_ne_bytes(*b)).collect()
-            }
+            F::R32Float | F::Rg32Float | F::Rgba32Float => bytes.as_chunks::<4>().0.iter().map(|b| f32::from_ne_bytes(*b)).collect(),
             // Half floats (copied first when they are not where half floats may be read).
             _ => match bytemuck::try_cast_slice::<u8, u16>(bytes) {
                 Ok(half) => convert_half(half),

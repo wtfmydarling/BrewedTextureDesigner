@@ -8,8 +8,8 @@ use iced::{Alignment, Element, Length, Padding};
 use crate::app::{Message, NoticesMessage};
 use crate::icons::{Icon, icon};
 use crate::style;
-use crate::widget::scroll::scroll_box;
 use crate::third_party::{Kind, Work, works};
+use crate::widget::scroll::scroll_box;
 
 /// The window's state: what is searched for.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -36,8 +36,12 @@ pub fn view(dialog: &NoticesDialog) -> Element<'_, Message> {
         }
         any = true;
         list = list.push(
-            container(text(format!("{} · {}", kind.heading(), found.len())).size(14).font(style::heavy()).color(style::TEXT_BRIGHT))
-                .padding(Padding { top: 16.0, right: 0.0, bottom: 8.0, left: 2.0 }),
+            container(text(format!("{} · {}", kind.heading(), found.len())).size(14).font(style::heavy()).color(style::TEXT_BRIGHT)).padding(Padding {
+                top: 16.0,
+                right: 0.0,
+                bottom: 8.0,
+                left: 2.0,
+            }),
         );
         let mut rows = column![].spacing(1);
         for (i, w) in found.into_iter().enumerate() {
@@ -49,7 +53,11 @@ pub fn view(dialog: &NoticesDialog) -> Element<'_, Message> {
             ]
             .spacing(8)
             .align_y(Alignment::Center);
-            let link = button(label).width(Length::Fill).padding([7, 12]).style(style::link_row(i % 2 == 0)).on_press(Message::Notices(NoticesMessage::Open(w.link.clone())));
+            let link = button(label)
+                .width(Length::Fill)
+                .padding([7, 12])
+                .style(style::link_row(i % 2 == 0))
+                .on_press(Message::Notices(NoticesMessage::Open(w.link.clone())));
             rows = rows.push(crate::view::tip(link, w.link.as_str(), iced::widget::tooltip::Position::Bottom));
         }
         list = list.push(container(rows).padding(1).width(Length::Fill).style(style::setting_list));
@@ -90,7 +98,6 @@ pub fn view(dialog: &NoticesDialog) -> Element<'_, Message> {
     let dialog = container(window).width(Length::Fill).max_width(640).height(Length::Fill).max_height(680).style(style::popup);
     // Nothing is lost by a click beside it: it closes.
     opaque(
-        mouse_area(container(center(opaque(dialog))).padding(24).width(Length::Fill).height(Length::Fill).style(style::scrim))
-            .on_press(Message::Dialog(None)),
+        mouse_area(container(center(opaque(dialog))).padding(24).width(Length::Fill).height(Length::Fill).style(style::scrim)).on_press(Message::Dialog(None)),
     )
 }

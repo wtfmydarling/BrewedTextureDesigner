@@ -307,12 +307,7 @@ fn read_args(args: &[OsString]) -> Asked {
                 return Asked::Now(Box::new(move || {
                     let (graph, nodes) = if demo {
                         let (g, _) = brewed_texture_core::demo::graph();
-                        let nodes = g
-                            .nodes
-                            .iter()
-                            .filter(|n| n.def().has_image())
-                            .map(|n| (n.id, n.def().name.to_string()))
-                            .collect();
+                        let nodes = g.nodes.iter().filter(|n| n.def().has_image()).map(|n| (n.id, n.def().name.to_string())).collect();
                         (g, nodes)
                     } else {
                         brewed_texture_engine::tools::gallery_graph()

@@ -1,8 +1,8 @@
 //! The graph's canvas, driven as a hand drives it: what a click, a drag, a double click, the
 //! wheel and the keys do to its nodes and links.
 
-use iced::{Rectangle, Vector};
 use brewed_texture_core::graph::{NodeId, SocketRef};
+use iced::{Rectangle, Vector};
 
 use super::*;
 use crate::app::AddMenuMessage;
@@ -149,7 +149,14 @@ fn a_box_selects_what_it_touches() {
     assert!(w.app.graph().nodes.iter().all(|n| !node_rect(&w, n.id).contains(from)), "the box starts on the canvas");
     drag(&mut w, from, r.center());
     assert!(w.app.ui.selection.contains(&levels), "{:?}", selected(&w));
-    let touched: Vec<NodeId> = w.app.graph().nodes.iter().filter(|n| node_rect(&w, n.id).intersects(&Rectangle::new(from, Size::new(r.center().x - from.x, r.center().y - from.y)))).map(|n| n.id).collect();
+    let touched: Vec<NodeId> = w
+        .app
+        .graph()
+        .nodes
+        .iter()
+        .filter(|n| node_rect(&w, n.id).intersects(&Rectangle::new(from, Size::new(r.center().x - from.x, r.center().y - from.y))))
+        .map(|n| n.id)
+        .collect();
     assert_eq!(selected(&w).len(), touched.len(), "what the box touches, no more");
     // With Shift: the Blur's box adds it.
     let b = node_rect(&w, blur);
@@ -388,7 +395,17 @@ fn a_color_picker_closes_with_its_node() {
     w.send(Message::Edit(Edit::AddNode { kind: NodeKind::UNIFORM_COLOR, pos: [2400.0, -800.0] }));
     w.send(Message::Seal);
     let color = w.app.graph().nodes_of(NodeKind::UNIFORM_COLOR).last().expect("the new Uniform Color").id;
-    let key = w.app.graph().node(color).unwrap().def().params.iter().find(|p| matches!(p.kind, brewed_texture_core::nodes::ParamKind::Color { .. })).expect("its color").key;
+    let key = w
+        .app
+        .graph()
+        .node(color)
+        .unwrap()
+        .def()
+        .params
+        .iter()
+        .find(|p| matches!(p.kind, brewed_texture_core::nodes::ParamKind::Color { .. }))
+        .expect("its color")
+        .key;
     w.send(Message::ColorPicker(Some(ColorTarget::Param(color, key.into()))));
     assert!(w.app.ui.color_picker.is_some());
     w.send(Message::Undo);
@@ -474,7 +491,11 @@ fn the_graph_draws_in_its_view_only() {
     let mut placements: Vec<(f32, Vector, String)> = Vec::new();
     for zoom in [0.3, 1.0, 2.5] {
         for (fx, fy) in [(0.5, 0.0), (0.5, 1.0), (0.0, 0.5), (1.0, 0.5), (0.0, 0.0), (1.0, 1.0)] {
-            placements.push((zoom, Vector::new(b.width * fx - middle[0] * zoom, b.height * fy - middle[1] * zoom), format!("the graph's middle at {fx},{fy} of it")));
+            placements.push((
+                zoom,
+                Vector::new(b.width * fx - middle[0] * zoom, b.height * fy - middle[1] * zoom),
+                format!("the graph's middle at {fx},{fy} of it"),
+            ));
         }
     }
     // Each comment's words just past each edge: its top above the view, its left beside it, its

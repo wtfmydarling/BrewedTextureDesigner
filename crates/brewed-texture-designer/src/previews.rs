@@ -72,12 +72,7 @@ pub fn look(paths: &[String]) -> Vec<Look> {
                 Look { path: path.clone(), there: held.is_some(), modified: None, bytes: held.map(|b| b.len() as u64) }
             } else {
                 let meta = std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file);
-                Look {
-                    path: path.clone(),
-                    there: meta.is_some(),
-                    modified: meta.as_ref().and_then(|m| m.modified().ok()),
-                    bytes: meta.map(|m| m.len()),
-                }
+                Look { path: path.clone(), there: meta.is_some(), modified: meta.as_ref().and_then(|m| m.modified().ok()), bytes: meta.map(|m| m.len()) }
             }
         })
         .collect()
@@ -95,9 +90,7 @@ pub fn make(path: &str, kind: ResourceKind) -> Result<(Vec<u8>, u32, u32, String
             let (w, h) = small.dimensions();
             Ok((small.into_raw(), w, h, about))
         }
-        ResourceKind::Svg => {
-            Ok((brewed_texture_engine::vector::preview(path, false, SIZE)?, SIZE, SIZE, "Vector graphics".into()))
-        }
+        ResourceKind::Svg => Ok((brewed_texture_engine::vector::preview(path, false, SIZE)?, SIZE, SIZE, "Vector graphics".into())),
         ResourceKind::Font => Ok((brewed_texture_engine::vector::preview(path, true, SIZE)?, SIZE, SIZE, "Font".into())),
     }
 }

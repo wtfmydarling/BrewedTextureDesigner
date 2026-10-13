@@ -215,16 +215,19 @@ impl App {
         let file = package.clone();
         // (Added where it was dropped, whichever graph is edited when the package is read.)
         let here = self.here();
-        self.in_background(move || super::packages::read_with_dependencies(&file, known), move |read| {
-            let read = Message::LibraryRead {
-                package: package.clone(),
-                graph,
-                name: name.clone(),
-                pos,
-                result: read.unwrap_or_else(|| Err("The package could not be read".into())).map(Arc::new),
-            };
-            Message::Asked(here, Box::new(read))
-        })
+        self.in_background(
+            move || super::packages::read_with_dependencies(&file, known),
+            move |read| {
+                let read = Message::LibraryRead {
+                    package: package.clone(),
+                    graph,
+                    name: name.clone(),
+                    pos,
+                    result: read.unwrap_or_else(|| Err("The package could not be read".into())).map(Arc::new),
+                };
+                Message::Asked(here, Box::new(read))
+            },
+        )
     }
 
     /// The package of a graph of the Library was read (see [`App::add_library_graph`]).

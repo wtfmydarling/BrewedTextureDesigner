@@ -24,17 +24,8 @@ pub enum Shape {
 }
 
 impl Shape {
-    pub const ALL: [Shape; 9] = [
-        Shape::RoundedCube,
-        Shape::Sphere,
-        Shape::MatBall,
-        Shape::Cube,
-        Shape::RoundedCylinder,
-        Shape::Cylinder,
-        Shape::Torus,
-        Shape::Plane,
-        Shape::Cloth,
-    ];
+    pub const ALL: [Shape; 9] =
+        [Shape::RoundedCube, Shape::Sphere, Shape::MatBall, Shape::Cube, Shape::RoundedCylinder, Shape::Cylinder, Shape::Torus, Shape::Plane, Shape::Cloth];
 
     /// What a file calls it (the model of a graph's 3D view, see
     /// `brewed_texture_core::project::ViewState`).
@@ -193,13 +184,7 @@ fn grid(columns: u32, rows: u32, uv_scale: [f32; 2], f: impl Fn(f32, f32) -> ([f
 /// A grid of quads from `f(u, v)`, at the `u` of `across` and the `v` of `down` (each from 0 to
 /// 1, in order): where they are close together, the surface is finer, its texture laid on it as
 /// evenly as elsewhere (`u` and `v` are its coordinates, wherever they are taken).
-fn grid_at(
-    across: &[f32],
-    down: &[f32],
-    uv_scale: [f32; 2],
-    f: impl Fn(f32, f32) -> ([f32; 3], [f32; 3], [f32; 3]),
-    out: &mut (Vec<Vertex>, Vec<u32>),
-) {
+fn grid_at(across: &[f32], down: &[f32], uv_scale: [f32; 2], f: impl Fn(f32, f32) -> ([f32; 3], [f32; 3], [f32; 3]), out: &mut (Vec<Vertex>, Vec<u32>)) {
     let base = out.0.len() as u32;
     for &v in down {
         for &u in across {
@@ -257,7 +242,12 @@ enum Piece {
     Line([f32; 2], [f32; 2]),
     /// The points `center + radius * (sin a, cos a)`, `a` from `from` to `to` (radians: 0 is
     /// straight up, π/2 straight out).
-    Arc { center: [f32; 2], radius: f32, from: f32, to: f32 },
+    Arc {
+        center: [f32; 2],
+        radius: f32,
+        from: f32,
+        to: f32,
+    },
 }
 
 impl Piece {
@@ -435,13 +425,7 @@ fn pieces_of(shape: Shape) -> (Vec<Vertex>, Vec<u32>) {
             // (It is built in: a test reads it.)
             Err(e) => log::error!("the matball: {e}"),
         },
-        Shape::Plane => grid(
-            256,
-            256,
-            [1.0, 1.0],
-            |u, v| ([u * 2.4 - 1.2, 1.2 - v * 2.4, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
-            &mut out,
-        ),
+        Shape::Plane => grid(256, 256, [1.0, 1.0], |u, v| ([u * 2.4 - 1.2, 1.2 - v * 2.4, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]), &mut out),
         // Its edges as sharp as an edge is seen: rounded by a five-hundredth of its side, which
         // no eye takes for round. (Square, each face moved its own way with the height: the
         // cube opened along every edge.)

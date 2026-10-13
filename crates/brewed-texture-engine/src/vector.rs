@@ -65,12 +65,9 @@ impl VectorJob {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         match &self.what {
             Vector::Svg { path, fit, color } => (0u8, path, fit, color).hash(&mut h),
-            Vector::Text { text, font, size, align, spacing } => {
-                (1u8, text, font, size.to_bits(), align, spacing.to_bits()).hash(&mut h)
-            }
+            Vector::Text { text, font, size, align, spacing } => (1u8, text, font, size.to_bits(), align, spacing.to_bits()).hash(&mut h),
         }
-        (self.size, self.offset.map(f32::to_bits), self.rotation.to_bits(), self.scale.to_bits(), self.tiling, self.reads)
-            .hash(&mut h);
+        (self.size, self.offset.map(f32::to_bits), self.rotation.to_bits(), self.scale.to_bits(), self.tiling, self.reads).hash(&mut h);
         h.finish()
     }
 
@@ -108,11 +105,7 @@ fn fonts(font: &str) -> Result<(Arc<usvg::fontdb::Database>, String), String> {
     let mut db = (**inter).clone();
     let before = db.len();
     db.load_font_data(data.to_vec());
-    let family = db
-        .faces()
-        .skip(before)
-        .find_map(|f| f.families.first().map(|(name, _)| name.clone()))
-        .ok_or_else(|| format!("'{font}' is not a font"))?;
+    let family = db.faces().skip(before).find_map(|f| f.families.first().map(|(name, _)| name.clone())).ok_or_else(|| format!("'{font}' is not a font"))?;
     Ok((Arc::new(db), family))
 }
 
@@ -149,12 +142,8 @@ fn tree(job: &VectorJob) -> Result<(usvg::Tree, [f32; 2], [f32; 2]), String> {
             let beside = (!brewed_texture_core::files::is_embedded(path)).then(|| Path::new(path).parent()).flatten();
             // Its text in Inter where the fonts it names are not (none of the system's are
             // looked for: the same file looks the same everywhere).
-            let options = usvg::Options {
-                resources_dir: beside.map(Into::into),
-                image_href_resolver: links(),
-                fontdb: fonts("")?.0,
-                ..usvg::Options::default()
-            };
+            let options =
+                usvg::Options { resources_dir: beside.map(Into::into), image_href_resolver: links(), fontdb: fonts("")?.0, ..usvg::Options::default() };
             let tree = read_svg(&data, &options).map_err(|e| format!("Cannot read '{path}': {e}"))?;
             let size = tree.size();
             let (sw, sh) = (size.width().max(1e-3), size.height().max(1e-3));
@@ -213,10 +202,7 @@ const LAYER_MEMORY: usize = 1 << 30;
 fn read_svg(data: &[u8], options: &usvg::Options) -> Result<usvg::Tree, String> {
     let mut unpacked = Vec::new();
     let data = if data.starts_with(&[0x1f, 0x8b]) {
-        flate2::read::GzDecoder::new(data)
-            .take(MAX_SVG as u64 + 1)
-            .read_to_end(&mut unpacked)
-            .map_err(|e| format!("it cannot be unpacked: {e}"))?;
+        flate2::read::GzDecoder::new(data).take(MAX_SVG as u64 + 1).read_to_end(&mut unpacked).map_err(|e| format!("it cannot be unpacked: {e}"))?;
         &unpacked[..]
     } else {
         data
@@ -227,9 +213,9 @@ fn read_svg(data: &[u8], options: &usvg::Options) -> Result<usvg::Tree, String> 
     let text = std::str::from_utf8(data).map_err(|_| "it is not text".to_string())?;
     let tree = usvg::Tree::from_str(text, options).map_err(|e| e.to_string())?;
     match layers(tree.root()) {
-        deep if deep > MAX_LAYERS => Err(format!(
-            "{deep} groups with opacity, a clip, a mask or a filter are inside one another; at most {MAX_LAYERS} are drawn"
-        )),
+        deep if deep > MAX_LAYERS => {
+            Err(format!("{deep} groups with opacity, a clip, a mask or a filter are inside one another; at most {MAX_LAYERS} are drawn"))
+        }
         _ => Ok(tree),
     }
 }
@@ -334,12 +320,7 @@ pub fn rasterize(job: &VectorJob) -> Result<Raster, String> {
                 let a = rgba.alpha();
                 if color {
                     let c = rgba.demultiply();
-                    px.copy_from_slice(&[
-                        half[c.red() as usize],
-                        half[c.green() as usize],
-                        half[c.blue() as usize],
-                        half[a as usize],
-                    ]);
+                    px.copy_from_slice(&[half[c.red() as usize], half[c.green() as usize], half[c.blue() as usize], half[a as usize]]);
                 } else {
                     px[0] = half[a as usize];
                 }
@@ -400,12 +381,8 @@ mod tests {
         let total: f32 = px.iter().sum();
         assert!(total > 100.0, "letters drawn: {total}");
         // Centered: as much on the left half as on the right, near enough.
-        let half_sum = |left: bool| -> f32 {
-            (0..64)
-                .flat_map(|y| (0..64).map(move |x| (y, x)))
-                .map(|(y, x)| px[y * 128 + if left { x } else { x + 64 }])
-                .sum()
-        };
+        let half_sum =
+            |left: bool| -> f32 { (0..64).flat_map(|y| (0..64).map(move |x| (y, x))).map(|(y, x)| px[y * 128 + if left { x } else { x + 64 }]).sum() };
         let (l, r) = (half_sum(true), half_sum(false));
         assert!((l - r).abs() < 0.25 * (l + r), "{l} {r}");
         // Moved half a texture right: on a tiling axis half of it comes back at the left edge.
@@ -416,8 +393,7 @@ mod tests {
         assert!(not.iter().sum::<f32>() < 0.7 * total, "without tiling, what leaves is gone");
         // Things XML does not take are text like any other.
         assert!(coverage(&text("<&\"'>")).iter().sum::<f32>() > 10.0);
-        let missing =
-            Vector::Text { text: "x".into(), font: "/no/such/font.ttf".into(), size: 40.0, align: 1, spacing: 0.0 };
+        let missing = Vector::Text { text: "x".into(), font: "/no/such/font.ttf".into(), size: 40.0, align: 1, spacing: 0.0 };
         assert!(rasterize(&VectorJob { what: missing, ..text("x") }).is_err());
     }
 
@@ -427,7 +403,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("square.svg");
         // A red square in the left half of a picture twice as wide as it is high.
-        std::fs::write(&path, r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect x="0" y="0" width="100" height="100" fill="#ff0000"/></svg>"##).unwrap();
+        std::fs::write(
+            &path,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect x="0" y="0" width="100" height="100" fill="#ff0000"/></svg>"##,
+        )
+        .unwrap();
         let job = VectorJob {
             what: Vector::Svg { path: path.display().to_string(), fit: 0, color: true },
             size: [64, 64],
@@ -438,27 +418,18 @@ mod tests {
             reads: 0,
         };
         let Raster::Color(px) = rasterize(&job).unwrap() else { panic!("color") };
-        let at = |x: usize, y: usize| -> [f32; 4] {
-            std::array::from_fn(|c| half::f16::from_bits(px[(y * 64 + x) * 4 + c]).to_f32())
-        };
+        let at = |x: usize, y: usize| -> [f32; 4] { std::array::from_fn(|c| half::f16::from_bits(px[(y * 64 + x) * 4 + c]).to_f32()) };
         // Fit: 200×100 into 64×64 is 64×32 in the middle; the square is its left half.
         assert_eq!(at(10, 32), [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(at(50, 32)[3], 0.0, "the right half is empty");
         assert_eq!(at(10, 5)[3], 0.0, "above the picture, nothing");
         // Stretched: the square covers the left half from top to bottom.
-        let stretched =
-            VectorJob { what: Vector::Svg { path: path.display().to_string(), fit: 2, color: false }, ..job };
+        let stretched = VectorJob { what: Vector::Svg { path: path.display().to_string(), fit: 2, color: false }, ..job };
         let Raster::Gray(g) = rasterize(&stretched).unwrap() else { panic!("coverage is grayscale") };
         assert_eq!(half::f16::from_bits(g[5 * 64 + 10]).to_f32(), 1.0);
         let broken = dir.join("broken.svg");
         std::fs::write(&broken, "not svg").unwrap();
-        assert!(
-            rasterize(&VectorJob {
-                what: Vector::Svg { path: broken.display().to_string(), fit: 0, color: true },
-                ..stretched
-            })
-            .is_err()
-        );
+        assert!(rasterize(&VectorJob { what: Vector::Svg { path: broken.display().to_string(), fit: 0, color: true }, ..stretched }).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -529,7 +500,11 @@ mod tests {
         // Links: an SVG beside it is drawn (itself linking to nothing), pictures of pixels are
         // not read (they are not drawn), nor files on network shares.
         std::fs::write(dir.join("inner.svg"), &svg).unwrap();
-        std::fs::write(dir.join("linking.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><image href="inner.svg" width="10" height="10"/></svg>"#).unwrap();
+        std::fs::write(
+            dir.join("linking.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><image href="inner.svg" width="10" height="10"/></svg>"#,
+        )
+        .unwrap();
         let link = |href: &str| format!(r#"<image href="{href}" width="10" height="10"/>"#);
         assert!(covered(&path, &link("inner.svg")).unwrap() > 0.9);
         assert_eq!(covered(&path, &link("linking.svg")).unwrap(), 0.0, "an SVG an SVG shows links to nothing");

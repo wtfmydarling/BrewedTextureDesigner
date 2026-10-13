@@ -1,9 +1,9 @@
 //! Modal dialogs: unsaved changes, work kept by a program that stopped, files a package cannot
 //! find, the settings (see [`crate::view::settings`]), keyboard and mouse, about.
 
+use brewed_texture_core::package::{MissingKind, file_name};
 use iced::widget::{button, center, column, container, mouse_area, opaque, row, rule, space, text};
 use iced::{Alignment, Element, Length};
-use brewed_texture_core::package::{MissingKind, file_name};
 
 use crate::app::autosave::Recovery;
 use crate::app::{App, Dialog, ExplorerMessage, Message, MissingFiles, PendingAction, SettingsMessage};
@@ -63,24 +63,14 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
         Dialog::Unsaved(action) => {
             let body = column![
                 text("Save changes?").size(18).font(style::heavy()).color(style::TEXT_BRIGHT),
-                text(format!(
-                    "\"{}\" has unsaved changes. Do you want to save them before {}?",
-                    app.doc.title(),
-                    action_text(app, action)
-                ))
-                .size(style::TEXT_SIZE)
-                .color(style::TEXT_DIM),
+                text(format!("\"{}\" has unsaved changes. Do you want to save them before {}?", app.doc.title(), action_text(app, action)))
+                    .size(style::TEXT_SIZE)
+                    .color(style::TEXT_DIM),
                 row![
                     space().width(Length::Fill),
                     button(text("Cancel").size(style::TEXT_SIZE)).padding([6, 14]).style(style::flat_button).on_press(Message::Dialog(None)),
-                    button(text("Don't Save").size(style::TEXT_SIZE))
-                        .padding([6, 14])
-                        .style(style::button)
-                        .on_press(Message::Proceed(action.clone())),
-                    button(text("Save").size(style::TEXT_SIZE))
-                        .padding([6, 18])
-                        .style(style::primary_button)
-                        .on_press(Message::SaveThen(action.clone())),
+                    button(text("Don't Save").size(style::TEXT_SIZE)).padding([6, 14]).style(style::button).on_press(Message::Proceed(action.clone())),
+                    button(text("Save").size(style::TEXT_SIZE)).padding([6, 18]).style(style::primary_button).on_press(Message::SaveThen(action.clone())),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
@@ -105,10 +95,15 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             };
             // Headings as the settings' groups have them: white and heavy, a line between.
             let heading = |t: &'static str| {
-                container(text(t).size(14).font(style::heavy()).color(style::TEXT_BRIGHT))
-                    .padding(iced::Padding { top: 14.0, bottom: 6.0, left: 0.0, right: 0.0 })
+                container(text(t).size(14).font(style::heavy()).color(style::TEXT_BRIGHT)).padding(iced::Padding {
+                    top: 14.0,
+                    bottom: 6.0,
+                    left: 0.0,
+                    right: 0.0,
+                })
             };
-            let line_between = rule::horizontal(1).style(|_| rule::Style { color: style::LINE, radius: 0.0.into(), fill_mode: rule::FillMode::Full, snap: true });
+            let line_between =
+                rule::horizontal(1).style(|_| rule::Style { color: style::LINE, radius: 0.0.into(), fill_mode: rule::FillMode::Full, snap: true });
             let mut keyboard = column![heading("Keyboard")].spacing(4);
             for (_, commands) in crate::view::settings::GROUPS {
                 for command in *commands {
@@ -162,12 +157,13 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             .align_y(Alignment::Center);
             let body = column![
                 title,
-                text("A node based procedural texture editor. Every image node runs as a shader on the GPU; \
-                      CPU side pixel work (export, histograms, file decoding) uses SIMD on all cores.")
+                text(
+                    "A node based procedural texture editor. Every image node runs as a shader on the GPU; \
+                      CPU side pixel work (export, histograms, file decoding) uses SIMD on all cores."
+                )
                 .size(style::TEXT_SIZE),
                 text(format!("GPU: {gpu}")).size(style::TEXT_SIZE),
-                text(format!("CPU threads: {}", std::thread::available_parallelism().map_or(1, |n| n.get())))
-                    .size(style::TEXT_SIZE),
+                text(format!("CPU threads: {}", std::thread::available_parallelism().map_or(1, |n| n.get()))).size(style::TEXT_SIZE),
                 // Whose the program is: anyone's (see LICENSE-MIT, LICENSE-APACHE and NOTICE).
                 text(crate::third_party::OWN_LICENSE).size(style::TEXT_SIZE).color(style::TEXT_DIM),
                 row![
@@ -205,10 +201,10 @@ impl std::fmt::Display for Place {
 /// category, as pictures or as a list; on the right, the package it goes in, its name, the size
 /// of its images and their precision.
 fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> Element<'a, Message> {
+    use crate::app::home::NewGraphMessage as N;
     use brewed_texture_core::Precision;
     use brewed_texture_core::templates::{Category, Template};
     use home_screen::Layout;
-    use crate::app::home::NewGraphMessage as N;
     let say = Message::NewGraph;
     let layout = app.ui.template_layout;
 
@@ -217,7 +213,10 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
     let toggle = |this: Layout, glyph: Icon| {
         let chosen = layout == this;
         let said = if this == Layout::Grid { "As pictures" } else { "As a list" };
-        let toggle = button(icon(glyph, 14.0, if chosen { style::TEXT_BRIGHT } else { style::TEXT_DIM })).padding([4, 7]).style(style::segment(chosen)).on_press(say(N::Layout(this)));
+        let toggle = button(icon(glyph, 14.0, if chosen { style::TEXT_BRIGHT } else { style::TEXT_DIM }))
+            .padding([4, 7])
+            .style(style::segment(chosen))
+            .on_press(say(N::Layout(this)));
         crate::view::tip(toggle, said, iced::widget::tooltip::Position::Bottom)
     };
     let mut templates = column![
@@ -233,17 +232,22 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
         let of: Vec<&(Template, home_screen::Start)> = app.home.templates.iter().filter(|(t, _)| t.category() == category).collect();
         templates = templates.push(text(category.name()).size(style::TEXT_SIZE).font(style::heavy()).color(style::TEXT_BRIGHT));
         templates = templates.push(match layout {
-            Layout::Grid => iced::widget::Row::with_children(of.into_iter().map(|(t, card)| home_screen::template_card(card, *t == dialog.template, say(N::Template(*t)), home_screen::Style::default())))
-                .spacing(10)
-                .wrap()
-                .into(),
-            Layout::List => Element::from(column(of.into_iter().map(|(t, card)| home_screen::template_row(card, *t == dialog.template, say(N::Template(*t)), home_screen::Style::default()))).spacing(3)),
+            Layout::Grid => iced::widget::Row::with_children(
+                of.into_iter().map(|(t, card)| home_screen::template_card(card, *t == dialog.template, say(N::Template(*t)), home_screen::Style::default())),
+            )
+            .spacing(10)
+            .wrap()
+            .into(),
+            Layout::List => Element::from(
+                column(
+                    of.into_iter().map(|(t, card)| home_screen::template_row(card, *t == dialog.template, say(N::Template(*t)), home_screen::Style::default())),
+                )
+                .spacing(3),
+            ),
         });
     }
-    let templates = container(scroll_box(container(templates).padding(16)).height(Length::Fill))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(style::template_area);
+    let templates =
+        container(scroll_box(container(templates).padding(16)).height(Length::Fill)).width(Length::Fill).height(Length::Fill).style(style::template_area);
 
     // Where, what it is called, how big, how precise.
     let label = |t: &'static str| text(t).size(style::SMALL).color(style::TEXT_DIM);
@@ -275,7 +279,11 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
         .padding(5)
         .style(style::segment(dialog.linked))
         .on_press(say(N::Link(!dialog.linked)));
-    let link = crate::view::tip(link, if dialog.linked { "Width and height together: click to set them apart" } else { "Width and height apart: click to set them together" }, iced::widget::tooltip::Position::Top);
+    let link = crate::view::tip(
+        link,
+        if dialog.linked { "Width and height together: click to set them apart" } else { "Width and height apart: click to set them together" },
+        iced::widget::tooltip::Position::Top,
+    );
     let size = row![side(dialog.size[0], N::Width), link, side(dialog.size[1], N::Height)].spacing(6).align_y(Alignment::Center);
     let mut precisions = row![].spacing(0);
     for (precision, said) in [(Precision::Bits8, "8 bits"), (Precision::Half, "16 bits float"), (Precision::Full, "32 bits float")] {
@@ -316,26 +324,31 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
 
 /// The export dialog: what is written, in what, and where; and the files, listed.
 fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog) -> Element<'a, Message> {
+    use crate::app::export_dialog::ExportMessage as X;
     use brewed_texture_core::export_presets::Preset;
     use brewed_texture_core::nodes::{DEPTH_8, DEPTH_16};
-    use crate::app::export_dialog::ExportMessage as X;
     let say = Message::Export;
     let label = |t: &'static str| text(t).size(style::TEXT_SIZE).color(style::TEXT_DIM).width(Length::Fixed(110.0));
     let mut presets = column![].spacing(4);
     for preset in Preset::ALL {
         let chosen = preset == dialog.preset;
         presets = presets.push(
-            button(column![text(preset.name()).size(style::TEXT_SIZE).font(style::bold()), text(preset.about()).size(style::SMALL).color(style::TEXT_DIM)].spacing(3))
-                .width(Length::Fill)
-                .padding([7, 10])
-                .style(style::option_button(chosen, false))
-                .on_press(say(X::Preset(preset))),
+            button(
+                column![text(preset.name()).size(style::TEXT_SIZE).font(style::bold()), text(preset.about()).size(style::SMALL).color(style::TEXT_DIM)]
+                    .spacing(3),
+            )
+            .width(Length::Fill)
+            .padding([7, 10])
+            .style(style::option_button(chosen, false))
+            .on_press(say(X::Preset(preset))),
         );
     }
     let segmented = |options: Vec<(&'static str, Message, bool)>| {
         let mut r = row![].spacing(0);
         for (name, message, chosen) in options {
-            r = r.push(button(text(name).size(style::TEXT_SIZE).font(style::chosen_font(chosen))).padding([5, 10]).style(style::segment(chosen)).on_press(message));
+            r = r.push(
+                button(text(name).size(style::TEXT_SIZE).font(style::chosen_font(chosen))).padding([5, 10]).style(style::segment(chosen)).on_press(message),
+            );
         }
         container(r).style(style::segments)
     };
@@ -358,10 +371,7 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
             row![
                 label("Graph's normals"),
                 column![
-                    segmented(vec![
-                        ("OpenGL (Y+)", say(X::DirectX(false)), !dialog.directx),
-                        ("DirectX (Y−)", say(X::DirectX(true)), dialog.directx),
-                    ]),
+                    segmented(vec![("OpenGL (Y+)", say(X::DirectX(false)), !dialog.directx), ("DirectX (Y−)", say(X::DirectX(true)), dialog.directx),]),
                     text(written).size(style::SMALL).color(style::TEXT_DIM),
                 ]
                 .spacing(4),
@@ -372,7 +382,10 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
         body = body.push(
             row![
                 label("Format"),
-                segmented(vec![("PNG 8 bits", say(X::Depth(DEPTH_8)), dialog.depth == DEPTH_8), ("PNG 16 bits", say(X::Depth(DEPTH_16)), dialog.depth == DEPTH_16)]),
+                segmented(vec![
+                    ("PNG 8 bits", say(X::Depth(DEPTH_8)), dialog.depth == DEPTH_8),
+                    ("PNG 16 bits", say(X::Depth(DEPTH_16)), dialog.depth == DEPTH_16)
+                ]),
             ]
             .align_y(Alignment::Center),
         );
@@ -421,8 +434,8 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
 /// The earlier versions of a package: each, when it was kept and what it is, to be restored in
 /// place of the package or opened beside it.
 fn versions<'a>(app: &'a App, dialog: &'a crate::app::versions::VersionsDialog) -> Element<'a, Message> {
-    use brewed_texture_core::versions::Kind;
     use crate::app::versions::VersionsMessage as V;
+    use brewed_texture_core::versions::Kind;
     let name = dialog.path.file_name().map_or_else(|| dialog.path.display().to_string(), |n| n.to_string_lossy().into_owned());
     let mut list = column![].spacing(2);
     for version in &dialog.list {
@@ -473,10 +486,7 @@ fn versions<'a>(app: &'a App, dialog: &'a crate::app::versions::VersionsDialog) 
             .color(style::TEXT_DIM),
         container(scroll_box(list).height(Length::Shrink)).max_height(360.0),
         text(restoring).size(style::SMALL).color(style::TEXT_FAINT),
-        row![
-            space().width(Length::Fill),
-            button(text("Close").size(style::TEXT_SIZE)).padding([6, 14]).style(style::button).on_press(Message::Dialog(None)),
-        ],
+        row![space().width(Length::Fill), button(text("Close").size(style::TEXT_SIZE)).padding([6, 14]).style(style::button).on_press(Message::Dialog(None)),],
     ]
     .spacing(12);
     modal(dialog_box(body, 620.0), None)
@@ -530,12 +540,9 @@ fn recover(app: &App) -> Element<'_, Message> {
     };
     let body = column![
         text("Recover unsaved work?").size(18).font(style::heavy()).color(style::TEXT_BRIGHT),
-        text(format!(
-            "{} stopped without quitting last time. What these packages had not saved yet was kept:",
-            brewed_texture_core::APP_NAME
-        ))
-        .size(style::TEXT_SIZE)
-        .color(style::TEXT_DIM),
+        text(format!("{} stopped without quitting last time. What these packages had not saved yet was kept:", brewed_texture_core::APP_NAME))
+            .size(style::TEXT_SIZE)
+            .color(style::TEXT_DIM),
         scroll_box(list).height(Length::Shrink),
         text(
             "Recovered, each opens with the changes it had, not saved yet: saving saves it where it was. \

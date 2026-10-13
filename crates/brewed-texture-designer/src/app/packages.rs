@@ -17,9 +17,7 @@ use iced::{Task, Vector};
 use brewed_texture_core::files::Held;
 use brewed_texture_core::package::{self, Flat, Library, Missing, MissingKind, Package, PackageEdit, ResourceKind};
 use brewed_texture_core::project::{self, Light, ViewState};
-use brewed_texture_core::{
-    Document, Edit, GraphId, GraphRef, Instance, Interface, NodeId, NodeKind, ParamKind, ParamValue,
-};
+use brewed_texture_core::{Document, Edit, GraphId, GraphRef, Instance, Interface, NodeId, NodeKind, ParamKind, ParamValue};
 
 use super::{App, Collected, ContextMenu, Dialog, DragPayload, ExplorerMessage, FileTarget, Fold, Message, MissingFiles, PendingAction, blocking};
 use crate::file_dialogs::Filters;
@@ -80,11 +78,7 @@ pub struct Shelf<'a> {
 }
 
 impl<'a> Shelf<'a> {
-    fn new(
-        root: Option<&'a Package>,
-        docs: impl Iterator<Item = &'a Document>,
-        deps: &'a HashMap<String, Package>,
-    ) -> Shelf<'a> {
+    fn new(root: Option<&'a Package>, docs: impl Iterator<Item = &'a Document>, deps: &'a HashMap<String, Package>) -> Shelf<'a> {
         let open = docs.filter_map(|d| Some((d.key()?, d.package()))).collect();
         Shelf { root, open, deps }
     }
@@ -180,11 +174,7 @@ pub fn with_extension_of(name: &str, path: &str) -> String {
 
 /// A path as the packages say it: absolute, without `.` and `..`.
 pub fn clean(path: &Path) -> String {
-    let path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |d| d.join(path))
-    };
+    let path = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().map_or_else(|_| path.to_path_buf(), |d| d.join(path)) };
     package::clean_path(&path).display().to_string()
 }
 
@@ -255,11 +245,7 @@ impl App {
     }
 
     pub(super) fn package_doc_mut(&mut self, key: u64) -> Option<&mut Document> {
-        if key == self.doc_key {
-            Some(&mut self.doc)
-        } else {
-            self.shelf.iter_mut().find(|p| p.key == key).map(|p| &mut p.doc)
-        }
+        if key == self.doc_key { Some(&mut self.doc) } else { self.shelf.iter_mut().find(|p| p.key == key).map(|p| &mut p.doc) }
     }
 
     pub(super) fn all_docs(&self) -> impl Iterator<Item = &Document> {
@@ -315,10 +301,7 @@ impl App {
     fn restore_view(&mut self, view: Option<ViewState>) {
         let view = view.unwrap_or_default();
         // (A node it showed that is gone, an undo took it away, is as none: the graph's Output.)
-        let preview = view
-            .preview
-            .filter(|id| self.graph().contains(*id))
-            .or_else(|| self.graph().nodes_of(NodeKind::OUTPUT).next().map(|n| n.id));
+        let preview = view.preview.filter(|id| self.graph().contains(*id)).or_else(|| self.graph().nodes_of(NodeKind::OUTPUT).next().map(|n| n.id));
         self.after_document_change(preview);
         if let (Some(pan), Some(zoom)) = (view.graph_pan, view.graph_zoom) {
             self.ui.graph_view.pan = Vector::new(pan[0], pan[1]);
@@ -378,13 +361,7 @@ impl App {
 
     /// Make the package being edited `package`, the file at `path` (`None`: untitled), in
     /// place of what it was: a new package of the Explorer.
-    pub(super) fn replace_package(
-        &mut self,
-        package: Package,
-        path: Option<PathBuf>,
-        views: HashMap<GraphId, ViewState>,
-        open: GraphId,
-    ) {
+    pub(super) fn replace_package(&mut self, package: Package, path: Option<PathBuf>, views: HashMap<GraphId, ViewState>, open: GraphId) {
         self.views.retain(|(key, _), _| *key != self.doc_key);
         self.doc_key = self.next_key();
         if let Some(path) = &path {
@@ -402,13 +379,7 @@ impl App {
 
     /// Add `package` to the Explorer and edit it. A package that is untitled and untouched
     /// (the one the program opens with, a new one) makes room for it.
-    pub(super) fn add_package(
-        &mut self,
-        package: Package,
-        path: Option<PathBuf>,
-        views: HashMap<GraphId, ViewState>,
-        open: GraphId,
-    ) {
+    pub(super) fn add_package(&mut self, package: Package, path: Option<PathBuf>, views: HashMap<GraphId, ViewState>, open: GraphId) {
         let untouched = self.doc.path().is_none() && !self.doc.is_dirty() && !self.doc.can_undo();
         if untouched {
             self.replace_package(package, path, views, open);
@@ -685,8 +656,7 @@ impl App {
 
     /// Where the view of each graph of the package open as `key` is.
     pub(crate) fn views_of(&self, key: u64) -> HashMap<GraphId, ViewState> {
-        let mut views: HashMap<GraphId, ViewState> =
-            self.views.iter().filter(|((k, _), _)| *k == key).map(|((_, g), v)| (*g, v.clone())).collect();
+        let mut views: HashMap<GraphId, ViewState> = self.views.iter().filter(|((k, _), _)| *k == key).map(|((_, g), v)| (*g, v.clone())).collect();
         if key == self.doc_key {
             views.insert(self.doc.current(), self.view_state());
         }
@@ -947,20 +917,12 @@ impl App {
         }
         self.close_popups();
         let name = self.doc.package().unique_graph_name("New Graph");
-        match self.doc.apply_package(PackageEdit::GraphFromSelection { graph: self.doc.current(), nodes: ids.clone(), name })
-        {
+        match self.doc.apply_package(PackageEdit::GraphFromSelection { graph: self.doc.current(), nodes: ids.clone(), name }) {
             Ok(result) => {
                 self.ui.selection = result.created.iter().copied().collect();
                 self.ui.selected_link = None;
-                let name =
-                    result.graph.and_then(|g| self.doc.package().graph(g)).map(|g| g.name.clone()).unwrap_or_default();
-                self.set_status(
-                    format!(
-                        "{} node(s) are the graph '{name}' now: double-click it in the Explorer to edit it",
-                        ids.len()
-                    ),
-                    false,
-                );
+                let name = result.graph.and_then(|g| self.doc.package().graph(g)).map(|g| g.name.clone()).unwrap_or_default();
+                self.set_status(format!("{} node(s) are the graph '{name}' now: double-click it in the Explorer to edit it", ids.len()), false);
             }
             Err(e) => self.set_status(e, true),
         }
@@ -1031,9 +993,7 @@ impl App {
         };
         let what = what.or_else(|| ResourceKind::of_path(&path).map(MissingKind::Resource));
         let (label, extensions): (String, Vec<&'static str>) = match what {
-            Some(MissingKind::Package) | None => {
-                (format!("{} package", brewed_texture_core::APP_NAME), vec![project::FILE_EXTENSION])
-            }
+            Some(MissingKind::Package) | None => (format!("{} package", brewed_texture_core::APP_NAME), vec![project::FILE_EXTENSION]),
             Some(MissingKind::Resource(kind)) => (kind.name().to_string(), kind.extensions().to_vec()),
         };
         // Where it was, else where dialogs open.
@@ -1072,15 +1032,10 @@ impl App {
         if let Some(Missing { what: MissingKind::Package, graphs, .. }) = &item {
             let wrong = match project::load(Path::new(&to)) {
                 Ok(loaded) => {
-                    let lacks: Vec<&String> =
-                        graphs.iter().filter(|name| !loaded.package.graphs.iter().any(|g| &g.name == *name)).collect();
+                    let lacks: Vec<&String> = graphs.iter().filter(|name| !loaded.package.graphs.iter().any(|g| &g.name == *name)).collect();
                     (!lacks.is_empty()).then(|| {
                         let names: Vec<&str> = lacks.iter().map(|s| s.as_str()).collect();
-                        format!(
-                            "{} has no graph {}: it is not the package that was there",
-                            package::file_name(&to),
-                            names.join(", ")
-                        )
+                        format!("{} has no graph {}: it is not the package that was there", package::file_name(&to), names.join(", "))
                     })
                 }
                 Err(e) => Some(e),
@@ -1094,8 +1049,7 @@ impl App {
         }
         let mut found = vec![(from.clone(), to.clone())];
         // The others that were in the same folder as this one may have moved with it.
-        let (old_dir, new_dir) =
-            (Path::new(&from).parent().map(PathBuf::from), Path::new(&to).parent().map(PathBuf::from));
+        let (old_dir, new_dir) = (Path::new(&from).parent().map(PathBuf::from), Path::new(&to).parent().map(PathBuf::from));
         if let (Some(old_dir), Some(new_dir), Some(Dialog::Missing(m))) = (old_dir, new_dir, &self.ui.dialog) {
             for other in m.items.iter().filter(|i| i.path != from) {
                 let p = Path::new(&other.path);
@@ -1142,11 +1096,7 @@ impl App {
     /// The files the open packages use, each once, and their kinds.
     pub(super) fn used_files(&self) -> Vec<(String, ResourceKind)> {
         let mut seen = HashSet::new();
-        self.all_docs()
-            .flat_map(|d| d.package().resources.iter())
-            .filter(|r| seen.insert(r.path.clone()))
-            .map(|r| (r.path.clone(), r.kind))
-            .collect()
+        self.all_docs().flat_map(|d| d.package().resources.iter()).filter(|r| seen.insert(r.path.clone())).map(|r| (r.path.clone(), r.kind)).collect()
     }
 
     /// Do the open packages use files that were not there when the files were looked at last?
@@ -1222,12 +1172,7 @@ impl App {
 
     /// A picture of a file was made (of the file as it was when it changed at `of`), or not:
     /// the next one waiting is started.
-    pub(super) fn preview_made(
-        &mut self,
-        path: String,
-        of: Option<std::time::SystemTime>,
-        made: Result<(Vec<u8>, u32, u32, String), String>,
-    ) -> Task<Message> {
+    pub(super) fn preview_made(&mut self, path: String, of: Option<std::time::SystemTime>, made: Result<(Vec<u8>, u32, u32, String), String>) -> Task<Message> {
         self.res.previews_making = self.res.previews_making.saturating_sub(1);
         if let Some(state) = self.res.files.get_mut(&path) {
             state.making = false;
@@ -1269,8 +1214,7 @@ impl App {
                     Ok(result) => {
                         if let Some(graph) = result.graph {
                             self.activate(key, Some(graph));
-                            self.ui.renaming_graph =
-                                self.package_doc(key).map(|d| (key, graph, d.entry().name.clone()));
+                            self.ui.renaming_graph = self.package_doc(key).map(|d| (key, graph, d.entry().name.clone()));
                             return iced::widget::operation::focus(crate::view::explorer::rename_id());
                         }
                     }
@@ -1358,14 +1302,12 @@ impl App {
             ExplorerMessage::Close(key) => return self.guarded(PendingAction::Close(key)),
             ExplorerMessage::LinkFiles(key) => {
                 self.close_popups();
-                let extensions: Vec<&'static str> =
-                    ResourceKind::ALL.iter().flat_map(|k| k.extensions().iter().copied()).collect();
+                let extensions: Vec<&'static str> = ResourceKind::ALL.iter().flat_map(|k| k.extensions().iter().copied()).collect();
                 let folder = self.dialog_folder(self.package_doc(key).and_then(|d| d.path()).map(PathBuf::as_path), false);
                 return Task::perform(
                     blocking(move || {
-                        let mut dialog = rfd::FileDialog::new()
-                            .set_title("Import and link files")
-                            .filter_to_open("Images, vector graphics and fonts", &extensions);
+                        let mut dialog =
+                            rfd::FileDialog::new().set_title("Import and link files").filter_to_open("Images, vector graphics and fonts", &extensions);
                         for kind in ResourceKind::ALL {
                             dialog = dialog.filter_to_open(kind.name(), kind.extensions());
                         }
@@ -1374,9 +1316,7 @@ impl App {
                         }
                         dialog.pick_files()
                     }),
-                    move |files| {
-                        Message::Explorer(ExplorerMessage::FilesPicked(key, files.flatten().unwrap_or_default()))
-                    },
+                    move |files| Message::Explorer(ExplorerMessage::FilesPicked(key, files.flatten().unwrap_or_default())),
                 );
             }
             ExplorerMessage::FilesPicked(key, files) => {
@@ -1397,14 +1337,12 @@ impl App {
             }
             ExplorerMessage::ImportFiles(key) => {
                 self.close_popups();
-                let extensions: Vec<&'static str> =
-                    ResourceKind::ALL.iter().flat_map(|k| k.extensions().iter().copied()).collect();
+                let extensions: Vec<&'static str> = ResourceKind::ALL.iter().flat_map(|k| k.extensions().iter().copied()).collect();
                 let folder = self.dialog_folder(self.package_doc(key).and_then(|d| d.path()).map(PathBuf::as_path), false);
                 return Task::perform(
                     blocking(move || {
-                        let mut dialog = rfd::FileDialog::new()
-                            .set_title("Import and embed files")
-                            .filter_to_open("Images, vector graphics and fonts", &extensions);
+                        let mut dialog =
+                            rfd::FileDialog::new().set_title("Import and embed files").filter_to_open("Images, vector graphics and fonts", &extensions);
                         for kind in ResourceKind::ALL {
                             dialog = dialog.filter_to_open(kind.name(), kind.extensions());
                         }
@@ -1413,9 +1351,7 @@ impl App {
                         }
                         dialog.pick_files()
                     }),
-                    move |files| {
-                        Message::Explorer(ExplorerMessage::ImportPicked(key, files.flatten().unwrap_or_default()))
-                    },
+                    move |files| Message::Explorer(ExplorerMessage::ImportPicked(key, files.flatten().unwrap_or_default())),
                 );
             }
             ExplorerMessage::ImportPicked(key, files) => {

@@ -147,19 +147,12 @@ fn clamp01(v: f32) -> f32 {
 }
 
 fn quad(renderer: &mut iced::Renderer, bounds: Rectangle, background: impl Into<Background>, radius: f32) {
-    renderer.fill_quad(
-        renderer::Quad { bounds, border: Border { radius: radius.into(), ..Border::default() }, ..Default::default() },
-        background,
-    );
+    renderer.fill_quad(renderer::Quad { bounds, border: Border { radius: radius.into(), ..Border::default() }, ..Default::default() }, background);
 }
 
 fn outline(renderer: &mut iced::Renderer, bounds: Rectangle, color: Color, width: f32, radius: f32) {
     renderer.fill_quad(
-        renderer::Quad {
-            bounds,
-            border: Border { color, width, radius: radius.into() },
-            ..Default::default()
-        },
+        renderer::Quad { bounds, border: Border { color, width, radius: radius.into() }, ..Default::default() },
         Background::Color(Color::TRANSPARENT),
     );
 }
@@ -204,9 +197,7 @@ fn hues(renderer: &mut iced::Renderer, r: Rectangle, vertical: bool) {
         let c0 = hsv_to_rgb([h0, 1.0, 1.0]);
         let c1 = hsv_to_rgb([h1, 1.0, 1.0]);
         let angle = if vertical { Radians(PI) } else { Radians(PI / 2.0) };
-        let g = Gradient::Linear(
-            Linear::new(angle).add_stop(0.0, Color::from_rgb(c0[0], c0[1], c0[2])).add_stop(1.0, Color::from_rgb(c1[0], c1[1], c1[2])),
-        );
+        let g = Gradient::Linear(Linear::new(angle).add_stop(0.0, Color::from_rgb(c0[0], c0[1], c0[2])).add_stop(1.0, Color::from_rgb(c1[0], c1[1], c1[2])));
         let over = if i < 5 { 0.5 } else { 0.0 };
         let part = if vertical {
             let seg = r.height / 6.0;
@@ -294,11 +285,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for ColorPicke
         _renderer: &iced::Renderer,
     ) -> mouse::Interaction {
         let state = tree.state.downcast_ref::<State>();
-        if state.drag.is_some() || cursor.is_over(layout.bounds()) {
-            mouse::Interaction::Crosshair
-        } else {
-            mouse::Interaction::default()
-        }
+        if state.drag.is_some() || cursor.is_over(layout.bounds()) { mouse::Interaction::Crosshair } else { mouse::Interaction::default() }
     }
 
     fn draw(
@@ -320,9 +307,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for ColorPicke
         let inside = framed(renderer, a.sv, 3.0);
         let across = Gradient::Linear(Linear::new(Radians(PI / 2.0)).add_stop(0.0, Color::WHITE).add_stop(1.0, pure));
         quad(renderer, inside, across, 2.0);
-        let down = Gradient::Linear(
-            Linear::new(Radians(PI)).add_stop(0.0, Color::from_rgba(0.0, 0.0, 0.0, 0.0)).add_stop(1.0, Color::BLACK),
-        );
+        let down = Gradient::Linear(Linear::new(Radians(PI)).add_stop(0.0, Color::from_rgba(0.0, 0.0, 0.0, 0.0)).add_stop(1.0, Color::BLACK));
         quad(renderer, inside, down, 2.0);
         let marker = Point::new(a.sv.x + s * a.sv.width, a.sv.y + (1.0 - v) * a.sv.height);
         let m = Rectangle { x: marker.x - 5.0, y: marker.y - 5.0, width: 10.0, height: 10.0 };
@@ -446,11 +431,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for ColorStrip
         _renderer: &iced::Renderer,
     ) -> mouse::Interaction {
         let state = tree.state.downcast_ref::<StripState>();
-        if state.dragging || cursor.is_over(layout.bounds()) {
-            mouse::Interaction::Crosshair
-        } else {
-            mouse::Interaction::default()
-        }
+        if state.dragging || cursor.is_over(layout.bounds()) { mouse::Interaction::Crosshair } else { mouse::Interaction::default() }
     }
 
     fn draw(

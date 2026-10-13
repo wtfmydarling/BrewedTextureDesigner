@@ -345,9 +345,8 @@ fn pixel_vars(graph: &Graph, node: &Node, results: &Evaluation, e: &mut NodeEval
             e.vars.push(VarInfo { name, value: 0.0, source: VarSource::Builtin });
             continue;
         }
-        let image_link = graph
-            .link_into(node.id, &var_socket_key(&name))
-            .filter(|l| graph.output_socket(l.from, &l.from_socket).is_some_and(|s| s.ty == DataType::Image));
+        let image_link =
+            graph.link_into(node.id, &var_socket_key(&name)).filter(|l| graph.output_socket(l.from, &l.from_socket).is_some_and(|s| s.ty == DataType::Image));
         if let Some(link) = image_link {
             e.vars.push(VarInfo { name, value: 0.0, source: VarSource::Image(link.from) });
         } else {

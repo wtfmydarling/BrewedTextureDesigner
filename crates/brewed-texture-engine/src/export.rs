@@ -13,9 +13,7 @@ use brewed_texture_core::nodes::output_format_channels;
 use crate::gpu::StoredImage;
 use crate::simd;
 
-pub use brewed_texture_core::nodes::{
-    DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_DXT1, DEPTH_DXT2, DEPTH_DXT3, DEPTH_DXT4, DEPTH_DXT5,
-};
+pub use brewed_texture_core::nodes::{DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_DXT1, DEPTH_DXT2, DEPTH_DXT3, DEPTH_DXT4, DEPTH_DXT5};
 
 /// A channel of a file packed of several images (see [`write_packed`], and
 /// `brewed_texture_core::export_presets`).
@@ -65,13 +63,7 @@ pub fn read_what_arrives(job: &mut crate::service::ExportJob, graph: &brewed_tex
 /// (a uniform color is a single pixel) is read where the file's pixel is. Composed a band of
 /// rows at a time into the file's samples, as an image is written (see [`write_stored`]), at
 /// `bit_depth` as an Output's is.
-pub fn write_packed(
-    path: &Path,
-    pack: &[Packed],
-    images: &HashMap<NodeId, StoredImage>,
-    size: [u32; 2],
-    bit_depth: u32,
-) -> Result<(), String> {
+pub fn write_packed(path: &Path, pack: &[Packed], images: &HashMap<NodeId, StoredImage>, size: [u32; 2], bit_depth: u32) -> Result<(), String> {
     let [width, height] = size;
     // Those of another size whole (they are small), the others a band at a time.
     let other = images.iter().filter(|(_, i)| [i.width, i.height] != size).map(|(n, i)| (*n, i.to_f32())).collect();
@@ -159,8 +151,7 @@ impl Rows for PackedRows<'_> {
 
 /// Make an output name safe to use as a file name.
 pub fn sanitize_file_name(name: &str) -> String {
-    let cleaned: String =
-        name.trim().chars().map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect();
+    let cleaned: String = name.trim().chars().map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect();
     let cleaned = cleaned.trim_matches(['.', ' ']);
     // Short enough for every file system (255 bytes), with a number and the extension.
     let mut end = cleaned.len().min(200);
@@ -175,8 +166,8 @@ pub fn sanitize_file_name(name: &str) -> String {
     // cannot be written there (before Windows 11). Everywhere the same name, for the same
     // files wherever a project is exported.
     const DEVICES: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1",
-        "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6",
+        "LPT7", "LPT8", "LPT9",
     ];
     let stem = cleaned.split('.').next().unwrap_or_default();
     if DEVICES.iter().any(|d| d.eq_ignore_ascii_case(stem.trim_end())) {
@@ -225,14 +216,7 @@ fn file_channels(format: u32) -> &'static [usize] {
 }
 
 /// Encode already formatted RGBA f32 pixels.
-pub fn write_image(
-    path: &Path,
-    rgba: &[f32],
-    width: u32,
-    height: u32,
-    format: u32,
-    bit_depth: u32,
-) -> Result<(), String> {
+pub fn write_image(path: &Path, rgba: &[f32], width: u32, height: u32, format: u32, bit_depth: u32) -> Result<(), String> {
     write_stored(path, &StoredImage::from_f32(width, height, rgba), format, bit_depth)
 }
 
@@ -248,12 +232,7 @@ pub fn write_stored(path: &Path, image: &StoredImage, format: u32, bit_depth: u3
 
 /// The samples of a file: the channels it keeps of the pixels, as `quantize` makes them,
 /// converted `rows` at a time.
-fn samples<T: Copy + Default + Send + Sync>(
-    image: &impl Rows,
-    channels: &[usize],
-    rows: u32,
-    quantize: fn(&[f32], &mut [T]),
-) -> Vec<T> {
+fn samples<T: Copy + Default + Send + Sync>(image: &impl Rows, channels: &[usize], rows: u32, quantize: fn(&[f32], &mut [T])) -> Vec<T> {
     let (width, height) = image.size();
     let mut out = Vec::with_capacity(width as usize * height as usize * channels.len());
     let mut q = Vec::new();
@@ -302,13 +281,9 @@ fn write_in_bands(path: &Path, image: &impl Rows, format: u32, bit_depth: u32, r
             let keep: &[usize] = if channels.len() == 4 { &[0, 1, 2, 3] } else { &[0, 1, 2] };
             let data = samples(image, keep, rows, |s, d| d.copy_from_slice(s));
             let img = if channels.len() == 4 {
-                image::DynamicImage::ImageRgba32F(
-                    image::ImageBuffer::from_raw(width, height, data).ok_or_else(size_err)?,
-                )
+                image::DynamicImage::ImageRgba32F(image::ImageBuffer::from_raw(width, height, data).ok_or_else(size_err)?)
             } else {
-                image::DynamicImage::ImageRgb32F(
-                    image::ImageBuffer::from_raw(width, height, data).ok_or_else(size_err)?,
-                )
+                image::DynamicImage::ImageRgb32F(image::ImageBuffer::from_raw(width, height, data).ok_or_else(size_err)?)
             };
             img.save_with_format(path, image::ImageFormat::OpenExr).map_err(err)
         }
@@ -531,9 +506,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let (w, h) = (37u32, 20u32);
         // A soft ramp in each channel, and an alpha that fades.
-        let rgba: Vec<f32> = (0..h)
-            .flat_map(|y| (0..w).flat_map(move |x| [x as f32 / w as f32, y as f32 / h as f32, 0.5, 1.0 - x as f32 / (2 * w) as f32]))
-            .collect();
+        let rgba: Vec<f32> =
+            (0..h).flat_map(|y| (0..w).flat_map(move |x| [x as f32 / w as f32, y as f32 / h as f32, 0.5, 1.0 - x as f32 / (2 * w) as f32])).collect();
         let u32_at = |b: &[u8], i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
         for (depth, fourcc, format) in [
             (DEPTH_DXT1, b"DXT1", texpresso::Format::Bc1),

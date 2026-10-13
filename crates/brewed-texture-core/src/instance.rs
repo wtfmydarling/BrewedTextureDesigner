@@ -76,14 +76,10 @@ impl InstanceParam {
         }
         let fallback = ParamKind::Float { default: 0.0, min: 0.0, max: 1.0, log: false, suffix: "" };
         let kind = match (self.default, self.min, self.max) {
-            (Value::Float(default), Value::Float(min), Value::Float(max)) => {
-                ParamKind::Float { default, min, max, log: false, suffix: "" }
-            }
+            (Value::Float(default), Value::Float(min), Value::Float(max)) => ParamKind::Float { default, min, max, log: false, suffix: "" },
             (Value::Int(default), Value::Int(min), Value::Int(max)) => ParamKind::Int { default, min, max },
             (Value::Bool(default), ..) => ParamKind::Bool { default },
-            (Value::Vec2(default), Value::Vec2(min), Value::Vec2(max)) => {
-                ParamKind::Vec2 { default, min: min[0].min(min[1]), max: max[0].max(max[1]) }
-            }
+            (Value::Vec2(default), Value::Vec2(min), Value::Vec2(max)) => ParamKind::Vec2 { default, min: min[0].min(min[1]), max: max[0].max(max[1]) },
             (Value::Color(default), ..) => ParamKind::Color { default },
             _ => fallback,
         };
@@ -289,7 +285,8 @@ mod tests {
         let param = interface.param("offset").unwrap();
         let start = param.start_value();
         assert_eq!(param.def().sanitize(start.clone()), start, "held to its range already");
-        let mut node = Node::of_graph(crate::graph::NodeId(1), Instance::new(GraphRef { package: None, graph: GraphId(1), name: "A".into() }, interface), [0.0, 0.0]);
+        let mut node =
+            Node::of_graph(crate::graph::NodeId(1), Instance::new(GraphRef { package: None, graph: GraphId(1), name: "A".into() }, interface), [0.0, 0.0]);
         let made = node.clone();
         node.normalize();
         assert_eq!(node, made, "as it is read back");

@@ -115,15 +115,7 @@ impl Versions {
     /// marked as wanted). Not when it is what the newest version holds (see
     /// [`crate::project::fingerprint`]): saved again as it was, or with only its view moved.
     /// Then those beyond the newest `keep` go: all, when `keep` is 0, and none is kept.
-    pub fn keep(
-        &self,
-        path: &Path,
-        package: &Package,
-        views: &HashMap<GraphId, ViewState>,
-        open: GraphId,
-        kind: Kind,
-        keep: usize,
-    ) -> Result<(), String> {
+    pub fn keep(&self, path: &Path, package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId, kind: Kind, keep: usize) -> Result<(), String> {
         if keep > 0 && self.newest_holds(path, package) {
             if kind == Kind::Saved {
                 self.saw(path);
@@ -224,7 +216,12 @@ impl Versions {
         // What the versions that go name, and no version of the package that stays: named by
         // another package's versions, maybe (all are read only then).
         let names = |versions: &[(Version, (u64, u32, String))]| -> HashSet<String> {
-            versions.iter().filter_map(|(v, _)| project::read_files(&v.file).ok()).flatten().filter_map(|f| files::embedded_hash(&f).map(str::to_string)).collect()
+            versions
+                .iter()
+                .filter_map(|(v, _)| project::read_files(&v.file).ok())
+                .flatten()
+                .filter_map(|f| files::embedded_hash(&f).map(str::to_string))
+                .collect()
         };
         let staying = names(&found);
         let mut alone: HashSet<String> = names(&gone).into_iter().filter(|h| !staying.contains(h)).collect();

@@ -69,11 +69,7 @@ impl Gradient {
     pub const MAX_KEPT: usize = 1024;
 
     pub fn from_pairs(pairs: &[(f32, [f32; 4])]) -> Gradient {
-        Gradient {
-            stops: pairs.iter().map(|&(pos, color)| GradientStop { pos, color }).collect(),
-            interpolation: Interpolation::Linear,
-        }
-        .normalized()
+        Gradient { stops: pairs.iter().map(|&(pos, color)| GradientStop { pos, color }).collect(), interpolation: Interpolation::Linear }.normalized()
     }
 
     /// Positions and the channels of colors clamped to [0, 1], non-finite values replaced, stops
@@ -146,8 +142,7 @@ impl Gradient {
 
     /// Mirror the gradient (t becomes 1 - t).
     pub fn reversed(&self) -> Gradient {
-        let mut stops: Vec<GradientStop> =
-            self.stops.iter().rev().map(|s| GradientStop { pos: 1.0 - s.pos, color: s.color }).collect();
+        let mut stops: Vec<GradientStop> = self.stops.iter().rev().map(|s| GradientStop { pos: 1.0 - s.pos, color: s.color }).collect();
         stops.sort_by(|a, b| a.pos.total_cmp(&b.pos));
         Gradient { stops, interpolation: self.interpolation }
     }
@@ -155,12 +150,8 @@ impl Gradient {
     /// Spread the stops evenly over [0, 1], keeping their order.
     pub fn distributed(&self) -> Gradient {
         let n = self.stops.len();
-        let stops = self
-            .stops
-            .iter()
-            .enumerate()
-            .map(|(i, s)| GradientStop { pos: if n > 1 { i as f32 / (n - 1) as f32 } else { 0.5 }, color: s.color })
-            .collect();
+        let stops =
+            self.stops.iter().enumerate().map(|(i, s)| GradientStop { pos: if n > 1 { i as f32 / (n - 1) as f32 } else { 0.5 }, color: s.color }).collect();
         Gradient { stops, interpolation: self.interpolation }
     }
 
@@ -254,10 +245,7 @@ mod tests {
     #[test]
     fn normalizing_repairs_input() {
         let g = Gradient {
-            stops: vec![
-                GradientStop { pos: 2.0, color: [1.0; 4] },
-                GradientStop { pos: f32::NAN, color: [f32::INFINITY, 0.0, 0.0, 1.0] },
-            ],
+            stops: vec![GradientStop { pos: 2.0, color: [1.0; 4] }, GradientStop { pos: f32::NAN, color: [f32::INFINITY, 0.0, 0.0, 1.0] }],
             interpolation: Interpolation::Linear,
         }
         .normalized();

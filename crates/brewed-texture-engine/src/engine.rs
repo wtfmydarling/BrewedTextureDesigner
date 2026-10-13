@@ -31,10 +31,10 @@ use brewed_texture_core::nodes::{ImageKind, NodeKind, PIXEL_MATH_BUILTINS, Role,
 use brewed_texture_core::types::DataType;
 
 use crate::gpu::{COLOR_FORMAT, GRAY_FORMAT, GRAY_FULL_FORMAT, Gpu, GpuImage, Readback, StoredImage, filterable, format_of, output_format};
-use brewed_texture_core::Precision;
 use crate::kernels::{self, DisplayU, ExecCtx, PixelVar};
 use crate::simd::{self, ImageStats};
 use crate::vector::{self, Raster, Vector, VectorJob};
+use brewed_texture_core::Precision;
 
 pub const THUMB_SIZE: u32 = 128;
 /// Samples in a baked gradient or curve.
@@ -148,7 +148,10 @@ enum BitmapEntry {
     /// Being decoded, by the decoding with this number (the file may have been asked for
     /// again since an earlier one started, which then counts no more).
     Loading(u64),
-    Ready { image: GpuImage, generation: u64 },
+    Ready {
+        image: GpuImage,
+        generation: u64,
+    },
     Failed(String),
 }
 
@@ -174,9 +177,21 @@ struct DecodedBitmap {
 enum Drawing {
     /// Being drawn by the job with this number, of the picture with this key; with the node's
     /// last drawing, shown until then, and the picture asked for since, drawn next.
-    Busy { ticket: u64, key: u64, last: Option<(GpuImage, u64)>, next: Option<VectorJob> },
-    Ready { key: u64, image: GpuImage, generation: u64 },
-    Failed { key: u64, error: String },
+    Busy {
+        ticket: u64,
+        key: u64,
+        last: Option<(GpuImage, u64)>,
+        next: Option<VectorJob>,
+    },
+    Ready {
+        key: u64,
+        image: GpuImage,
+        generation: u64,
+    },
+    Failed {
+        key: u64,
+        error: String,
+    },
 }
 
 struct Drawn {
@@ -401,10 +416,7 @@ impl Engine {
     }
 
     pub fn reports(&self) -> HashMap<NodeId, ImageReport> {
-        self.states
-            .iter()
-            .map(|(id, s)| (*id, ImageReport { version: s.version, error: s.error.clone(), warning: s.warning.clone(), kind: s.kind }))
-            .collect()
+        self.states.iter().map(|(id, s)| (*id, ImageReport { version: s.version, error: s.error.clone(), warning: s.warning.clone(), kind: s.kind })).collect()
     }
 
     /// Are files still being decoded, or pictures drawn? (The graph must be evaluated again when
@@ -643,10 +655,7 @@ impl Engine {
         self.boundary.retain(|id| alive.contains(id));
         // Files no Bitmap node reads any more go, whatever was open before (a file read again
         // is decoded again).
-        let files: HashSet<&str> = graph
-            .nodes_of(NodeKind::BITMAP)
-            .map(|n| eval.params(n.id).map_or(n.text("path"), |p| p.text("path")))
-            .collect();
+        let files: HashSet<&str> = graph.nodes_of(NodeKind::BITMAP).map(|n| eval.params(n.id).map_or(n.text("path"), |p| p.text("path"))).collect();
         self.bitmaps.retain(|path, _| files.contains(path.as_str()));
         // The drawings of nodes that draw none any more go too.
         self.drawings.retain(|id, _| graph.node(*id).is_some_and(|n| n.kind == NodeKind::SVG || n.kind == NodeKind::TEXT));
@@ -834,14 +843,12 @@ impl Engine {
         let shown = self.shown();
         // A copy stays while a view shows it: of a node shown, of its image as it is.
         let states = &self.states;
-        self.shown_copies
-            .retain(|id, (version, _)| shown.contains(id) && states.get(id).is_some_and(|s| s.version == *version));
+        self.shown_copies.retain(|id, (version, _)| shown.contains(id) && states.get(id).is_some_and(|s| s.version == *version));
         if self.keep == Keep::All {
             return;
         }
         let kept = self.kept();
-        let stale: Vec<NodeId> =
-            self.states.iter().filter(|(id, s)| s.image.is_some() && !kept.contains(id)).map(|(id, _)| *id).collect();
+        let stale: Vec<NodeId> = self.states.iter().filter(|(id, s)| s.image.is_some() && !kept.contains(id)).map(|(id, _)| *id).collect();
         for id in stale {
             self.release(id);
         }
@@ -1026,9 +1033,7 @@ impl Engine {
         // big as the texture size; but a uniform color is the same everywhere, and one pixel of
         // it is all of it.
         const GRAYSCALE_OF_ALPHA: u32 = 5;
-        let gray_already = node.kind == NodeKind::GRAYSCALE
-            && input_kinds.first() == Some(&Some(ImageKind::Gray))
-            && params.u("mode") != GRAYSCALE_OF_ALPHA;
+        let gray_already = node.kind == NodeKind::GRAYSCALE && input_kinds.first() == Some(&Some(ImageKind::Gray)) && params.u("mode") != GRAYSCALE_OF_ALPHA;
         let alias = (node.bypass && !fixed.is_empty()) || d.role == Role::Instance || gray_already;
         let arriving = input_kinds.first().copied().flatten();
         let arriving_size = input_sizes.first().copied().flatten().unwrap_or(resolution);
@@ -1529,9 +1534,7 @@ fn decode_bitmap(path: &str) -> Result<(u32, u32, Pixels), String> {
 /// decoded, as is one of no pixels.
 pub fn open_picture(bytes: &[u8], name: &str) -> Result<image::DynamicImage, String> {
     const SIDE: u32 = brewed_texture_core::graph::MAX_RESOLUTION;
-    let format = image::ImageFormat::from_path(name)
-        .or_else(|_| image::guess_format(bytes))
-        .map_err(|e| format!("Cannot open '{name}': {e}"))?;
+    let format = image::ImageFormat::from_path(name).or_else(|_| image::guess_format(bytes)).map_err(|e| format!("Cannot open '{name}': {e}"))?;
     let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(SIDE);

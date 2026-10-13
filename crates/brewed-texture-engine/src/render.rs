@@ -66,11 +66,7 @@ impl Library for Packages {
 
 /// A path as packages name one: absolute, without `.` and `..`.
 fn key_of(path: &Path) -> String {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |d| d.join(path))
-    };
+    let absolute = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().map_or_else(|_| path.to_path_buf(), |d| d.join(path)) };
     package::clean_path(&absolute).display().to_string()
 }
 

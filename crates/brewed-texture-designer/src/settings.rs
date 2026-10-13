@@ -516,11 +516,8 @@ fn write(doc: &mut DocumentMut, before: &Settings, now: &Settings) {
     setting!(file_dialogs, "general", "file_dialogs", Value::from(id_of(&FILE_DIALOGS, &now.file_dialogs)));
     setting!(invert_zoom, "general", "invert_zoom", Value::from(now.invert_zoom));
     setting!(new_files, "files", "new", Value::from(id_of(&NEW_FILES, &now.new_files)));
-    let size = if now.graph_size[0] == now.graph_size[1] {
-        whole(now.graph_size[0])
-    } else {
-        Value::Array(now.graph_size.iter().map(|n| i64::from(*n)).collect())
-    };
+    let size =
+        if now.graph_size[0] == now.graph_size[1] { whole(now.graph_size[0]) } else { Value::Array(now.graph_size.iter().map(|n| i64::from(*n)).collect()) };
     setting!(graph_size, "new_graphs", "size", size);
     setting!(graph_precision, "new_graphs", "precision", Value::from(id_of(&PRECISIONS, &now.graph_precision)));
     setting!(library_folders, "library", "folders", Value::Array(now.library_folders.iter().map(String::as_str).collect()));

@@ -3,12 +3,12 @@
 //! the same language as the Math node.
 
 use iced::advanced::layout::{self, Layout};
+use iced::advanced::mouse;
 use iced::advanced::renderer::{self, Renderer as _};
 use iced::advanced::text::{self, Paragraph as _, Renderer as _};
 use iced::advanced::widget::{Tree, Widget, tree};
 use iced::advanced::{Clipboard, Shell};
 use iced::alignment::Vertical;
-use iced::advanced::mouse;
 use iced::{Background, Border, Element, Event, Length, Pixels, Point, Rectangle, Size, keyboard};
 
 use crate::style;
@@ -120,11 +120,7 @@ impl<'a, Message> NumberField<'a, Message> {
         if self.max <= self.min {
             return 0.0;
         }
-        let t = if self.log {
-            (v.max(1e-12).ln() - self.min.ln()) / (self.max.ln() - self.min.ln())
-        } else {
-            (v - self.min) / (self.max - self.min)
-        };
+        let t = if self.log { (v.max(1e-12).ln() - self.min.ln()) / (self.max.ln() - self.min.ln()) } else { (v - self.min) / (self.max - self.min) };
         t.clamp(0.0, 1.0) as f32
     }
 
@@ -161,7 +157,13 @@ impl<'a, Message> NumberField<'a, Message> {
 /// Up to `decimals` decimals, trailing zeros removed, "-0" avoided.
 pub fn format_number(v: f64, decimals: usize) -> String {
     if !v.is_finite() {
-        return if v.is_nan() { "NaN".into() } else if v > 0.0 { "∞".into() } else { "-∞".into() };
+        return if v.is_nan() {
+            "NaN".into()
+        } else if v > 0.0 {
+            "∞".into()
+        } else {
+            "-∞".into()
+        };
     }
     let s = format!("{v:.decimals$}");
     let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s };
@@ -525,11 +527,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
             None => style::LINE,
         };
         renderer.fill_quad(
-            renderer::Quad {
-                bounds,
-                border: Border { color: border_color, width: 1.0, radius: 3.0.into() },
-                ..renderer::Quad::default()
-            },
+            renderer::Quad { bounds, border: Border { color: border_color, width: 1.0, radius: 3.0.into() }, ..renderer::Quad::default() },
             Background::Color(if enabled { style::FIELD } else { style::PANEL_DARK }),
         );
         let size = Pixels(style::SMALL + 0.5);
@@ -605,12 +603,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
                 if edit.select_all && !edit.text.is_empty() {
                     renderer.fill_quad(
                         renderer::Quad {
-                            bounds: Rectangle {
-                                x: x0,
-                                y: bounds.y + 3.0,
-                                width: full.min(visible),
-                                height: bounds.height - 6.0,
-                            },
+                            bounds: Rectangle { x: x0, y: bounds.y + 3.0, width: full.min(visible), height: bounds.height - 6.0 },
                             ..renderer::Quad::default()
                         },
                         Background::Color(style::alpha(style::ACCENT, 0.45)),
@@ -636,12 +629,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for NumberFiel
                     if !edit.select_all {
                         renderer.fill_quad(
                             renderer::Quad {
-                                bounds: Rectangle {
-                                    x: x0 + caret_x,
-                                    y: bounds.y + 4.0,
-                                    width: 1.0,
-                                    height: bounds.height - 8.0,
-                                },
+                                bounds: Rectangle { x: x0 + caret_x, y: bounds.y + 4.0, width: 1.0, height: bounds.height - 8.0 },
                                 ..renderer::Quad::default()
                             },
                             Background::Color(style::ACCENT),

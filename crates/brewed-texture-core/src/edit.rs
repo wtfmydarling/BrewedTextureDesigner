@@ -3,8 +3,8 @@
 //! [`crate::Document`] records edits for undo / redo.
 
 use crate::gradient::Gradient;
-use crate::instance::Instance;
 use crate::graph::{Clipboard, CommentId, Graph, GraphAttributes, Link, MAX_RESOLUTION, MIN_RESOLUTION, NodeId, Precision, SocketRef, coordinate};
+use crate::instance::Instance;
 use crate::nodes::{ImageKind, NodeKind};
 use crate::types::{DataType, ParamValue, Value, can_connect};
 
@@ -252,11 +252,9 @@ impl Edit {
     /// Short description for the Edit menu ("Undo Move").
     pub fn label(&self) -> &'static str {
         match self {
-            Edit::AddNode { .. }
-            | Edit::AddNodeWith { .. }
-            | Edit::AddVariableNode { .. }
-            | Edit::AddInstance { .. }
-            | Edit::AddNodeConnected { .. } => "Add Node",
+            Edit::AddNode { .. } | Edit::AddNodeWith { .. } | Edit::AddVariableNode { .. } | Edit::AddInstance { .. } | Edit::AddNodeConnected { .. } => {
+                "Add Node"
+            }
             Edit::RemoveNodes(_) => "Delete",
             Edit::RemoveLink(_) | Edit::Disconnect { .. } | Edit::DisconnectInputs(_) => "Disconnect",
             Edit::MoveNodes { .. } => "Move",
@@ -578,10 +576,18 @@ impl Edit {
                 EditResult::changed()
             }
             Edit::ResetVariable(name) => {
-                if variable_mut(graph, &name)?.reset() { EditResult::changed() } else { EditResult::unchanged() }
+                if variable_mut(graph, &name)?.reset() {
+                    EditResult::changed()
+                } else {
+                    EditResult::unchanged()
+                }
             }
             Edit::MakeVariableDefault(name) => {
-                if variable_mut(graph, &name)?.make_default() { EditResult::changed() } else { EditResult::unchanged() }
+                if variable_mut(graph, &name)?.make_default() {
+                    EditResult::changed()
+                } else {
+                    EditResult::unchanged()
+                }
             }
             Edit::RenameVariable { from, to } => {
                 let new = graph.rename_variable(&from, &to)?;
@@ -762,7 +768,11 @@ mod tests {
                 let v = var(seed);
                 Edit::SetVariableDefault { value: value_for(seed, &v), name: v }
             }
-            33 => Edit::SetAttributes(GraphAttributes { description: text(seed), category: ["", "Noises/Grunge", "/", "a//b", " x "][roll(seed, 5)].into(), hidden: roll(seed, 2) == 0 }),
+            33 => Edit::SetAttributes(GraphAttributes {
+                description: text(seed),
+                category: ["", "Noises/Grunge", "/", "a//b", " x "][roll(seed, 5)].into(),
+                hidden: roll(seed, 2) == 0,
+            }),
             34 => Edit::SetPrecision([Precision::Bits8, Precision::Half, Precision::Full][roll(seed, 3)]),
             35 => Edit::ResizeComment { id: comment(seed), pos: [odd(seed), 0.0], size: [odd(seed), odd(seed)] },
             36 => Edit::MoveComment { id: comment(seed), delta: [odd(seed), 3.0], nodes: vec![node(seed), node(seed)] },
@@ -1155,10 +1165,7 @@ mod tests {
         assert!(g.link_into(invert, "i:input").is_some());
         // A failing edit undoes the ones before it.
         let before = g.links.clone();
-        let bad = Edit::Batch(vec![
-            Edit::RemoveLink(g.links[0].clone()),
-            Edit::SetParam { node: blur, key: "nope".into(), value: ParamValue::Float(1.0) },
-        ]);
+        let bad = Edit::Batch(vec![Edit::RemoveLink(g.links[0].clone()), Edit::SetParam { node: blur, key: "nope".into(), value: ParamValue::Float(1.0) }]);
         assert!(bad.apply(&mut g).is_err());
         assert_eq!(g.links, before);
     }
@@ -1285,9 +1292,7 @@ mod tests {
         assert!(accepts_link(NodeKind::BLUR, DataType::Image, true));
         assert!(!accepts_link(NodeKind::MATH, DataType::Image, true));
         assert!(accepts_link(NodeKind::PIXEL_MATH, DataType::Image, true));
-        let r = Edit::AddNodeConnected { kind: NodeKind::PIXEL_MATH, pos: [0.0, 0.0], socket: out.clone() }
-            .apply(&mut g)
-            .unwrap();
+        let r = Edit::AddNodeConnected { kind: NodeKind::PIXEL_MATH, pos: [0.0, 0.0], socket: out.clone() }.apply(&mut g).unwrap();
         let pm = r.created[0];
         assert!(g.link_into(pm, "v:a").is_some_and(|l| l.from == noise));
         assert!(Edit::AddNodeConnected { kind: NodeKind::MATH, pos: [0.0, 0.0], socket: out }.apply(&mut g).is_err());
@@ -1295,8 +1300,7 @@ mod tests {
         let blur = g.add_node(NodeKind::BLUR, [0.0, 0.0]);
         g.set_exposed(blur, "radius", true).unwrap();
         let inp = SocketRef { node: blur, key: "p:radius".into(), output: false };
-        let r =
-            Edit::AddNodeConnected { kind: NodeKind::FLOAT_INPUT, pos: [0.0, 0.0], socket: inp }.apply(&mut g).unwrap();
+        let r = Edit::AddNodeConnected { kind: NodeKind::FLOAT_INPUT, pos: [0.0, 0.0], socket: inp }.apply(&mut g).unwrap();
         assert!(g.link_into(blur, "p:radius").is_some_and(|l| l.from == r.created[0]));
     }
 
@@ -1306,9 +1310,7 @@ mod tests {
         g.add_node(NodeKind::FLOAT_INPUT, [0.0, 0.0]);
         Edit::SetVariable { name: "value".into(), value: Value::Float(7.0) }.apply(&mut g).unwrap();
         assert_eq!(g.variable("value").unwrap().value, Value::Float(1.0));
-        Edit::SetVariableRange { name: "value".into(), min: Value::Float(0.0), max: Value::Float(10.0) }
-            .apply(&mut g)
-            .unwrap();
+        Edit::SetVariableRange { name: "value".into(), min: Value::Float(0.0), max: Value::Float(10.0) }.apply(&mut g).unwrap();
         Edit::SetVariable { name: "value".into(), value: Value::Int(7) }.apply(&mut g).unwrap();
         assert_eq!(g.variable("value").unwrap().value, Value::Float(7.0));
         Edit::SetVariableDefault { name: "value".into(), value: Value::Float(7.0) }.apply(&mut g).unwrap();

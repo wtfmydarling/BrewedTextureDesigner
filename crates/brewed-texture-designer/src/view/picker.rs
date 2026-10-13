@@ -110,9 +110,7 @@ impl canvas::Program<Message> for Overlay<'_> {
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right)) => Self::publish(PickMessage::Cancel),
             Event::Mouse(mouse::Event::ButtonPressed(_) | mouse::Event::WheelScrolled { .. }) => Some(canvas::Action::capture()),
-            Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => {
-                Self::publish(PickMessage::Cancel)
-            }
+            Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => Self::publish(PickMessage::Cancel),
             _ => None,
         }
     }

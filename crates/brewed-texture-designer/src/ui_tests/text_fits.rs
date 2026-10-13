@@ -70,7 +70,8 @@ pub(super) fn cut_short(w: &mut Harness) -> Vec<String> {
         .filter_map(|(text, bounds)| {
             let size = SIZES.into_iter().find(|s| (bounds.height - s * 1.3).abs() < 0.6)?;
             let wide = narrowest(&text, size);
-            (wide > bounds.width + 1.0).then(|| format!("{text:?} at {size} px: {wide:.1} px wide, laid out {:.1} at {:.0},{:.0}", bounds.width, bounds.x, bounds.y))
+            (wide > bounds.width + 1.0)
+                .then(|| format!("{text:?} at {size} px: {wide:.1} px wide, laid out {:.1} at {:.0},{:.0}", bounds.width, bounds.x, bounds.y))
         })
         .collect()
 }
@@ -94,7 +95,13 @@ fn wrapped(w: &mut Harness) -> Vec<String> {
         .filter(|(text, _)| !text.trim().is_empty() && text.split_whitespace().count() <= 3 && text.chars().count() <= 32)
         .filter_map(|(text, bounds)| {
             let size = SIZES.into_iter().find(|s| (bounds.height - 2.0 * s * 1.3).abs() < 0.6 && narrowest(&text, *s) > bounds.width + 1.0)?;
-            Some(format!("{text:?} at {size} px in two lines: {:.1} px wide, laid out {:.1} at {:.0},{:.0}", narrowest(&text, size), bounds.width, bounds.x, bounds.y))
+            Some(format!(
+                "{text:?} at {size} px in two lines: {:.1} px wide, laid out {:.1} at {:.0},{:.0}",
+                narrowest(&text, size),
+                bounds.width,
+                bounds.x,
+                bounds.y
+            ))
         })
         .collect()
 }
@@ -187,10 +194,8 @@ fn menus_show_their_items_whole() {
         newly_cut(&mut w, &before, name, &mut found);
     }
     // Open Recent Package ▸, with packages in it.
-    w.app.ui.recent = vec![
-        "C:/Users/someone/Documents/Textures/A rather long name of a package.brewtex".into(),
-        "/home/someone/textures/bricks.brewtex".into(),
-    ];
+    w.app.ui.recent =
+        vec!["C:/Users/someone/Documents/Textures/A rather long name of a package.brewtex".into(), "/home/someone/textures/bricks.brewtex".into()];
     w.send(Message::Menu(Some(MenuId::File)));
     w.send(Message::SubMenu(Some(crate::app::SubMenu::Recent)));
     newly_cut(&mut w, &before, "File > Open Recent Package", &mut found);
@@ -337,7 +342,8 @@ fn driven_values_say_whole_where_they_come_from() {
         let Some(source) = w.app.graph().nodes_of(kind).last().map(|n| n.id) else { continue };
         let outputs = w.app.graph().node(source).map(|n| w.app.graph().output_sockets(n)).unwrap_or_default();
         for out in outputs {
-            let into = driven.iter().find_map(|node| params(&w, *node).find(|p| can_connect(out.ty, p.ty) && tried.insert((kind, p.ty))).map(|p| (*node, p.key)));
+            let into =
+                driven.iter().find_map(|node| params(&w, *node).find(|p| can_connect(out.ty, p.ty) && tried.insert((kind, p.ty))).map(|p| (*node, p.key)));
             let Some((node, param)) = into else { continue };
             if !connect(&mut w, SocketRef { node: source, key: out.key.clone(), output: true }, SocketRef { node, key: param.clone(), output: false }) {
                 continue;
@@ -362,10 +368,8 @@ fn driven_values_say_whole_where_they_come_from() {
         w.send(Message::Edit(Edit::BindVariable { node: input, name: name.into() }));
         w.send(Message::Seal);
         let out = w.app.graph().node(input).map(|n| w.app.graph().output_sockets(n)).unwrap_or_default().remove(0);
-        let (node, param) = driven
-            .iter()
-            .find_map(|node| params(&w, *node).find(|p| can_connect(out.ty, p.ty)).map(|p| (*node, p.key)))
-            .expect("a parameter an input drives");
+        let (node, param) =
+            driven.iter().find_map(|node| params(&w, *node).find(|p| can_connect(out.ty, p.ty)).map(|p| (*node, p.key))).expect("a parameter an input drives");
         assert!(connect(&mut w, SocketRef { node: input, key: out.key, output: true }, SocketRef { node, key: param, output: false }));
         w.send(Message::Graph(GraphMessage::Select { node, mode: SelectMode::Replace }));
         newly_cut(&mut w, &before, &format!("{kind:?} of a long name"), &mut found);
@@ -418,7 +422,11 @@ fn the_properties_of_a_graph_a_comment_and_a_selection_show_whole() {
     newly_cut(&mut w, &before, "the graph", &mut found);
     found.extend(overlapping(&mut w).into_iter().map(|line| format!("the graph: {line}")));
     // A comment.
-    w.send(Message::Edit(Edit::AddComment { text: "The bricks of the left wall, and the mortar between them".into(), pos: [2600.0, -900.0], size: [400.0, 300.0] }));
+    w.send(Message::Edit(Edit::AddComment {
+        text: "The bricks of the left wall, and the mortar between them".into(),
+        pos: [2600.0, -900.0],
+        size: [400.0, 300.0],
+    }));
     let comment = w.app.graph().comments.last().map(|c| c.id).expect("a comment");
     w.send(Message::Edit(Edit::SetCommentDescription { id: comment, text: long.into() }));
     w.send(Message::Seal);
@@ -484,7 +492,14 @@ fn colors_show_whole_in_the_smallest_window() {
     newly_cut(&mut w, &before, "a comment", &mut found);
     w.snapshot("colors_comment_narrow");
     // A color input value, opened.
-    let tint = w.app.graph().variables.iter().find(|v| matches!(v.value, brewed_texture_core::Value::Color(_))).map(|v| v.name.clone()).expect("the demo has a color input");
+    let tint = w
+        .app
+        .graph()
+        .variables
+        .iter()
+        .find(|v| matches!(v.value, brewed_texture_core::Value::Color(_)))
+        .map(|v| v.name.clone())
+        .expect("the demo has a color input");
     w.send(Message::Graph(GraphMessage::ClearSelection));
     w.app.ui.expanded_vars.insert(tint.clone());
     newly_cut(&mut w, &before, "a color input value", &mut found);
@@ -822,8 +837,16 @@ fn the_columns_fit_any_window_and_any_split() {
             w.app.fit_columns();
             let column = |which| view::pane_width(&w.app, which);
             let least = view::PANE_SPACING + 1.0;
-            assert!(column(crate::app::Pane::Explorer) >= crate::app::LEFT_MIN - least, "{width} {left} {right}: the Explorer {}", column(crate::app::Pane::Explorer));
-            assert!(column(crate::app::Pane::Properties) >= crate::app::RIGHT_MIN - least, "{width} {left} {right}: Properties {}", column(crate::app::Pane::Properties));
+            assert!(
+                column(crate::app::Pane::Explorer) >= crate::app::LEFT_MIN - least,
+                "{width} {left} {right}: the Explorer {}",
+                column(crate::app::Pane::Explorer)
+            );
+            assert!(
+                column(crate::app::Pane::Properties) >= crate::app::RIGHT_MIN - least,
+                "{width} {left} {right}: Properties {}",
+                column(crate::app::Pane::Properties)
+            );
         }
     }
 }
@@ -888,13 +911,15 @@ pub(super) fn overlapping(w: &mut Harness) -> Vec<String> {
                 && o.width > 3.0
                 && o.height > 3.0
             {
-                found.push(format!("{a:?} at {:.0},{:.0} {:.0}×{:.0} over {b:?} at {:.0},{:.0} {:.0}×{:.0}", ra.x, ra.y, ra.width, ra.height, rb.x, rb.y, rb.width, rb.height));
+                found.push(format!(
+                    "{a:?} at {:.0},{:.0} {:.0}×{:.0} over {b:?} at {:.0},{:.0} {:.0}×{:.0}",
+                    ra.x, ra.y, ra.width, ra.height, rb.x, rb.y, rb.width, rb.height
+                ));
             }
         }
     }
     found
 }
-
 
 /// The check of texts run into one another sees two texts laid out over each other, and not a
 /// text scrolled out of sight under another.
@@ -910,8 +935,11 @@ fn texts_over_one_another_are_seen_and_scrolled_ones_are_not() {
     // A text far down a scrollable, under a text beside the scrollable: not seen there.
     let scrolled: View = Box::new(|_| {
         stack![
-            iced::widget::container(crate::widget::scroll::scroll_box(column![text("Seen at the top"), iced::widget::space().height(233), text("Far down, out of sight")]).height(200))
-                .height(iced::Length::Fill),
+            iced::widget::container(
+                crate::widget::scroll::scroll_box(column![text("Seen at the top"), iced::widget::space().height(233), text("Far down, out of sight")])
+                    .height(200)
+            )
+            .height(iced::Length::Fill),
             column![iced::widget::space().height(250), text("Under the scrollable")],
         ]
         .into()

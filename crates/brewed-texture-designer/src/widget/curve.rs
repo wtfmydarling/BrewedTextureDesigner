@@ -3,6 +3,7 @@
 //! the square to add a point there and drag it, drag a handle out of the square to remove its
 //! point (a curve keeps two).
 
+use brewed_texture_core::Curve;
 use iced::advanced::graphics::geometry::Renderer as _;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Renderer as _};
@@ -10,7 +11,6 @@ use iced::advanced::widget::{Tree, Widget, tree};
 use iced::advanced::{Clipboard, Shell};
 use iced::widget::canvas::{Frame, Path, Stroke};
 use iced::{Element, Event, Length, Point, Rectangle, Size, Vector, mouse};
-use brewed_texture_core::Curve;
 
 use crate::style;
 

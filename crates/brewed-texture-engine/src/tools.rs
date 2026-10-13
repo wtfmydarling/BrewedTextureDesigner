@@ -84,8 +84,7 @@ pub fn contact_sheet(graph: &Graph, nodes: &[(NodeId, String)], path: &Path) -> 
     let rows = (nodes.len() as u32).div_ceil(cols);
     let mut sheet = image::RgbaImage::from_pixel(cols * cell, rows * cell, image::Rgba([40, 40, 40, 255]));
     for (i, (id, label)) in nodes.iter().enumerate() {
-        let error =
-            eval.node(*id).and_then(|n| n.error().map(str::to_string)).or_else(|| engine.state(*id)?.error.clone());
+        let error = eval.node(*id).and_then(|n| n.error().map(str::to_string)).or_else(|| engine.state(*id)?.error.clone());
         match error {
             Some(e) => println!("  #{i:02} {label}: ERROR {e}"),
             None => println!("  #{i:02} {label}"),

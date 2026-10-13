@@ -175,7 +175,10 @@ fn a_package_may_have_no_graph() {
     let of_the_explorer = |asked: &[Message]| asked.iter().any(|m| matches!(m, Message::Explorer(ExplorerMessage::Context(ContextTarget::Explorer))));
     // (A row takes its own menu, not the Explorer's.)
     let asked = right_clicked(&mut w, row.center());
-    assert!(asked.iter().any(|m| matches!(m, Message::Explorer(ExplorerMessage::Context(ContextTarget::GraphItem(..))))) && !of_the_explorer(&asked), "{asked:?}");
+    assert!(
+        asked.iter().any(|m| matches!(m, Message::Explorer(ExplorerMessage::Context(ContextTarget::GraphItem(..))))) && !of_the_explorer(&asked),
+        "{asked:?}"
+    );
     let empty = (1..60)
         .map(|i| Point::new(100.0, row.y + row.height + i as f32 * 10.0))
         .find(|p| of_the_explorer(&right_clicked(&mut w, *p)))
@@ -255,8 +258,11 @@ fn files_are_imported_linked_or_embedded_by_the_menus() {
         for (label, wanted) in [("Import and Link Files…", true), ("Import and Embed Files…", false)] {
             let item = *texts(&mut w, label).last().unwrap_or_else(|| panic!("{label} in {menu:?}"));
             let made = clicked(&mut w, item.center());
-            let links = made.iter().any(|m| matches!(m, Message::FromMenu(inner) if matches!(&**inner, Message::Explorer(ExplorerMessage::LinkFiles(k)) if *k == key)));
-            let embeds = made.iter().any(|m| matches!(m, Message::FromMenu(inner) if matches!(&**inner, Message::Explorer(ExplorerMessage::ImportFiles(k)) if *k == key)));
+            let links =
+                made.iter().any(|m| matches!(m, Message::FromMenu(inner) if matches!(&**inner, Message::Explorer(ExplorerMessage::LinkFiles(k)) if *k == key)));
+            let embeds = made
+                .iter()
+                .any(|m| matches!(m, Message::FromMenu(inner) if matches!(&**inner, Message::Explorer(ExplorerMessage::ImportFiles(k)) if *k == key)));
             assert_eq!((links, embeds), (wanted, !wanted), "{label} in {menu:?}: {made:?}");
         }
         assert!(texts(&mut w, "Link Files…").is_empty() && texts(&mut w, "Import Files…").is_empty(), "the names of before");
@@ -950,12 +956,8 @@ fn mangled_packages_open_in_the_window() {
     let mut archive = Archive::new(Cursor::new(bytes)).expect("its archive");
     let names: Vec<String> = archive.entries().iter().map(|e| e.name.clone()).collect();
     let contents: Vec<(String, Vec<u8>)> = names.into_iter().map(|n| (n.clone(), archive.read(&n, 1 << 30).unwrap())).collect();
-    let jsons: Vec<(usize, serde_json::Value)> = contents
-        .iter()
-        .enumerate()
-        .filter(|(_, (n, _))| n.ends_with(".json"))
-        .map(|(i, (_, c))| (i, serde_json::from_slice(c).unwrap()))
-        .collect();
+    let jsons: Vec<(usize, serde_json::Value)> =
+        contents.iter().enumerate().filter(|(_, (n, _))| n.ends_with(".json")).map(|(i, (_, c))| (i, serde_json::from_slice(c).unwrap())).collect();
     let mut seed = 7u32;
     let mut opened = 0;
     let mangled = dir.join("mangled.brewtex");
@@ -1380,8 +1382,7 @@ fn the_last_curve(app: &App) -> iced::Element<'_, Message> {
     let Some(node) = app.graph().nodes_of(NodeKind::CURVE).last() else { return iced::widget::space().into() };
     let id = node.id;
     let curve = node.value("curve").and_then(ParamValue::as_curve).expect("its curve");
-    crate::widget::curve::curve_editor(curve, move |c| Message::Edit(Edit::SetParam { node: id, key: "curve".into(), value: ParamValue::Curve(c) }))
-        .into()
+    crate::widget::curve::curve_editor(curve, move |c| Message::Edit(Edit::SetParam { node: id, key: "curve".into(), value: ParamValue::Curve(c) })).into()
 }
 
 /// A point added to a curve and dragged before the window is drawn again is the point that

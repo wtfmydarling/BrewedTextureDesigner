@@ -31,8 +31,7 @@ impl Curve {
     /// The curve as it may be: points finite and within [0, 1], sorted across, at least
     /// [`MIN_GAP`] apart (of two closer, the later stays), at least two of them.
     pub fn normalized(&self) -> Curve {
-        let mut points: Vec<[f32; 2]> =
-            self.points.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| p.map(|v| v.clamp(0.0, 1.0))).collect();
+        let mut points: Vec<[f32; 2]> = self.points.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| p.map(|v| v.clamp(0.0, 1.0))).collect();
         points.sort_by(|a, b| a[0].total_cmp(&b[0]));
         let mut kept: Vec<[f32; 2]> = Vec::with_capacity(points.len());
         for p in points {
@@ -104,10 +103,7 @@ impl Curve {
             let h = (p[k + 1][0] - p[k][0]).max(1e-6);
             let t = (x - p[k][0]) / h;
             let (t2, t3) = (t * t, t * t * t);
-            let y = (2.0 * t3 - 3.0 * t2 + 1.0) * p[k][1]
-                + (t3 - 2.0 * t2 + t) * h * m[k]
-                + (-2.0 * t3 + 3.0 * t2) * p[k + 1][1]
-                + (t3 - t2) * h * m[k + 1];
+            let y = (2.0 * t3 - 3.0 * t2 + 1.0) * p[k][1] + (t3 - 2.0 * t2 + t) * h * m[k] + (-2.0 * t3 + 3.0 * t2) * p[k + 1][1] + (t3 - t2) * h * m[k + 1];
             y.clamp(0.0, 1.0)
         }
     }

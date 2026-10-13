@@ -5,20 +5,20 @@
 //! An image input is one of them: its value is a picture (Image Input nodes of one name
 //! share it), with a picture by default, what it takes and its color while it has none.
 
-use iced::widget::{button, column, container, pick_list, row, space, text, text_input, tooltip};
-use iced::{Alignment, Element, Length};
 use brewed_texture_core::graph::{ImageInput, Variable};
 use brewed_texture_core::nodes::ImageKind;
 use brewed_texture_core::package::Package;
 use brewed_texture_core::{DataType, Edit, Value};
+use iced::widget::{button, column, container, pick_list, row, space, text, text_input, tooltip};
+use iced::{Alignment, Element, Length};
 
 use crate::app::{App, ColorTarget, DragPayload, FileTarget, Message, VarField};
 use crate::icons::{Icon, icon};
 use crate::style;
-use crate::widget::scroll::scroll_box;
 use crate::view::editors::{file_field, swatch, value_editor};
 use crate::widget::outside::outside;
 use crate::widget::pressable::pressable;
+use crate::widget::scroll::scroll_box;
 use crate::widget::socket_icon;
 
 /// How wide the names of the fields of an input value are in Input Values (in Properties, as
@@ -27,10 +27,7 @@ const FIELD_LABEL_W: f32 = 78.0;
 
 /// A field of an input value, its name `label_w` wide before it.
 fn field_row<'a>(label: &'a str, editor: impl Into<Element<'a, Message>>, label_w: f32) -> Element<'a, Message> {
-    row![text(label).size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)), editor.into()]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
+    row![text(label).size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)), editor.into()].spacing(6).align_y(Alignment::Center).into()
 }
 
 fn set_value(name: &str) -> impl Fn(brewed_texture_core::Value) -> Message + Clone + 'static {
@@ -85,7 +82,11 @@ fn image_settings<'a>(
             .padding([3, 6])
             .style(style::pick_list)
     };
-    col = col.push(field_row("Kind", crate::view::tip(kind, "What the graph takes here: an image that arrives is made grayscale or color.", tooltip::Position::Top), label_w));
+    col = col.push(field_row(
+        "Kind",
+        crate::view::tip(kind, "What the graph takes here: an image that arrives is made grayscale or color.", tooltip::Position::Top),
+        label_w,
+    ));
     let color = image_color(var);
     col = col.push(field_row("Default", file_field(app, FileTarget::VariableDefault(name.clone()), "no picture: the color".into(), Some(color)), label_w));
     let open = app.ui.color_picker == Some(ColorTarget::Variable(name.clone(), VarField::Value));
@@ -221,11 +222,7 @@ pub fn details<'a>(app: &'a App, var: &'a Variable, rename: bool, label_w: f32) 
         Some(image) => (format!("{} image", image.kind.name()), "Image Input node"),
         None => (var.ty.name().to_string(), "Input node"),
     };
-    col = col.push(
-        text(format!("{what} · used by {users} {node}{}", if users == 1 { "" } else { "s" }))
-            .size(style::SMALL)
-            .color(style::TEXT_FAINT),
-    );
+    col = col.push(text(format!("{what} · used by {users} {node}{}", if users == 1 { "" } else { "s" })).size(style::SMALL).color(style::TEXT_FAINT));
     col.into()
 }
 
@@ -248,9 +245,7 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
         ),
     };
     let grip = crate::view::tip(
-        pressable(icon(Icon::Grip, 14.0, style::TEXT_FAINT))
-            .padding([2, 1])
-            .on_press(Message::PanelPress(DragPayload::Variable(var.name.clone()))),
+        pressable(icon(Icon::Grip, 14.0, style::TEXT_FAINT)).padding([2, 1]).on_press(Message::PanelPress(DragPayload::Variable(var.name.clone()))),
         if var.image.is_some() {
             "Drag onto the graph to add another Image Input with this picture"
         } else {
@@ -278,9 +273,13 @@ fn variable_row<'a>(app: &'a App, var: &'a Variable, index: usize) -> Element<'a
         (true, false) => String::new(),
         (false, false) => var.description.clone(),
         (true, true) => format!("Changed — middle-click the row to put {} back", said(var, true, app.doc.package())),
-        (false, true) => format!("{}
+        (false, true) => format!(
+            "{}
 
-Changed — middle-click the row to put {} back", var.description, said(var, true, app.doc.package())),
+Changed — middle-click the row to put {} back",
+            var.description,
+            said(var, true, app.doc.package())
+        ),
     };
     let name: Element<'a, Message> = crate::view::tip(name, hint, tooltip::Position::Bottom);
     let header = row![

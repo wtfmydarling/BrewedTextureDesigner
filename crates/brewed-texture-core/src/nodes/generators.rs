@@ -2,38 +2,10 @@
 
 use super::*;
 
-pub const SHAPES: &[&str] = &[
-    "Disc",
-    "Square",
-    "Rounded Square",
-    "Polygon",
-    "Star",
-    "Ring",
-    "Cross",
-    "Capsule",
-    "Paraboloid",
-    "Cone",
-    "Pyramid",
-    "Bell",
-    "Gaussian",
-    "Waves",
-];
-const SHAPE_IDS: &[&str] = &[
-    "disc",
-    "square",
-    "rounded_square",
-    "polygon",
-    "star",
-    "ring",
-    "cross",
-    "capsule",
-    "paraboloid",
-    "cone",
-    "pyramid",
-    "bell",
-    "gaussian",
-    "waves",
-];
+pub const SHAPES: &[&str] =
+    &["Disc", "Square", "Rounded Square", "Polygon", "Star", "Ring", "Cross", "Capsule", "Paraboloid", "Cone", "Pyramid", "Bell", "Gaussian", "Waves"];
+const SHAPE_IDS: &[&str] =
+    &["disc", "square", "rounded_square", "polygon", "star", "ring", "cross", "capsule", "paraboloid", "cone", "pyramid", "bell", "gaussian", "waves"];
 pub const SHAPE_ROUNDED: u32 = 2;
 pub const SHAPE_POLYGON: u32 = 3;
 pub const SHAPE_STAR: u32 = 4;
@@ -59,23 +31,8 @@ const TILE_PATTERNS: &[&str] = &[
     "Waves",
     "Input Image",
 ];
-const TILE_PATTERN_IDS: &[&str] = &[
-    "disc",
-    "square",
-    "rounded_square",
-    "polygon",
-    "star",
-    "ring",
-    "cross",
-    "capsule",
-    "paraboloid",
-    "cone",
-    "pyramid",
-    "bell",
-    "gaussian",
-    "waves",
-    "image",
-];
+const TILE_PATTERN_IDS: &[&str] =
+    &["disc", "square", "rounded_square", "polygon", "star", "ring", "cross", "capsule", "paraboloid", "cone", "pyramid", "bell", "gaussian", "waves", "image"];
 pub const TILE_PATTERN_IMAGE: u32 = 14;
 
 /// What a Uniform Color makes, in the order of its "output" parameter.
@@ -92,9 +49,7 @@ pub static UNIFORM_COLOR: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         // (First: what it makes decides what its color is.)
-        choice("output", "Output", 0, UNIFORM_OUTPUTS, UNIFORM_OUTPUT_IDS)
-            .fixed()
-            .tip("Color: the color. Grayscale: its luminance, in a grayscale image."),
+        choice("output", "Output", 0, UNIFORM_OUTPUTS, UNIFORM_OUTPUT_IDS).fixed().tip("Color: the color. Grayscale: its luminance, in a grayscale image."),
         // (Grayscale, a level of gray: what it makes is its luminance.)
         color("color", "Color", [0.5, 0.5, 0.5, 1.0]).gray_when("output", &[1]),
     ],
@@ -128,8 +83,7 @@ pub static SHAPE: NodeDef = NodeDef {
     outputs: GRAY_OUT,
     params: &[
         choice("shape", "Shape", 0, SHAPES, SHAPE_IDS).pictured(),
-        vec2("size", "Size", [0.6, 0.6], 0.0, 2.0)
-            .tip("Extent of the shape relative to its cell (1 = touches the edges)."),
+        vec2("size", "Size", [0.6, 0.6], 0.0, 2.0).tip("Extent of the shape relative to its cell (1 = touches the edges)."),
         float("scale", "Scale", 1.0, 0.0, 2.0),
         angle("rotation", "Rotation", 0.0, -180.0, 180.0).tip("Degrees, counter-clockwise."),
         vec2("offset", "Offset", [0.0, 0.0], -1.0, 1.0),
@@ -162,8 +116,7 @@ pub static TILE_GENERATOR: NodeDef = NodeDef {
             "Shift of every row relative to the previous one, in tiles (0.5 gives a brick bond). \
              Whole tiles also move the random variations along with the tiles.",
         ),
-        boolean("vertical_offset", "Vertical Offset", false)
-            .tip("Shift columns vertically instead of shifting rows horizontally."),
+        boolean("vertical_offset", "Vertical Offset", false).tip("Shift columns vertically instead of shifting rows horizontally."),
         angle("rotation", "Rotation", 0.0, -180.0, 180.0),
         angle("random_rotation", "Random Rotation", 0.0, 0.0, 180.0),
         float("random_scale", "Random Scale", 0.0, 0.0, 1.0).bounded(),
@@ -224,16 +177,12 @@ pub static TILE_SAMPLER: NodeDef = NodeDef {
         angle("rotation", "Rotation", 0.0, -180.0, 180.0),
         angle("random_rotation", "Random Rotation", 0.0, 0.0, 180.0),
         angle("rotation_map", "Rotation Map Angle", 180.0, -360.0, 360.0).tip("How far white on the Rotation Map turns a tile."),
-        float("random_mirror", "Random Mirror", 0.0, 0.0, 1.0)
-            .bounded()
-            .tip("The chance of a tile being mirrored across, and, apart from that, up and down."),
+        float("random_mirror", "Random Mirror", 0.0, 0.0, 1.0).bounded().tip("The chance of a tile being mirrored across, and, apart from that, up and down."),
         choice("color", "Color", 0, TILE_SAMPLER_COLORS, TILE_SAMPLER_COLOR_IDS),
         float("luminance", "Luminance", 1.0, 0.0, 1.0).bounded(),
         float("random_luminance", "Random Luminance", 0.0, 0.0, 1.0).bounded(),
         float("mask_random", "Mask Random", 0.0, 0.0, 1.0).bounded().tip("The chance of a tile being left out."),
-        float("mask_threshold", "Mask Map Threshold", 0.5, 0.0, 1.0)
-            .bounded()
-            .tip("A tile stays where the Mask Map at its center is at least this."),
+        float("mask_threshold", "Mask Map Threshold", 0.5, 0.0, 1.0).bounded().tip("A tile stays where the Mask Map at its center is at least this."),
         boolean("mask_invert", "Invert Mask Map", false),
         float("softness", "Softness", 0.02, 0.0, 1.0).bounded().when("pattern", SOLID_SHAPES),
         int("sides", "Sides", 6, 3, 16).bounded().when("pattern", &[SHAPE_POLYGON, SHAPE_STAR]),
@@ -252,25 +201,14 @@ pub const FX_MAP_BUILTINS: &[&str] = &["i", "count", "depth", "cells", "col", "r
 
 /// What an FX-Map program sets of each splat, each with how many values it takes (see the tip
 /// of the program of [`FX_MAP`]).
-pub const FX_MAP_OUTPUTS: &[(&str, usize, usize)] = &[
-    ("x", 1, 1),
-    ("y", 1, 1),
-    ("size", 1, 2),
-    ("angle", 1, 1),
-    ("value", 1, 1),
-    ("color", 3, 4),
-    ("opacity", 1, 1),
-    ("draw", 1, 1),
-    ("image", 1, 1),
-];
+pub const FX_MAP_OUTPUTS: &[(&str, usize, usize)] =
+    &[("x", 1, 1), ("y", 1, 1), ("size", 1, 2), ("angle", 1, 1), ("value", 1, 1), ("color", 3, 4), ("opacity", 1, 1), ("draw", 1, 1), ("image", 1, 1)];
 
 /// What each of [`FX_MAP_OUTPUTS`] is where the program does not set it.
-pub const FX_MAP_STARTS: &[&[f64]] =
-    &[&[0.5], &[0.5], &[1.0, 1.0], &[0.0], &[1.0], &[1.0, 1.0, 1.0, 1.0], &[1.0], &[1.0], &[1.0]];
+pub const FX_MAP_STARTS: &[&[f64]] = &[&[0.5], &[0.5], &[1.0, 1.0], &[0.0], &[1.0], &[1.0, 1.0, 1.0, 1.0], &[1.0], &[1.0], &[1.0]];
 
 /// The language of FX-Map programs.
-pub static FX_MAP_RULES: crate::expr::script::ScriptRules =
-    crate::expr::script::ScriptRules { builtins: FX_MAP_BUILTINS, outputs: FX_MAP_OUTPUTS };
+pub static FX_MAP_RULES: crate::expr::script::ScriptRules = crate::expr::script::ScriptRules { builtins: FX_MAP_BUILTINS, outputs: FX_MAP_OUTPUTS };
 
 /// How the splats of an FX-Map combine with what is under them.
 pub const FX_MAP_BLENDS: &[&str] = &["Max", "Add", "Stack", "Subtract", "Min", "Multiply"];
@@ -546,10 +484,8 @@ const NOISE_CRATERS: u32 = 38;
 /// White noise: one random value per pixel.
 pub const NOISE_WHITE: u32 = 39;
 /// Every type but white noise, which is one value per pixel.
-const NOISE_SCALED: &[u32] = &[
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
-    32, 33, 34, 35, 36, 37, 38,
-];
+const NOISE_SCALED: &[u32] =
+    &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38];
 /// Types made of octaves, each finer than the last.
 const NOISE_FRACTAL: &[u32] = &[
     NOISE_PERLIN,
@@ -591,30 +527,20 @@ pub static NOISE: NodeDef = NodeDef {
     outputs: GRAY_OUT,
     params: &[
         choice("type", "Type", 0, NOISE_TYPES, NOISE_IDS).pictured().searched(NOISE_WORDS),
-        int("scale", "Scale", 8, 1, 128)
-            .bounded()
-            .tip("Number of noise cells across the image (an integer, so it tiles).")
-            .when("type", NOISE_SCALED),
-        int("octaves", "Octaves", 5, 1, 10)
-            .bounded()
-            .tip("Layers of ever finer detail on top of each other.")
-            .when("type", NOISE_FRACTAL),
-        float("roughness", "Roughness", 0.5, 0.0, 1.0)
-            .bounded()
-            .tip("How strong each finer layer is compared to the one before.")
-            .when("type", NOISE_FRACTAL),
+        int("scale", "Scale", 8, 1, 128).bounded().tip("Number of noise cells across the image (an integer, so it tiles).").when("type", NOISE_SCALED),
+        int("octaves", "Octaves", 5, 1, 10).bounded().tip("Layers of ever finer detail on top of each other.").when("type", NOISE_FRACTAL),
+        float("roughness", "Roughness", 0.5, 0.0, 1.0).bounded().tip("How strong each finer layer is compared to the one before.").when("type", NOISE_FRACTAL),
         float("distortion", "Distortion", 1.0, 0.0, 4.0)
-            .tip("How strongly the pattern is bent: how far it swirls, how much the cracks wobble, how sharply \
-                  the light gathers.")
+            .tip(
+                "How strongly the pattern is bent: how far it swirls, how much the cracks wobble, how sharply \
+                  the light gathers.",
+            )
             .when("type", &[NOISE_LIQUID, NOISE_MARBLE, NOISE_CAUSTICS, NOISE_CRACKS, NOISE_PLASMA]),
         int("stretch", "Stretch", 8, 1, 32)
             .at_least(1.0)
             .tip("How many times longer than tall the streaks, or the knots of the grain, are.")
             .when("type", &[NOISE_STREAKS, NOISE_WOOD]),
-        int("rings", "Rings", 12, 1, 64)
-            .clamped(1.0, 256.0)
-            .tip("How close together the rings of the grain are.")
-            .when("type", &[NOISE_WOOD]),
+        int("rings", "Rings", 12, 1, 64).clamped(1.0, 256.0).tip("How close together the rings of the grain are.").when("type", &[NOISE_WOOD]),
         angle("angle", "Angle", 0.0, -180.0, 180.0)
             .tip("Which way the flow, the fibers, the scratches or the ripples run.")
             .when("type", &[NOISE_FLOW, NOISE_FIBERS, NOISE_RIPPLES, NOISE_DIRECTIONAL_SCRATCHES]),
@@ -625,17 +551,11 @@ pub static NOISE: NodeDef = NodeDef {
         float("jitter", "Jitter", 1.0, 0.0, 1.0)
             .bounded()
             .tip("0 puts every cell's point in its middle (a regular grid), 1 anywhere in the cell.")
-            .when(
-                "type",
-                &[NOISE_CELLS, NOISE_VORONOI, NOISE_VORONOI_FRACTAL, NOISE_CRACKS, NOISE_CRYSTAL, NOISE_MOSAIC, NOISE_STONES, NOISE_SCALES],
-            ),
+            .when("type", &[NOISE_CELLS, NOISE_VORONOI, NOISE_VORONOI_FRACTAL, NOISE_CRACKS, NOISE_CRYSTAL, NOISE_MOSAIC, NOISE_STONES, NOISE_SCALES]),
         float("density", "Density", 0.5, 0.0, 1.0)
             .bounded()
             .tip("How much of the image is covered; for a waveform, how loud it is.")
-            .when(
-                "type",
-                &[NOISE_TURING, NOISE_RAINDROPS, NOISE_SPOTS, NOISE_BLOTCHES, NOISE_MOISTURE, NOISE_DIRT, NOISE_CRATERS, NOISE_WAVEFORM],
-            ),
+            .when("type", &[NOISE_TURING, NOISE_RAINDROPS, NOISE_SPOTS, NOISE_BLOTCHES, NOISE_MOISTURE, NOISE_DIRT, NOISE_CRATERS, NOISE_WAVEFORM]),
         float("line_density", "Density", 0.15, 0.0, 1.0)
             .bounded()
             .tip("How many lines there are.")
@@ -648,20 +568,21 @@ pub static NOISE: NodeDef = NodeDef {
             .at_least(0.0)
             .tip("How wide the lines are in the middle (they get thinner towards their ends).")
             .when("type", &[NOISE_FIBERS, NOISE_SCRATCHES, NOISE_DIRECTIONAL_SCRATCHES]),
-        pixels("line_width", "Width", 3.0, 0.0, 16.0)
-            .at_least(0.0)
-            .tip("How wide the lines are.")
-            .when("type", &[NOISE_VEINS, NOISE_CRACKS]),
+        pixels("line_width", "Width", 3.0, 0.0, 16.0).at_least(0.0).tip("How wide the lines are.").when("type", &[NOISE_VEINS, NOISE_CRACKS]),
         float("thickness", "Thickness", 0.25, 0.0, 1.0)
             .bounded()
-            .tip("How thick the tubes, corridors or threads are, as a share of a cell; for a waveform, how wide \
-                  its bars are.")
+            .tip(
+                "How thick the tubes, corridors or threads are, as a share of a cell; for a waveform, how wide \
+                  its bars are.",
+            )
             .when("type", &[NOISE_TRUCHET, NOISE_MAZE, NOISE_WEAVE, NOISE_WAVEFORM]),
         choice("weave", "Weave", 0, WEAVES, WEAVE_IDS)
-            .tip("How the threads cross: Plain, over one and under one; Twill, over two and under two a step \
+            .tip(
+                "How the threads cross: Plain, over one and under one; Twill, over two and under two a step \
                   along each row, in diagonal ribs; Basket, two threads together as Plain; Satin, over four and \
                   under one, the crossings spread out. (The scale is taken as a whole number of repeats, so the \
-                  weave tiles.)")
+                  weave tiles.)",
+            )
             .when("type", &[NOISE_WEAVE]),
         int("seed", "Seed", 0, 0, 9999).bounded(),
         boolean("invert", "Invert", false),
@@ -690,10 +611,10 @@ pub static SVG: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         file("path", "File", &["svg"]),
-        choice("fit", "Fit", 0, SVG_FITS, SVG_FIT_IDS)
-            .fixed()
-            .tip("Fit: all of the picture, as large as the texture holds it. Fill: the texture covered, the rest \
-                  cut. Stretch: to the texture's shape."),
+        choice("fit", "Fit", 0, SVG_FITS, SVG_FIT_IDS).fixed().tip(
+            "Fit: all of the picture, as large as the texture holds it. Fill: the texture covered, the rest \
+                  cut. Stretch: to the texture's shape.",
+        ),
         choice("output", "Output", 0, SVG_OUTPUTS, SVG_OUTPUT_IDS)
             .fixed()
             .tip("Color: the picture's colors. Coverage: grayscale, how much of each pixel the picture covers."),

@@ -7,9 +7,9 @@
 //! with images, thumbnails and reports as [`Event`]s.
 
 pub(crate) mod autosave;
-pub(crate) mod export_dialog;
 #[cfg(any(test, feature = "dev-tools"))]
 pub(crate) mod dev;
+pub(crate) mod export_dialog;
 pub(crate) mod home;
 pub(crate) mod library;
 pub(crate) mod packages;
@@ -31,21 +31,21 @@ use brewed_texture_core::package::{Missing, Package, ResourceKind};
 use brewed_texture_core::project::{self, ViewState};
 use brewed_texture_core::{Category, Document, Edit, GraphId, NodeKind, ParamValue, Value};
 
+use brewed_texture_engine::simd::ImageStats;
+use brewed_texture_engine::{DisplayImage, EngineService, Event, ExportJob, ImageReport, Request};
 pub use packages::OpenPackage;
 use packages::{Deps, Seen};
 pub use settings_dialog::{SettingsDialog, SettingsMessage};
-use brewed_texture_engine::{DisplayImage, EngineService, Event, ExportJob, ImageReport, Request};
-use brewed_texture_engine::simd::ImageStats;
 
 use crate::copied_files;
-use crate::gpu::{self, EventSource};
 use crate::eyedropper;
 use crate::file_dialogs::Filters;
+use crate::gpu::{self, EventSource};
 use crate::picker::{self, PickTarget, Shot};
-use crate::view;
-use crate::view::frames::FrameRate;
 use crate::settings::{self, Settings};
 use crate::shortcuts::{Chord, Command};
+use crate::view;
+use crate::view::frames::FrameRate;
 use crate::workspace::Workspace;
 
 // ---------------------------------------------------------------------------- options
@@ -87,12 +87,24 @@ pub enum DragPayload {
     Node(NodeKind),
     Variable(String),
     /// A graph of a package open in the Explorer: it becomes a node that uses it.
-    Graph { key: u64, graph: GraphId, name: String },
+    Graph {
+        key: u64,
+        graph: GraphId,
+        name: String,
+    },
     /// A graph of a package in a library folder (see [`library`]): it becomes a node that uses
     /// it, its package read first if it has to be.
-    Library { package: String, graph: GraphId, name: String },
+    Library {
+        package: String,
+        graph: GraphId,
+        name: String,
+    },
     /// A file of a package (and what the package calls it): it becomes the node that reads it.
-    Resource { path: String, kind: ResourceKind, name: String },
+    Resource {
+        path: String,
+        kind: ResourceKind,
+        name: String,
+    },
 }
 
 /// A field that says which file something reads.
@@ -190,7 +202,9 @@ pub enum ContextTarget {
     Node(NodeId),
     Link(Link),
     Comment(CommentId),
-    Canvas { graph_pos: [f32; 2] },
+    Canvas {
+        graph_pos: [f32; 2],
+    },
     /// A package in the Explorer (by its key).
     Package(u64),
     /// A graph of a package in the Explorer.
@@ -692,31 +706,68 @@ pub enum SelectMode {
 
 #[derive(Clone, Debug)]
 pub enum GraphMessage {
-    Select { node: NodeId, mode: SelectMode },
-    SelectBox { ids: Vec<NodeId>, additive: bool },
+    Select {
+        node: NodeId,
+        mode: SelectMode,
+    },
+    SelectBox {
+        ids: Vec<NodeId>,
+        additive: bool,
+    },
     ClearSelection,
     SelectLink(Link),
     SelectComment(CommentId),
     /// Select a comment and put the cursor in its text field (double-click on its title).
     EditComment(CommentId),
-    Move { ids: Vec<NodeId>, delta: [f32; 2] },
+    Move {
+        ids: Vec<NodeId>,
+        delta: [f32; 2],
+    },
     /// A comment dragged by its title bar, with the nodes it holds.
-    MoveComment { id: CommentId, delta: [f32; 2], nodes: Vec<NodeId> },
+    MoveComment {
+        id: CommentId,
+        delta: [f32; 2],
+        nodes: Vec<NodeId>,
+    },
     /// A comment resized by its corner.
-    ResizeComment { id: CommentId, size: [f32; 2] },
+    ResizeComment {
+        id: CommentId,
+        size: [f32; 2],
+    },
     /// A link dragged to a socket; `replacing` is the link it was picked up from.
-    Connect { from: SocketRef, to: SocketRef, replacing: Option<Link> },
+    Connect {
+        from: SocketRef,
+        to: SocketRef,
+        replacing: Option<Link>,
+    },
     /// A link dropped on empty space (the add menu opens); a picked up link is removed.
-    LinkDropped { from: SocketRef, at: Point, graph_pos: [f32; 2], detached: Option<Link> },
-    OpenAddMenu { at: Point, graph_pos: [f32; 2] },
+    LinkDropped {
+        from: SocketRef,
+        at: Point,
+        graph_pos: [f32; 2],
+        detached: Option<Link>,
+    },
+    OpenAddMenu {
+        at: Point,
+        graph_pos: [f32; 2],
+    },
     Preview(NodeId),
-    Context { at: Point, target: ContextTarget },
+    Context {
+        at: Point,
+        target: ContextTarget,
+    },
     /// The canvas moved by this much, in pixels.
     PanBy(Vector),
     /// Zoom by `factor`, keeping the point at `at` (canvas pixels) where it is.
-    ZoomAt { at: Point, factor: f32 },
+    ZoomAt {
+        at: Point,
+        factor: f32,
+    },
     Bounds(Rectangle),
-    Drop { payload: DragPayload, graph_pos: [f32; 2] },
+    Drop {
+        payload: DragPayload,
+        graph_pos: [f32; 2],
+    },
     Error(String),
 }
 
@@ -726,11 +777,18 @@ pub enum PreviewMessage {
     ToggleTiling,
     Fit,
     OneToOne,
-    View { zoom: f32, pan: Vector, fit: bool },
+    View {
+        zoom: f32,
+        pan: Vector,
+        fit: bool,
+    },
     /// The image moved by this much, in pixels.
     PanBy(Vector),
     /// Zoom by `factor`, keeping the point at `at` (view pixels) where it is.
-    ZoomAt { at: Point, factor: f32 },
+    ZoomAt {
+        at: Point,
+        factor: f32,
+    },
     /// The camera of the 3D view moved by the mouse.
     Move3d(view::view3d::Move),
     Bounds(Rectangle),
@@ -767,9 +825,15 @@ pub enum PickMessage {
     /// Picking on a capture: the monitors are captured.
     Captured(Result<Vec<Shot>, String>),
     /// A click on a picker window, at a pixel of its shot.
-    Color { shot: usize, at: [f32; 2] },
+    Color {
+        shot: usize,
+        at: [f32; 2],
+    },
     /// A path dragged on a picker window, in the coordinates of that window.
-    Path { shot: usize, points: Vec<[f32; 2]> },
+    Path {
+        shot: usize,
+        points: Vec<[f32; 2]>,
+    },
     Cancel,
 }
 
@@ -832,7 +896,12 @@ pub enum ExplorerMessage {
     Embed(u64, Vec<String>),
     /// Files were read for a package, to import (or, `embed`, to hold those it links to), and
     /// what could not be read.
-    FilesRead { key: u64, embed: bool, files: Vec<(String, Held)>, failed: Vec<String> },
+    FilesRead {
+        key: u64,
+        embed: bool,
+        files: Vec<(String, Held)>,
+        failed: Vec<String>,
+    },
     /// Write a file a package holds to disk, and link to it instead (a file dialog).
     SaveResourceAs(u64, String),
     ResourceSavePicked(u64, String, Option<PathBuf>),
@@ -969,7 +1038,13 @@ pub enum Message {
     LookAtLibrary,
     LibraryLooked(Option<Arc<HashMap<String, library::Looked>>>),
     /// The package of a graph of the Library dropped on the graph was read.
-    LibraryRead { package: String, graph: GraphId, name: String, pos: [f32; 2], result: Result<Arc<packages::Opened>, String> },
+    LibraryRead {
+        package: String,
+        graph: GraphId,
+        name: String,
+        pos: [f32; 2],
+        result: Result<Arc<packages::Opened>, String>,
+    },
     /// The Home screen (see [`home`]).
     Home(home::HomeMessage),
     /// The dialog of a new package or graph.
@@ -1188,9 +1263,7 @@ pub enum WindowRequest {
 }
 
 fn main_window_settings(workspace: Option<&Workspace>) -> window::Settings {
-    let size = workspace.and_then(|w| w.size).map_or(Size::new(1680.0, 1000.0), |[w, h]| {
-        Size::new(w.max(MIN_WINDOW.width), h.max(MIN_WINDOW.height))
-    });
+    let size = workspace.and_then(|w| w.size).map_or(Size::new(1680.0, 1000.0), |[w, h]| Size::new(w.max(MIN_WINDOW.width), h.max(MIN_WINDOW.height)));
     window::Settings {
         size,
         // On Windows it is cloaked, made to fill the screen and shown in that order, once
@@ -1860,9 +1933,7 @@ impl App {
         let mut seen = HashSet::new();
         self.graph()
             .nodes_of(NodeKind::OUTPUT)
-            .filter(|n| {
-                brewed_texture_core::nodes::Usage::of(n.enum_value("usage")).is_some_and(|u| u.shown_in_3d()) && seen.insert(n.enum_value("usage"))
-            })
+            .filter(|n| brewed_texture_core::nodes::Usage::of(n.enum_value("usage")).is_some_and(|u| u.shown_in_3d()) && seen.insert(n.enum_value("usage")))
             .map(|n| n.id)
             .collect()
     }
@@ -2047,13 +2118,10 @@ impl App {
             return;
         };
         let margin = 50.0;
-        let zoom = ((canvas.width - 2.0 * margin) / (x1 - x0).max(1.0))
-            .min((canvas.height - 2.0 * margin) / (y1 - y0).max(1.0))
-            .clamp(0.15, 1.25);
+        let zoom = ((canvas.width - 2.0 * margin) / (x1 - x0).max(1.0)).min((canvas.height - 2.0 * margin) / (y1 - y0).max(1.0)).clamp(0.15, 1.25);
         let center = [(x0 + x1) * 0.5, (y0 + y1) * 0.5];
         self.ui.graph_view.zoom = zoom;
-        self.ui.graph_view.pan =
-            Vector::new(canvas.width * 0.5 - center[0] * zoom, canvas.height * 0.5 - center[1] * zoom);
+        self.ui.graph_view.pan = Vector::new(canvas.width * 0.5 - center[0] * zoom, canvas.height * 0.5 - center[1] * zoom);
     }
 
     /// Pan the graph view so that a node is fully visible; the zoom stays.
@@ -2116,10 +2184,7 @@ impl App {
             if clip.package.is_some() {
                 clip.use_package();
             } else if clip.uses_graphs_of_its_package() {
-                self.set_status(
-                    "The nodes use graphs of a package that has no file: save it, and copy them again",
-                    true,
-                );
+                self.set_status("The nodes use graphs of a package that has no file: save it, and copy them again", true);
                 return;
             }
         }
@@ -2167,10 +2232,9 @@ impl App {
         const MARGIN: f32 = 26.0;
         use view::graph::layout;
         let (pos, size) = match bounds {
-            Some(b) => (
-                [b[0] - MARGIN, b[1] - MARGIN - layout::COMMENT_HEADER_H],
-                [b[2] - b[0] + 2.0 * MARGIN, b[3] - b[1] + 2.0 * MARGIN + layout::COMMENT_HEADER_H],
-            ),
+            Some(b) => {
+                ([b[0] - MARGIN, b[1] - MARGIN - layout::COMMENT_HEADER_H], [b[2] - b[0] + 2.0 * MARGIN, b[3] - b[1] + 2.0 * MARGIN + layout::COMMENT_HEADER_H])
+            }
             None => {
                 let at = self.ui.graph_view.to_graph(self.ui.cursor);
                 ([at[0] - 20.0, at[1] - 20.0], [340.0, 260.0])
@@ -2447,8 +2511,7 @@ impl App {
     fn export_jobs(&self, dir: &std::path::Path) -> Vec<ExportJob> {
         let graph = self.doc.graph();
         let outputs: Vec<&brewed_texture_core::Node> = graph.nodes_of(NodeKind::OUTPUT).collect();
-        let names: Vec<(String, u32)> =
-            outputs.iter().map(|n| (n.text("name").to_string(), n.enum_value("bit_depth"))).collect();
+        let names: Vec<(String, u32)> = outputs.iter().map(|n| (n.text("name").to_string(), n.enum_value("bit_depth"))).collect();
         let paths = brewed_texture_engine::export::output_paths(dir, &names);
         outputs
             .iter()
@@ -2712,11 +2775,8 @@ impl App {
             Message::ExportNode(id) => {
                 let Some(node) = self.graph().node(id) else { return Task::none() };
                 let depth = node.enum_value("bit_depth");
-                let name = format!(
-                    "{}.{}",
-                    brewed_texture_engine::export::sanitize_file_name(node.text("name")),
-                    brewed_texture_engine::export::extension(depth)
-                );
+                let name =
+                    format!("{}.{}", brewed_texture_engine::export::sanitize_file_name(node.text("name")), brewed_texture_engine::export::extension(depth));
                 let ext = brewed_texture_engine::export::extension(depth);
                 let here = self.here();
                 let folder = self.dialog_folder(None, false);
@@ -2912,7 +2972,11 @@ impl App {
                     // of the screen for itself.
                     ScreenAsked::Opened if !self.ui.maximized => {
                         if let Some(fitted) = fitted_window(size, screen) {
-                            log::info!("the window opened larger than its screen ({screen:?}): it is made {} by {}, and to fill the screen", fitted.width, fitted.height);
+                            log::info!(
+                                "the window opened larger than its screen ({screen:?}): it is made {} by {}, and to fill the screen",
+                                fitted.width,
+                                fitted.height
+                            );
                             return told.chain(window::resize(id, fitted)).chain(window::maximize(id, true));
                         }
                     }
@@ -3604,11 +3668,7 @@ impl App {
                 if status != iced::event::Status::Captured {
                     self.cancel_dialog();
                 }
-            } else if self.ui.renaming_var.is_some()
-                || self.ui.binding.is_some()
-                || self.ui.renaming_graph.is_some()
-                || self.ui.renaming_file.is_some()
-            {
+            } else if self.ui.renaming_var.is_some() || self.ui.binding.is_some() || self.ui.renaming_graph.is_some() || self.ui.renaming_file.is_some() {
                 // Typing a name: forget the text, the name stays as it was.
                 self.ui.renaming_var = None;
                 self.ui.binding = None;
@@ -3912,11 +3972,7 @@ impl App {
         {
             let shown = &self.ui.preview.view3d;
             if (c.shape, c.displacement, c.tiling) != (shown.shape, shown.displacement, shown.tiling) {
-                let scene = brewed_texture_core::graph::Scene {
-                    model: Some(c.shape.id().to_string()),
-                    height: Some(c.displacement),
-                    repeat: Some(c.tiling),
-                };
+                let scene = brewed_texture_core::graph::Scene { model: Some(c.shape.id().to_string()), height: Some(c.displacement), repeat: Some(c.tiling) };
                 self.apply(Edit::SetScene(scene));
             }
         }
@@ -4375,9 +4431,7 @@ impl App {
     /// Is `target` a level of gray (a Uniform Color's color while it makes grayscale)?
     pub fn target_gray(&self, target: &ColorTarget) -> bool {
         match target {
-            ColorTarget::Param(node, key) => {
-                self.doc.graph().node(*node).is_some_and(|n| n.param_def(key).is_some_and(|pd| n.param_gray(&pd)))
-            }
+            ColorTarget::Param(node, key) => self.doc.graph().node(*node).is_some_and(|n| n.param_def(key).is_some_and(|pd| n.param_gray(&pd))),
             _ => false,
         }
     }

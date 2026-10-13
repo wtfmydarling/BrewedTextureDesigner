@@ -80,10 +80,7 @@ impl Comment {
     /// Does this comment hold a node of size `size` at `pos`? True when the whole node is
     /// inside, so that moving the comment never tears a node away from its neighbours.
     pub fn holds(&self, pos: [f32; 2], size: [f32; 2]) -> bool {
-        pos[0] >= self.pos[0]
-            && pos[1] >= self.pos[1]
-            && pos[0] + size[0] <= self.pos[0] + self.size[0]
-            && pos[1] + size[1] <= self.pos[1] + self.size[1]
+        pos[0] >= self.pos[0] && pos[1] >= self.pos[1] && pos[0] + size[0] <= self.pos[0] + self.size[0] && pos[1] + size[1] <= self.pos[1] + self.size[1]
     }
 }
 
@@ -170,8 +167,7 @@ impl TryFrom<NodeFile> for Node {
     type Error = String;
 
     fn try_from(file: NodeFile) -> Result<Node, String> {
-        let kind = NodeKind::from_id(&file.kind)
-            .ok_or_else(|| format!("unknown node type '{}' (made by a newer version of the program?)", file.kind))?;
+        let kind = NodeKind::from_id(&file.kind).ok_or_else(|| format!("unknown node type '{}' (made by a newer version of the program?)", file.kind))?;
         let def = |key: &str| match &file.uses {
             Some(instance) => instance.interface.param(key).map(InstanceParam::def),
             None => kind.def().param(key).copied(),
@@ -184,9 +180,7 @@ impl TryFrom<NodeFile> for Node {
                 Some(Ok(value)) => value,
                 Some(Err(id)) => {
                     let node = kind.def().name;
-                    return Err(format!(
-                        "the {key} of a {node} is '{id}', which this version does not know (made by a newer version of the program?)"
-                    ));
+                    return Err(format!("the {key} of a {node} is '{id}', which this version does not know (made by a newer version of the program?)"));
                 }
             };
             params.push(ParamSlot { exposed: file.exposed.contains(&key), key, value });
@@ -306,11 +300,7 @@ impl<'de> Deserialize<'de> for ParamsFile {
 
 impl Node {
     pub fn new(id: NodeId, kind: NodeKind, pos: [f32; 2]) -> Node {
-        let params = kind
-            .def()
-            .all_params()
-            .map(|p| ParamSlot { key: p.key.to_string(), value: p.default_value(), exposed: p.exposed_by_default })
-            .collect();
+        let params = kind.def().all_params().map(|p| ParamSlot { key: p.key.to_string(), value: p.default_value(), exposed: p.exposed_by_default }).collect();
         Node {
             id,
             kind,
@@ -327,12 +317,7 @@ impl Node {
     /// A node that uses a graph: its parameters are the graph's input values, at the values
     /// they have in the graph.
     pub fn of_graph(id: NodeId, instance: Instance, pos: [f32; 2]) -> Node {
-        let params = instance
-            .interface
-            .params
-            .iter()
-            .map(|p| ParamSlot { key: p.name.clone(), value: p.start_value(), exposed: false })
-            .collect();
+        let params = instance.interface.params.iter().map(|p| ParamSlot { key: p.name.clone(), value: p.start_value(), exposed: false }).collect();
         Node {
             id,
             kind: NodeKind::GRAPH_INSTANCE,
@@ -384,14 +369,8 @@ impl Node {
             .map(|p| {
                 let def = p.def();
                 match old.iter().find(|s| s.key == p.name) {
-                    Some(slot) if def.accepts(&slot.value) => {
-                        ParamSlot { key: p.name.clone(), value: def.sanitize(slot.value.clone()), exposed: slot.exposed }
-                    }
-                    other => ParamSlot {
-                        key: p.name.clone(),
-                        value: p.start_value(),
-                        exposed: other.is_some_and(|s| s.exposed),
-                    },
+                    Some(slot) if def.accepts(&slot.value) => ParamSlot { key: p.name.clone(), value: def.sanitize(slot.value.clone()), exposed: slot.exposed },
+                    other => ParamSlot { key: p.name.clone(), value: p.start_value(), exposed: other.is_some_and(|s| s.exposed) },
                 }
             })
             .collect();
@@ -514,11 +493,7 @@ impl Node {
             };
             defs.iter()
                 .map(|p| match old.iter().find(|s| s.key == p.key) {
-                    Some(slot) => ParamSlot {
-                        key: p.key.to_string(),
-                        value: p.sanitize(slot.value.clone()),
-                        exposed: slot.exposed && p.can_expose(),
-                    },
+                    Some(slot) => ParamSlot { key: p.key.to_string(), value: p.sanitize(slot.value.clone()), exposed: slot.exposed && p.can_expose() },
                     None => ParamSlot { key: p.key.to_string(), value: value(p), exposed: p.exposed_by_default },
                 })
                 .collect()
@@ -594,8 +569,7 @@ impl Variable {
             DataType::Image => (Value::Color(IMAGE_INPUT_COLOR), Value::Color([0.0; 4]), Value::Color([1.0; 4])),
             DataType::Color => (Value::Color([0.8, 0.5, 0.2, 1.0]), Value::Color([0.0; 4]), Value::Color([1.0; 4])),
         };
-        let image = (ty == DataType::Image)
-            .then(|| ImageInput { kind: ImageKind::Gray, picture: String::new(), default: String::new() });
+        let image = (ty == DataType::Image).then(|| ImageInput { kind: ImageKind::Gray, picture: String::new(), default: String::new() });
         Variable { name, ty, value, default: value, min, max, description: String::new(), image }
     }
 
@@ -940,8 +914,7 @@ pub fn output_socket_key(key: &str) -> String {
 
 /// Turn arbitrary text into an identifier usable in expressions.
 pub fn sanitize_identifier(text: &str) -> String {
-    let mut out: String =
-        text.trim().chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
+    let mut out: String = text.trim().chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
     if out.is_empty() {
         out.push_str("value");
     }
@@ -1100,9 +1073,7 @@ impl Graph {
             return Err(format!("There is no variable named '{from}'"));
         }
         if self.variable(&to).is_some() {
-            return Err(format!(
-                "A variable named '{to}' already exists. To share it, give an Input node that name in its properties."
-            ));
+            return Err(format!("A variable named '{to}' already exists. To share it, give an Input node that name in its properties."));
         }
         for n in self.nodes.iter_mut().filter(|n| n.variable.as_deref() == Some(from)) {
             n.variable = Some(to.clone());
@@ -1128,12 +1099,7 @@ impl Graph {
             }
             Some(_) => {}
             None => {
-                let mut var = n
-                    .variable
-                    .as_deref()
-                    .and_then(|old| self.variable(old))
-                    .cloned()
-                    .unwrap_or_else(|| Variable::new(name.clone(), ty));
+                let mut var = n.variable.as_deref().and_then(|old| self.variable(old)).cloned().unwrap_or_else(|| Variable::new(name.clone(), ty));
                 var.name = name.clone();
                 self.variables.push(var);
             }
@@ -1172,13 +1138,7 @@ impl Graph {
             None => d
                 .inputs
                 .iter()
-                .map(|s| SocketInfo {
-                    key: input_socket_key(s.key),
-                    label: s.label.to_string(),
-                    ty: s.ty,
-                    slot: s.slot,
-                    kind: SocketKind::Input,
-                })
+                .map(|s| SocketInfo { key: input_socket_key(s.key), label: s.label.to_string(), ty: s.ty, slot: s.slot, kind: SocketKind::Input })
                 .collect(),
         };
         for pd in node.param_defs() {
@@ -1187,13 +1147,7 @@ impl Graph {
                 continue;
             }
             if let Some((ty, takes)) = pd.socket(&slot.value) {
-                out.push(SocketInfo {
-                    key: param_socket_key(pd.key),
-                    label: pd.label.to_string(),
-                    ty,
-                    slot: takes,
-                    kind: SocketKind::Param,
-                });
+                out.push(SocketInfo { key: param_socket_key(pd.key), label: pd.label.to_string(), ty, slot: takes, kind: SocketKind::Param });
             }
         }
         // Pixel Math reads a channel of each image: color, which a grayscale image is too.
@@ -1211,25 +1165,13 @@ impl Graph {
                 .interface
                 .outputs
                 .iter()
-                .map(|p| SocketInfo {
-                    key: output_socket_key(&p.name),
-                    label: p.name.clone(),
-                    ty: DataType::Image,
-                    slot: Slot::Any,
-                    kind: SocketKind::Output,
-                })
+                .map(|p| SocketInfo { key: output_socket_key(&p.name), label: p.name.clone(), ty: DataType::Image, slot: Slot::Any, kind: SocketKind::Output })
                 .collect();
         }
         node.def()
             .outputs
             .iter()
-            .map(|s| SocketInfo {
-                key: output_socket_key(s.key),
-                label: s.label.to_string(),
-                ty: s.ty,
-                slot: s.slot,
-                kind: SocketKind::Output,
-            })
+            .map(|s| SocketInfo { key: output_socket_key(s.key), label: s.label.to_string(), ty: s.ty, slot: s.slot, kind: SocketKind::Output })
             .collect()
     }
 
@@ -1373,9 +1315,7 @@ impl Graph {
         self.node(link.to).is_some_and(|n| has_input_socket(n, &link.to_socket))
             && self.node(link.from).is_some_and(|n| match &n.instance {
                 // The outputs of a node type are always there; a graph's may not be now.
-                Some(instance) => {
-                    link.from_socket.strip_prefix("o:").is_some_and(|k| instance.interface.outputs.iter().any(|p| p.name == k))
-                }
+                Some(instance) => link.from_socket.strip_prefix("o:").is_some_and(|k| instance.interface.outputs.iter().any(|p| p.name == k)),
                 None => true,
             })
     }

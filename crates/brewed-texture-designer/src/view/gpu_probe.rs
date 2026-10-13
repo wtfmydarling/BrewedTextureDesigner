@@ -3,9 +3,9 @@
 //! The Home screen draws one, so that the engine starts and the GPU is known before any graph
 //! is shown (the 2D and 3D views, which do the same, are not there).
 
+use brewed_texture_engine::wgpu;
 use iced::widget::shader::{self, Viewport};
 use iced::{Element, Length, Rectangle, mouse};
-use brewed_texture_engine::wgpu;
 
 use crate::app::Message;
 

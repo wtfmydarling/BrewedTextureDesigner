@@ -65,14 +65,7 @@ pub struct FuncInfo {
     pub doc: &'static str,
 }
 
-const fn f(
-    name: &'static str,
-    func: Func,
-    min_args: usize,
-    max_args: usize,
-    signature: &'static str,
-    doc: &'static str,
-) -> FuncInfo {
+const fn f(name: &'static str, func: Func, min_args: usize, max_args: usize, signature: &'static str, doc: &'static str) -> FuncInfo {
     FuncInfo { name, func, min_args, max_args, signature, doc }
 }
 
@@ -240,12 +233,7 @@ pub fn suggest_function(name: &str) -> Option<&'static str> {
     if let Some(f) = find_function(&lower) {
         return Some(f.name);
     }
-    FUNCTIONS
-        .iter()
-        .map(|f| (levenshtein(&lower, f.name), f.name))
-        .filter(|(d, _)| *d <= 2)
-        .min_by_key(|(d, _)| *d)
-        .map(|(_, n)| n)
+    FUNCTIONS.iter().map(|f| (levenshtein(&lower, f.name), f.name)).filter(|(d, _)| *d <= 2).min_by_key(|(d, _)| *d).map(|(_, n)| n)
 }
 
 /// PCG hash, shared bit-for-bit by the CPU evaluator and the generated WGSL.

@@ -65,14 +65,7 @@ impl<Message> Widget<Message, iced::Theme, iced::Renderer> for Placed<'_, Messag
         self.content.as_widget_mut().update(&mut tree.children[0], event, child, cursor, renderer, clipboard, shell, viewport);
     }
 
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &iced::Renderer,
-    ) -> mouse::Interaction {
+    fn mouse_interaction(&self, tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle, renderer: &iced::Renderer) -> mouse::Interaction {
         let Some(child) = layout.children().next() else { return mouse::Interaction::None };
         self.content.as_widget().mouse_interaction(&tree.children[0], child, cursor, viewport, renderer)
     }

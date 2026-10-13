@@ -47,8 +47,8 @@ use wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_manager_v1::Z
 
 use self::screencopy::Capture;
 use super::loupe;
-use super::portal::ScreenCast;
 use super::path::{self, Pixel, Trace};
+use super::portal::ScreenCast;
 use super::stroke::{self, Area, Stroke};
 use super::{Cancel, Mode, Outcome, color, portal};
 
@@ -468,11 +468,7 @@ impl State {
     /// The desktop was shown the surface: give it its (transparent) content.
     fn configured(&mut self, i: usize, size: (u32, u32)) {
         let overlay = &mut self.overlays[i];
-        let (w, h) = if size.0 == 0 || size.1 == 0 {
-            (overlay.geometry.width as u32, overlay.geometry.height as u32)
-        } else {
-            size
-        };
+        let (w, h) = if size.0 == 0 || size.1 == 0 { (overlay.geometry.width as u32, overlay.geometry.height as u32) } else { size };
         overlay.size = Some((w, h));
         #[cfg(test)]
         live_tests::COVERED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1093,7 +1089,15 @@ impl Dispatch<WlKeyboard, ()> for State {
 }
 
 impl Dispatch<ZwlrScreencopyManagerV1, ()> for State {
-    fn event(_: &mut State, _: &ZwlrScreencopyManagerV1, _: <ZwlrScreencopyManagerV1 as wayland_client::Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<State>) {}
+    fn event(
+        _: &mut State,
+        _: &ZwlrScreencopyManagerV1,
+        _: <ZwlrScreencopyManagerV1 as wayland_client::Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<State>,
+    ) {
+    }
 }
 
 impl Dispatch<WpViewport, ()> for State {

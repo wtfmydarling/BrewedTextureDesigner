@@ -2,10 +2,8 @@
 
 use super::*;
 
-const SHUFFLE_SOURCES: &[&str] =
-    &["A.Red", "A.Green", "A.Blue", "A.Alpha", "B.Red", "B.Green", "B.Blue", "B.Alpha", "Zero", "One"];
-const SHUFFLE_SOURCE_IDS: &[&str] =
-    &["a_red", "a_green", "a_blue", "a_alpha", "b_red", "b_green", "b_blue", "b_alpha", "zero", "one"];
+const SHUFFLE_SOURCES: &[&str] = &["A.Red", "A.Green", "A.Blue", "A.Alpha", "B.Red", "B.Green", "B.Blue", "B.Alpha", "Zero", "One"];
+const SHUFFLE_SOURCE_IDS: &[&str] = &["a_red", "a_green", "a_blue", "a_alpha", "b_red", "b_green", "b_blue", "b_alpha", "zero", "one"];
 
 pub static LEVELS: NodeDef = NodeDef {
     id: "levels",
@@ -103,18 +101,8 @@ pub static GRADIENT_MAP: NodeDef = NodeDef {
     inputs: IMAGE_IN,
     outputs: COLOR_OUT,
     params: &[
-        gradient(
-            "gradient",
-            "Gradient",
-            &[(0.0, [0.05, 0.04, 0.03, 1.0]), (0.5, [0.45, 0.25, 0.12, 1.0]), (1.0, [0.95, 0.9, 0.8, 1.0])],
-        ),
-        choice(
-            "channel",
-            "Read",
-            0,
-            &["Luminance", "Red", "Green", "Blue", "Alpha", "Average"],
-            &["luminance", "red", "green", "blue", "alpha", "average"],
-        )
+        gradient("gradient", "Gradient", &[(0.0, [0.05, 0.04, 0.03, 1.0]), (0.5, [0.45, 0.25, 0.12, 1.0]), (1.0, [0.95, 0.9, 0.8, 1.0])]),
+        choice("channel", "Read", 0, &["Luminance", "Red", "Green", "Blue", "Alpha", "Average"], &["luminance", "red", "green", "blue", "alpha", "average"])
             .tip("Which value of the input picks the position in the gradient."),
         boolean("keep_alpha", "Keep Input Alpha", true).tip("Multiply the gradient's alpha with the input's alpha."),
     ],

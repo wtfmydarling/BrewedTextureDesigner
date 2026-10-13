@@ -10,10 +10,7 @@ pub static NORMAL: NodeDef = NodeDef {
     keywords: "normal map bump height",
     inputs: GRAY_IN,
     outputs: COLOR_OUT,
-    params: &[
-        float("intensity", "Intensity", 4.0, 0.0, 32.0),
-        choice("format", "Format", 0, &["OpenGL (Y+)", "DirectX (Y-)"], &["opengl", "directx"]),
-    ],
+    params: &[float("intensity", "Intensity", 4.0, 0.0, 32.0), choice("format", "Format", 0, &["OpenGL (Y+)", "DirectX (Y-)"], &["opengl", "directx"])],
     role: Role::Image,
 };
 
@@ -27,8 +24,7 @@ pub static AMBIENT_OCCLUSION: NodeDef = NodeDef {
     outputs: GRAY_OUT,
     params: &[
         pixels("radius", "Radius", 48.0, 1.0, 256.0).at_least(0.0).tip("Search distance in pixels of a 1024 px image."),
-        float("height", "Height Depth", 0.03, 0.0, 0.5)
-            .tip("Height of white relative to the image width: larger values make everything deeper."),
+        float("height", "Height Depth", 0.03, 0.0, 0.5).tip("Height of white relative to the image width: larger values make everything deeper."),
         float("intensity", "Intensity", 1.0, 0.0, 4.0),
     ],
     role: Role::Image,

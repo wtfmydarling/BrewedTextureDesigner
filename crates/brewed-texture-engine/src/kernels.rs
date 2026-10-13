@@ -697,8 +697,7 @@ fn tile_sampler(cx: &mut ExecCtx) -> Result<Option<String>, String> {
             None
         }));
     }
-    let reads: Vec<&GpuImage> =
-        (0..8).map(|i| copies.get(i).and_then(Option::as_ref).unwrap_or_else(|| input(cx.inputs, i, &cx.gpu.black))).collect();
+    let reads: Vec<&GpuImage> = (0..8).map(|i| copies.get(i).and_then(Option::as_ref).unwrap_or_else(|| input(cx.inputs, i, &cx.gpu.black))).collect();
     let result = result.and_then(|()| cx.gpu.run(cx.encoder, "tile_sampler", bytes(&u), &reads, cx.output));
     for copy in copies.into_iter().flatten() {
         cx.gpu.recycle(copy);
@@ -863,9 +862,7 @@ fn noise(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 
 fn bitmap(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     match cx.bitmap {
-        Some(img) => {
-            cx.gpu.run(cx.encoder, "resample", bytes(&BlurU::copy(cx.params.tiling())), &[img], cx.output)?
-        }
+        Some(img) => cx.gpu.run(cx.encoder, "resample", bytes(&BlurU::copy(cx.params.tiling())), &[img], cx.output)?,
         None => cx.gpu.run(cx.encoder, "uniform_color", bytes(&ColorU { color: [0.0; 4] }), &[], cx.output)?,
     }
     Ok(None)
@@ -950,16 +947,7 @@ fn slope_blur(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     // The path is no longer than the image is wide: a longer one only goes round a tiled
     // image again, and far apart samples keep the GPU busy for long.
     let amount = (p.f("intensity") / 1024.0).clamp(-1.0, 1.0);
-    let u = SlopeU {
-        dir_x: 0.0,
-        dir_y: 0.0,
-        amount,
-        pad0: 0.0,
-        samples: p.i("samples").clamp(1, 256),
-        mode: p.u("mode"),
-        tiling: p.tiling(),
-        pad1: 0,
-    };
+    let u = SlopeU { dir_x: 0.0, dir_y: 0.0, amount, pad0: 0.0, samples: p.i("samples").clamp(1, 256), mode: p.u("mode"), tiling: p.tiling(), pad1: 0 };
     let img = input(cx.inputs, 0, &cx.gpu.black);
     let map = input(cx.inputs, 1, &cx.gpu.black);
     cx.gpu.run(cx.encoder, "slope_blur", bytes(&u), &[img, map], cx.output)?;
@@ -993,16 +981,7 @@ fn directional_warp(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let d = direction(p.f("angle"));
     let [w, h] = cx.output.size();
     let k = p.f("intensity");
-    let u = SlopeU {
-        dir_x: d[0] * k,
-        dir_y: d[1] * k * w as f32 / h.max(1) as f32,
-        amount: 0.0,
-        pad0: 0.0,
-        samples: 0,
-        mode: 0,
-        tiling: p.tiling(),
-        pad1: 0,
-    };
+    let u = SlopeU { dir_x: d[0] * k, dir_y: d[1] * k * w as f32 / h.max(1) as f32, amount: 0.0, pad0: 0.0, samples: 0, mode: 0, tiling: p.tiling(), pad1: 0 };
     let img = input(cx.inputs, 0, &cx.gpu.black);
     let map = input(cx.inputs, 1, &cx.gpu.black);
     cx.gpu.run(cx.encoder, "directional_warp", bytes(&u), &[img, map], cx.output)?;
@@ -1027,15 +1006,7 @@ fn normal(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 
 fn height_kernel(cx: &mut ExecCtx, kernel: &str, radius_px: f32, intensity: f32, depth: f32) -> Result<(), String> {
     let r = px_to_uv(radius_px, cx.output);
-    let u = HeightU {
-        radius_x: r[0],
-        radius_y: r[1],
-        intensity,
-        depth,
-        invert: u32::from(cx.params.b("invert")),
-        tiling: cx.params.tiling(),
-        pad: [0; 2],
-    };
+    let u = HeightU { radius_x: r[0], radius_y: r[1], intensity, depth, invert: u32::from(cx.params.b("invert")), tiling: cx.params.tiling(), pad: [0; 2] };
     let img = input(cx.inputs, 0, &cx.gpu.black);
     cx.gpu.run(cx.encoder, kernel, bytes(&u), &[img], cx.output)
 }
@@ -1085,13 +1056,7 @@ fn emboss(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let p = cx.params;
     let (sa, ca) = p.f("light_angle").to_radians().sin_cos();
     let (se, ce) = p.f("elevation").clamp(1.0, 90.0).to_radians().sin_cos();
-    let u = EmbossU {
-        light: [ce * ca, ce * sa, se],
-        intensity: p.f("intensity"),
-        mode: p.u("output"),
-        tiling: p.tiling(),
-        pad: [0; 2],
-    };
+    let u = EmbossU { light: [ce * ca, ce * sa, se], intensity: p.f("intensity"), mode: p.u("output"), tiling: p.tiling(), pad: [0; 2] };
     let mut warning = None;
     if u.mode == 1 && !connected(cx.inputs, 1) {
         warning = Some("'Lit color' needs an image in the Color input".to_string());
@@ -1147,12 +1112,7 @@ fn adjust(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 
 fn gradient_map(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let lut = cx.lut.ok_or("The gradient was not prepared")?;
-    let u = GradientMapU {
-        channel: cx.params.u("channel"),
-        keep_alpha: u32::from(cx.params.b("keep_alpha")),
-        tiling: cx.params.tiling(),
-        pad: 0,
-    };
+    let u = GradientMapU { channel: cx.params.u("channel"), keep_alpha: u32::from(cx.params.b("keep_alpha")), tiling: cx.params.tiling(), pad: 0 };
     let img = input(cx.inputs, 0, &cx.gpu.black);
     cx.gpu.run(cx.encoder, "gradient_map", bytes(&u), &[img, lut], cx.output)?;
     Ok(None)
@@ -1160,8 +1120,7 @@ fn gradient_map(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 
 fn channel_shuffle(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let p = cx.params;
-    let u =
-        ShuffleU { channels: [p.u("red"), p.u("green"), p.u("blue"), p.u("alpha")], tiling: p.tiling(), pad: [0; 3] };
+    let u = ShuffleU { channels: [p.u("red"), p.u("green"), p.u("blue"), p.u("alpha")], tiling: p.tiling(), pad: [0; 3] };
     let a = input(cx.inputs, 0, &cx.gpu.black);
     let b = input(cx.inputs, 1, &cx.gpu.black);
     cx.gpu.run(cx.encoder, "shuffle", bytes(&u), &[a, b], cx.output)?;
@@ -1170,12 +1129,7 @@ fn channel_shuffle(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 
 fn gradient_dynamic(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let p = cx.params;
-    let u = GradientDynamicU {
-        position: p.f("position"),
-        vertical: p.u("orientation").min(1),
-        mapped: u32::from(connected(cx.inputs, 2)),
-        tiling: p.tiling(),
-    };
+    let u = GradientDynamicU { position: p.f("position"), vertical: p.u("orientation").min(1), mapped: u32::from(connected(cx.inputs, 2)), tiling: p.tiling() };
     let [img, gradient, map] = [0, 1, 2].map(|i| input(cx.inputs, i, &cx.gpu.black));
     cx.gpu.run(cx.encoder, "gradient_dynamic", bytes(&u), &[img, gradient, map], cx.output)?;
     Ok(None)
@@ -1192,12 +1146,7 @@ fn curve(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 fn rgba_merge(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     let p = cx.params;
     let connected = (0..4).filter(|&i| connected(cx.inputs, i)).fold(0u32, |bits, i| bits | (1 << i));
-    let u = MergeU {
-        values: [p.f("red_value"), p.f("green_value"), p.f("blue_value"), p.f("alpha_value")],
-        connected,
-        tiling: p.tiling(),
-        pad: [0; 2],
-    };
+    let u = MergeU { values: [p.f("red_value"), p.f("green_value"), p.f("blue_value"), p.f("alpha_value")], connected, tiling: p.tiling(), pad: [0; 2] };
     let channels: Vec<&GpuImage> = (0..4).map(|i| input(cx.inputs, i, &cx.gpu.black)).collect();
     cx.gpu.run(cx.encoder, "rgba_merge", bytes(&u), &channels, cx.output)?;
     Ok(None)
@@ -1448,14 +1397,7 @@ fn bevel(cx: &mut ExecCtx) -> Result<Option<String>, String> {
 /// again, which keeps the cost bounded for any radius: the copy is halved until the Gaussian
 /// is narrow on it, and a Gaussian wider than four times the image (the image's average,
 /// however much wider) is taken as that wide.
-pub fn gaussian_blur(
-    gpu: &Gpu,
-    encoder: &mut wgpu::CommandEncoder,
-    input: &GpuImage,
-    output: &GpuImage,
-    sigma: f32,
-    tiling: u32,
-) -> Result<(), String> {
+pub fn gaussian_blur(gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, input: &GpuImage, output: &GpuImage, sigma: f32, tiling: u32) -> Result<(), String> {
     let copy = BlurU::copy(tiling);
     if sigma < 0.2 || input.size() != output.size() {
         // Nothing to blur (or a 1x1 placeholder input): plain resample.
@@ -1625,8 +1567,7 @@ fn pixel_math(cx: &mut ExecCtx) -> Result<Option<String>, String> {
     );
 
     let kernel = cx.gpu.dynamic_kernel(&source, images.len(), cx.output.format())?;
-    let mut u =
-        PixelMathU { consts: [[0.0; 4]; 4], tiling: params.tiling(), channel: params.u("channel"), pad: [0; 2] };
+    let mut u = PixelMathU { consts: [[0.0; 4]; 4], tiling: params.tiling(), channel: params.u("channel"), pad: [0; 2] };
     for (i, v) in consts.iter().enumerate() {
         u.consts[i / 4][i % 4] = *v;
     }

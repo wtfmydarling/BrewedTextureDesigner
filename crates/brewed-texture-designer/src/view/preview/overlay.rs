@@ -1,11 +1,11 @@
 //! Interaction layer of the 2D view: zoom and pan, pixel probe, the Transform 2D gizmo and the
 //! points of the lights of a panorama (lights.rs).
 
+use brewed_texture_core::graph::NodeId;
+use brewed_texture_core::{Edit, NodeKind, ParamValue};
 use iced::advanced::mouse;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::{Color, Point, Rectangle, Size, Vector, keyboard};
-use brewed_texture_core::graph::NodeId;
-use brewed_texture_core::{Edit, NodeKind, ParamValue};
 
 use super::lights::{Grip, Panel, Points};
 use crate::app::{App, Message, PreviewMessage};
@@ -55,7 +55,11 @@ enum Handle {
     Move,
     Rotate,
     /// Source-space point being dragged, and which axes it scales.
-    Scale { src: [f32; 2], x: bool, y: bool },
+    Scale {
+        src: [f32; 2],
+        x: bool,
+        y: bool,
+    },
     /// A point of a light of a panorama.
     Point(usize),
     /// A grip of the gizmo of a softbox or a panel.
@@ -64,12 +68,27 @@ enum Handle {
 
 #[derive(Clone, Debug)]
 enum Drag {
-    Pan { last: Point },
-    Gizmo { handle: Handle, start_uv: Vector, start_screen: Point, start: Xform },
+    Pan {
+        last: Point,
+    },
+    Gizmo {
+        handle: Handle,
+        start_uv: Vector,
+        start_screen: Point,
+        start: Xform,
+    },
     /// A point of a light: which, where it was taken, and the points as they were then.
-    Point { index: usize, start_uv: Vector, start: Points },
+    Point {
+        index: usize,
+        start_uv: Vector,
+        start: Points,
+    },
     /// A grip of a softbox's or a panel's gizmo, where it was taken, and the light as it was.
-    Panel { grip: Grip, start_uv: Vector, start: Panel },
+    Panel {
+        grip: Grip,
+        start_uv: Vector,
+        start: Panel,
+    },
 }
 
 #[derive(Default)]
@@ -93,10 +112,7 @@ const RING: f32 = 64.0;
 /// Image rectangle in widget-local coordinates.
 pub fn image_rect(bounds: Size, image: [u32; 2], zoom: f32, pan: Vector) -> Rectangle {
     let size = Size::new(image[0] as f32 * zoom, image[1] as f32 * zoom);
-    Rectangle::new(
-        Point::new(bounds.width / 2.0 + pan.x - size.width / 2.0, bounds.height / 2.0 + pan.y - size.height / 2.0),
-        size,
-    )
+    Rectangle::new(Point::new(bounds.width / 2.0 + pan.x - size.width / 2.0, bounds.height / 2.0 + pan.y - size.height / 2.0), size)
 }
 
 /// Zoom and pan that fit an image into the view.
@@ -132,12 +148,7 @@ impl Overlay<'_> {
     fn xform(&self, id: NodeId) -> Option<(Xform, [bool; 4])> {
         let node = self.app.graph().node(id)?;
         let params = self.app.eval.params(id)?;
-        let x = Xform {
-            offset: params.v2("offset"),
-            rotation: params.f("rotation"),
-            scale: params.v2("scale"),
-            pivot: params.v2("pivot"),
-        };
+        let x = Xform { offset: params.v2("offset"), rotation: params.f("rotation"), scale: params.v2("scale"), pivot: params.v2("pivot") };
         // Exposed parameters get their value from a socket: the gizmo must not edit them.
         let locked = ["offset", "rotation", "scale", "pivot"].map(|k| node.is_exposed(k));
         Some((x, locked))
@@ -309,27 +320,15 @@ impl canvas::Program<Message> for Overlay<'_> {
                     Some(Drag::Gizmo { handle, start_uv, start_screen, start }) => {
                         let (id, _) = gizmo?;
                         let edits = self.gizmo_edits(id, (*handle, *start_uv, *start_screen, *start), uv_of(q), q, rect, aspect, state.modifiers.shift());
-                        if edits.is_empty() {
-                            None
-                        } else {
-                            Some(canvas::Action::publish(Message::Edits(edits)))
-                        }
+                        if edits.is_empty() { None } else { Some(canvas::Action::publish(Message::Edits(edits))) }
                     }
                     Some(Drag::Panel { grip, start_uv, start }) => {
                         let edits = start.edits(*grip, *start_uv, uv_of(q), state.modifiers.shift());
-                        if edits.is_empty() {
-                            None
-                        } else {
-                            Some(canvas::Action::publish(Message::Edits(edits)))
-                        }
+                        if edits.is_empty() { None } else { Some(canvas::Action::publish(Message::Edits(edits))) }
                     }
                     Some(Drag::Point { index, start_uv, start }) => {
                         let edits = start.edits(*index, *start_uv, uv_of(q), state.modifiers.shift());
-                        if edits.is_empty() {
-                            None
-                        } else {
-                            Some(canvas::Action::publish(Message::Edits(edits)))
-                        }
+                        if edits.is_empty() { None } else { Some(canvas::Action::publish(Message::Edits(edits))) }
                     }
                     None => {
                         // Hover: gizmo highlight and pixel probe.
@@ -858,13 +857,7 @@ mod tests {
                 state.modifiers = keyboard::Modifiers::SHIFT;
             }
             let to = from + by;
-            let events = [
-                moved(from),
-                button(from, mouse::Button::Left, true),
-                moved(from + by * 0.5),
-                moved(to),
-                button(to, mouse::Button::Left, false),
-            ];
+            let events = [moved(from), button(from, mouse::Button::Left, true), moved(from + by * 0.5), moved(to), button(to, mouse::Button::Left, false)];
             feed(app, &mut state, bounds, image, &events);
         };
         let params = |app: &App| {

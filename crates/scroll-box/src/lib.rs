@@ -11,8 +11,8 @@
 //! scrollable itself**: a box made any other way is a bar over its rows waiting to be found
 //! again.
 
-use iced::widget::scrollable::{self, Direction, Scrollable, Scrollbar};
 use iced::widget::container;
+use iced::widget::scrollable::{self, Direction, Scrollable, Scrollbar};
 use iced::{Color, Element, Shadow, border};
 
 /// How wide the bar is, and how far from what it is beside.

@@ -198,10 +198,7 @@ impl Language {
 
 pub fn compile(src: &str) -> Result<Program, ExprError> {
     if src.len() > script::MAX_SCRIPT {
-        return Err(ExprError {
-            message: format!("Expression is too long (max {} characters)", script::MAX_SCRIPT),
-            span: Span::new(0, src.len()),
-        });
+        return Err(ExprError { message: format!("Expression is too long (max {} characters)", script::MAX_SCRIPT), span: Span::new(0, src.len()) });
     }
     let tokens = lexer::tokenize(src);
     let mut parser = parser::Parser::new(&tokens);
@@ -261,8 +258,7 @@ pub(crate) fn words_read(src: &str, own: &dyn Fn(&str) -> bool) -> Vec<String> {
             let called = matches!(next, Some(TokenKind::LParen));
             let setting = matches!(next, Some(TokenKind::Assign));
             let channels = i > 0 && tokens[i - 1].kind == TokenKind::Dot;
-            if !called && !setting && !channels && !builtins::is_builtin(name) && !own(name) && !set.contains(&name.as_str()) && !vars.contains(name)
-            {
+            if !called && !setting && !channels && !builtins::is_builtin(name) && !own(name) && !set.contains(&name.as_str()) && !vars.contains(name) {
                 vars.push(name.clone());
             }
         }
@@ -391,11 +387,7 @@ pub(crate) fn eval_with(node: &Node, vars: &[Vector], rand: &dyn Fn(f64) -> f64)
         Node::Unary(UnOp::Not, a) => Vector::number(bool_f(!truthy(eval_with(a, vars, rand).c[0]))),
         Node::Binary(op, a, b) => {
             let (a, b) = (eval_with(a, vars, rand), eval_with(b, vars, rand));
-            if op.is_logical() {
-                Vector::number(apply_binary(*op, a.c[0], b.c[0]))
-            } else {
-                each(&[a, b], |x| apply_binary(*op, x[0], x[1]))
-            }
+            if op.is_logical() { Vector::number(apply_binary(*op, a.c[0], b.c[0])) } else { each(&[a, b], |x| apply_binary(*op, x[0], x[1])) }
         }
         Node::Call(Func::Rand, args) => Vector::number(rand(args.first().map_or(0.0, |k| eval_with(k, vars, rand).c[0]))),
         // What an image input is at (x, y): the variable's value (only an image differs).
@@ -449,11 +441,7 @@ fn call_vectors(func: Func, args: &[Vector]) -> Vector {
             let l = dot(&a, &a).sqrt();
             each(&[a], |x| x[0] / l)
         }
-        Func::Cross => Vector::of(&[
-            a.at(1) * b.at(2) - a.at(2) * b.at(1),
-            a.at(2) * b.at(0) - a.at(0) * b.at(2),
-            a.at(0) * b.at(1) - a.at(1) * b.at(0),
-        ]),
+        Func::Cross => Vector::of(&[a.at(1) * b.at(2) - a.at(2) * b.at(1), a.at(2) * b.at(0) - a.at(0) * b.at(2), a.at(0) * b.at(1) - a.at(1) * b.at(0)]),
         // Of numbers only.
         Func::Hash | Func::Hypot | Func::Rand | Func::Sample => {
             let values: Vec<f64> = args.iter().map(|v| v.c[0]).collect();
@@ -506,8 +494,7 @@ mod tests {
 
     fn eval(src: &str, vars: &[(&str, f64)]) -> f64 {
         let p = compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
-        let values: Vec<f64> =
-            p.vars.iter().map(|name| vars.iter().find(|(n, _)| n == name).map_or(0.0, |(_, v)| *v)).collect();
+        let values: Vec<f64> = p.vars.iter().map(|name| vars.iter().find(|(n, _)| n == name).map_or(0.0, |(_, v)| *v)).collect();
         p.eval(&values)
     }
 
@@ -741,8 +728,7 @@ mod tests {
 
     fn eval_all(src: &str, vars: &[(&str, f64)]) -> Vec<f64> {
         let p = compile(src).unwrap_or_else(|e| panic!("{src}: {e}"));
-        let values: Vec<f64> =
-            p.vars.iter().map(|name| vars.iter().find(|(n, _)| n == name).map_or(0.0, |(_, v)| *v)).collect();
+        let values: Vec<f64> = p.vars.iter().map(|name| vars.iter().find(|(n, _)| n == name).map_or(0.0, |(_, v)| *v)).collect();
         p.eval_all(&values)
     }
 

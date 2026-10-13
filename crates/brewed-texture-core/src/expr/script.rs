@@ -225,8 +225,7 @@ pub(crate) fn link(assignments: Vec<Assignment>, value: Vec<(Node, u8)>, parser:
             };
             return Err(ExprError { message: format!("'{}' takes {takes}{what}", a.name), span: a.span });
         }
-        let (values, dims): (Vec<Node>, Vec<u8>) =
-            a.values.into_iter().map(|(v, d)| (fold(remap(v, &map, &mut read, vars.len())), d)).unzip();
+        let (values, dims): (Vec<Node>, Vec<u8>) = a.values.into_iter().map(|(v, d)| (fold(remap(v, &map, &mut read, vars.len())), d)).unzip();
         set[local] = true;
         statements.push(Statement { local, values, dims, span: a.name_span });
     }
@@ -239,10 +238,7 @@ pub(crate) fn link(assignments: Vec<Assignment>, value: Vec<(Node, u8)>, parser:
 /// Read a script of the language `rules` speaks.
 pub fn compile_script(src: &str, rules: &ScriptRules) -> Result<Script, ExprError> {
     if src.len() > MAX_SCRIPT {
-        return Err(ExprError {
-            message: format!("The program is too long (at most {MAX_SCRIPT} characters)"),
-            span: Span::new(0, src.len()),
-        });
+        return Err(ExprError { message: format!("The program is too long (at most {MAX_SCRIPT} characters)"), span: Span::new(0, src.len()) });
     }
     let tokens = lexer::tokenize(src);
     let outputs: Vec<&str> = rules.outputs.iter().map(|(o, ..)| *o).collect();

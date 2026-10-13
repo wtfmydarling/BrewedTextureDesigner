@@ -64,10 +64,16 @@ fn path(glyph: Glyph) -> &'static str {
         Glyph::Back => r#"<path d="M19 12H5.5M11 6l-6 6 6 6"/>"#,
         Glyph::File => r#"<path d="M6 3.5h8.5l4 4v13H6z"/><path d="M14.5 3.5v4h4"/>"#,
         Glyph::Material => r#"<circle cx="12" cy="12" r="8.5"/><path d="M3.6 13c2.6 1.9 14.2 1.9 16.8 0M8.2 7.2c1.1-.7 2.4-1.1 3.8-1.2"/>"#,
-        Glyph::Graph => r#"<rect x="3" y="4" width="7" height="6" rx="1.5"/><rect x="14" y="14" width="7" height="6" rx="1.5"/><path d="M10 7h2.5a2 2 0 0 1 2 2v5"/>"#,
-        Glyph::Pattern => r#"<circle cx="7" cy="7.5" r="2.6"/><circle cx="16.5" cy="7" r="1.6"/><circle cx="9" cy="16.5" r="1.8"/><circle cx="16.8" cy="16" r="3.2"/>"#,
+        Glyph::Graph => {
+            r#"<rect x="3" y="4" width="7" height="6" rx="1.5"/><rect x="14" y="14" width="7" height="6" rx="1.5"/><path d="M10 7h2.5a2 2 0 0 1 2 2v5"/>"#
+        }
+        Glyph::Pattern => {
+            r#"<circle cx="7" cy="7.5" r="2.6"/><circle cx="16.5" cy="7" r="1.6"/><circle cx="9" cy="16.5" r="1.8"/><circle cx="16.8" cy="16" r="3.2"/>"#
+        }
         Glyph::Filter => r#"<path d="M4 5h16l-6.3 7.4V19l-3.4 1.5v-8.1z"/>"#,
-        Glyph::Light => r#"<circle cx="12" cy="12" r="3.8"/><path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M5.6 18.4l1.7-1.7M16.7 7.3l1.7-1.7"/>"#,
+        Glyph::Light => {
+            r#"<circle cx="12" cy="12" r="3.8"/><path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M5.6 18.4l1.7-1.7M16.7 7.3l1.7-1.7"/>"#
+        }
         Glyph::Camera => r#"<path d="M4 8.5h3.2L9 6h6l1.8 2.5H20V19H4z"/><circle cx="12" cy="13.5" r="3.3"/>"#,
         Glyph::More => r#"<circle cx="12" cy="12" r="9"/><path d="M7.9 12h.2M11.9 12h.2M15.9 12h.2" stroke-width="2.6"/>"#,
         Glyph::SortUp => r#"<path d="M8 14l4-4 4 4"/>"#,

@@ -269,10 +269,7 @@ mod tests {
     fn presets_make_the_files_engines_expect() {
         let g = Template::Pbr.graph([512, 512], crate::Precision::Half);
         let names = |preset: Preset, directx: bool| plan(&g, "Rusty Metal", preset, directx).into_iter().map(|f| f.name).collect::<Vec<_>>();
-        assert_eq!(
-            names(Preset::Outputs, false),
-            ["base_color", "base_metalness", "specular_roughness", "height", "normal", "ambient_occlusion"]
-        );
+        assert_eq!(names(Preset::Outputs, false), ["base_color", "base_metalness", "specular_roughness", "height", "normal", "ambient_occlusion"]);
         assert_eq!(names(Preset::Unreal, false), ["T_Rusty_Metal_BaseColor", "T_Rusty_Metal_Normal", "T_Rusty_Metal_ORM", "T_Rusty_Metal_Height"]);
         assert_eq!(
             names(Preset::UnityUrp, false),
@@ -296,7 +293,10 @@ mod tests {
             Source::Output { node, .. } => g.node(*node).map(|n| n.text("name").to_string()),
             Source::Value(_) => None,
         };
-        assert_eq!(orm.iter().map(usage).collect::<Vec<_>>(), [Some("ambient_occlusion".into()), Some("specular_roughness".into()), Some("base_metalness".into())]);
+        assert_eq!(
+            orm.iter().map(usage).collect::<Vec<_>>(),
+            [Some("ambient_occlusion".into()), Some("specular_roughness".into()), Some("base_metalness".into())]
+        );
         let hdrp = plan(&g, "Rusty Metal", Preset::UnityHdrp, false);
         let Planned::Pack(mask) = &hdrp[2].what else { panic!() };
         assert_eq!(mask[2], Source::Value(1.0));
@@ -325,7 +325,10 @@ mod tests {
         let names: Vec<&str> = unreal.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, ["T_Leather_BaseColor", "T_Leather_ORM", "T_Leather_Height"]);
         let source = |node, channel, invert| Source::Output { node, channel, invert };
-        assert_eq!(unreal[0].what, Planned::Pack(vec![source(diffuse, 0, false), source(diffuse, 1, false), source(diffuse, 2, false), source(opacity, 0, false)]));
+        assert_eq!(
+            unreal[0].what,
+            Planned::Pack(vec![source(diffuse, 0, false), source(diffuse, 1, false), source(diffuse, 2, false), source(opacity, 0, false)])
+        );
         let Planned::Pack(orm) = &unreal[1].what else { panic!() };
         assert_eq!(orm[1], source(gloss, 0, true), "roughness: 1 − glossiness");
         assert_eq!(unreal[2].what, Planned::Pack(vec![source(displacement, 0, false)]));

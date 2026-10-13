@@ -3,9 +3,9 @@
 
 use std::time::Duration;
 
+use brewed_texture_core::{Edit, Precision};
 use iced::widget::{button, column, container, image, mouse_area, pick_list, row, rule, space, stack, text, tooltip};
 use iced::{Alignment, Element, Length, Padding};
-use brewed_texture_core::{Edit, Precision};
 
 use crate::app::{App, Dialog, ExplorerMessage, MenuId, Message, OWN_TITLE_BAR, PreviewMessage, SettingsMessage, SubMenu, WindowAction};
 use crate::icons::{Icon, icon};
@@ -83,13 +83,8 @@ fn item<'a>(label: impl Into<String>, shortcut: impl Into<String>, message: Opti
 }
 
 pub(crate) fn separator<'a>() -> Entry<'a> {
-    let line = container(rule::horizontal(1).style(|_| rule::Style {
-        color: style::LINE,
-        radius: 0.0.into(),
-        fill_mode: rule::FillMode::Full,
-        snap: true,
-    }))
-    .padding([3, 6]);
+    let line = container(rule::horizontal(1).style(|_| rule::Style { color: style::LINE, radius: 0.0.into(), fill_mode: rule::FillMode::Full, snap: true }))
+        .padding([3, 6]);
     Entry::new(line, 0.0)
 }
 
@@ -132,13 +127,9 @@ fn recent_packages(app: &App) -> Entry<'_> {
     }
     let (title, arrow) = ("Open Recent Package", "▸");
     let label = button(
-        row![
-            text(title).size(style::TEXT_SIZE).color(style::TEXT),
-            space().width(Length::Fill),
-            text(arrow).size(style::SMALL).color(style::TEXT_DIM),
-        ]
-        .spacing(ITEM_GAP)
-        .align_y(Alignment::Center),
+        row![text(title).size(style::TEXT_SIZE).color(style::TEXT), space().width(Length::Fill), text(arrow).size(style::SMALL).color(style::TEXT_DIM),]
+            .spacing(ITEM_GAP)
+            .align_y(Alignment::Center),
     )
     .width(Length::Fill)
     .padding([4.0, ITEM_PAD])
@@ -176,11 +167,7 @@ fn file_menu(app: &App) -> Vec<Entry<'_>> {
         separator(),
         item("Save", app.key_of(Command::Save), Some(Message::Save)),
         item("Save As…", app.key_of(Command::SaveAs), Some(Message::SaveAs)),
-        item(
-            "Package History…",
-            "",
-            app.doc.path().is_some().then_some(Message::Versions(crate::app::versions::VersionsMessage::Open)),
-        ),
+        item("Package History…", "", app.doc.path().is_some().then_some(Message::Versions(crate::app::versions::VersionsMessage::Open))),
         item("Close Package", "", Some(Message::Explorer(ExplorerMessage::Close(key)))),
         separator(),
         item("Export…", app.key_of(Command::Export), Some(Message::Export(crate::app::export_dialog::ExportMessage::Open))),
@@ -244,11 +231,7 @@ fn edit_menu(app: &App) -> Vec<Entry<'_>> {
             app.key_of(Command::GraphFromSelection),
             sel(Message::GraphFromSelection),
         ),
-        item(
-            if has_selection { "Frame Selection in a Comment" } else { "Add Comment" },
-            app.key_of(Command::AddComment),
-            Some(Message::AddComment),
-        ),
+        item(if has_selection { "Frame Selection in a Comment" } else { "Add Comment" }, app.key_of(Command::AddComment), Some(Message::AddComment)),
         separator(),
         item("Settings…", app.key_of(Command::Settings), Some(Message::Settings(SettingsMessage::Open))),
     ]
@@ -392,12 +375,7 @@ pub fn window_edges_with<'a>(resize: fn(iced::window::Direction) -> Message) -> 
     let along = Length::Fixed(WINDOW_CORNER - WINDOW_EDGE);
     // Each corner is an L: as far along the top or bottom as along the side.
     let side = |top: D, middle: D, bottom: D, top_i: I, bottom_i: I| {
-        column![
-            grip(top, top_i, edge, along),
-            grip(middle, I::ResizingHorizontally, edge, Length::Fill),
-            grip(bottom, bottom_i, edge, along),
-        ]
-        .width(edge)
+        column![grip(top, top_i, edge, along), grip(middle, I::ResizingHorizontally, edge, Length::Fill), grip(bottom, bottom_i, edge, along),].width(edge)
     };
     column![
         row![
@@ -485,11 +463,7 @@ fn count(n: usize, thing: &str) -> String {
 
 /// A reading of the status bar, as long as it has to be and no longer.
 fn reading<'a>(content: String, hint: String) -> Element<'a, Message> {
-    tip(
-        text(content).size(style::SMALL).color(style::TEXT_DIM).wrapping(text::Wrapping::None),
-        hint,
-        tooltip::Position::Top,
-    )
+    tip(text(content).size(style::SMALL).color(style::TEXT_DIM).wrapping(text::Wrapping::None), hint, tooltip::Position::Top)
 }
 
 fn divider<'a>() -> Element<'a, Message> {
@@ -509,8 +483,7 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
 
     let nodes = count(app.graph().nodes.len(), "node");
     let busy = app.res.busy_since.map(|since| since.elapsed());
-    let recent: Vec<(f32, usize)> =
-        app.res.updates.iter().filter(|(at, ..)| at.elapsed() <= READING_SPAN).map(|(_, millis, n)| (*millis, *n)).collect();
+    let recent: Vec<(f32, usize)> = app.res.updates.iter().filter(|(at, ..)| at.elapsed() <= READING_SPAN).map(|(_, millis, n)| (*millis, *n)).collect();
     let graph = match busy {
         Some(for_) if app.res.slow || for_ >= COMPUTING_AFTER => {
             format!("{nodes} · computing… {}", duration(for_.as_secs_f32() * 1000.0))
@@ -568,10 +541,7 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
         ),
         None => text(gpu).size(style::SMALL).color(style::TEXT_FAINT).into(),
     };
-    let mut bar = row![container(status).clip(true).width(Length::Fill), graph]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .height(Length::Fixed(STATUS_BAR_H));
+    let mut bar = row![container(status).clip(true).width(Length::Fill), graph].spacing(8).align_y(Alignment::Center).height(Length::Fixed(STATUS_BAR_H));
     if engine {
         bar = bar.push(divider()).push(memory);
     }

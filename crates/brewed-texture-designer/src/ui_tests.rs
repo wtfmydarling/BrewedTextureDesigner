@@ -3,23 +3,22 @@
 //!
 //! With `BREWED_UI_SNAPSHOTS=<folder>` the tests also save what they draw as PNG files.
 
+use brewed_texture_core::files::Held;
+use brewed_texture_core::{Edit, NodeKind, ParamValue};
 use iced::advanced::clipboard;
 use iced::advanced::renderer::{self, Headless};
 use iced::advanced::widget::operation::{self, Operation, Outcome, focusable};
 use iced::keyboard::{self, Key};
 use iced::{Color, Element, Pixels, Point, Size, mouse, window};
 use iced_runtime::user_interface::{Cache, UserInterface};
-use brewed_texture_core::files::Held;
-use brewed_texture_core::{Edit, NodeKind, ParamValue};
 
 use crate::app::{
-    App, ColorTarget, ContextMenu, ContextTarget, Dialog, DragPayload, ExplorerMessage, GraphMessage, Message, PendingAction, PreviewMessage,
-    ScreenPick, SelectMode, StartupOptions,
+    App, ColorTarget, ContextMenu, ContextTarget, Dialog, DragPayload, ExplorerMessage, GraphMessage, Message, PendingAction, PreviewMessage, ScreenPick,
+    SelectMode, StartupOptions,
 };
 use crate::picker::{PickTarget, Shot};
 use crate::view;
 use crate::view::properties::expression::editor_id;
-
 
 type View = Box<dyn for<'a> Fn(&'a App) -> Element<'a, Message>>;
 
@@ -540,7 +539,20 @@ fn the_program_starts_on_the_home_screen() {
     // A package made from a template, in place of the blank one.
     w.send(Message::NewGraph(NewGraphMessage::Open(None)));
     w.input(&[]);
-    for said in ["New Graph", "Templates", "OpenPBR", "Base", "HDRi", "Studio", "Metallic Roughness", "Scan Processing", "Filters", "Empty", "Create graph in", "Create"] {
+    for said in [
+        "New Graph",
+        "Templates",
+        "OpenPBR",
+        "Base",
+        "HDRi",
+        "Studio",
+        "Metallic Roughness",
+        "Scan Processing",
+        "Filters",
+        "Empty",
+        "Create graph in",
+        "Create",
+    ] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
     w.snapshot("new_graph");
@@ -1551,10 +1563,7 @@ fn the_color_editor_is_a_window_of_its_own() {
         assert!(panels::find_click(&mut w, bar, |m| matches!(m, Message::ColorEditor(ColorEditorMessage::Drag))).is_some(), "its title bar");
         w.hover(Point::new(COLOR_EDITOR.width - 2.0, COLOR_EDITOR.height - 2.0));
         let pressed = w.produced(&[iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))]);
-        assert!(
-            pressed.iter().any(|m| matches!(m, Message::ColorEditor(ColorEditorMessage::Resize(window::Direction::SouthEast)))),
-            "its corner: {pressed:?}"
-        );
+        assert!(pressed.iter().any(|m| matches!(m, Message::ColorEditor(ColorEditorMessage::Resize(window::Direction::SouthEast)))), "its corner: {pressed:?}");
         w.mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
     }
     // Its × closes it (the system's close does, where the system draws the title bar).
@@ -1653,9 +1662,11 @@ fn a_gray_is_picked_in_the_editor_of_colors_and_the_color_before_comes_back() {
     assert_eq!(w.app.color_shown(&target), Some(was));
     w.send(Message::Redo);
     // The color before, under the one now: a click gives it back, a step of its own.
-    let below = panels::find_click(&mut w, iced::Rectangle::new(Point::ORIGIN, crate::view::editors::COLOR_EDITOR), |m| {
-        matches!(m, Message::Step(inner) if matches!(&**inner, Message::SetColor(_, c) if *c == was))
-    })
+    let below = panels::find_click(
+        &mut w,
+        iced::Rectangle::new(Point::ORIGIN, crate::view::editors::COLOR_EDITOR),
+        |m| matches!(m, Message::Step(inner) if matches!(&**inner, Message::SetColor(_, c) if *c == was)),
+    )
     .expect("the color it was");
     click(&mut w, below);
     assert_eq!(color(&w), was, "given back");
@@ -1880,8 +1891,8 @@ fn press(w: &mut Harness, named: keyboard::key::Named) {
 /// what they look like.
 #[test]
 fn choices_are_picked_by_their_pictures() {
-    use brewed_texture_core::nodes::NOISE_TYPES;
     use crate::app::ChoiceMenu;
+    use brewed_texture_core::nodes::NOISE_TYPES;
 
     for (width, height) in [(1680.0, 1000.0), (1000.0, 640.0)] {
         let mut w = harness!(view::root, width, height);
@@ -2024,7 +2035,6 @@ fn frame_cost() {
     println!("update {:.3} ms, draw {:.3} ms a frame", update.as_secs_f64() * 1000.0 / runs as f64, draw.as_secs_f64() * 1000.0 / runs as f64);
 }
 
-
 /// Draw one frame, as the window does at `at`, and say what comes next: what the widgets ask
 /// for, or another frame when they published anything (the runtime draws again after
 /// messages).
@@ -2111,8 +2121,7 @@ fn the_3d_view_is_lit_by_an_environment_image() {
     // (A folder of its own: the test of the files of environment images has "environment".)
     let dir = scratch("lit-by-an-image");
     let sky = dir.join("sky.hdr");
-    let pixels: Vec<image::Rgb<f32>> =
-        (0..32u32).flat_map(|y| (0..64u32).map(move |x| image::Rgb([x as f32 / 16.0, 1.0 - y as f32 / 32.0, 2.0]))).collect();
+    let pixels: Vec<image::Rgb<f32>> = (0..32u32).flat_map(|y| (0..64u32).map(move |x| image::Rgb([x as f32 / 16.0, 1.0 - y as f32 / 32.0, 2.0]))).collect();
     image::codecs::hdr::HdrEncoder::new(std::fs::File::create(&sky).unwrap()).encode(&pixels, 64, 32).unwrap();
     let (sky, missing) = (sky.display().to_string(), dir.join("missing.hdr").display().to_string());
     let read = |file: &str| P::EnvironmentRead(file.to_string(), crate::environment::load(std::path::Path::new(file)).map(std::sync::Arc::new));
@@ -2270,9 +2279,7 @@ fn feed(w: &mut Harness, event: iced::Event, window: Option<window::Id>) {
     }
     let mut messages = Vec::new();
     let cursor = w.cursor;
-    let statuses = w.frame(|ui, renderer| {
-        ui.update(std::slice::from_ref(&event), cursor, renderer, &mut clipboard::Null, &mut messages).1
-    });
+    let statuses = w.frame(|ui, renderer| ui.update(std::slice::from_ref(&event), cursor, renderer, &mut clipboard::Null, &mut messages).1);
     for m in messages.into_iter().filter(stays_inside) {
         w.send(m);
     }
@@ -2310,12 +2317,7 @@ impl Dice {
 }
 
 /// A key as the window reports it, with what it types when it types anything.
-fn key_event(
-    key: Key,
-    physical: keyboard::key::Physical,
-    modifiers: keyboard::Modifiers,
-    pressed: bool,
-) -> iced::Event {
+fn key_event(key: Key, physical: keyboard::key::Physical, modifiers: keyboard::Modifiers, pressed: bool) -> iced::Event {
     let text = match (&key, modifiers.control()) {
         (Key::Character(c), false) => Some(c.clone()),
         _ => None,
@@ -2331,13 +2333,7 @@ fn key_event(
             repeat: false,
         }
     } else {
-        keyboard::Event::KeyReleased {
-            key: key.clone(),
-            modified_key: key,
-            physical_key: physical,
-            location: keyboard::Location::Standard,
-            modifiers,
-        }
+        keyboard::Event::KeyReleased { key: key.clone(), modified_key: key, physical_key: physical, location: keyboard::Location::Standard, modifiers }
     })
 }
 
@@ -2358,15 +2354,10 @@ fn sockets(w: &Harness) -> (Vec<Point>, Vec<Point>) {
 
 /// The events of a left drag from `a` to `b` in `parts` moves.
 fn drag_events(a: Point, b: Point, parts: u64) -> Vec<iced::Event> {
-    let mut events = vec![
-        iced::Event::Mouse(mouse::Event::CursorMoved { position: a }),
-        iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
-    ];
+    let mut events = vec![iced::Event::Mouse(mouse::Event::CursorMoved { position: a }), iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))];
     for i in 1..=parts.max(1) {
         let t = i as f32 / parts.max(1) as f32;
-        events.push(iced::Event::Mouse(mouse::Event::CursorMoved {
-            position: Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t),
-        }));
+        events.push(iced::Event::Mouse(mouse::Event::CursorMoved { position: Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t) }));
     }
     events.push(iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)));
     events
@@ -2452,8 +2443,12 @@ fn broken(app: &App) -> Option<String> {
         Some(ColorTarget::Param(id, _) | ColorTarget::GradientStop(id, _)) if !g.contains(*id) => {
             return Some(format!("a color picker is open for node {}, which is not in the graph", id.0));
         }
-        Some(ColorTarget::Comment(id)) if g.comment(*id).is_none() => return Some(format!("a color picker is open for comment {id:?}, which is not in the graph")),
-        Some(ColorTarget::Variable(name, _)) if !variable(name) => return Some(format!("a color picker is open for the input value {name}, which the graph has not")),
+        Some(ColorTarget::Comment(id)) if g.comment(*id).is_none() => {
+            return Some(format!("a color picker is open for comment {id:?}, which is not in the graph"));
+        }
+        Some(ColorTarget::Variable(name, _)) if !variable(name) => {
+            return Some(format!("a color picker is open for the input value {name}, which the graph has not"));
+        }
         _ => {}
     }
     if let Some((name, _)) = ui.renaming_var.as_ref().filter(|(name, _)| !variable(name)) {
@@ -2584,16 +2579,11 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
         let what: String;
         let roll = dice.below(1000);
         let here = w.cursor.position().unwrap_or(Point::ORIGIN);
-        let anywhere =
-            |dice: &mut Dice| Point::new(dice.float(-10.0, size.width + 10.0), dice.float(-10.0, size.height + 10.0));
+        let anywhere = |dice: &mut Dice| Point::new(dice.float(-10.0, size.width + 10.0), dice.float(-10.0, size.height + 10.0));
         let moved = |p: Point| iced::Event::Mouse(mouse::Event::CursorMoved { position: p });
         match roll {
             0..=299 => {
-                let p = if dice.chance(20) {
-                    Point::new(here.x + dice.float(-30.0, 30.0), here.y + dice.float(-30.0, 30.0))
-                } else {
-                    anywhere(&mut dice)
-                };
+                let p = if dice.chance(20) { Point::new(here.x + dice.float(-30.0, 30.0), here.y + dice.float(-30.0, 30.0)) } else { anywhere(&mut dice) };
                 what = format!("move to {:.0},{:.0}", p.x, p.y);
                 events.push(moved(p));
             }
@@ -2618,8 +2608,7 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
                 events.insert(0, moved(p));
             }
             500..=599 => {
-                let button = [mouse::Button::Left, mouse::Button::Left, mouse::Button::Middle, mouse::Button::Right]
-                    [dice.below(4) as usize];
+                let button = [mouse::Button::Left, mouse::Button::Left, mouse::Button::Middle, mouse::Button::Right][dice.below(4) as usize];
                 let (a, b) = (anywhere(&mut dice), anywhere(&mut dice));
                 what = format!("{button:?} drag {:.0},{:.0} to {:.0},{:.0}", a.x, a.y, b.x, b.y);
                 events.push(moved(a));
@@ -2661,12 +2650,8 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
             }
             830..=909 => {
                 let k = named[dice.below(named.len() as u64) as usize];
-                let m = [
-                    keyboard::Modifiers::default(),
-                    keyboard::Modifiers::default(),
-                    keyboard::Modifiers::SHIFT,
-                    keyboard::Modifiers::CTRL,
-                ][dice.below(4) as usize];
+                let m = [keyboard::Modifiers::default(), keyboard::Modifiers::default(), keyboard::Modifiers::SHIFT, keyboard::Modifiers::CTRL]
+                    [dice.below(4) as usize];
                 what = format!("{m:?} {k:?}");
                 let physical = Physical::Unidentified(keyboard::key::NativeCode::Unidentified);
                 events.push(key_event(Key::Named(k), physical, m, true));
@@ -2674,11 +2659,7 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
             }
             910..=959 => {
                 let (c, code) = shortcut_keys[dice.below(shortcut_keys.len() as u64) as usize];
-                let m = if dice.chance(20) {
-                    keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT
-                } else {
-                    keyboard::Modifiers::CTRL
-                };
+                let m = if dice.chance(20) { keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT } else { keyboard::Modifiers::CTRL };
                 what = format!("{m:?} {c}");
                 events.push(key_event(Key::Character(c.to_string().into()), Physical::Code(code), m, true));
                 events.push(key_event(Key::Character(c.to_string().into()), Physical::Code(code), m, false));
@@ -2693,10 +2674,7 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
                 events.push(iced::Event::Window(window::Event::Resized(new)));
             }
             970..=979 => {
-                let path =
-                    [image.clone(), broken_file.clone(), files.join("missing.png"), files.clone(), graph_file.clone()]
-                        [dice.below(5) as usize]
-                        .clone();
+                let path = [image.clone(), broken_file.clone(), files.join("missing.png"), files.clone(), graph_file.clone()][dice.below(5) as usize].clone();
                 what = format!("drop {}", path.display());
                 events.push(iced::Event::Window(window::Event::FileDropped(path)));
             }
@@ -2821,11 +2799,7 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
         let failure = match result {
             Err(panic) => Some(format!(
                 "PANIC: {}",
-                panic
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
-                    .unwrap_or_default()
+                panic.downcast_ref::<String>().cloned().or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()
             )),
             Ok(Some(state)) => Some(format!("BROKEN: {state}")),
             // Every thousand steps: what is saved reads back as it was, and every step undone
@@ -2867,10 +2841,7 @@ fn monkey(seed: u64, steps: usize) -> Result<usize, String> {
             // (What the window showed then, when snapshots are asked for.)
             w.snapshot(&format!("monkey_{seed}_failed"));
             let _ = std::fs::remove_dir_all(&files);
-            return Err(format!(
-                "seed {seed}, step {step}: {failure}\nlast steps:\n{}",
-                log.iter().cloned().collect::<Vec<_>>().join("\n")
-            ));
+            return Err(format!("seed {seed}, step {step}: {failure}\nlast steps:\n{}", log.iter().cloned().collect::<Vec<_>>().join("\n")));
         }
     }
     let _ = std::fs::remove_dir_all(&files);
@@ -2905,7 +2876,10 @@ fn round_trips(w: &mut Harness, folder: &std::path::Path) -> Option<String> {
                     format!("graph '{}': {}", a.name, nodes.unwrap_or_else(|| "not its nodes".into()))
                 })
                 .collect();
-            return Some(format!("the package read back is not what was saved: {}", if differs.is_empty() { "not its graphs".into() } else { differs.join("; ") }));
+            return Some(format!(
+                "the package read back is not what was saved: {}",
+                if differs.is_empty() { "not its graphs".into() } else { differs.join("; ") }
+            ));
         }
         Err(e) => return Some(format!("the package saved cannot be read: {e}")),
     }
@@ -3166,9 +3140,7 @@ fn packages_and_graphs_used_as_nodes() {
 #[test]
 fn nodes_made_a_graph_of_their_own() {
     let mut w = harness!(view::root, 1680.0, 1000.0);
-    let of_kinds = |app: &App, kinds: &[NodeKind]| -> Vec<_> {
-        app.graph().nodes.iter().filter(|n| kinds.contains(&n.kind)).map(|n| n.id).collect()
-    };
+    let of_kinds = |app: &App, kinds: &[NodeKind]| -> Vec<_> { app.graph().nodes.iter().filter(|n| kinds.contains(&n.kind)).map(|n| n.id).collect() };
     // The two Blends, and the Levels and the Blur between them; but the Gradient Map and the
     // Histogram Scan are between them too.
     w.app.ui.selection = of_kinds(&w.app, &[NodeKind::BLEND, NodeKind::LEVELS, NodeKind::BLUR]).into_iter().collect();
@@ -3342,10 +3314,10 @@ fn the_explorer_and_its_menus() {
 /// it is dragged: onto itself, or onto a graph it uses; nor is it pasted there.
 #[test]
 fn image_inputs_are_input_values_and_drags_say_what_cannot_be() {
+    use crate::app::FileTarget;
     use brewed_texture_core::ResourceKind;
     use brewed_texture_core::graph::{SocketRef, param_socket_key};
     use brewed_texture_core::nodes::ImageKind;
-    use crate::app::FileTarget;
 
     let mut w = harness!(view::root, 1680.0, 1000.0);
     // Pictures chosen are linked, as the settings may say (held by the package, as they say by
@@ -3573,10 +3545,7 @@ fn pictures_of_files_are_made_a_few_at_a_time() {
         .collect();
     let key = w.app.doc_key;
     w.send(Message::Explorer(ExplorerMessage::FilesPicked(key, files.clone())));
-    let looks = files
-        .iter()
-        .map(|p| crate::previews::Look { path: p.display().to_string(), there: true, modified: None, bytes: Some(64) })
-        .collect();
+    let looks = files.iter().map(|p| crate::previews::Look { path: p.display().to_string(), there: true, modified: None, bytes: Some(64) }).collect();
     w.send(Message::FilesLooked(looks));
     assert_eq!((w.app.res.previews_making, w.app.res.previews_waiting.len()), (crate::previews::AT_ONCE, 5 - crate::previews::AT_ONCE));
     let first = files[0].display().to_string();

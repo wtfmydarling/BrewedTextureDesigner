@@ -4,9 +4,9 @@ pub mod lights;
 pub mod overlay;
 pub mod render;
 
+use brewed_texture_core::nodes::Role;
 use iced::widget::{button, center, column, container, row, shader, stack, text};
 use iced::{Alignment, Element, Length};
-use brewed_texture_core::nodes::Role;
 
 use crate::app::{App, Message, PreviewMessage};
 use crate::icons::{Icon, icon};
@@ -25,16 +25,20 @@ fn toolbar_2d(app: &App) -> Element<'_, Message> {
         Some(n) => crate::view::fitted(n, style::TEXT_SIZE, style::ui_font(), Some(style::TEXT)),
         None => crate::view::fitted("double-click a node to show it here", style::SMALL, style::ui_font(), Some(style::TEXT_DIM)),
     };
-    let mut bar = row![icon(Icon::Image, 14.0, style::TEXT_DIM), container(name).width(Length::Fill).clip(true)]
-    .spacing(6)
-    .align_y(Alignment::Center);
+    let mut bar = row![icon(Icon::Image, 14.0, style::TEXT_DIM), container(name).width(Length::Fill).clip(true)].spacing(6).align_y(Alignment::Center);
     // In a narrow view, the buttons closer together; narrower, the channels on a line of their
     // own under the others.
     let room = crate::view::pane_width(app, crate::app::Pane::View2D);
     let (narrow, under) = (room < NARROW_2D, room < TWO_LINES_2D);
     let pad = if narrow { 4.0 } else { 6.0 };
     // (On their own line, as close as a strip of segments: it fits the narrowest view.)
-    let (channel_pad, channel_gap) = if under { (3.0, 0) } else if narrow { (pad, 2) } else { (pad, 6) };
+    let (channel_pad, channel_gap) = if under {
+        (3.0, 0)
+    } else if narrow {
+        (pad, 2)
+    } else {
+        (pad, 6)
+    };
     let mut channels = row![].spacing(channel_gap).align_y(Alignment::Center);
     for (i, name) in CHANNELS.iter().enumerate() {
         let active = p.channel == i as u32;
@@ -220,9 +224,9 @@ fn content_2d(app: &App) -> Element<'_, Message> {
     if let Some(h) = hint {
         layers.push(center(text(h).size(15).color(style::TEXT_FAINT)).into());
     }
-    if let Some(e) = p.node.and_then(|id| {
-        app.eval.node(id).and_then(|n| n.error().map(str::to_string)).or_else(|| app.res.reports.get(&id).and_then(|r| r.error.clone()))
-    }) {
+    if let Some(e) =
+        p.node.and_then(|id| app.eval.node(id).and_then(|n| n.error().map(str::to_string)).or_else(|| app.res.reports.get(&id).and_then(|r| r.error.clone())))
+    {
         layers.push(container(text(e).size(style::TEXT_SIZE).color(style::ERROR)).padding(8).into());
     }
     container(stack(layers)).style(style::canvas_frame).width(Length::Fill).height(Length::Fill).into()

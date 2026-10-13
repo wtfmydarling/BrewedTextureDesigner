@@ -7,24 +7,24 @@
 pub mod expression;
 mod levels;
 
-use iced::widget::{button, column, container, mouse_area, pick_list, row, space, text, text_input, toggler, tooltip};
-use iced::{Alignment, Element, Length};
 use brewed_texture_core::graph::{Node, NodeId, param_socket_key};
 use brewed_texture_core::nodes::{NodeKind, ParamDef, ParamKind};
 use brewed_texture_core::package::Package;
 use brewed_texture_core::{Curve, DataType, Edit, Gradient, GraphAttributes, Interpolation, ParamValue, Tiling, Value};
+use iced::widget::{button, column, container, mouse_area, pick_list, row, space, text, text_input, toggler, tooltip};
+use iced::{Alignment, Element, Length};
 
 use crate::app::{App, ColorTarget, FileTarget, Message};
 use crate::icons::{Icon, icon};
-use crate::style;
-use crate::widget::scroll::scroll_box;
 use crate::picker::PickTarget;
+use crate::style;
 use crate::view::editors::{eyedropper, file_field};
-use crate::view::{tip, section};
+use crate::view::{section, tip};
 use crate::widget::curve::curve_editor;
 use crate::widget::gradient::gradient_editor;
 use crate::widget::number::number;
 use crate::widget::outside::outside;
+use crate::widget::scroll::scroll_box;
 use crate::widget::{TOGGLE_W, expose_toggle, socket_icon};
 
 /// How wide the names of the rows are at most, and at least: as wide as the panel has room for
@@ -147,8 +147,8 @@ fn graph_view(app: &App, label_w: f32) -> Element<'_, Message> {
             "What the graph says of itself: in the Library, where its package is in a library folder (Settings → Library), \
              under its Category (none: under its package's name), and in the tips of the nodes that use it."
         )
-            .size(style::SMALL)
-            .color(style::TEXT_DIM),
+        .size(style::SMALL)
+        .color(style::TEXT_DIM),
         row![
             label("Description"),
             text_input("What it makes", &a.description)
@@ -202,15 +202,10 @@ fn comment_view(app: &App, id: brewed_texture_core::CommentId, label_w: f32) -> 
     };
     container(
         column![
-            row![
-                container(space().width(12).height(12)).style(style::chip(style::color_of(comment.color))),
-                text("Comment").size(16).font(style::bold()),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-            text("A frame around a group of nodes; drag its title bar to move them together.")
-                .size(style::SMALL)
-                .color(style::TEXT_DIM),
+            row![container(space().width(12).height(12)).style(style::chip(style::color_of(comment.color))), text("Comment").size(16).font(style::bold()),]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            text("A frame around a group of nodes; drag its title bar to move them together.").size(style::SMALL).color(style::TEXT_DIM),
             text_input("What are these nodes for?", &comment.text)
                 .id(comment_text_id())
                 .on_input(move |t| Message::Edit(Edit::SetCommentText { id, text: t }))
@@ -226,10 +221,7 @@ fn comment_view(app: &App, id: brewed_texture_core::CommentId, label_w: f32) -> 
             .align_y(Alignment::Center),
             crate::view::editors::color_channels(app, ColorTarget::Comment(id), comment.color, false, label_w + 6.0, 0.0),
             row![
-                button(text("Delete Comment").size(style::SMALL))
-                    .padding([3, 8])
-                    .style(style::button)
-                    .on_press(Message::Edit(Edit::RemoveComments(vec![id]))),
+                button(text("Delete Comment").size(style::SMALL)).padding([3, 8]).style(style::button).on_press(Message::Edit(Edit::RemoveComments(vec![id]))),
             ],
         ]
         .spacing(10),
@@ -250,9 +242,10 @@ fn multi_view<'a>(app: &'a App, ids: &[NodeId], n: usize) -> Element<'a, Message
             button(text(*label).size(style::SMALL).wrapping(text::Wrapping::None))
                 .padding([3, 7])
                 .style(style::toggle_button(all == Some(i as u32)))
-                .on_press_maybe((!nodes.is_empty()).then(|| {
-                    step(Message::Edit(Edit::SetParamMany { nodes: nodes.clone(), key: key.into(), value: ParamValue::Enum(i as u32) }))
-                }))
+                .on_press_maybe(
+                    (!nodes.is_empty())
+                        .then(|| step(Message::Edit(Edit::SetParamMany { nodes: nodes.clone(), key: key.into(), value: ParamValue::Enum(i as u32) }))),
+                )
                 .into()
         });
         iced::widget::Row::with_children(buttons).spacing(4).wrap().vertical_spacing(4)
@@ -346,13 +339,9 @@ fn node_view(app: &App, id: NodeId, label_w: f32) -> Element<'_, Message> {
         Some(instance) if !instance.interface.description.is_empty() => instance.interface.description.as_str(),
         _ => d.description,
     };
-    let mut col = column![
-        head,
-        text(kind).size(style::SMALL).color(style::TEXT_FAINT),
-        text(about).size(style::SMALL).color(style::TEXT_DIM),
-        messages(app, node),
-    ]
-    .spacing(6);
+    let mut col =
+        column![head, text(kind).size(style::SMALL).color(style::TEXT_FAINT), text(about).size(style::SMALL).color(style::TEXT_DIM), messages(app, node),]
+            .spacing(6);
     if node.instance.is_some() {
         col = col.push(
             row![
@@ -394,10 +383,7 @@ fn node_view(app: &App, id: NodeId, label_w: f32) -> Element<'_, Message> {
         col = col.push(section("3D View"));
         col = col.push(
             row![
-                toggler(lights)
-                    .on_toggle(move |on| Message::Preview(crate::app::PreviewMessage::LightBy(on.then_some(id))))
-                    .size(16)
-                    .style(style::toggler),
+                toggler(lights).on_toggle(move |on| Message::Preview(crate::app::PreviewMessage::LightBy(on.then_some(id)))).size(16).style(style::toggler),
                 text("Light the 3D view with this panorama").size(style::SMALL),
             ]
             .spacing(8)
@@ -422,7 +408,11 @@ fn node_view(app: &App, id: NodeId, label_w: f32) -> Element<'_, Message> {
     }
     if node.kind == NodeKind::TRANSFORM_2D {
         col = col.push(section("Gizmo"));
-        col = col.push(text("Drag in the 2D view: the center moves, the ring rotates, the handles scale; Shift snaps rotation and keeps proportions.").size(style::SMALL).color(style::TEXT_DIM));
+        col = col.push(
+            text("Drag in the 2D view: the center moves, the ring rotates, the handles scale; Shift snaps rotation and keeps proportions.")
+                .size(style::SMALL)
+                .color(style::TEXT_DIM),
+        );
         let reset = ["offset", "rotation", "scale", "pivot"]
             .iter()
             .filter(|k| !node.is_exposed(k))
@@ -452,8 +442,7 @@ fn variable_section<'a>(app: &'a App, node: &'a Node, label_w: f32) -> Element<'
     let current = node.variable.clone().unwrap_or_default();
     let ty = node.variable_type();
     let editing = app.ui.binding.as_ref().filter(|(n, _)| *n == id).map(|(_, t)| t.clone());
-    let others: Vec<String> =
-        app.graph().variables.iter().filter(|v| Some(v.ty) == ty && v.name != current).map(|v| v.name.clone()).collect();
+    let others: Vec<String> = app.graph().variables.iter().filter(|v| Some(v.ty) == ty && v.name != current).map(|v| v.name.clone()).collect();
     let mut col = column![
         section("Input value"),
         // (Their fields where the fields of parameters are: after a gap from their names.)
@@ -472,9 +461,7 @@ fn variable_section<'a>(app: &'a App, node: &'a Node, label_w: f32) -> Element<'
         ]
         .spacing(6)
         .align_y(Alignment::Center),
-        text("Enter a name to use another value. Input nodes with the same name share one value.")
-            .size(style::SMALL)
-            .color(style::TEXT_FAINT),
+        text("Enter a name to use another value. Input nodes with the same name share one value.").size(style::SMALL).color(style::TEXT_FAINT),
     ]
     .spacing(6);
     if !others.is_empty() {
@@ -514,7 +501,9 @@ fn variable_section<'a>(app: &'a App, node: &'a Node, label_w: f32) -> Element<'
             ),
         };
         if !color {
-            col = col.push(row![text("Value").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)), editor].spacing(6).align_y(Alignment::Center));
+            col = col.push(
+                row![text("Value").size(style::SMALL).color(style::TEXT_DIM).width(Length::Fixed(label_w)), editor].spacing(6).align_y(Alignment::Center),
+            );
         }
         col = col.push(crate::view::inputs::details(app, var, false, label_w));
     }
@@ -614,7 +603,8 @@ fn not_connected<'a>(ty: DataType, uses: String) -> Element<'a, Message> {
         // (Beside the socket.)
         let (font, room) = (style::ui_font(), room.width - 12.0 - 6.0);
         let fits = |said: &String| crate::view::text_width_in(said, style::SMALL, font) <= room;
-        let shown = [whole.clone(), format!("uses {uses}"), uses.clone()].into_iter().find(fits).unwrap_or_else(|| crate::view::cut(&uses, style::SMALL, font, room));
+        let shown =
+            [whole.clone(), format!("uses {uses}"), uses.clone()].into_iter().find(fits).unwrap_or_else(|| crate::view::cut(&uses, style::SMALL, font, room));
         let short = shown != whole;
         let line = row![socket_icon(ty, false, 12.0, style::WARNING), text(shown).size(style::SMALL).color(style::WARNING).wrapping(text::Wrapping::None)]
             .spacing(6)
@@ -685,9 +675,13 @@ fn param_row<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, index: usize, l
     let hint = if not_applicable {
         "Value nodes produce numbers, not images: tiling does not apply to them".to_string()
     } else if changed {
-        format!("{}
+        format!(
+            "{}
 
-Changed — middle-click the row to put {} back", pd.tooltip, shown(&pd, &default))
+Changed — middle-click the row to put {} back",
+            pd.tooltip,
+            shown(&pd, &default)
+        )
     } else {
         pd.tooltip.to_string()
     };
@@ -706,8 +700,7 @@ Changed — middle-click the row to put {} back", pd.tooltip, shown(&pd, &defaul
     let toggle = expose_toggle(
         pd.can_expose().then(|| pd.socket(&slot.value).map(|(ty, _)| ty)).flatten(),
         exposed,
-        (pd.can_expose() && !not_applicable)
-            .then(|| Message::Edit(Edit::SetExposed { node: id, key: pd.key.to_string(), exposed: !exposed })),
+        (pd.can_expose() && !not_applicable).then(|| Message::Edit(Edit::SetExposed { node: id, key: pd.key.to_string(), exposed: !exposed })),
     );
     // The editor fills the row, so the expose toggles line up whatever the editor's own width
     // (a toggler, for instance, is narrow).
@@ -782,11 +775,9 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
             .spacing(4)
             .into()
         }
-        (ParamKind::Bool { .. }, ParamValue::Bool(b)) => toggler(*b)
-            .on_toggle(move |x| set(id, key, ParamValue::Bool(x)))
-            .size(16)
-            .style(style::toggler)
-            .into(),
+        (ParamKind::Bool { .. }, ParamValue::Bool(b)) => {
+            toggler(*b).on_toggle(move |x| set(id, key, ParamValue::Bool(x))).size(16).style(style::toggler).into()
+        }
         // (Its channels under the row: see `param_row`.)
         (ParamKind::Color { .. }, ParamValue::Color(c)) => {
             crate::view::editors::color_field(app, ColorTarget::Param(id, key.to_string()), *c, node.param_gray(&pd))
@@ -820,21 +811,26 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
             let (none, color) = graph_picture(node, key, &ParamValue::Text(String::new()), app.doc.package());
             file_field(app, FileTarget::Param(id, key.to_string()), none, color)
         }
-        (ParamKind::Text { .. }, ParamValue::Text(s)) => text_input("", s)
-            .on_input(move |t| set(id, key, ParamValue::Text(t)))
-            .size(style::TEXT_SIZE)
-            .padding([3, 6])
-            .style(style::text_input)
-            .into(),
+        (ParamKind::Text { .. }, ParamValue::Text(s)) => {
+            text_input("", s).on_input(move |t| set(id, key, ParamValue::Text(t))).size(style::TEXT_SIZE).padding([3, 6]).style(style::text_input).into()
+        }
         (ParamKind::Curve { .. }, ParamValue::Curve(c)) => row![
             space().width(Length::Fill),
             tip(
-                button(icon(Icon::Reverse, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(set(id, key, ParamValue::Curve(c.inverted())))),
+                button(icon(Icon::Reverse, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(set(
+                    id,
+                    key,
+                    ParamValue::Curve(c.inverted())
+                ))),
                 "Upside down: dark for light",
                 tooltip::Position::Top,
             ),
             tip(
-                button(icon(Icon::Reset, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(set(id, key, ParamValue::Curve(Curve::default())))),
+                button(icon(Icon::Reset, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(set(
+                    id,
+                    key,
+                    ParamValue::Curve(Curve::default())
+                ))),
                 "Straight: every value as it is",
                 tooltip::Position::Top,
             ),
@@ -845,14 +841,12 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
         (ParamKind::Gradient { .. }, ParamValue::Gradient(g)) => {
             let interpolation = g.interpolation;
             let g2 = g.clone();
-            pick_list(Interpolation::ALL, Some(interpolation), move |i| {
-                set(id, key, ParamValue::Gradient(Gradient { interpolation: i, ..g2.clone() }))
-            })
-            .width(Length::Fill)
-            .text_size(style::TEXT_SIZE)
-            .padding([3, 6])
-            .style(style::pick_list)
-            .into()
+            pick_list(Interpolation::ALL, Some(interpolation), move |i| set(id, key, ParamValue::Gradient(Gradient { interpolation: i, ..g2.clone() })))
+                .width(Length::Fill)
+                .text_size(style::TEXT_SIZE)
+                .padding([3, 6])
+                .style(style::pick_list)
+                .into()
         }
         _ => text(format!("{value:?}")).size(style::SMALL).into(),
     }
@@ -862,13 +856,8 @@ fn editor<'a>(app: &'a App, node: &'a Node, pd: ParamDef<'a>, value: &'a ParamVa
 fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'a str, g: &'a Gradient) -> Element<'a, Message> {
     let id = node.id;
     let selected = app.ui.gradient_stop.get(&(id, key.to_string())).copied().filter(|i| *i < g.stops.len());
-    let editor = gradient_editor(
-        g,
-        selected,
-        move |g| set(id, key, ParamValue::Gradient(g)),
-        move |i| Message::GradientStop(id, key.to_string(), i),
-    )
-    .on_release(Message::Seal);
+    let editor = gradient_editor(g, selected, move |g| set(id, key, ParamValue::Gradient(g)), move |i| Message::GradientStop(id, key.to_string(), i))
+        .on_release(Message::Seal);
     let tools = row![
         eyedropper(
             PickTarget::Gradient(id, key.to_string()),
@@ -880,15 +869,21 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'a str, g: &'a Gradien
         tip(
             // (The stop selected stays selected, where it is now: the one at its place was
             // selected instead, and its color shown.)
-            button(icon(Icon::Reverse, 14.0, style::TEXT_DIM))
-                .padding(4)
-                .style(style::button)
-                .on_press(step(Message::SetGradient(id, key.to_string(), g.reversed(), selected.map(|i| g.stops.len() - 1 - i)))),
+            button(icon(Icon::Reverse, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(Message::SetGradient(
+                id,
+                key.to_string(),
+                g.reversed(),
+                selected.map(|i| g.stops.len() - 1 - i)
+            ))),
             "Reverse",
             tooltip::Position::Top,
         ),
         tip(
-            button(icon(Icon::Distribute, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(set(id, key, ParamValue::Gradient(g.distributed())))),
+            button(icon(Icon::Distribute, 14.0, style::TEXT_DIM)).padding(4).style(style::button).on_press(step(set(
+                id,
+                key,
+                ParamValue::Gradient(g.distributed())
+            ))),
             "Spread the stops evenly",
             tooltip::Position::Top,
         ),
@@ -928,9 +923,7 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'a str, g: &'a Gradien
                     button(icon(Icon::Trash, 14.0, if removable { style::TEXT_DIM } else { style::TEXT_FAINT }))
                         .padding(4)
                         .style(style::button)
-                        .on_press_maybe(removable.then(|| {
-                            step(Message::SetGradient(id, key.to_string(), removed.clone(), Some(i.saturating_sub(1))))
-                        })),
+                        .on_press_maybe(removable.then(|| { step(Message::SetGradient(id, key.to_string(), removed.clone(), Some(i.saturating_sub(1)))) })),
                     "Remove the stop (or drag it down, off the ramp)",
                     tooltip::Position::Top,
                 ),
@@ -951,11 +944,7 @@ fn gradient_block<'a>(app: &'a App, node: &'a Node, key: &'a str, g: &'a Gradien
         );
         col = col.push(crate::view::editors::color_channels(app, target, stop.color, false, STOP_LABEL_W + 6.0, 0.0));
     } else {
-        col = col.push(
-            text("Click the ramp to add a stop, or a handle to change its color and position.")
-                .size(style::SMALL)
-                .color(style::TEXT_FAINT),
-        );
+        col = col.push(text("Click the ramp to add a stop, or a handle to change its color and position.").size(style::SMALL).color(style::TEXT_FAINT));
     }
     container(col).padding(iced::Padding { top: 2.0, right: 0.0, bottom: 4.0, left: 0.0 }).into()
 }

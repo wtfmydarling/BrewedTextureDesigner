@@ -58,14 +58,7 @@ impl<Message> Widget<Message, iced::Theme, iced::Renderer> for Blind<'_, Message
         self.content.as_widget_mut().update(&mut tree.children[0], event, layout, cursor, renderer, clipboard, shell, viewport);
     }
 
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &iced::Renderer,
-    ) -> mouse::Interaction {
+    fn mouse_interaction(&self, tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle, renderer: &iced::Renderer) -> mouse::Interaction {
         self.content.as_widget().mouse_interaction(&tree.children[0], layout, self.cursor(cursor), viewport, renderer)
     }
 

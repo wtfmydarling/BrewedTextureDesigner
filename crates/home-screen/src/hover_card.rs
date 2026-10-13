@@ -141,14 +141,7 @@ impl<'a, Message: 'a> Widget<Message, iced::Theme, iced::Renderer> for HoverCard
         }
     }
 
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &iced::Renderer,
-    ) -> mouse::Interaction {
+    fn mouse_interaction(&self, tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle, renderer: &iced::Renderer) -> mouse::Interaction {
         self.anchor.as_widget().mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
     }
 

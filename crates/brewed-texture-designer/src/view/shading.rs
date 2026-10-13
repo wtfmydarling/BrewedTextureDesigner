@@ -361,7 +361,12 @@ impl Material {
             [MAX_INPUTS as u32, 1],
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
         );
-        let lut = texture("brewed 3d lut", wgpu::TextureFormat::Rgba16Float, [LUT_SIDE as u32; 2], wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
+        let lut = texture(
+            "brewed 3d lut",
+            wgpu::TextureFormat::Rgba16Float,
+            [LUT_SIDE as u32; 2],
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
         let table: Vec<f16> = lut_table().iter().flatten().map(|v| f16::from_f32(*v)).collect();
         queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &lut, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
@@ -369,7 +374,8 @@ impl Material {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(LUT_SIDE as u32 * 8), rows_per_image: Some(LUT_SIDE as u32) },
             wgpu::Extent3d { width: LUT_SIDE as u32, height: LUT_SIDE as u32, depth_or_array_layers: 1 },
         );
-        let nothing = texture("brewed 3d no map", wgpu::TextureFormat::Rgba8Unorm, [1, 1], wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
+        let nothing =
+            texture("brewed 3d no map", wgpu::TextureFormat::Rgba8Unorm, [1, 1], wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &nothing, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             &[0, 0, 0, 255],
@@ -508,7 +514,14 @@ impl Material {
     }
 
     /// `input` drawn by `pipeline` over all of `output`.
-    fn draw(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::RenderPipeline, input: &wgpu::TextureView, output: &wgpu::TextureView) {
+    fn draw(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        pipeline: &wgpu::RenderPipeline,
+        input: &wgpu::TextureView,
+        output: &wgpu::TextureView,
+    ) {
         let group = self.group(device, input);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("brewed 3d material extra"),

@@ -3,13 +3,13 @@
 
 use std::f32::consts::PI;
 
+use brewed_texture_core::{Gradient, GradientStop, Interpolation};
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Renderer as _};
 use iced::advanced::widget::{Tree, Widget, tree};
 use iced::advanced::{Clipboard, Shell};
 use iced::gradient::Linear;
 use iced::{Background, Border, Color, Element, Event, Gradient as Fill, Length, Point, Radians, Rectangle, Size, mouse};
-use brewed_texture_core::{Gradient, GradientStop, Interpolation};
 
 use crate::style;
 use crate::widget::color::checker;
@@ -34,13 +34,7 @@ pub fn gradient_editor<'a, Message>(
     on_change: impl Fn(Gradient) -> Message + 'a,
     on_select: impl Fn(usize) -> Message + 'a,
 ) -> GradientEditor<'a, Message> {
-    GradientEditor {
-        gradient: gradient.normalized(),
-        selected,
-        on_change: Box::new(on_change),
-        on_select: Box::new(on_select),
-        on_release: None,
-    }
+    GradientEditor { gradient: gradient.normalized(), selected, on_change: Box::new(on_change), on_select: Box::new(on_select), on_release: None }
 }
 
 impl<Message> GradientEditor<'_, Message> {
@@ -102,7 +96,6 @@ impl<Message> GradientEditor<'_, Message> {
             hit.contains(p)
         })
     }
-
 }
 
 /// `g` with its stop `index` moved to `pos`, and the stop's new index.
@@ -279,12 +272,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for GradientEd
                 }
             }
         }
-        quad(
-            renderer,
-            b,
-            Color::TRANSPARENT,
-            Border { color: style::BORDER, width: 1.0, radius: 2.0.into() },
-        );
+        quad(renderer, b, Color::TRANSPARENT, Border { color: style::BORDER, width: 1.0, radius: 2.0.into() });
 
         // Handles, the selected one on top.
         let mut order: Vec<usize> = (0..stops.len()).collect();
@@ -304,11 +292,7 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for GradientEd
             if removing {
                 fill = style::alpha(fill, 0.3);
             }
-            let border = Border {
-                color: if selected { style::ACCENT } else { style::gray(20) },
-                width: if selected { 2.0 } else { 1.0 },
-                radius: 3.0.into(),
-            };
+            let border = Border { color: if selected { style::ACCENT } else { style::gray(20) }, width: if selected { 2.0 } else { 1.0 }, radius: 3.0.into() };
             quad(renderer, r, fill, border);
         }
     }

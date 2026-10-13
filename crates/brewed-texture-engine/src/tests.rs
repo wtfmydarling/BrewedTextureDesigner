@@ -139,8 +139,7 @@ fn blur_preserves_mean_with_tiling() {
     let out = eval_read(&mut e, &g, blur);
     let (a, b) = (mean(&src), mean(&out));
     assert!((a - b).abs() < 0.01, "mean {a} vs {b}");
-    let var =
-        |d: &[f32], m: f64| d.iter().step_by(4).map(|v| (*v as f64 - m).powi(2)).sum::<f64>() / (RES * RES) as f64;
+    let var = |d: &[f32], m: f64| d.iter().step_by(4).map(|v| (*v as f64 - m).powi(2)).sum::<f64>() / (RES * RES) as f64;
     assert!(var(&out, b) < var(&src, a) * 0.05);
 
     // Directional blur also keeps the mean (it wraps around the tiling borders).
@@ -565,8 +564,11 @@ fn tile_sampler_places_patterns_by_maps() {
     }
     set(&mut g, t, "scale", ParamValue::Float(1.0));
     let fine = eval_read(&mut e, &g, t);
-    let inner: Vec<f32> =
-        (0..RES).flat_map(|y| (0..RES).map(move |x| (x, y))).filter(|(x, y)| (x % 8).abs_diff(4) < 3 && (y % 8).abs_diff(4) < 3).map(|(x, y)| pixel(&fine, x, y)[0]).collect();
+    let inner: Vec<f32> = (0..RES)
+        .flat_map(|y| (0..RES).map(move |x| (x, y)))
+        .filter(|(x, y)| (x % 8).abs_diff(4) < 3 && (y % 8).abs_diff(4) < 3)
+        .map(|(x, y)| pixel(&fine, x, y)[0])
+        .collect();
     let m = inner.iter().sum::<f32>() / inner.len() as f32;
     let spread = (inner.iter().map(|v| (v - m).powi(2)).sum::<f32>() / inner.len() as f32).sqrt();
     assert!((m - 0.5).abs() < 0.1 && spread < 0.1, "tiles of {m} ± {spread}");
@@ -603,8 +605,7 @@ fn gradient_map_with_many_stops() {
     let ramp = g.add_node(NodeKind::GRADIENT, [0.0, 0.0]);
     let gm = g.add_node(NodeKind::GRADIENT_MAP, [0.0, 0.0]);
     g.connect(ramp, "o:output", gm, "i:input").unwrap();
-    let stops: Vec<(f32, [f32; 4])> =
-        (0..7).map(|i| (i as f32 / 6.0, [(i % 2) as f32, (i % 3) as f32 / 2.0, i as f32 / 6.0, 1.0])).collect();
+    let stops: Vec<(f32, [f32; 4])> = (0..7).map(|i| (i as f32 / 6.0, [(i % 2) as f32, (i % 3) as f32 / 2.0, i as f32 / 6.0, 1.0])).collect();
     let gradient = Gradient::from_pairs(&stops);
     set(&mut g, gm, "gradient", ParamValue::Gradient(gradient.clone()));
     let src = eval_read(&mut e, &g, ramp);
@@ -839,11 +840,8 @@ fn nodes_made_a_graph_of_their_own_compute_what_they_did() {
                 panic!("{}: {err}", n.def().name);
             }
         }
-        let mut out: Vec<(String, Vec<f32>)> = flat
-            .graph
-            .nodes_of(NodeKind::OUTPUT)
-            .map(|o| (o.text("name").to_string(), e.read_image(o.id).expect("written").2))
-            .collect();
+        let mut out: Vec<(String, Vec<f32>)> =
+            flat.graph.nodes_of(NodeKind::OUTPUT).map(|o| (o.text("name").to_string(), e.read_image(o.id).expect("written").2)).collect();
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
     }
@@ -1198,7 +1196,13 @@ fn one_value_a_shape(mask: &[f32], filled: &[f32], size: u32, tiles: bool) -> Op
             }
             values.insert(at(filled, x, y).to_bits());
             for (nx, ny) in [(x + 1, y), (x, y + 1)] {
-                let (nx, ny) = if tiles { (nx % size, ny % size) } else if nx >= size || ny >= size { continue } else { (nx, ny) };
+                let (nx, ny) = if tiles {
+                    (nx % size, ny % size)
+                } else if nx >= size || ny >= size {
+                    continue;
+                } else {
+                    (nx, ny)
+                };
                 if at(mask, nx, ny) >= 0.5 && at(filled, nx, ny) != at(filled, x, y) {
                     return None;
                 }
@@ -1252,7 +1256,8 @@ fn flood_fill_gives_each_shape_one_value() {
     let filled = eval_read(&mut e, &g, fill);
     assert_eq!(one_value_a_shape(&mask, &filled, RES, false), Some(1), "the snake is one shape");
     // A spiral band, four turns of it, thin and curved all along.
-    let spiral = shape(&mut g, "(1 - step(0.3, fract(hypot(u - 0.5, v - 0.5) * 10 - atan2(v - 0.5, u - 0.5) / tau))) * (1 - step(0.45, hypot(u - 0.5, v - 0.5)))");
+    let spiral =
+        shape(&mut g, "(1 - step(0.3, fract(hypot(u - 0.5, v - 0.5) * 10 - atan2(v - 0.5, u - 0.5) / tau))) * (1 - step(0.45, hypot(u - 0.5, v - 0.5)))");
     g.connect(spiral, "o:output", fill, "i:mask").unwrap();
     let mask = eval_read(&mut e, &g, spiral);
     let filled = eval_read(&mut e, &g, fill);
@@ -1398,8 +1403,7 @@ fn bitmap_node_decodes_and_resamples() {
     set(&mut g, b, "tiling", ParamValue::Enum(0)); // clamp at the borders
     set(&mut g, b, "path", ParamValue::Text(path.display().to_string()));
     let data = eval_read(&mut e, &g, b);
-    let px =
-        |tx: f32, ty: f32| pixel(&data, ((tx + 0.5) / 4.0 * RES as f32) as u32, ((ty + 0.5) / 2.0 * RES as f32) as u32);
+    let px = |tx: f32, ty: f32| pixel(&data, ((tx + 0.5) / 4.0 * RES as f32) as u32, ((ty + 0.5) / 2.0 * RES as f32) as u32);
     let green = px(1.0, 0.0);
     let yellow = px(2.0, 1.0);
     assert!(close(green[0], 0.0, 0.02) && close(green[1], 1.0, 0.02), "{green:?}");
@@ -1602,7 +1606,13 @@ fn noises_as_a_picture() {
     let mut sheet = vec![0u8; (w * h * 4) as usize];
     for (t, (name, out)) in looks.iter().enumerate() {
         let t = t as u32;
-        let own: Vec<u8> = out.chunks(4).flat_map(|p| { let v = (p[0].clamp(0.0, 1.0) * 255.0).round() as u8; [v, v, v, 255] }).collect();
+        let own: Vec<u8> = out
+            .chunks(4)
+            .flat_map(|p| {
+                let v = (p[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+                [v, v, v, 255]
+            })
+            .collect();
         let file = format!("noise_{}.png", name.to_lowercase().replace(' ', "_"));
         image::RgbaImage::from_raw(SIZE, SIZE, own).unwrap().save(std::path::Path::new(&dir).join(file)).unwrap();
         let (ox, oy) = ((t % COLUMNS) * SIZE, (t / COLUMNS) * SIZE);
@@ -2193,7 +2203,14 @@ fn demo_memory_while_showing_nodes() {
     let line = |app: &App, what: &str| {
         let m = app.e.memory_report();
         let gpu = allocated(app).map_or(String::new(), |(a, r)| format!(", the allocator {a:.0} MB ({r:.0} reserved)"));
-        println!("{what:<28} {:>4.0} MB: shown {:.0} ({}), kept {:.0}, scratch {:.0}{gpu}", mb(m.total()), mb(m.shown), m.shown_images, mb(m.kept), mb(m.scratch));
+        println!(
+            "{what:<28} {:>4.0} MB: shown {:.0} ({}), kept {:.0}, scratch {:.0}{gpu}",
+            mb(m.total()),
+            mb(m.shown),
+            m.shown_images,
+            mb(m.kept),
+            mb(m.scratch)
+        );
     };
     println!("{}", app.e.gpu.adapter_info);
     app.wait();
@@ -2292,8 +2309,7 @@ fn image_allocation_costs() {
     for backend in [wgpu::Backends::VULKAN, wgpu::Backends::DX12] {
         let Ok(gpu) = Gpu::headless_on(backend) else { continue };
         println!("{}", gpu.adapter_info);
-        let formats =
-            [(F::R8Unorm, 1), (F::R16Float, 1), (F::Rgba8Unorm, 1), (F::Rgba16Float, 1), (F::Rgba16Float, 12)];
+        let formats = [(F::R8Unorm, 1), (F::R16Float, 1), (F::Rgba8Unorm, 1), (F::Rgba16Float, 1), (F::Rgba16Float, 12)];
         for (format, mips) in formats {
             let mut made = 0.0;
             let mut reused = 0.0;
@@ -2343,8 +2359,7 @@ fn drag_through_the_service(resolution: u32, steps: usize) -> Option<(Vec<f64>, 
     let service = EngineService::spawn(gpu.device.clone(), gpu.queue.clone(), gpu.adapter_info.clone(), emit);
     let (mut g, preview) = brewed_texture_core::demo::graph();
     g.resolution = [resolution, resolution];
-    let outputs: Vec<NodeId> =
-        g.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
+    let outputs: Vec<NodeId> = g.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
     let wait_for = |revision: u64| {
         let started = std::time::Instant::now();
         while *finished.lock().unwrap() < revision && started.elapsed() < Duration::from_secs(20) {
@@ -2417,32 +2432,13 @@ fn edge_values(pd: &brewed_texture_core::nodes::ParamDef) -> Vec<ParamValue> {
             }
         }
         ParamKind::Int { default, min, max } => {
-            for v in [
-                default as i64,
-                min as i64,
-                max as i64,
-                0,
-                -1,
-                max as i64 * 10 + 10,
-                min as i64 - 100,
-                100_000,
-                i32::MAX as i64,
-                i32::MIN as i64 + 1,
-            ] {
+            for v in [default as i64, min as i64, max as i64, 0, -1, max as i64 * 10 + 10, min as i64 - 100, 100_000, i32::MAX as i64, i32::MIN as i64 + 1] {
                 out.push(ParamValue::Int(limit(v as f32) as i64 as i32));
             }
         }
         ParamKind::Vec2 { default, min, max } => {
             let span = (max - min).abs().max(1.0);
-            for v in [
-                default,
-                [min, min],
-                [max, max],
-                [0.0, 0.0],
-                [max + span * 10.0; 2],
-                [min - span * 10.0; 2],
-                [1e6, -1e6],
-            ] {
+            for v in [default, [min, min], [max, max], [0.0, 0.0], [max + span * 10.0; 2], [min - span * 10.0; 2], [1e6, -1e6]] {
                 out.push(ParamValue::Vec2([limit(v[0]), limit(v[1])]));
             }
         }
@@ -2482,18 +2478,7 @@ fn edge_values(pd: &brewed_texture_core::nodes::ParamDef) -> Vec<ParamValue> {
                     "size = a",
                 ]
             } else if language == Language::Pixel {
-                &[
-                    "u",
-                    "0",
-                    "1/0",
-                    "sqrt(-1)",
-                    "log(0)",
-                    "u*1e30*1e30",
-                    "((((((((u))))))))",
-                    "u +",
-                    "unknown_function(u)",
-                    "a",
-                ]
+                &["u", "0", "1/0", "sqrt(-1)", "log(0)", "u*1e30*1e30", "((((((((u))))))))", "u +", "unknown_function(u)", "a"]
             } else {
                 &["0", "1/0", "sqrt(-1)", "1e40*1e40", "1 +", "x", "pow(2, 1000)"]
             };
@@ -2507,14 +2492,7 @@ fn edge_values(pd: &brewed_texture_core::nodes::ParamDef) -> Vec<ParamValue> {
 /// One variant of a node under stress: evaluated twice (the first time builds its pipelines),
 /// then what went wrong, if anything. `at_4k` scales its time from the resolution of `g` to
 /// 4096×4096. Returns the engine to go on with (a new one after a panic).
-fn stress(
-    mut e: Engine,
-    g: &Graph,
-    id: NodeId,
-    what: &str,
-    findings: &mut Vec<String>,
-    times: &mut Vec<(f64, String)>,
-) -> Engine {
+fn stress(mut e: Engine, g: &Graph, id: NodeId, what: &str, findings: &mut Vec<String>, times: &mut Vec<(f64, String)>) -> Engine {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     let pixels = f64::from(g.resolution[0]) * f64::from(g.resolution[1]);
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -2534,11 +2512,7 @@ fn stress(
     }));
     match result {
         Err(panic) => {
-            let message = panic
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_default();
+            let message = panic.downcast_ref::<String>().cloned().or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
             findings.push(format!("PANIC {what}: {message}"));
             return engine().expect("the GPU is still there");
         }
@@ -2602,8 +2576,7 @@ fn every_parameter_at_its_edges() {
                     let mut g = g.clone();
                     let Some(param) = g.node_mut(id).and_then(|n| n.param_mut(pd.key)) else { continue };
                     param.value = value.clone();
-                    let what =
-                        format!("{} ({}) {} = {:?}", d.name, if color { "color" } else { "gray" }, pd.key, value);
+                    let what = format!("{} ({}) {} = {:?}", d.name, if color { "color" } else { "gray" }, pd.key, value);
                     e = stress(e, &g, id, &what, &mut findings, &mut times);
                 }
             }
@@ -2639,12 +2612,7 @@ fn every_parameter_at_its_edges() {
             e = stress(e, &g, id, &what, &mut findings, &mut times);
         }
     }
-    println!(
-        "{} evaluations ({one_at_a_time} one parameter at a time) in {:.1} s, {} findings",
-        times.len(),
-        started.elapsed().as_secs_f64(),
-        findings.len()
-    );
+    println!("{} evaluations ({one_at_a_time} one parameter at a time) in {:.1} s, {} findings", times.len(), started.elapsed().as_secs_f64(), findings.len());
     for f in &findings {
         println!("{}", f.chars().take(300).collect::<String>());
     }
@@ -2863,8 +2831,7 @@ fn a_large_graph_dragged_through_the_service() {
     });
     let service = EngineService::spawn(gpu.device.clone(), gpu.queue.clone(), gpu.adapter_info.clone(), emit);
     let (demo, preview) = brewed_texture_core::demo::graph();
-    let materials: Vec<NodeId> =
-        demo.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
+    let materials: Vec<NodeId> = demo.nodes_of(NodeKind::OUTPUT).filter(|n| n.enum_value("usage") != 0).map(|n| n.id).collect();
     let mut g = demo.clone();
     let ids: Vec<NodeId> = demo.nodes.iter().map(|n| n.id).collect();
     // (BREWED_COPIES copies of the demo besides it, 8 if it does not say.)
@@ -3045,13 +3012,8 @@ fn pixel_math_makes_no_nan() {
     let Some(mut e) = engine() else { return };
     // (What overflows as it is computed is infinite or not a number, as the GPU has it: finite
     // here, whichever.)
-    let cases = [
-        ("sqrt(-1)", Some(0.0)),
-        ("log(0)", Some(-65504.0)),
-        ("1 / (u - u)", Some(65504.0)),
-        ("0 * (1 / (u - u))", Some(0.0)),
-        ("u * 1e30 * 1e30 + 1", None),
-    ];
+    let cases =
+        [("sqrt(-1)", Some(0.0)), ("log(0)", Some(-65504.0)), ("1 / (u - u)", Some(65504.0)), ("0 * (1 / (u - u))", Some(0.0)), ("u * 1e30 * 1e30 + 1", None)];
     for (expression, want) in cases {
         let mut g = graph();
         let pm = g.add_node(NodeKind::PIXEL_MATH, [0.0, 0.0]);
@@ -3065,7 +3027,6 @@ fn pixel_math_makes_no_nan() {
     }
     assert!(e.gpu.take_errors().is_empty());
 }
-
 
 /// The deepest expressions Pixel Math reads (chains of as many operations as an expression
 /// can have, negations as deep as they nest, `fract` of `fract`…, a `max` of more than a

@@ -366,12 +366,8 @@ impl Stream {
             if handle.is_null() {
                 return Err("The desktop's screen stream could not be opened".into());
             }
-            let data = Arc::new(StreamData {
-                stream: Mutex::new(handle),
-                frame: Mutex::new(Frame::default()),
-                status: Mutex::new((0, String::new())),
-                library,
-            });
+            let data =
+                Arc::new(StreamData { stream: Mutex::new(handle), frame: Mutex::new(Frame::default()), status: Mutex::new((0, String::new())), library });
             let mut hook = Box::new(SpaHook::default());
             let events = &EVENTS;
             // The data outlives the listener: the stream is destroyed in `Streams::drop`.

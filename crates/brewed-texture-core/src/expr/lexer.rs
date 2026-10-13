@@ -245,14 +245,7 @@ mod tests {
     fn operators_and_unicode() {
         assert_eq!(
             kinds("a**2 × π"),
-            vec![
-                TokenKind::Ident("a".into()),
-                TokenKind::Caret,
-                TokenKind::Number(2.0),
-                TokenKind::Star,
-                TokenKind::Ident("pi".into()),
-                TokenKind::Eof
-            ]
+            vec![TokenKind::Ident("a".into()), TokenKind::Caret, TokenKind::Number(2.0), TokenKind::Star, TokenKind::Ident("pi".into()), TokenKind::Eof]
         );
         let toks = tokenize("x @ y");
         assert!(matches!(toks[1].kind, TokenKind::Error(_)));

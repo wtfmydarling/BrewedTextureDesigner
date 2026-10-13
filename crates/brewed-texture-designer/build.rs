@@ -141,16 +141,16 @@ fn version_info() -> Vec<u8> {
     let (major, minor, patch) = (part(0), part(1), part(2));
     let mut fixed = Vec::new();
     for word in [
-        0xFEEF_04BD,               // signature
-        0x0001_0000,               // structure version
-        (major << 16) | minor,     // file version
+        0xFEEF_04BD,           // signature
+        0x0001_0000,           // structure version
+        (major << 16) | minor, // file version
         patch << 16,
-        (major << 16) | minor,     // product version
+        (major << 16) | minor, // product version
         patch << 16,
-        0x3F,                      // flags mask
-        0,                         // flags
-        0x0004_0004,               // VOS_NT_WINDOWS32
-        1,                         // VFT_APP
+        0x3F,        // flags mask
+        0,           // flags
+        0x0004_0004, // VOS_NT_WINDOWS32
+        1,           // VFT_APP
         0,
         0,
         0,

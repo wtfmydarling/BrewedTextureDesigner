@@ -491,10 +491,7 @@ fn draw(
         u.consts[i / 4][i % 4] = *v;
     }
     let batches = batches(script, cpu, (count, from, depth), u.seed, pattern, target.size(), copies_x * copies_y);
-    let reads: Vec<&GpuImage> = (1..5)
-        .map(|i| copies[i - 1].as_ref().unwrap_or_else(|| input(cx.inputs, i, &cx.gpu.black)))
-        .chain(images.iter())
-        .collect();
+    let reads: Vec<&GpuImage> = (1..5).map(|i| copies[i - 1].as_ref().unwrap_or_else(|| input(cx.inputs, i, &cx.gpu.black))).chain(images.iter()).collect();
     if result.is_ok() {
         cx.gpu.draw_splats(cx.encoder, &kernel, bytemuck::bytes_of(&u), &reads, target, &batches);
     }

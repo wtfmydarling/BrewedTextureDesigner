@@ -41,26 +41,17 @@ pub fn socket_icon<'a, Message: 'a>(ty: DataType, filled: bool, size: f32, color
 /// How wide the toggle that exposes a parameter is (or the room left for it, where it has none).
 pub const TOGGLE_W: f32 = 22.0;
 
-pub fn expose_toggle<'a, Message: Clone + 'a>(
-    ty: Option<DataType>,
-    exposed: bool,
-    on_toggle: Option<Message>,
-) -> Element<'a, Message> {
+pub fn expose_toggle<'a, Message: Clone + 'a>(ty: Option<DataType>, exposed: bool, on_toggle: Option<Message>) -> Element<'a, Message> {
     const W: f32 = TOGGLE_W;
     let Some(ty) = ty else {
         return iced::widget::space().width(Length::Fixed(W)).into();
     };
     let color = if on_toggle.is_some() { style::type_color(ty) } else { style::TEXT_FAINT };
-    let b = button(socket_icon(ty, exposed, 14.0, color))
-        .padding(4)
-        .width(Length::Fixed(W))
-        .style(style::flat_button)
-        .on_press_maybe(on_toggle);
+    let b = button(socket_icon(ty, exposed, 14.0, color)).padding(4).width(Length::Fixed(W)).style(style::flat_button).on_press_maybe(on_toggle);
     let tip = if exposed {
         "Exposed: the value comes from the node connected to this parameter's socket. Click to un-expose."
     } else {
         "Expose: give this parameter an input socket on the node"
     };
-    tooltip(b, iced::widget::container(iced::widget::text(tip).size(style::SMALL)).padding(6).style(style::tooltip), tooltip::Position::Left)
-        .into()
+    tooltip(b, iced::widget::container(iced::widget::text(tip).size(style::SMALL)).padding(6).style(style::tooltip), tooltip::Position::Left).into()
 }

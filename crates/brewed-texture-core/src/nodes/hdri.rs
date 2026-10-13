@@ -52,7 +52,9 @@ pub static HDRI_GRADIENT: NodeDef = NodeDef {
         // (White to black: which color is where is plain to see.)
         color("top", "Top Color", [1.0, 1.0, 1.0, 1.0]).tip("The color at the point."),
         color("bottom", "Bottom Color", [0.0, 0.0, 0.0, 1.0]).tip("The color opposite it."),
-        float("contrast", "Contrast", 0.5, 0.0, 1.0).bounded().tip("How sharply one color turns into the other: 0 all the way round, 1 at once, at the middle."),
+        float("contrast", "Contrast", 0.5, 0.0, 1.0)
+            .bounded()
+            .tip("How sharply one color turns into the other: 0 all the way round, 1 at once, at the middle."),
         float("exposure", "Exposure (EV)", 0.0, -10.0, 10.0).tip("How bright both colors are: each step doubles them."),
     ],
     role: Role::Image,
@@ -136,9 +138,11 @@ pub static HDRI_PLANE_LIGHT: NodeDef = NodeDef {
         choice("placement", "Placement", 0, PLANE_LIGHT_PLACEMENTS, PLANE_LIGHT_PLACEMENT_IDS)
             .fixed()
             .tip("Facing the middle of the scene, wherever it is; or flat overhead (a ceiling) or underfoot (a floor)."),
-        vec2("position", "Position", [0.5, 0.4], 0.0, 1.0)
-            .tip("Where its middle is seen: across, once round; down, from straight up (0) to straight down (1). A ceiling is above the horizon, a floor below it."),
-        vec2("size", "Size", [0.5, 0.5], 0.0, 4.0).tip("How wide and long it is, from its middle, as far as it is from the middle of the scene (or as high above it)."),
+        vec2("position", "Position", [0.5, 0.4], 0.0, 1.0).tip(
+            "Where its middle is seen: across, once round; down, from straight up (0) to straight down (1). A ceiling is above the horizon, a floor below it.",
+        ),
+        vec2("size", "Size", [0.5, 0.5], 0.0, 4.0)
+            .tip("How wide and long it is, from its middle, as far as it is from the middle of the scene (or as high above it)."),
         angle("rotation", "Rotation", 0.0, -180.0, 180.0).tip("Degrees, counter-clockwise."),
         float("hardness", "Hardness", 0.25, 0.0, 1.0).bounded().tip("How sharp its edges are."),
         choice("pattern", "Pattern", 0, PLANE_LIGHT_PATTERNS, PLANE_LIGHT_PATTERN_IDS),

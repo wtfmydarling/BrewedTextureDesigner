@@ -102,12 +102,8 @@ mod tests {
         std::fs::write(&b, b"").unwrap();
         let uri = |p: &PathBuf| {
             let s = p.to_str().unwrap().replace('\\', "/");
-            let encoded: String = s
-                .bytes()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || b"/-._:".contains(&c) { (c as char).to_string() } else { format!("%{c:02X}") }
-                })
-                .collect();
+            let encoded: String =
+                s.bytes().map(|c| if c.is_ascii_alphanumeric() || b"/-._:".contains(&c) { (c as char).to_string() } else { format!("%{c:02X}") }).collect();
             // (`/home/…` on Linux and macOS; `C:/…` on Windows, after a slash of its own.)
             if encoded.starts_with('/') { format!("file://{encoded}") } else { format!("file:///{encoded}") }
         };

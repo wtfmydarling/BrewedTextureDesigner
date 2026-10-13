@@ -126,12 +126,7 @@ pub fn alpha(c: Color, a: f32) -> Color {
 }
 
 pub fn mix(a: Color, b: Color, t: f32) -> Color {
-    Color {
-        r: a.r + (b.r - a.r) * t,
-        g: a.g + (b.g - a.g) * t,
-        b: a.b + (b.b - a.b) * t,
-        a: a.a + (b.a - a.a) * t,
-    }
+    Color { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: a.a + (b.a - a.a) * t }
 }
 
 /// Display color of an RGBA value (values are shown as stored, like the 2D view).
@@ -143,8 +138,7 @@ pub fn color_of(c: [f32; 4]) -> Color {
 /// The fonts of the interface, the same on every system: Inter, one file of every weight and
 /// one of its italics (SIL Open Font License 1.1, see assets/fonts/Inter-LICENSE.txt). A
 /// system's own fonts differ from system to system, and one had no bold of every size.
-const UI_FONTS: [&[u8]; 2] =
-    [include_bytes!("../assets/fonts/InterVariable.ttf"), include_bytes!("../assets/fonts/InterVariable-Italic.ttf")];
+const UI_FONTS: [&[u8]; 2] = [include_bytes!("../assets/fonts/InterVariable.ttf"), include_bytes!("../assets/fonts/InterVariable-Italic.ttf")];
 
 /// The family the files of [`UI_FONTS`] name.
 const UI_FAMILY: &str = "Inter Variable";
@@ -188,9 +182,7 @@ fn interface_fonts(locale: String, mut db: fontdb::Database) -> cosmic_text::Fon
 /// character no font has is.
 fn undrawn_emoji(db: &mut fontdb::Database) {
     // (The faces cosmic-text takes for emoji are told by their names; so are these.)
-    let of_emoji = |face: &&fontdb::FaceInfo| {
-        face.post_script_name.contains("Emoji") || face.families.iter().any(|(name, _)| name.contains("Emoji"))
-    };
+    let of_emoji = |face: &&fontdb::FaceInfo| face.post_script_name.contains("Emoji") || face.families.iter().any(|(name, _)| name.contains("Emoji"));
     let faces: Vec<fontdb::ID> = db.faces().filter(of_emoji).map(|face| face.id).collect();
     for id in faces {
         if db.with_face_data(id, drawn_as_nothing).unwrap_or(false) {
@@ -336,8 +328,7 @@ fn fallbacks(db: &mut fontdb::Database) -> Fallbacks {
         let of = |style: Style| faces.iter().copied().filter(move |face| face.style == style);
         for style in [Style::Normal, Style::Italic] {
             // (Upright text keeps to upright faces, as it did.)
-            let liked: &[Style] =
-                if style == Style::Italic { &[Style::Italic, Style::Oblique, Style::Normal] } else { &[Style::Normal] };
+            let liked: &[Style] = if style == Style::Italic { &[Style::Italic, Style::Oblique, Style::Normal] } else { &[Style::Normal] };
             let near = liked.iter().map(|&wanted| of(wanted).collect::<Vec<_>>()).find(|near| !near.is_empty());
             let Some(near) = near else { continue };
             for weight in (100..=900).step_by(100).filter(|&weight| !of(style).any(|face| face.weight.0 == weight)) {
@@ -455,11 +446,7 @@ pub fn canvas_frame(_: &Theme) -> container::Style {
 }
 
 pub fn field_box(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(FIELD.into()),
-        border: Border { color: LINE, width: 1.0, radius: 3.0.into() },
-        ..Default::default()
-    }
+    container::Style { background: Some(FIELD.into()), border: Border { color: LINE, width: 1.0, radius: 3.0.into() }, ..Default::default() }
 }
 
 pub fn popup(_: &Theme) -> container::Style {
@@ -509,11 +496,7 @@ pub fn stripe(even: bool) -> impl Fn(&Theme) -> container::Style {
 /// A list of settings: rows one under the other, a line between two, in a frame (the lines
 /// are this, between rows a pixel apart).
 pub fn setting_list(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(LINE.into()),
-        border: Border { color: LINE, width: 1.0, radius: 2.0.into() },
-        ..Default::default()
-    }
+    container::Style { background: Some(LINE.into()), border: Border { color: LINE, width: 1.0, radius: 2.0.into() }, ..Default::default() }
 }
 
 /// A row of a list of settings: every other one a little lighter, so that what is said on
@@ -665,11 +648,7 @@ pub fn switch_button(on: bool) -> impl Fn(&Theme, button_w::Status) -> button_w:
 
 /// The field of a segmented control: its options side by side in it.
 pub fn segments(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(FIELD.into()),
-        border: Border { color: LINE, width: 1.0, radius: 4.0.into() },
-        ..Default::default()
-    }
+    container::Style { background: Some(FIELD.into()), border: Border { color: LINE, width: 1.0, radius: 4.0.into() }, ..Default::default() }
 }
 
 /// An option of a segmented control: raised and bright when it is the one chosen, lit when
@@ -684,12 +663,15 @@ pub fn segment(chosen: bool) -> impl Fn(&Theme, button_w::Status) -> button_w::S
             (false, button_w::Status::Disabled) => (None, TEXT_FAINT, Color::TRANSPARENT),
             (false, button_w::Status::Active) => (None, TEXT_DIM, Color::TRANSPARENT),
         };
-        let shadow = if chosen {
-            Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.35), offset: Vector::new(0.0, 1.0), blur_radius: 2.0 }
-        } else {
-            Shadow::default()
-        };
-        button_w::Style { background: bg.map(Background::Color), text_color: text, border: Border { color: border, width: 1.0, radius: 3.0.into() }, shadow, snap: true }
+        let shadow =
+            if chosen { Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.35), offset: Vector::new(0.0, 1.0), blur_radius: 2.0 } } else { Shadow::default() };
+        button_w::Style {
+            background: bg.map(Background::Color),
+            text_color: text,
+            border: Border { color: border, width: 1.0, radius: 3.0.into() },
+            shadow,
+            snap: true,
+        }
     }
 }
 
@@ -741,20 +723,12 @@ pub fn option_button(current: bool, lit: bool) -> impl Fn(&Theme, button_w::Stat
 
 /// Where the templates of a new graph are: darker than the dialog.
 pub fn template_area(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(gray(22).into()),
-        border: Border { color: LINE, width: 1.0, radius: 4.0.into() },
-        ..Default::default()
-    }
+    container::Style { background: Some(gray(22).into()), border: Border { color: LINE, width: 1.0, radius: 4.0.into() }, ..Default::default() }
 }
 
 /// The frame around a picture of an option.
 pub fn picture_frame(_: &Theme) -> container::Style {
-    container::Style {
-        background: Some(THUMB_BACKGROUND.into()),
-        border: Border { color: BORDER, width: 1.0, radius: 2.0.into() },
-        ..Default::default()
-    }
+    container::Style { background: Some(THUMB_BACKGROUND.into()), border: Border { color: BORDER, width: 1.0, radius: 2.0.into() }, ..Default::default() }
 }
 
 // ---------------------------------------------------------------------------- inputs
@@ -825,14 +799,33 @@ pub fn toggler(_: &Theme, status: toggler_w::Status) -> toggler_w::Style {
     };
     let track = match (on, disabled) {
         (_, true) => PANEL,
-        (true, _) => if hovered { gray(250) } else { gray(215) },
+        (true, _) => {
+            if hovered {
+                gray(250)
+            } else {
+                gray(215)
+            }
+        }
         (false, _) => FIELD,
     };
     toggler_w::Style {
         background: track.into(),
         background_border_width: 1.0,
-        background_border_color: if on { track } else if hovered { BORDER_LIGHT } else { LINE },
-        foreground: if on { gray(30) } else if hovered { TEXT } else { TEXT_DIM }.into(),
+        background_border_color: if on {
+            track
+        } else if hovered {
+            BORDER_LIGHT
+        } else {
+            LINE
+        },
+        foreground: if on {
+            gray(30)
+        } else if hovered {
+            TEXT
+        } else {
+            TEXT_DIM
+        }
+        .into(),
         foreground_border_width: 0.0,
         foreground_border_color: Color::TRANSPARENT,
         text_color: Some(TEXT),
@@ -856,17 +849,8 @@ mod tests {
     /// The interface's font in every weight a font is asked in, upright and in italics.
     fn every_weight() -> Vec<Font> {
         use iced::font::{Style, Weight};
-        let weights = [
-            Weight::Thin,
-            Weight::ExtraLight,
-            Weight::Light,
-            Weight::Normal,
-            Weight::Medium,
-            Weight::Semibold,
-            Weight::Bold,
-            Weight::ExtraBold,
-            Weight::Black,
-        ];
+        let weights =
+            [Weight::Thin, Weight::ExtraLight, Weight::Light, Weight::Normal, Weight::Medium, Weight::Semibold, Weight::Bold, Weight::ExtraBold, Weight::Black];
         let styles = [Style::Normal, Style::Italic];
         styles.into_iter().flat_map(|style| weights.map(|weight| Font { weight, style, ..ui_font() })).collect()
     }
@@ -933,8 +917,7 @@ mod tests {
     fn every_weight_is_drawn_in_the_embedded_inter_whatever_fonts_the_system_has() {
         // (Their letters are another Inter's, the engine's 3.19: a face drawn in is told by what it
         // is, not by how it looks.)
-        let theirs: Arc<dyn AsRef<[u8]> + Sync + Send> =
-            Arc::new(include_bytes!("../../brewed-texture-engine/assets/fonts/Inter-Regular.ttf").as_slice());
+        let theirs: Arc<dyn AsRef<[u8]> + Sync + Send> = Arc::new(include_bytes!("../../brewed-texture-engine/assets/fonts/Inter-Regular.ttf").as_slice());
         let mut db = fontdb::Database::new();
         let mut claim = |family: &str, font: Font| {
             let asked = to_attributes(font);
@@ -982,8 +965,7 @@ mod tests {
     fn what_inter_has_not_is_drawn_in_one_family_at_every_weight_upright_and_in_italics() {
         // (Their letters are another Inter's, the engine's 3.19, which has some the interface's
         // has not.)
-        let theirs: Arc<dyn AsRef<[u8]> + Sync + Send> =
-            Arc::new(include_bytes!("../../brewed-texture-engine/assets/fonts/Inter-Regular.ttf").as_slice());
+        let theirs: Arc<dyn AsRef<[u8]> + Sync + Send> = Arc::new(include_bytes!("../../brewed-texture-engine/assets/fonts/Inter-Regular.ttf").as_slice());
         let face = |family: &str, weight: u16| fontdb::FaceInfo {
             id: fontdb::ID::dummy(),
             source: fontdb::Source::Binary(theirs.clone()),

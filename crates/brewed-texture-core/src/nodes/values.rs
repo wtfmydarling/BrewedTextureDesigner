@@ -9,13 +9,7 @@ pub const DEFAULT_MATH_EXPRESSION: &str = "(1+x)*sin(myVar)-2.4/cos(myVar2)";
 /// graph used as a node, the size it is computed at there).
 pub const MATH_BUILTINS: &[&str] = &["width", "height"];
 
-const fn input_node(
-    id: &'static str,
-    name: &'static str,
-    ty: DataType,
-    outputs: &'static [SocketDef],
-    description: &'static str,
-) -> NodeDef {
+const fn input_node(id: &'static str, name: &'static str, ty: DataType, outputs: &'static [SocketDef], description: &'static str) -> NodeDef {
     NodeDef {
         id,
         name,
@@ -82,9 +76,7 @@ pub static MATH: NodeDef = NodeDef {
     outputs: &[value("result", "Result", DataType::Float)],
     params: &[
         expression("expression", "Expression", DEFAULT_MATH_EXPRESSION, false),
-        boolean("auto_bind", "Auto-bind", true)
-            .fixed()
-            .tip("Unconnected variables named like a graph variable take that variable's value."),
+        boolean("auto_bind", "Auto-bind", true).fixed().tip("Unconnected variables named like a graph variable take that variable's value."),
     ],
     role: Role::Value,
 };

@@ -127,14 +127,7 @@ impl Drop for Locked {
 }
 
 impl Dispatch<ZwpRelativePointerV1, ()> for State {
-    fn event(
-        state: &mut Self,
-        _: &ZwpRelativePointerV1,
-        event: zwp_relative_pointer_v1::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
+    fn event(state: &mut Self, _: &ZwpRelativePointerV1, event: zwp_relative_pointer_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         if let zwp_relative_pointer_v1::Event::RelativeMotion { dx, .. } = event
             && dx.is_finite()
         {
@@ -172,15 +165,7 @@ macro_rules! ignore {
 ignore!(WlPointer, ZwpLockedPointerV1, ZwpPointerConstraintsV1, ZwpRelativePointerManagerV1);
 
 impl Dispatch<WlRegistry, GlobalListContents> for State {
-    fn event(
-        _: &mut Self,
-        _: &WlRegistry,
-        _: <WlRegistry as Proxy>::Event,
-        _: &GlobalListContents,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
+    fn event(_: &mut Self, _: &WlRegistry, _: <WlRegistry as Proxy>::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
 }
 
 /// Locking the pointer needs a compositor and a window the pointer is over, so these tests

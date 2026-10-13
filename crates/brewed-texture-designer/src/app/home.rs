@@ -16,10 +16,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use brewed_texture_core::package::Package;
 use brewed_texture_core::project::{self, Light, ViewState};
 use brewed_texture_core::templates::{Category, Example, Template};
 use brewed_texture_core::{NodeKind, PackageEdit, Precision};
-use brewed_texture_core::package::Package;
 use home_screen::{Event, Glyph, Layout, Lesson, Resource, Sort, Start};
 use iced::Task;
 use iced::widget::image;

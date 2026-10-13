@@ -19,10 +19,10 @@ use iced::{Alignment, ContentFit, Element, Length};
 use crate::app::{App, ContextTarget, DragPayload, ExplorerMessage, Fold, Message};
 use crate::icons::{Icon, icon};
 use crate::style;
-use crate::widget::scroll::scroll_box;
 use crate::view::{fitted, tip};
 use crate::widget::outside::outside;
 use crate::widget::pressable::pressable;
+use crate::widget::scroll::scroll_box;
 
 /// Id of the field a graph is renamed in (focused when renaming starts).
 pub fn rename_id() -> iced::widget::Id {
@@ -34,11 +34,7 @@ fn explorer(m: ExplorerMessage) -> Message {
 }
 
 fn tool<'a>(which: Icon, hint: &'a str, message: Message) -> Element<'a, Message> {
-    tip(
-        button(icon(which, 14.0, style::TEXT_DIM)).padding(4).style(style::flat_button).on_press(message),
-        hint,
-        tooltip::Position::Bottom,
-    )
+    tip(button(icon(which, 14.0, style::TEXT_DIM)).padding(4).style(style::flat_button).on_press(message), hint, tooltip::Position::Bottom)
 }
 
 /// The icon of a file of a package, before (or without) its picture.
@@ -154,23 +150,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
         list = list.push(package_rows(app, &uses, key, doc));
     }
     // A right click where it lists nothing: a new package, packages opened (a row takes its own).
-    let listed = iced::widget::mouse_area(
-        scroll_box(container(list).padding([4, 6])).height(Length::Fill),
-    )
-    .on_right_press(explorer(ExplorerMessage::Context(ContextTarget::Explorer)));
+    let listed = iced::widget::mouse_area(scroll_box(container(list).padding([4, 6])).height(Length::Fill))
+        .on_right_press(explorer(ExplorerMessage::Context(ContextTarget::Explorer)));
     column![crate::view::pane_header("Explorer", tools), listed].into()
 }
 
 /// A row that folds what is under it.
-fn folder<'a>(
-    app: &App,
-    fold: Fold,
-    indent: f32,
-    label: &'a str,
-    count: usize,
-    context: ContextTarget,
-    hint: &'a str,
-) -> Element<'a, Message> {
+fn folder<'a>(app: &App, fold: Fold, indent: f32, label: &'a str, count: usize, context: ContextTarget, hint: &'a str) -> Element<'a, Message> {
     let folded = app.ui.explorer_folded.contains(&fold);
     let content = row![
         space().width(indent),
@@ -181,10 +167,8 @@ fn folder<'a>(
     ]
     .spacing(6)
     .align_y(Alignment::Center);
-    let entry = pressable(content)
-        .padding([3, 4])
-        .on_press(explorer(ExplorerMessage::Toggle(fold)))
-        .on_right_press(explorer(ExplorerMessage::Context(context)));
+    let entry =
+        pressable(content).padding([3, 4]).on_press(explorer(ExplorerMessage::Toggle(fold))).on_right_press(explorer(ExplorerMessage::Context(context)));
     tip(entry, hint, tooltip::Position::Right)
 }
 
@@ -278,15 +262,7 @@ fn package_rows<'a>(app: &'a App, uses: &Uses, key: u64, doc: &'a Document) -> E
     }
     for kind in kinds {
         let of_kind: Vec<&Resource> = resources.iter().filter(|r| r.kind == kind).collect();
-        rows = rows.push(folder(
-            app,
-            Fold::Kind(key, kind),
-            2.0 * STEP - 12.0,
-            folder_name(kind),
-            of_kind.len(),
-            ContextTarget::ResourcesFolder(key),
-            "",
-        ));
+        rows = rows.push(folder(app, Fold::Kind(key, kind), 2.0 * STEP - 12.0, folder_name(kind), of_kind.len(), ContextTarget::ResourcesFolder(key), ""));
         if !app.ui.explorer_folded.contains(&Fold::Kind(key, kind)) {
             for r in of_kind {
                 rows = rows.push(resource_row(app, uses, key, r, 3.0 * STEP + 2.0));
@@ -303,10 +279,7 @@ fn resource_row<'a>(app: &'a App, uses: &Uses, key: u64, r: &'a Resource, indent
     let preview = state.and_then(|s| s.preview.as_ref());
     let picture: Element<'a, Message> = match preview {
         Some(p) => image(p.image.clone()).width(18).height(18).content_fit(ContentFit::Contain).into(),
-        None => container(icon(resource_icon(r.kind), 14.0, if there { style::TEXT_DIM } else { style::TEXT_FAINT }))
-            .width(18)
-            .center_x(18)
-            .into(),
+        None => container(icon(resource_icon(r.kind), 14.0, if there { style::TEXT_DIM } else { style::TEXT_FAINT })).width(18).center_x(18).into(),
     };
     let renaming = app.ui.renaming_file.as_ref().filter(|(k, path, _)| *k == key && *path == r.path);
     let name: Element<'a, Message> = match renaming {
@@ -324,9 +297,7 @@ fn resource_row<'a>(app: &'a App, uses: &Uses, key: u64, r: &'a Resource, indent
         .into(),
         None => fitted(r.name(), style::SMALL, style::ui_font(), Some(if there { style::TEXT } else { style::TEXT_FAINT })),
     };
-    let mut content = row![space().width(indent), picture, container(name).width(Length::Fill).clip(true),]
-    .spacing(6)
-    .align_y(Alignment::Center);
+    let mut content = row![space().width(indent), picture, container(name).width(Length::Fill).clip(true),].spacing(6).align_y(Alignment::Center);
     let bytes = state.and_then(|s| s.bytes).map(crate::previews::bytes);
     let (held, where_) = if r.is_embedded() {
         let size = r.data.as_ref().map(|d| crate::previews::bytes(d.len() as u64)).unwrap_or_default();

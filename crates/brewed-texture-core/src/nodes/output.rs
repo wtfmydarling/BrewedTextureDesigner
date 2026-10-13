@@ -1,7 +1,7 @@
 //! Graph outputs.
 
-use super::*;
 use super::usage::{USAGE_GROUPS, USAGE_IDS, USAGE_NAMES, USAGE_TIPS, USAGE_WORDS, Usage};
+use super::*;
 
 pub const OUTPUT_FORMATS: &[&str] = &["RGBA", "RGB", "RG", "R", "G", "B", "A"];
 const OUTPUT_FORMAT_IDS: &[&str] = &["rgba", "rgb", "rg", "r", "g", "b", "a"];
@@ -9,19 +9,9 @@ const OUTPUT_FORMAT_IDS: &[&str] = &["rgba", "rgb", "rg", "r", "g", "b", "a"];
 /// How an Output writes its file (the "bit_depth" parameter), as Substance Designer's outputs
 /// offer: PNG of 8 or 16 bits, OpenEXR of half floats or floats, and DDS compressed as games
 /// read textures (BC1 to BC3, of 8 bits; DXT2 and DXT4 with the colors multiplied by the alpha).
-pub const OUTPUT_DEPTHS: &[&str] = &[
-    "8 bits",
-    "16 bits",
-    "16 bits float",
-    "32 bits float",
-    "DXT1 / BC1",
-    "DXT2 / BC2",
-    "DXT3 / BC2",
-    "DXT4 / BC3",
-    "DXT5 / BC3",
-];
-const OUTPUT_DEPTH_IDS: &[&str] =
-    &["unorm8", "unorm16", "float16", "float32", "dxt1", "dxt2", "dxt3", "dxt4", "dxt5"];
+pub const OUTPUT_DEPTHS: &[&str] =
+    &["8 bits", "16 bits", "16 bits float", "32 bits float", "DXT1 / BC1", "DXT2 / BC2", "DXT3 / BC2", "DXT4 / BC3", "DXT5 / BC3"];
+const OUTPUT_DEPTH_IDS: &[&str] = &["unorm8", "unorm16", "float16", "float32", "dxt1", "dxt2", "dxt3", "dxt4", "dxt5"];
 pub const DEPTH_8: u32 = 0;
 pub const DEPTH_16: u32 = 1;
 pub const DEPTH_16F: u32 = 2;
@@ -61,16 +51,11 @@ pub static OUTPUT: NodeDef = NodeDef {
              compressed as game engines read textures, with its mipmaps. The output keeps its image as it writes it, \
              as the 2D and 3D views show it.",
         ),
-        choice("usage", "Usage", 0, &USAGE_NAMES, &USAGE_IDS)
-            .fixed()
-            .searched(&USAGE_WORDS)
-            .grouped(USAGE_GROUPS)
-            .explained(&USAGE_TIPS)
-            .tip(
-                "What the map is for, as Substance Designer's usages: the parameter of OpenPBR it fills, the map an older \
+        choice("usage", "Usage", 0, &USAGE_NAMES, &USAGE_IDS).fixed().searched(&USAGE_WORDS).grouped(USAGE_GROUPS).explained(&USAGE_TIPS).tip(
+            "What the map is for, as Substance Designer's usages: the parameter of OpenPBR it fills, the map an older \
                  workflow reads, or the panorama that lights the scene. The 3D view puts each where it goes; export \
                  presets find their maps by it.",
-            ),
+        ),
     ],
     role: Role::Output,
 };

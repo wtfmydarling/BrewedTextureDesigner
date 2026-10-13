@@ -233,10 +233,7 @@ impl App {
                 // untitled, not to be saved over it unasked.
                 let newer = snapshot.saved.is_some_and(|saved| saved > snapshot.unsaved.time);
                 let path = snapshot.unsaved.path.as_ref().filter(|_| !newer).map(PathBuf::from);
-                let same = path
-                    .as_ref()
-                    .and_then(|p| self.open_key(&p.display().to_string()))
-                    .filter(|k| self.package_doc(*k).is_some_and(|d| !d.is_dirty()));
+                let same = path.as_ref().and_then(|p| self.open_key(&p.display().to_string())).filter(|k| self.package_doc(*k).is_some_and(|d| !d.is_dirty()));
                 self.add_package(loaded.package, path, loaded.views, loaded.open);
                 if let Some(same) = same.filter(|k| *k != self.doc_key) {
                     self.shelf.retain(|p| p.key != same);

@@ -2,9 +2,9 @@
 
 use std::ops::Range;
 
+use brewed_texture_core::expr::{self, TokenClass};
 use iced::advanced::text::highlighter::{self, Highlighter};
 use iced::{Color, Font};
-use brewed_texture_core::expr::{self, TokenClass};
 
 use crate::style;
 

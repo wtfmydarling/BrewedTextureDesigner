@@ -292,7 +292,8 @@ mod x11 {
     pub(super) fn put_at(connection: &RustConnection, own: u32, root: u32, place: Option<Place>) -> Result<Place, ReplyError> {
         let now = geometry(connection, own, root)?;
         let pointer = connection.query_pointer(root)?.reply()?;
-        let wanted = super::wanted(place.map(|p| Place { width: now.width, height: now.height, ..p }), (i32::from(pointer.root_x), i32::from(pointer.root_y)), now);
+        let wanted =
+            super::wanted(place.map(|p| Place { width: now.width, height: now.height, ..p }), (i32::from(pointer.root_x), i32::from(pointer.root_y)), now);
         let place = super::fit(wanted, &screens(connection, root));
         let mut hints = WmSizeHints::get_normal_hints(connection, own)?.reply()?.unwrap_or_default();
         hints.position = Some((WmSizeHintsSpecification::UserSpecified, place.x, place.y));
@@ -481,7 +482,22 @@ mod tests {
         assert!(two.contains(&area(0, 0, half, high)) && two.contains(&area(half, 0, wide - half, high)), "{two:?}");
 
         let own = c.generate_id().unwrap();
-        c.create_window(x11rb::COPY_DEPTH_FROM_PARENT, own, root, 10, 10, 750, 425, 0, WindowClass::INPUT_OUTPUT, x11rb::COPY_FROM_PARENT, &CreateWindowAux::new()).unwrap().check().unwrap();
+        c.create_window(
+            x11rb::COPY_DEPTH_FROM_PARENT,
+            own,
+            root,
+            10,
+            10,
+            750,
+            425,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            x11rb::COPY_FROM_PARENT,
+            &CreateWindowAux::new(),
+        )
+        .unwrap()
+        .check()
+        .unwrap();
         let put = |at: Option<(i32, i32)>| {
             let put = x11::put_at(&c, own, root, at.map(|(x, y)| place(x, y, 750, 425))).unwrap();
             assert_eq!(x11::geometry(&c, own, root).unwrap(), put, "the server has it elsewhere");

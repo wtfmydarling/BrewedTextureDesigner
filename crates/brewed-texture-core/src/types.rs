@@ -19,8 +19,7 @@ pub enum DataType {
 }
 
 impl DataType {
-    pub const VALUE_TYPES: [DataType; 5] =
-        [DataType::Float, DataType::Int, DataType::Bool, DataType::Vec2, DataType::Color];
+    pub const VALUE_TYPES: [DataType; 5] = [DataType::Float, DataType::Int, DataType::Bool, DataType::Vec2, DataType::Color];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -280,9 +279,7 @@ impl ParamValue {
         let ty = self.socket_type()?;
         let v = value.convert(ty)?;
         Some(match (self, v) {
-            (ParamValue::Enum(_), Value::Int(i)) => {
-                ParamValue::Enum(i.clamp(0, enum_count.saturating_sub(1) as i32) as u32)
-            }
+            (ParamValue::Enum(_), Value::Int(i)) => ParamValue::Enum(i.clamp(0, enum_count.saturating_sub(1) as i32) as u32),
             (_, Value::Float(f)) => ParamValue::Float(f),
             (_, Value::Int(i)) => ParamValue::Int(i),
             (_, Value::Bool(b)) => ParamValue::Bool(b),

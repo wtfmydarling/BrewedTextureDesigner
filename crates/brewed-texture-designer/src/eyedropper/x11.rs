@@ -23,8 +23,8 @@ use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::render::{self, ConnectionExt as _, PictType};
 use x11rb::protocol::shape::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
-    AtomEnum, ClientMessageEvent, ClipOrdering, ConfigureWindowAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask,
-    GrabMode, GrabStatus, ImageFormat, ImageOrder, Rectangle, StackMode, Window, WindowClass,
+    AtomEnum, ClientMessageEvent, ClipOrdering, ConfigureWindowAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask, GrabMode, GrabStatus,
+    ImageFormat, ImageOrder, Rectangle, StackMode, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 
@@ -129,12 +129,8 @@ impl Picker {
         let setup = conn.setup();
         let screen = setup.roots.get(screen).ok_or("no X screen")?;
         let root = screen.root;
-        let visual = screen
-            .allowed_depths
-            .iter()
-            .flat_map(|d| d.visuals.iter())
-            .find(|v| v.visual_id == screen.root_visual)
-            .ok_or("the screen's visual is unknown")?;
+        let visual =
+            screen.allowed_depths.iter().flat_map(|d| d.visuals.iter()).find(|v| v.visual_id == screen.root_visual).ok_or("the screen's visual is unknown")?;
         let bits = setup.pixmap_formats.iter().find(|f| f.depth == screen.root_depth).ok_or("the screen's pixel format is unknown")?;
         if bits.bits_per_pixel < 8 || bits.bits_per_pixel % 8 != 0 {
             return Err("the screen has too few colors to pick from".into());
@@ -408,7 +404,19 @@ impl Picker {
             let make = |background: u32| -> Result<Window, Error> {
                 let window = self.conn.generate_id()?;
                 let aux = CreateWindowAux::new().background_pixel(background).override_redirect(1);
-                self.conn.create_window(x11rb::COPY_DEPTH_FROM_PARENT, window, self.root, 0, 0, self.size.0 as u16, self.size.1 as u16, 0, WindowClass::INPUT_OUTPUT, 0, &aux)?;
+                self.conn.create_window(
+                    x11rb::COPY_DEPTH_FROM_PARENT,
+                    window,
+                    self.root,
+                    0,
+                    0,
+                    self.size.0 as u16,
+                    self.size.1 as u16,
+                    0,
+                    WindowClass::INPUT_OUTPUT,
+                    0,
+                    &aux,
+                )?;
                 // Nothing of it shows until the path is drawn; it never takes the mouse.
                 self.conn.shape_rectangles(shape::SO::SET, shape::SK::BOUNDING, ClipOrdering::UNSORTED, window, 0, 0, &[])?;
                 self.conn.shape_rectangles(shape::SO::SET, shape::SK::INPUT, ClipOrdering::UNSORTED, window, 0, 0, &[])?;
@@ -580,13 +588,7 @@ fn escape_keycodes(conn: &RustConnection) -> Result<Vec<u8>, Error> {
     let (min, max) = (setup.min_keycode, setup.max_keycode);
     let mapping = conn.get_keyboard_mapping(min, max - min + 1)?.reply()?;
     let per = mapping.keysyms_per_keycode.max(1) as usize;
-    Ok(mapping
-        .keysyms
-        .chunks(per)
-        .enumerate()
-        .filter(|(_, syms)| syms.contains(&ESCAPE_KEYSYM))
-        .map(|(i, _)| min + i as u8)
-        .collect())
+    Ok(mapping.keysyms.chunks(per).enumerate().filter(|(_, syms)| syms.contains(&ESCAPE_KEYSYM)).map(|(i, _)| min + i as u8).collect())
 }
 
 /// The ARGB32 picture format, when the server can make cursors of it (RENDER 0.5).
@@ -693,17 +695,22 @@ mod live_tests {
             conn.create_pixmap(depth, pixmap, root, w as u16, h as u16).ok()?;
             let gc = conn.generate_id().ok()?;
             conn.create_gc(gc, pixmap, &CreateGCAux::new()).ok()?;
-            let data: Vec<u8> = (0..h).flat_map(|_| (0..w).flat_map(|x| {
-                let [r, g, b] = ramp(x);
-                [b, g, r, 0]
-            })).collect();
+            let data: Vec<u8> = (0..h)
+                .flat_map(|_| {
+                    (0..w).flat_map(|x| {
+                        let [r, g, b] = ramp(x);
+                        [b, g, r, 0]
+                    })
+                })
+                .collect();
             for (i, rows) in data.chunks(w as usize * 4 * 16).enumerate() {
                 let n = rows.len() / (w as usize * 4);
                 conn.put_image(ImageFormat::Z_PIXMAP, pixmap, gc, w as u16, n as u16, 0, (i * 16) as i16, 0, depth, rows).ok()?;
             }
             let window = conn.generate_id().ok()?;
             let aux = CreateWindowAux::new().background_pixmap(pixmap).override_redirect(1);
-            conn.create_window(x11rb::COPY_DEPTH_FROM_PARENT, window, root, x as i16, y as i16, w as u16, h as u16, 0, WindowClass::INPUT_OUTPUT, 0, &aux).ok()?;
+            conn.create_window(x11rb::COPY_DEPTH_FROM_PARENT, window, root, x as i16, y as i16, w as u16, h as u16, 0, WindowClass::INPUT_OUTPUT, 0, &aux)
+                .ok()?;
             conn.map_window(window).ok()?;
             conn.flush().ok()?;
             std::thread::sleep(Duration::from_millis(200));
@@ -734,7 +741,12 @@ mod live_tests {
         fn wait_for_grab(&self) {
             let started = Instant::now();
             while started.elapsed() < Duration::from_secs(5) {
-                let reply = self.conn.grab_pointer(false, self.root, EventMask::NO_EVENT, GrabMode::ASYNC, GrabMode::ASYNC, x11rb::NONE, x11rb::NONE, x11rb::CURRENT_TIME).unwrap().reply().unwrap();
+                let reply = self
+                    .conn
+                    .grab_pointer(false, self.root, EventMask::NO_EVENT, GrabMode::ASYNC, GrabMode::ASYNC, x11rb::NONE, x11rb::NONE, x11rb::CURRENT_TIME)
+                    .unwrap()
+                    .reply()
+                    .unwrap();
                 if reply.status == GrabStatus::ALREADY_GRABBED {
                     return;
                 }

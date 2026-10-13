@@ -387,8 +387,7 @@ mod tests {
             assert_eq!(u.index() as usize, i, "{u:?}");
             assert_eq!(Usage::of(i as u32), Some(*u));
             assert!(!u.tip().is_empty() && !u.words().is_empty(), "{u:?}");
-            let places: Vec<&str> =
-                USAGE_GROUPS.iter().filter(|(_, of)| of.contains(&u.index())).map(|(name, _)| *name).collect();
+            let places: Vec<&str> = USAGE_GROUPS.iter().filter(|(_, of)| of.contains(&u.index())).map(|(name, _)| *name).collect();
             assert_eq!(places, [u.group().name()], "{u:?}");
         }
         let listed: usize = USAGE_GROUPS.iter().map(|(_, of)| of.len()).sum();

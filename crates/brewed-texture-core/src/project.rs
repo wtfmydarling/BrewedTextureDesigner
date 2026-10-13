@@ -224,13 +224,7 @@ pub fn save(path: &Path, package: &Package, views: &HashMap<GraphId, ViewState>,
 }
 
 /// [`save`], with a picture of the package (a PNG), which lists of packages show.
-pub fn save_with_picture(
-    path: &Path,
-    package: &Package,
-    views: &HashMap<GraphId, ViewState>,
-    open: GraphId,
-    picture: Option<&[u8]>,
-) -> Result<(), String> {
+pub fn save_with_picture(path: &Path, package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId, picture: Option<&[u8]>) -> Result<(), String> {
     write_file(path, package, views, open, path.parent(), Held::In, None, picture)
 }
 
@@ -246,13 +240,7 @@ pub fn read_picture(path: &Path) -> Option<Vec<u8>> {
 /// Save a snapshot of `package`, which has unsaved changes (see [`crate::recovery`]), as the
 /// file at `path`: its paths as they are (the snapshot is elsewhere), the files it holds kept
 /// apart, and what `unsaved` says of it.
-pub fn save_snapshot(
-    path: &Path,
-    package: &Package,
-    views: &HashMap<GraphId, ViewState>,
-    open: GraphId,
-    unsaved: &Unsaved,
-) -> Result<(), String> {
+pub fn save_snapshot(path: &Path, package: &Package, views: &HashMap<GraphId, ViewState>, open: GraphId, unsaved: &Unsaved) -> Result<(), String> {
     write_file(path, package, views, open, None, Held::Apart, Some(unsaved), None)
 }
 
@@ -304,8 +292,7 @@ fn write<W: Write>(
     }
     // The entries of graphs and of the files the package holds (each once), in order.
     let graph_entries: Vec<String> = package.graphs.iter().map(|g| graph_entry(g.id)).collect();
-    let file_entries: Vec<Option<String>> =
-        package.resources.iter().map(|r| crate::files::embedded_file(&r.path).map(|f| format!("{FILES}{f}"))).collect();
+    let file_entries: Vec<Option<String>> = package.resources.iter().map(|r| crate::files::embedded_file(&r.path).map(|f| format!("{FILES}{f}"))).collect();
     let manifest = manifest(&package)?;
     let editor = Editor {
         open,
@@ -486,8 +473,7 @@ pub fn read_graphs(path: &Path) -> Result<Vec<GraphSummary>, String> {
     if archive.entry(MANIFEST).is_none() {
         return Err(not_a_package());
     }
-    let manifest: Manifest =
-        serde_json::from_slice(&archive.read(MANIFEST, MAX_JSON)?).map_err(|e| format!("The package cannot be read: {e}"))?;
+    let manifest: Manifest = serde_json::from_slice(&archive.read(MANIFEST, MAX_JSON)?).map_err(|e| format!("The package cannot be read: {e}"))?;
     if manifest.format != FORMAT {
         return Err(not_a_package());
     }
@@ -509,8 +495,7 @@ pub fn read_graphs(path: &Path) -> Result<Vec<GraphSummary>, String> {
 pub fn read_files(path: &Path) -> Result<Vec<String>, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
     let mut archive = Archive::new(BufReader::new(file))?;
-    let manifest: Manifest =
-        serde_json::from_slice(&archive.read(MANIFEST, MAX_JSON)?).map_err(|e| format!("The package cannot be read: {e}"))?;
+    let manifest: Manifest = serde_json::from_slice(&archive.read(MANIFEST, MAX_JSON)?).map_err(|e| format!("The package cannot be read: {e}"))?;
     Ok(manifest.files.into_iter().filter_map(|f| serde_json::from_value::<FileItem>(f).ok()).map(|f| f.file).collect())
 }
 
@@ -540,20 +525,14 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
     if archive.entry(MANIFEST).is_none() {
         return Err(not_a_package());
     }
-    let manifest: Manifest =
-        serde_json::from_slice(&archive.read(MANIFEST, MAX_JSON)?).map_err(|e| format!("The package cannot be read: {e}"))?;
+    let manifest: Manifest = serde_json::from_slice(&archive.read(MANIFEST, MAX_JSON)?).map_err(|e| format!("The package cannot be read: {e}"))?;
     if manifest.format != FORMAT {
         return Err(not_a_package());
     }
     if manifest.version > VERSION {
-        return Err(format!(
-            "The package was made by a newer version of {} (format {}): update the program to open it",
-            crate::APP_NAME,
-            manifest.version
-        ));
+        return Err(format!("The package was made by a newer version of {} (format {}): update the program to open it", crate::APP_NAME, manifest.version));
     }
-    let unknown: Vec<&str> =
-        manifest.extensions_required.iter().map(String::as_str).filter(|e| !EXTENSIONS.contains(e)).collect();
+    let unknown: Vec<&str> = manifest.extensions_required.iter().map(String::as_str).filter(|e| !EXTENSIONS.contains(e)).collect();
     if !unknown.is_empty() {
         return Err(format!("The package needs what this version does not read: {}", unknown.join(", ")));
     }
@@ -561,8 +540,7 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
     let mut entries = Vec::new();
     for item in &manifest.graphs {
         let bytes = archive.read(&graph_entry(item.id), MAX_JSON).map_err(|e| format!("The graph '{}' cannot be read: {e}", item.name))?;
-        let mut graph: Graph =
-            serde_json::from_slice(&bytes).map_err(|e| format!("The graph '{}' cannot be read: {e}", item.name))?;
+        let mut graph: Graph = serde_json::from_slice(&bytes).map_err(|e| format!("The graph '{}' cannot be read: {e}", item.name))?;
         let links = graph.links.len();
         graph.normalize();
         if graph.links.len() < links {
@@ -1185,12 +1163,8 @@ mod tests {
         let mut archive = Archive::new(Cursor::new(bytes)).unwrap();
         let names: Vec<String> = archive.entries().iter().map(|e| e.name.clone()).collect();
         let contents: Vec<(String, Vec<u8>)> = names.into_iter().map(|n| (n.clone(), archive.read(&n, 1 << 30).unwrap())).collect();
-        let jsons: Vec<(usize, Json)> = contents
-            .iter()
-            .enumerate()
-            .filter(|(_, (n, _))| n.ends_with(".json"))
-            .map(|(i, (_, c))| (i, serde_json::from_slice(c).unwrap()))
-            .collect();
+        let jsons: Vec<(usize, Json)> =
+            contents.iter().enumerate().filter(|(_, (n, _))| n.ends_with(".json")).map(|(i, (_, c))| (i, serde_json::from_slice(c).unwrap())).collect();
         let ids: Vec<_> = demo.nodes.iter().map(|n| n.id).collect();
         let clip = demo.copy_nodes(&ids).to_text();
         let clip: Json = serde_json::from_str(clip.strip_prefix(Clipboard::MAGIC).unwrap()).unwrap();

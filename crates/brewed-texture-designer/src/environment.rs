@@ -55,8 +55,7 @@ impl std::fmt::Debug for Hdri {
 /// 8-bit one is taken as linear light up to 1).
 pub fn load(path: &Path) -> Result<Hdri, String> {
     let named = |e: String| format!("{}: {e}", path.display());
-    let mut reader =
-        image::ImageReader::open(path).and_then(|reader| reader.with_guessed_format()).map_err(|e| named(e.to_string()))?;
+    let mut reader = image::ImageReader::open(path).and_then(|reader| reader.with_guessed_format()).map_err(|e| named(e.to_string()))?;
     // The largest usual environments, 16384 × 8192, take 1.5 GB decoded (more than the
     // decoder's own limit lets it take); they are made smaller then.
     let mut limits = image::Limits::default();
@@ -85,14 +84,7 @@ impl Hdri {
         while sw > SH_WIDTH {
             (small, sw, sh) = halve(&small, sw, sh);
         }
-        Hdri {
-            id: NEXT.fetch_add(1, Ordering::Relaxed),
-            path,
-            width: w as u32,
-            height: h as u32,
-            pixels,
-            sh: project(&small, sw, sh),
-        }
+        Hdri { id: NEXT.fetch_add(1, Ordering::Relaxed), path, width: w as u32, height: h as u32, pixels, sh: project(&small, sw, sh) }
     }
 }
 
@@ -595,11 +587,13 @@ mod tests {
         // A mirror shows the stripes as they are, roughness 0.2 still shows them, and the
         // rougher levels less and less, down to their gray.
         let glossy = glossy(&gpu, &maps);
-        let contrast: Vec<f32> = glossy.iter().map(|level| {
-            let (lo, hi) = range_of_middle_row(level);
-            hi - lo
-        })
-        .collect();
+        let contrast: Vec<f32> = glossy
+            .iter()
+            .map(|level| {
+                let (lo, hi) = range_of_middle_row(level);
+                hi - lo
+            })
+            .collect();
         assert!(contrast[0] > 0.99, "{contrast:?}");
         assert!(contrast[1] > 0.4, "{contrast:?}");
         assert!(contrast.windows(2).all(|c| c[1] <= c[0] + 0.01), "{contrast:?}");

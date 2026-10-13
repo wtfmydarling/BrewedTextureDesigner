@@ -312,21 +312,12 @@ impl Package {
     /// that order.
     pub fn all_files(&self) -> Vec<String> {
         let mut seen = HashSet::new();
-        self.resources
-            .iter()
-            .map(|r| r.path.clone())
-            .chain(self.files().map(|(.., path)| path.to_string()))
-            .filter(|p| seen.insert(p.clone()))
-            .collect()
+        self.resources.iter().map(|r| r.path.clone()).chain(self.files().map(|(.., path)| path.to_string())).filter(|p| seen.insert(p.clone())).collect()
     }
 
     /// The package files whose graphs the nodes of this one use.
     pub fn dependencies(&self) -> BTreeSet<String> {
-        self.graphs
-            .iter()
-            .flat_map(|g| g.graph.instances())
-            .filter_map(|n| n.instance.as_ref()?.graph.package.clone())
-            .collect()
+        self.graphs.iter().flat_map(|g| g.graph.instances()).filter_map(|n| n.instance.as_ref()?.graph.package.clone()).collect()
     }
 
     /// Change every path of the package: of its files, of the files its graphs read and of the
@@ -416,9 +407,7 @@ impl Package {
                         m.graphs.push(r.name.clone());
                     }
                 }
-                None => {
-                    out.push(Missing { path: path.clone(), what: MissingKind::Package, graphs: vec![r.name.clone()] })
-                }
+                None => out.push(Missing { path: path.clone(), what: MissingKind::Package, graphs: vec![r.name.clone()] }),
             }
         }
         out
@@ -686,8 +675,7 @@ impl PackageEdit {
                 if added == 0 {
                     return Err(format!("Not a file the package can use: {}", unknown.join(", ")));
                 }
-                let notice =
-                    (!unknown.is_empty()).then(|| format!("Not files the package can use: {}", unknown.join(", ")));
+                let notice = (!unknown.is_empty()).then(|| format!("Not files the package can use: {}", unknown.join(", ")));
                 PackageResult { notice, ..changed }
             }
             PackageEdit::RemoveResource(path) => {
@@ -766,8 +754,7 @@ impl PackageEdit {
                 if added == 0 {
                     return Err(format!("Not a file the package can use: {}", unknown.join(", ")));
                 }
-                let notice =
-                    (!unknown.is_empty()).then(|| format!("Not files the package can use: {}", unknown.join(", ")));
+                let notice = (!unknown.is_empty()).then(|| format!("Not files the package can use: {}", unknown.join(", ")));
                 PackageResult { notice, ..changed }
             }
             PackageEdit::RemoveUnused => {
@@ -784,7 +771,8 @@ impl PackageEdit {
                     return Ok(PackageResult::default());
                 }
                 // (As a file relinked is: one of the package to one it can use.)
-                if let Some((_, to)) = moves.iter().find(|(from, to)| package.resources.iter().any(|r| &r.path == *from) && ResourceKind::of_path(to).is_none()) {
+                if let Some((_, to)) = moves.iter().find(|(from, to)| package.resources.iter().any(|r| &r.path == *from) && ResourceKind::of_path(to).is_none())
+                {
                     return Err(format!("{} is not a file the package can use", file_name(to)));
                 }
                 if moves.values().any(|to| crate::files::is_embedded(to)) {
@@ -896,31 +884,22 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
     if !between.is_empty() {
         let names: Vec<&str> = between.iter().take(3).map(|n| n.def().name).collect();
         let (is, them) = if between.len() == 1 { ("is", "it") } else { ("are", "them") };
-        return Err(format!(
-            "{} {is} between the selected nodes: select {them} too, or leave out what comes after {them}",
-            names.join(", ")
-        ));
+        return Err(format!("{} {is} between the selected nodes: select {them} too, or leave out what comes after {them}", names.join(", ")));
     }
     for l in &links {
         if chosen.contains(&l.from) && !chosen.contains(&l.to) {
             let from = graph.output_socket(l.from, &l.from_socket);
             if from.as_ref().is_some_and(|s| s.ty != DataType::Image) {
                 let name = graph.node(l.from).map_or_else(String::new, |n| n.def().name.to_string());
-                return Err(format!(
-                    "A value leaves the selection ({name}): a graph gives images, leave the value nodes out"
-                ));
+                return Err(format!("A value leaves the selection ({name}): a graph gives images, leave the value nodes out"));
             }
         }
     }
 
     let mut inner = Graph { resolution: graph.resolution, precision: graph.precision, ..Graph::default() };
     let nodes: Vec<&Node> = graph.nodes.iter().filter(|n| chosen.contains(&n.id)).collect();
-    let bounds = |f: fn(&Node) -> f32| {
-        nodes
-            .iter()
-            .map(|n| f(n))
-            .fold(None, |a: Option<(f32, f32)>, v| Some(a.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v)))))
-    };
+    let bounds =
+        |f: fn(&Node) -> f32| nodes.iter().map(|n| f(n)).fold(None, |a: Option<(f32, f32)>, v| Some(a.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v)))));
     let (x0, x1) = bounds(|n| n.pos[0]).expect("nodes");
     let (y0, _) = bounds(|n| n.pos[1]).expect("nodes");
     // The nodes as they are (ids of their own in the new graph, so their links stay as they
@@ -934,10 +913,7 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
             return Vec::new();
         }
         let mut vars = n.expression_vars();
-        vars.retain(|v| {
-            graph.link_into(n.id, &crate::graph::var_socket_key(v)).is_none()
-                && graph.variable(v).is_some_and(|v| v.ty != DataType::Image)
-        });
+        vars.retain(|v| graph.link_into(n.id, &crate::graph::var_socket_key(v)).is_none() && graph.variable(v).is_some_and(|v| v.ty != DataType::Image));
         vars
     };
     let mut needed: Vec<String> = Vec::new();
@@ -993,8 +969,7 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
         };
         kept.push((reader, name.clone()));
     }
-    let mut remainder =
-        Remainder { graph: rest, pos: [x0, y0], into: Vec::new(), out_of: Vec::new(), exposed: Vec::new() };
+    let mut remainder = Remainder { graph: rest, pos: [x0, y0], into: Vec::new(), out_of: Vec::new(), exposed: Vec::new() };
     for (reader, name) in kept {
         remainder.into.push((reader, "o:value".to_string(), param_socket_key(&name)));
         remainder.exposed.push(name);
@@ -1017,10 +992,7 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
         let name = match arriving.iter().find(|(s, _)| *s == source) {
             Some((_, name)) => name.clone(),
             None => {
-                let from = graph.node(l.from).map_or_else(
-                    || "input".to_string(),
-                    |n| crate::graph::sanitize_identifier(&n.def().name.to_lowercase()),
-                );
+                let from = graph.node(l.from).map_or_else(|| "input".to_string(), |n| crate::graph::sanitize_identifier(&n.def().name.to_lowercase()));
                 let name = if target.ty == DataType::Image {
                     let name = inner.unique_variable_name(&from);
                     let input = inner.add_node(NodeKind::IMAGE_INPUT, [x0 - 260.0, y0 + row]);
@@ -1045,8 +1017,7 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
                     inner.sync_variables();
                     // The value that arrives now, in the range of the parameter it drives: the new
                     // graph, on its own, is what the nodes were.
-                    let range =
-                        target.key.strip_prefix("p:").and_then(|key| graph.param_def(l.to, key)).map(|pd| pd.kind);
+                    let range = target.key.strip_prefix("p:").and_then(|key| graph.param_def(l.to, key)).map(|pd| pd.kind);
                     if let Some(var) = inner.variable_mut(&name) {
                         match range {
                             Some(ParamKind::Float { min, max, .. }) if var.ty == DataType::Float => {
@@ -1059,12 +1030,8 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
                         }
                         if let Some(v) = ev.value(l.from).and_then(|v| v.convert(var.ty)).filter(Value::is_finite) {
                             (var.min, var.max) = match (var.min, var.max, v) {
-                                (Value::Float(lo), Value::Float(hi), Value::Float(x)) => {
-                                    (Value::Float(lo.min(x)), Value::Float(hi.max(x)))
-                                }
-                                (Value::Int(lo), Value::Int(hi), Value::Int(x)) => {
-                                    (Value::Int(lo.min(x)), Value::Int(hi.max(x)))
-                                }
+                                (Value::Float(lo), Value::Float(hi), Value::Float(x)) => (Value::Float(lo.min(x)), Value::Float(hi.max(x))),
+                                (Value::Int(lo), Value::Int(hi), Value::Int(x)) => (Value::Int(lo.min(x)), Value::Int(hi.max(x))),
                                 other => (other.0, other.1),
                             };
                             var.value = v.clamped(&var.min, &var.max);
@@ -1081,16 +1048,9 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
             }
         };
         let reader = if target.ty == DataType::Image {
-            inner
-                .nodes_of(NodeKind::IMAGE_INPUT)
-                .find(|n| n.variable.as_deref() == Some(name.as_str()))
-                .map(|n| (n.id, "o:output".to_string()))
+            inner.nodes_of(NodeKind::IMAGE_INPUT).find(|n| n.variable.as_deref() == Some(name.as_str())).map(|n| (n.id, "o:output".to_string()))
         } else {
-            inner
-                .nodes
-                .iter()
-                .find(|n| n.variable.as_deref() == Some(name.as_str()))
-                .map(|n| (n.id, "o:value".to_string()))
+            inner.nodes.iter().find(|n| n.variable.as_deref() == Some(name.as_str())).map(|n| (n.id, "o:value".to_string()))
         };
         if let Some((from, socket)) = reader {
             let _ = inner.connect(from, &socket, l.to, &l.to_socket);
@@ -1106,14 +1066,10 @@ pub fn graph_from_selection(graph: &Graph, ids: &[NodeId]) -> Result<(Graph, Rem
         let name = match leaving.iter().find(|(s, _)| *s == source) {
             Some((_, name)) => name.clone(),
             None => {
-                let from = graph.node(l.from).map_or_else(
-                    || "output".to_string(),
-                    |n| crate::graph::sanitize_identifier(&n.def().name.to_lowercase()),
-                );
+                let from = graph.node(l.from).map_or_else(|| "output".to_string(), |n| crate::graph::sanitize_identifier(&n.def().name.to_lowercase()));
                 let output = inner.add_node(NodeKind::OUTPUT, [x1 + 260.0, y0 + row]);
                 let name = inner.unique_output_name(&from);
-                inner.node_mut(output).expect("just added").param_mut("name").expect("a name").value =
-                    ParamValue::Text(name.clone());
+                inner.node_mut(output).expect("just added").param_mut("name").expect("a name").value = ParamValue::Text(name.clone());
                 let _ = inner.connect(l.from, &l.from_socket, output, "i:input");
                 row += 220.0;
                 leaving.push((source, name.clone()));
@@ -1234,12 +1190,7 @@ pub fn flatten<L: Library>(lib: &L, from: Option<&str>, id: GraphId) -> Option<F
     let graph = &entry.graph;
     let mut b = Builder {
         lib,
-        flat: Graph {
-            resolution: graph.resolution,
-            precision: graph.precision,
-            variables: graph.variables.clone(),
-            ..Graph::default()
-        },
+        flat: Graph { resolution: graph.resolution, precision: graph.precision, variables: graph.variables.clone(), ..Graph::default() },
         problems: BTreeMap::new(),
         owners: HashMap::new(),
         redirects: HashMap::new(),
@@ -1253,14 +1204,7 @@ pub fn flatten<L: Library>(lib: &L, from: Option<&str>, id: GraphId) -> Option<F
 impl<L: Library> Builder<'_, L> {
     /// Lay out `graph`, of the package at `from`: at the top (`prefix` is `None`) as it is,
     /// else under the node `owner` of the top, with the input values `values` gives.
-    fn expand(
-        &mut self,
-        graph: &Graph,
-        from: Option<&str>,
-        prefix: Option<u64>,
-        values: Option<&Params>,
-        owner: Option<NodeId>,
-    ) -> Expanded {
+    fn expand(&mut self, graph: &Graph, from: Option<&str>, prefix: Option<u64>, values: Option<&Params>, owner: Option<NodeId>) -> Expanded {
         let set;
         let graph = match values {
             Some(values) => {
@@ -1397,12 +1341,7 @@ impl<L: Library> Builder<'_, L> {
                         out.outputs.insert(b.text("name").to_string(), source);
                     }
                 }
-                _ => self.flat.links.push(Link {
-                    from: source.0,
-                    from_socket: source.1,
-                    to: id_of(b.id),
-                    to_socket: l.to_socket.clone(),
-                }),
+                _ => self.flat.links.push(Link { from: source.0, from_socket: source.1, to: id_of(b.id), to_socket: l.to_socket.clone() }),
             }
         }
         out.first = Interface::of(graph).outputs.iter().find_map(|p| out.outputs.get(&p.name).cloned());
@@ -1412,17 +1351,9 @@ impl<L: Library> Builder<'_, L> {
             for node in graph.instances() {
                 let Some(first) = children.get(&node.id).and_then(|c| c.first.clone()) else { continue };
                 let instance = node.instance.as_deref().expect("an instance");
-                let shows = Instance::new(
-                    instance.graph.clone(),
-                    Interface { inputs: vec![Port { name: SHOWN.into(), kind: None }], ..Interface::default() },
-                );
+                let shows = Instance::new(instance.graph.clone(), Interface { inputs: vec![Port { name: SHOWN.into(), kind: None }], ..Interface::default() });
                 self.flat.nodes.push(Node::of_graph(node.id, shows, node.pos));
-                self.flat.links.push(Link {
-                    from: first.0,
-                    from_socket: first.1,
-                    to: node.id,
-                    to_socket: input_socket_key(SHOWN),
-                });
+                self.flat.links.push(Link { from: first.0, from_socket: first.1, to: node.id, to_socket: input_socket_key(SHOWN) });
             }
         }
         out
@@ -1432,11 +1363,7 @@ impl<L: Library> Builder<'_, L> {
     fn used(&self, from: Option<&str>, r: &GraphRef) -> Result<(Arc<Graph>, GraphId, Option<String>), String> {
         let package = r.package.clone().or_else(|| from.map(str::to_string));
         let Some(found) = self.lib.package(package.as_deref()) else {
-            return Err(format!(
-                "The package {} of '{}' cannot be found",
-                file_name(package.as_deref().unwrap_or("?")),
-                r.name
-            ));
+            return Err(format!("The package {} of '{}' cannot be found", file_name(package.as_deref().unwrap_or("?")), r.name));
         };
         let entry = found.find(r).ok_or_else(|| match &r.package {
             Some(path) => format!("{} has no graph '{}'", file_name(path), r.name),
@@ -1493,12 +1420,8 @@ impl<L: Library> Builder<'_, L> {
                 self.flat.nodes.push(node);
             }
         }
-        let gray: HashSet<NodeId> = self
-            .redirects
-            .keys()
-            .copied()
-            .filter(|id| self.inputs.get(id).is_some_and(|(kind, ..)| *kind == ImageKind::Gray))
-            .collect();
+        let gray: HashSet<NodeId> =
+            self.redirects.keys().copied().filter(|id| self.inputs.get(id).is_some_and(|(kind, ..)| *kind == ImageKind::Gray)).collect();
         // Follow an input that passes on what arrives at another, as far as it goes.
         let resolve = |mut source: (NodeId, String), redirects: &HashMap<NodeId, (NodeId, String)>| {
             for _ in 0..MAX_DEPTH * 4 {
@@ -1517,19 +1440,10 @@ impl<L: Library> Builder<'_, L> {
             let source = resolve(self.redirects[id].clone(), &self.redirects);
             if let Some(node) = self.flat.node_mut(*id) {
                 let mut conversion = Node::new(*id, NodeKind::GRAYSCALE, node.pos);
-                conversion
-                    .params
-                    .iter_mut()
-                    .filter(|s| s.key == "tiling")
-                    .for_each(|s| s.value = node.value("tiling").cloned().unwrap_or(s.value.clone()));
+                conversion.params.iter_mut().filter(|s| s.key == "tiling").for_each(|s| s.value = node.value("tiling").cloned().unwrap_or(s.value.clone()));
                 *node = conversion;
             }
-            self.flat.links.push(Link {
-                from: source.0,
-                from_socket: source.1,
-                to: *id,
-                to_socket: input_socket_key("input"),
-            });
+            self.flat.links.push(Link { from: source.0, from_socket: source.1, to: *id, to_socket: input_socket_key("input") });
         }
         let passed: HashSet<NodeId> = self.redirects.keys().filter(|id| !gray.contains(id)).copied().collect();
         self.flat.nodes.retain(|n| !passed.contains(&n.id));
@@ -1634,11 +1548,7 @@ pub fn sync_instances(package: &mut Package, own: Option<&str>, lib: &impl Libra
 // ---------------------------------------------------------------------------- paths
 
 fn same_part(a: &Component<'_>, b: &Component<'_>) -> bool {
-    if cfg!(windows) {
-        a.as_os_str().to_string_lossy().eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
-    } else {
-        a == b
-    }
+    if cfg!(windows) { a.as_os_str().to_string_lossy().eq_ignore_ascii_case(&b.as_os_str().to_string_lossy()) } else { a == b }
 }
 
 /// Where the files of a package go when they are collected beside it (so that the package and
@@ -1874,9 +1784,7 @@ mod tests {
         let ev = eval::evaluate(f);
         assert!(ev.cyclic.is_empty());
         let at = |id: NodeId| ev.order.iter().position(|x| *x == id).unwrap();
-        assert!(
-            at(noise) < at(gray.id) && at(gray.id) < at(blur.id) && at(blur.id) < at(out) && at(blur.id) < at(used)
-        );
+        assert!(at(noise) < at(gray.id) && at(gray.id) < at(blur.id) && at(blur.id) < at(out) && at(blur.id) < at(used));
     }
 
     /// A graph used as a node is computed at the size of the graph that uses it, and that is the
@@ -1921,10 +1829,7 @@ mod tests {
             [0.0, 300.0],
         );
         // The graph uses itself.
-        let itself = g.add_instance(
-            Instance::new(GraphRef { package: None, graph: main, name: "Main".into() }, Interface::default()),
-            [0.0, 600.0],
-        );
+        let itself = g.add_instance(Instance::new(GraphRef { package: None, graph: main, name: "Main".into() }, Interface::default()), [0.0, 600.0]);
         let shelf = Shelf([(None, package), (Some(lib_path.to_string()), library)].into_iter().collect());
         let flat = flatten(&shelf, None, main).unwrap();
         assert!(!flat.problems.contains_key(&used), "{:?}", flat.problems);
@@ -1978,9 +1883,7 @@ mod tests {
         let chosen: Vec<NodeId> = g.nodes.iter().filter(|n| wear.contains(&n.kind)).map(|n| n.id).collect();
         assert_eq!(chosen.len(), 6);
         let before = flatten(&Shelf([(None, package.clone())].into_iter().collect()), None, main).unwrap();
-        let result = PackageEdit::GraphFromSelection { graph: main, nodes: chosen.clone(), name: "Wear".into() }
-            .apply(&mut package)
-            .unwrap();
+        let result = PackageEdit::GraphFromSelection { graph: main, nodes: chosen.clone(), name: "Wear".into() }.apply(&mut package).unwrap();
         let sub = result.graph.unwrap();
         let used = result.created[0];
         let g = &package.graph(main).unwrap().graph;
@@ -1994,13 +1897,7 @@ mod tests {
         let after = flatten(&Shelf([(None, package.clone())].into_iter().collect()), None, main).unwrap();
         assert!(after.problems.is_empty(), "{:?}", after.problems);
         let kinds = |f: &Flat| {
-            let mut k: Vec<&str> = f
-                .graph
-                .nodes
-                .iter()
-                .filter(|n| n.def().has_image() && n.def().role != Role::Instance)
-                .map(|n| n.kind.id())
-                .collect();
+            let mut k: Vec<&str> = f.graph.nodes.iter().filter(|n| n.def().has_image() && n.def().role != Role::Instance).map(|n| n.kind.id()).collect();
             k.sort();
             k
         };
@@ -2016,14 +1913,8 @@ mod tests {
         // Nothing to put in a graph, or outputs: refused, and the package stays as it is.
         let output = g.nodes_of(NodeKind::OUTPUT).next().unwrap().id;
         let before = package.clone();
-        assert!(
-            PackageEdit::GraphFromSelection { graph: main, nodes: vec![], name: "x".into() }.apply(&mut package).is_err()
-        );
-        assert!(
-            PackageEdit::GraphFromSelection { graph: main, nodes: vec![output], name: "x".into() }
-                .apply(&mut package)
-                .is_err()
-        );
+        assert!(PackageEdit::GraphFromSelection { graph: main, nodes: vec![], name: "x".into() }.apply(&mut package).is_err());
+        assert!(PackageEdit::GraphFromSelection { graph: main, nodes: vec![output], name: "x".into() }.apply(&mut package).is_err());
         assert_eq!(package, before);
     }
 
@@ -2055,10 +1946,7 @@ mod tests {
         // The Pixel Math alone: the Input node stays with the Levels, and drives the new graph's
         // amount.
         let mut p = package.clone();
-        let used = PackageEdit::GraphFromSelection { graph: main, nodes: vec![pm], name: "Part".into() }
-            .apply(&mut p)
-            .unwrap()
-            .created[0];
+        let used = PackageEdit::GraphFromSelection { graph: main, nodes: vec![pm], name: "Part".into() }.apply(&mut p).unwrap().created[0];
         let g = &p.graph(main).unwrap().graph;
         let link = g.link_into(used, &param_socket_key("amount")).expect("driven from outside");
         assert_eq!(g.node(link.from).unwrap().variable.as_deref(), Some("amount"));
@@ -2068,10 +1956,7 @@ mod tests {
 
         // The Input node, the Pixel Math and the Levels: the value goes with them.
         let mut p = package.clone();
-        let used = PackageEdit::GraphFromSelection { graph: main, nodes: vec![amount, pm, levels], name: "Part".into() }
-            .apply(&mut p)
-            .unwrap()
-            .created[0];
+        let used = PackageEdit::GraphFromSelection { graph: main, nodes: vec![amount, pm, levels], name: "Part".into() }.apply(&mut p).unwrap().created[0];
         let g = &p.graph(main).unwrap().graph;
         assert!(g.variable("amount").is_none());
         let node = g.node(used).unwrap();
@@ -2258,9 +2143,7 @@ mod tests {
         let mut package = Package::new("Main", Graph::default());
         let t = package.add_graph("Tex", tex);
         let main = package.first();
-        let laid_out = |package: &Package, id: GraphId| {
-            flatten(&Shelf([(None, package.clone())].into_iter().collect()), None, id).unwrap().graph
-        };
+        let laid_out = |package: &Package, id: GraphId| flatten(&Shelf([(None, package.clone())].into_iter().collect()), None, id).unwrap().graph;
         let source = |f: &Graph, id: NodeId, socket: &str| f.node(f.link_into(id, socket).unwrap().from).unwrap().clone();
 
         // Alone: the input is its picture; without one, its color.
@@ -2547,13 +2430,8 @@ mod tests {
         g.node_mut(bitmap).unwrap().param_mut("path").unwrap().value = ParamValue::Text("/old/bricks.png".into());
         let mut package = Package::new("Main", g);
         assert_eq!(package.resources, vec![Resource::linked("/old/bricks.png".into(), ResourceKind::Bitmap)]);
-        assert!(
-            PackageEdit::RemoveResource("/old/bricks.png".into()).apply(&mut package.clone()).is_err(),
-            "a node reads it"
-        );
-        PackageEdit::Relink { from: "/old/bricks.png".into(), to: "/new/bricks.png".into() }
-            .apply(&mut package)
-            .unwrap();
+        assert!(PackageEdit::RemoveResource("/old/bricks.png".into()).apply(&mut package.clone()).is_err(), "a node reads it");
+        PackageEdit::Relink { from: "/old/bricks.png".into(), to: "/new/bricks.png".into() }.apply(&mut package).unwrap();
         let g = &package.graph(package.first()).unwrap().graph;
         assert_eq!(g.node(bitmap).unwrap().text("path"), "/new/bricks.png");
         assert_eq!(package.resources[0].path, "/new/bricks.png");
@@ -2563,11 +2441,7 @@ mod tests {
         assert!(package.missing().iter().any(|m| m.path == "/fonts/a.ttf"));
         // Graphs of a package: names of their own; the last can go too, its files staying.
         let first = package.first();
-        let second = PackageEdit::AddGraph { name: "Main".into(), graph: Box::default() }
-            .apply(&mut package)
-            .unwrap()
-            .graph
-            .unwrap();
+        let second = PackageEdit::AddGraph { name: "Main".into(), graph: Box::default() }.apply(&mut package).unwrap().graph.unwrap();
         assert_eq!(package.graph(second).unwrap().name, "Main 2");
         assert!(PackageEdit::RenameGraph { id: second, name: "Main".into() }.apply(&mut package.clone()).is_err());
         PackageEdit::RemoveGraph(first).apply(&mut package).unwrap();

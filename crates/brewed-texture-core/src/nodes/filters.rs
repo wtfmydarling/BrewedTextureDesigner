@@ -90,7 +90,8 @@ pub static BLUR: NodeDef = NodeDef {
     keywords: "gaussian soften smooth",
     inputs: IMAGE_IN,
     outputs: IMAGE_OUT,
-    params: &[pixels("radius", "Radius", 8.0, 0.0, 128.0).at_least(0.0)
+    params: &[pixels("radius", "Radius", 8.0, 0.0, 128.0)
+        .at_least(0.0)
         .tip("Blur radius in pixels of a 1024 px image, so the look is the same at every resolution.")],
     role: Role::Image,
 };
@@ -120,8 +121,7 @@ pub static SLOPE_BLUR: NodeDef = NodeDef {
     inputs: &[image("input", "Input"), gray("slope", "Slope Map")],
     outputs: IMAGE_OUT,
     params: &[
-        pixels("intensity", "Intensity", 16.0, -128.0, 128.0)
-            .tip("Distance travelled along the slope, in pixels of a 1024 px image. Negative flows uphill."),
+        pixels("intensity", "Intensity", 16.0, -128.0, 128.0).tip("Distance travelled along the slope, in pixels of a 1024 px image. Negative flows uphill."),
         int("samples", "Samples", 16, 2, 64).bounded(),
         choice("mode", "Mode", 0, &["Blur", "Min", "Max"], &["blur", "min", "max"]),
     ],
@@ -203,12 +203,8 @@ pub static PIXEL_MATH: NodeDef = NodeDef {
     outputs: IMAGE_OUT,
     params: &[
         expression("expression", "Expression", "u * v", true),
-        choice("channel", "Read Channel", 0, READ_CHANNELS, READ_CHANNEL_IDS)
-            .fixed()
-            .tip("Which channel of connected images the variables read."),
-        boolean("auto_bind", "Auto-bind", true)
-            .fixed()
-            .tip("Unconnected variables named like a graph variable take that variable's value."),
+        choice("channel", "Read Channel", 0, READ_CHANNELS, READ_CHANNEL_IDS).fixed().tip("Which channel of connected images the variables read."),
+        boolean("auto_bind", "Auto-bind", true).fixed().tip("Unconnected variables named like a graph variable take that variable's value."),
     ],
     role: Role::Image,
 };

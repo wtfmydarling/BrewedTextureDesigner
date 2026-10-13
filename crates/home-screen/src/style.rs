@@ -176,7 +176,8 @@ impl Style {
                 button::Status::Pressed => gray(52),
                 _ => self.card,
             };
-            let border = if chosen { Border { color: gray(214), width: 1.5, radius: 6.0.into() } } else { Border { color: self.line, width: 1.0, radius: 6.0.into() } };
+            let border =
+                if chosen { Border { color: gray(214), width: 1.5, radius: 6.0.into() } } else { Border { color: self.line, width: 1.0, radius: 6.0.into() } };
             button::Style { background: Some(Background::Color(bg)), text_color: self.text, border, shadow: Shadow::default(), snap: true }
         }
     }
@@ -195,7 +196,13 @@ impl Style {
                 _ => (self.card, self.line),
             };
             let text = if status == button::Status::Disabled { self.faint } else { self.text };
-            button::Style { background: Some(Background::Color(bg)), text_color: text, border: Border { color: line, width: 1.0, radius: 6.0.into() }, shadow: Shadow::default(), snap: true }
+            button::Style {
+                background: Some(Background::Color(bg)),
+                text_color: text,
+                border: Border { color: line, width: 1.0, radius: 6.0.into() },
+                shadow: Shadow::default(),
+                snap: true,
+            }
         }
     }
 

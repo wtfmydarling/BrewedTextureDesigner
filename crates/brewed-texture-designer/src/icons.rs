@@ -59,7 +59,9 @@ fn path(icon: Icon) -> &'static str {
         Icon::Bypass => r#"<path d="M3 12h6M15 12h6M9 12c0-5 6-5 6 0"/><path d="M9 12c0 5 6 5 6 0" stroke-dasharray="2 2"/>"#,
         Icon::Link => r#"<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>"#,
         Icon::Package => r#"<path d="M3 4.5h18v4H3zM4.5 8.5V19.5h15V8.5M9.5 12h5"/>"#,
-        Icon::Graph => r#"<rect x="3" y="4" width="7" height="6" rx="1.5"/><rect x="14" y="14" width="7" height="6" rx="1.5"/><path d="M10 7h2.5a2 2 0 0 1 2 2v5"/>"#,
+        Icon::Graph => {
+            r#"<rect x="3" y="4" width="7" height="6" rx="1.5"/><rect x="14" y="14" width="7" height="6" rx="1.5"/><path d="M10 7h2.5a2 2 0 0 1 2 2v5"/>"#
+        }
         Icon::Plus => r#"<path d="M12 5v14M5 12h14"/>"#,
         Icon::Close => r#"<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>"#,
         Icon::Minimize => r#"<path d="M6 12h12"/>"#,
@@ -67,7 +69,9 @@ fn path(icon: Icon) -> &'static str {
         Icon::Restore => r#"<rect x="5.5" y="8.5" width="10" height="10" rx="1"/><path d="M8.5 8.5V6.5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-2"/>"#,
         Icon::List => r#"<path d="M9 6.5h11M9 12h11M9 17.5h11M4.5 6.5h.5M4.5 12h.5M4.5 17.5h.5"/>"#,
         Icon::Font => r#"<path d="M5 19.5L11 4.5h2l6 15M7.4 13.5h9.2"/>"#,
-        Icon::Vector => r#"<path d="M5 19C8 10 15 12 19 5"/><rect x="3" y="17" width="4" height="4" rx=".6"/><rect x="17" y="3" width="4" height="4" rx=".6"/>"#,
+        Icon::Vector => {
+            r#"<path d="M5 19C8 10 15 12 19 5"/><rect x="3" y="17" width="4" height="4" rx=".6"/><rect x="17" y="3" width="4" height="4" rx=".6"/>"#
+        }
         Icon::Warning => r#"<path d="M12 4l9 16H3zM12 10v4.5M12 17.4v.2"/>"#,
         Icon::Info => r#"<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.2"/>"#,
         Icon::Sun => {
@@ -88,9 +92,5 @@ fn handle(icon: Icon) -> svg::Handle {
 
 /// An icon of `size` pixels tinted with `color`.
 pub fn icon<'a, Message: 'a>(icon: Icon, size: f32, color: Color) -> Element<'a, Message> {
-    svg(handle(icon))
-        .width(Length::Fixed(size))
-        .height(Length::Fixed(size))
-        .style(move |_, _| svg::Style { color: Some(color) })
-        .into()
+    svg(handle(icon)).width(Length::Fixed(size)).height(Length::Fixed(size)).style(move |_, _| svg::Style { color: Some(color) }).into()
 }

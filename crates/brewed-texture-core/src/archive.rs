@@ -189,10 +189,7 @@ impl<W: Write> Writer<W> {
         let directory = self.out.at;
         for e in &self.entries {
             // The fields that do not fit, in the order the ZIP64 extra field holds them.
-            let over: Vec<u64> = [e.size, e.compressed, e.offset]
-                .into_iter()
-                .filter(|v| self.zip64 || *v >= u64::from(FULL32))
-                .collect();
+            let over: Vec<u64> = [e.size, e.compressed, e.offset].into_iter().filter(|v| self.zip64 || *v >= u64::from(FULL32)).collect();
             let long = |v: u64| if self.zip64 || v >= u64::from(FULL32) { FULL32 } else { v as u32 };
             let mut record = Vec::with_capacity(46 + e.name.len() + 28);
             record.extend(CENTRAL.to_le_bytes());
@@ -332,10 +329,7 @@ impl<R: Read + Seek> Archive<R> {
         inner.read_exact(&mut tail).map_err(io)?;
         let at = (0..tail.len().saturating_sub(21))
             .rev()
-            .find(|&i| {
-                tail[i..i + 4] == END.to_le_bytes()
-                    && usize::from(u16::from_le_bytes([tail[i + 20], tail[i + 21]])) == tail.len() - i - 22
-            })
+            .find(|&i| tail[i..i + 4] == END.to_le_bytes() && usize::from(u16::from_le_bytes([tail[i + 20], tail[i + 21]])) == tail.len() - i - 22)
             .ok_or("this is not an archive (a ZIP file)")?;
         let end_at = len - tail_len + at as u64;
         let mut end = Fields::new(&tail[at + 4..]);

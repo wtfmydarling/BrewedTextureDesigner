@@ -5,17 +5,17 @@
 //! takes the changes, Cancel forgets them. And the offer to start the program again, for the
 //! settings it takes only then.
 
+use brewed_texture_core::Precision;
 use iced::widget::{button, center, column, container, mouse_area, opaque, pick_list, row, space, text, toggler};
 use iced::{Alignment, Color, Element, Length, Padding};
-use brewed_texture_core::Precision;
 
 use crate::app::{App, Message, SettingsDialog, SettingsMessage};
 use crate::icons::{Icon, icon};
 use crate::settings::{FileDialogs, Graphics, NewFiles, Page, Setting, Settings};
 use crate::shortcuts::{Chord, Command, Place, Shortcuts};
 use crate::style;
-use crate::widget::scroll::scroll_box;
 use crate::widget::number::number;
+use crate::widget::scroll::scroll_box;
 
 /// How wide the values are.
 const CONTROL: f32 = 300.0;
@@ -23,10 +23,7 @@ const CONTROL: f32 = 300.0;
 /// The commands on the Shortcuts page, in groups.
 pub(crate) const GROUPS: &[(&str, &[Command])] = &[
     ("Packages", &[Command::New, Command::Open, Command::Save, Command::SaveAs, Command::Export]),
-    (
-        "Editing",
-        &[Command::Undo, Command::Redo, Command::Copy, Command::Cut, Command::Paste, Command::Duplicate, Command::Delete, Command::SelectAll],
-    ),
+    ("Editing", &[Command::Undo, Command::Redo, Command::Copy, Command::Cut, Command::Paste, Command::Duplicate, Command::Delete, Command::SelectAll]),
     ("Graph", &[Command::Bypass, Command::GraphFromSelection, Command::Frame, Command::AddComment, Command::AddNode]),
     ("2D View", &[Command::ShowTiling]),
     ("Program", &[Command::Settings, Command::Help]),
@@ -53,23 +50,15 @@ pub fn view<'a>(app: &'a App, dialog: &'a SettingsDialog) -> Element<'a, Message
         if draft.differ(applied, page) {
             label = label.push(space().width(Length::Fill)).push(text("●").size(style::CAPTION).color(style::TEXT_DIM));
         }
-        pages = pages.push(
-            button(label)
-                .width(Length::Fill)
-                .padding([7, 12])
-                .style(style::nav_tab(chosen))
-                .on_press(say(SettingsMessage::Page(page))),
-        );
+        pages = pages.push(button(label).width(Length::Fill).padding([7, 12]).style(style::nav_tab(chosen)).on_press(say(SettingsMessage::Page(page))));
     }
     let sidebar = container(pages).width(Length::Fixed(190.0)).height(Length::Fill).style(style::sidebar);
 
     let page = dialog.page;
-    let mut content = column![
-        text(page.name()).size(20).font(style::heavy()).color(style::TEXT_BRIGHT),
-        text(page.about()).size(style::TEXT_SIZE).color(style::TEXT_DIM),
-    ]
-    .spacing(4)
-    .padding(Padding { top: 18.0, right: 22.0, bottom: 22.0, left: 22.0 });
+    let mut content =
+        column![text(page.name()).size(20).font(style::heavy()).color(style::TEXT_BRIGHT), text(page.about()).size(style::TEXT_SIZE).color(style::TEXT_DIM),]
+            .spacing(4)
+            .padding(Padding { top: 18.0, right: 22.0, bottom: 22.0, left: 22.0 });
     let body: Vec<Element<'a, Message>> = match page {
         Page::General => general(applied, draft),
         Page::Packages => packages(applied, draft),
@@ -91,9 +80,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a SettingsDialog) -> Element<'a, Message
         if problems.len() > 3 {
             said.push(format!("And {} more.", problems.len() - 3));
         }
-        head = head.push(
-            container(text(said.join("\n")).size(style::SMALL)).padding(8).width(Length::Fill).style(style::message_box(style::WARNING)),
-        );
+        head = head.push(container(text(said.join("\n")).size(style::SMALL)).padding(8).width(Length::Fill).style(style::message_box(style::WARNING)));
     }
 
     let kept = match file {
@@ -111,10 +98,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a SettingsDialog) -> Element<'a, Message
             .padding([6, 14])
             .style(style::button)
             .on_press(say(SettingsMessage::Cancel)),
-        button(text("Apply").size(style::TEXT_SIZE))
-            .padding([6, 18])
-            .style(style::primary_button)
-            .on_press_maybe(pending.then(|| say(SettingsMessage::Apply))),
+        button(text("Apply").size(style::TEXT_SIZE)).padding([6, 18]).style(style::primary_button).on_press_maybe(pending.then(|| say(SettingsMessage::Apply))),
     ]
     .spacing(8)
     .align_y(Alignment::Center)
@@ -214,10 +198,12 @@ fn strip<'a>(r: Row<'a>, even: bool) -> Element<'a, Message> {
         ),
         None => space().width(Length::Fixed(21.0)).into(),
     };
-    let line = row![said, container(r.control).width(Length::Fixed(CONTROL)), reset]
-        .spacing(14)
-        .align_y(Alignment::Center)
-        .padding(Padding { top: 9.0, right: 8.0, bottom: 9.0, left: 12.0 });
+    let line = row![said, container(r.control).width(Length::Fixed(CONTROL)), reset].spacing(14).align_y(Alignment::Center).padding(Padding {
+        top: 9.0,
+        right: 8.0,
+        bottom: 9.0,
+        left: 12.0,
+    });
     // A change not applied yet: a bar down the left of the row, in the color of what is chosen.
     container(container(line).width(Length::Fill).style(style::setting_row(even)))
         .padding(Padding { left: 3.0, ..Padding::ZERO })
@@ -239,11 +225,16 @@ fn segmented<'a, T: Copy + PartialEq + 'a>(options: &[(T, &'a str)], chosen: T, 
         // as it is when chosen, the heavier).
         let wide = crate::view::text_width_in(label, style::TEXT_SIZE, style::bold()).ceil().clamp(1.0, f32::from(u16::MAX)) as u16;
         let option = button(
-            text(*label).size(style::TEXT_SIZE).font(style::chosen_font(*value == chosen)).width(Length::Fill).align_x(Alignment::Center).wrapping(text::Wrapping::None),
+            text(*label)
+                .size(style::TEXT_SIZE)
+                .font(style::chosen_font(*value == chosen))
+                .width(Length::Fill)
+                .align_x(Alignment::Center)
+                .wrapping(text::Wrapping::None),
         )
-            .width(Length::FillPortion(wide))
-            .padding([4, 6])
-            .style(style::segment(*value == chosen));
+        .width(Length::FillPortion(wide))
+        .padding([4, 6])
+        .style(style::segment(*value == chosen));
         segments = segments.push(if enabled { option.on_press(set(on(*value))) } else { option });
     }
     container(segments).padding(2).width(Length::Fill).style(style::segments).into()
@@ -378,8 +369,12 @@ fn packages<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message
                 Row::new(
                     "File import mode",
                     match draft.new_files {
-                        NewFiles::Embed => "A file chosen in a field or dropped on the window is held in the package: one file to copy or send, which needs nothing beside it.",
-                        NewFiles::Link => "A file chosen in a field or dropped on the window is named where it is on disk: it goes with the package only if copied along.",
+                        NewFiles::Embed => {
+                            "A file chosen in a field or dropped on the window is held in the package: one file to copy or send, which needs nothing beside it."
+                        }
+                        NewFiles::Link => {
+                            "A file chosen in a field or dropped on the window is named where it is on disk: it goes with the package only if copied along."
+                        }
                     },
                     files,
                 )
@@ -389,8 +384,12 @@ fn packages<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message
         group(
             "New Graphs",
             vec![
-                Row::new("Size", "How wide and how high the images of a graph made new are. Each graph has its own, in its properties.", size)
-                    .state(applied.graph_size, draft.graph_size, d.graph_size, set(Setting::GraphSize(d.graph_size))),
+                Row::new("Size", "How wide and how high the images of a graph made new are. Each graph has its own, in its properties.", size).state(
+                    applied.graph_size,
+                    draft.graph_size,
+                    d.graph_size,
+                    set(Setting::GraphSize(d.graph_size)),
+                ),
                 Row::new("Precision", "What its images are kept in: more bits, finer steps, and more memory.", precision).state(
                     applied.graph_precision,
                     draft.graph_precision,
@@ -487,27 +486,30 @@ fn recovery<'a>(applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message
             .state(applied.keep_versions, draft.keep_versions, d.keep_versions, set(Setting::KeepVersions(d.keep_versions))),
         ],
     );
-    vec![group(
-        "Unsaved Work",
-        vec![
-            Row::new(
-                "Keep unsaved work",
-                if draft.keep_unsaved {
-                    "What the packages have not saved is kept beside the settings, and offered back if the program stops without quitting."
-                } else {
-                    "Nothing is kept: what was not saved is gone if the program stops without quitting."
-                },
-                switch(draft.keep_unsaved, true, Setting::KeepUnsaved),
-            )
-            .state(applied.keep_unsaved, draft.keep_unsaved, d.keep_unsaved, set(Setting::KeepUnsaved(d.keep_unsaved))),
-            Row::new(
-                "Auto-save interval",
-                "How often unsaved work is kept. Only packages that changed since are kept again; on a slow disk, less often is kinder.",
-                choices(every, Minutes(draft.keep_every), draft.keep_unsaved, |m: Minutes| Setting::KeepEvery(m.0)),
-            )
-            .state(applied.keep_every, draft.keep_every, d.keep_every, set(Setting::KeepEvery(d.keep_every))),
-        ],
-    ), saved]
+    vec![
+        group(
+            "Unsaved Work",
+            vec![
+                Row::new(
+                    "Keep unsaved work",
+                    if draft.keep_unsaved {
+                        "What the packages have not saved is kept beside the settings, and offered back if the program stops without quitting."
+                    } else {
+                        "Nothing is kept: what was not saved is gone if the program stops without quitting."
+                    },
+                    switch(draft.keep_unsaved, true, Setting::KeepUnsaved),
+                )
+                .state(applied.keep_unsaved, draft.keep_unsaved, d.keep_unsaved, set(Setting::KeepUnsaved(d.keep_unsaved))),
+                Row::new(
+                    "Auto-save interval",
+                    "How often unsaved work is kept. Only packages that changed since are kept again; on a slow disk, less often is kinder.",
+                    choices(every, Minutes(draft.keep_every), draft.keep_unsaved, |m: Minutes| Setting::KeepEvery(m.0)),
+                )
+                .state(applied.keep_every, draft.keep_every, d.keep_every, set(Setting::KeepEvery(d.keep_every))),
+            ],
+        ),
+        saved,
+    ]
 }
 
 fn graphics<'a>(app: &App, applied: &Settings, draft: &Settings) -> Vec<Element<'a, Message>> {
@@ -522,10 +524,14 @@ fn graphics<'a>(app: &App, applied: &Settings, draft: &Settings) -> Vec<Element<
     vec![group(
         "Drawing",
         vec![
-            Row::new("Graphics API", "What the program draws and computes with. Automatic takes the one the system does best.", segmented(&apis, draft.graphics, true, Setting::Graphics))
-                .state(applied.graphics, draft.graphics, d.graphics, set(Setting::Graphics(d.graphics)))
-                .restart()
-                .note(api_note),
+            Row::new(
+                "Graphics API",
+                "What the program draws and computes with. Automatic takes the one the system does best.",
+                segmented(&apis, draft.graphics, true, Setting::Graphics),
+            )
+            .state(applied.graphics, draft.graphics, d.graphics, set(Setting::Graphics(d.graphics)))
+            .restart()
+            .note(api_note),
             Row::new(
                 "Antialiasing",
                 "Smooth edges of the links, nodes and curves the program draws. Off, it takes less video memory, on large screens most.",
@@ -542,9 +548,7 @@ fn shortcuts<'a>(applied: &Settings, dialog: &'a SettingsDialog) -> Vec<Element<
     let draft = &dialog.draft;
     let mut parts = Vec::new();
     if let Some(note) = &dialog.note {
-        parts.push(
-            container(text(note.clone()).size(style::SMALL)).padding(8).width(Length::Fill).style(style::message_box(style::TEXT_DIM)).into(),
-        );
+        parts.push(container(text(note.clone()).size(style::SMALL)).padding(8).width(Length::Fill).style(style::message_box(style::TEXT_DIM)).into());
     }
     for (title, commands) in GROUPS {
         let rows = commands

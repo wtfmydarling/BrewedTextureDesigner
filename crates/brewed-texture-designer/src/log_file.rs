@@ -114,9 +114,7 @@ impl Write for Sink {
 /// and to the file in `folder`. Where the file is, when it could be made.
 pub fn start(folder: Option<&Path>, filter: &str) -> Option<PathBuf> {
     let (sink, path) = Sink::open(folder, CAP);
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter))
-        .target(env_logger::Target::Pipe(Box::new(sink)))
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter)).target(env_logger::Target::Pipe(Box::new(sink))).init();
     path
 }
 

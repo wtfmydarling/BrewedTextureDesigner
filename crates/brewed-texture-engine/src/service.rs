@@ -11,8 +11,8 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use brewed_texture_core::eval::Evaluation;
 use brewed_texture_core::NodeKind;
+use brewed_texture_core::eval::Evaluation;
 use brewed_texture_core::graph::{Graph, NodeId};
 
 use crate::engine::{ChoicePictures, DisplayImage, Engine, EvalReport, ImageReport, Keep, Memory, Thumbnail};
@@ -447,8 +447,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                     // Converting and encoding happen off the engine thread, from the image as
                     // the GPU stores it, a band at a time.
                     write(&mut writing, job.path.clone(), move || {
-                        let result =
-                            export::write_stored(&job.path, &image, job.format, job.bit_depth).map(|_| job.path);
+                        let result = export::write_stored(&job.path, &image, job.format, job.bit_depth).map(|_| job.path);
                         (emit)(Event::Exported(result));
                     });
                 }
@@ -491,13 +490,7 @@ fn write(writing: &mut HashMap<PathBuf, JoinHandle<()>>, path: PathBuf, job: imp
 
 /// Forget the document (see [`Request::Reset`]): every image of the engine, and the graph, what
 /// the views show of it and the memory the front end was told of, which it forgot too.
-fn forget(
-    engine: &mut Engine,
-    current: &mut Option<Current>,
-    preview: &mut Option<NodeId>,
-    materials: &mut Vec<NodeId>,
-    memory: &mut Option<Memory>,
-) {
+fn forget(engine: &mut Engine, current: &mut Option<Current>, preview: &mut Option<NodeId>, materials: &mut Vec<NodeId>, memory: &mut Option<Memory>) {
     engine.reset();
     *current = None;
     *preview = None;

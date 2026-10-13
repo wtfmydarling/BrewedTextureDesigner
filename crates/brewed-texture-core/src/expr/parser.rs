@@ -138,18 +138,7 @@ fn channels(letters: &str) -> Option<Vec<u8>> {
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Token]) -> Self {
-        Self {
-            tokens,
-            pos: 0,
-            depth: 0,
-            tree: 0,
-            dim: 1,
-            vars: Vec::new(),
-            first_read: Vec::new(),
-            statement: 0,
-            set: HashMap::new(),
-            outputs: &[],
-        }
+        Self { tokens, pos: 0, depth: 0, tree: 0, dim: 1, vars: Vec::new(), first_read: Vec::new(), statement: 0, set: HashMap::new(), outputs: &[] }
     }
 
     /// The token after the next one.
@@ -246,11 +235,7 @@ impl<'a> Parser<'a> {
             (_, 1) => Ok(a),
             _ => Err(self.error_at(
                 op,
-                format!(
-                    "{} and {} do not go together: take as many components of one as the other has (.xy, .xyz)",
-                    describe_dim(a),
-                    describe_dim(b)
-                ),
+                format!("{} and {} do not go together: take as many components of one as the other has (.xy, .xyz)", describe_dim(a), describe_dim(b)),
             )),
         }
     }
@@ -320,10 +305,7 @@ impl<'a> Parser<'a> {
                 && let Some(&before) = self.set.get(name)
                 && before != dim
             {
-                return Err(ExprError {
-                    message: format!("'{name}' is {}: it cannot become {}", describe_dim(before), describe_dim(dim)),
-                    span: tok.span,
-                });
+                return Err(ExprError { message: format!("'{name}' is {}: it cannot become {}", describe_dim(before), describe_dim(dim)), span: tok.span });
             }
             self.set.insert(name.clone(), dim);
             statements.push(Assignment { name: name.clone(), name_span: tok.span, values, span });
@@ -685,15 +667,9 @@ impl<'a> Parser<'a> {
         if !self.eat(&TokenKind::RParen) {
             let next = self.peek().clone();
             if matches!(next.kind, TokenKind::Eof) {
-                return Err(ExprError {
-                    message: format!("Missing ')' to close the call to '{name}'"),
-                    span: Span::new(name_tok.span.start, open.span.end),
-                });
+                return Err(ExprError { message: format!("Missing ')' to close the call to '{name}'"), span: Span::new(name_tok.span.start, open.span.end) });
             }
-            return Err(self.error_at(
-                &next,
-                format!("Expected ',' or ')' in call to '{name}' but found {}", next.kind.describe()),
-            ));
+            return Err(self.error_at(&next, format!("Expected ',' or ')' in call to '{name}' but found {}", next.kind.describe())));
         }
         let span = self.span_from(name_tok);
         let n = args.len();
@@ -709,10 +685,7 @@ impl<'a> Parser<'a> {
         }
         // What `sample` reads is an image input: named, not computed, nor set by the program.
         if info.func == Func::Sample && !matches!(args.first(), Some(Node::Var(i)) if !self.is_set(*i)) {
-            return Err(ExprError {
-                message: format!("The first argument of '{name}' is the name of an image input — usage: {}", info.signature),
-                span,
-            });
+            return Err(ExprError { message: format!("The first argument of '{name}' is the name of an image input — usage: {}", info.signature), span });
         }
         self.dim = builtins::result_dim(info.func, &dims).map_err(|message| ExprError { message: format!("'{name}': {message}"), span })?;
         self.made(deep)?;

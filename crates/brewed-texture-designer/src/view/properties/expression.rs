@@ -2,16 +2,16 @@
 //! editor, errors, variables, a plot of the function and a reference of functions and
 //! constants.
 
-use iced::alignment::Vertical;
-use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
-use iced::widget::text::{Alignment as TextAlign, LineHeight, Shaping};
-use iced::widget::{button, column, container, pick_list, row, text, text_editor};
-use iced::{Alignment, Element, Length, Pixels, Point, Rectangle, mouse};
 use brewed_texture_core::eval::VarSource;
 use brewed_texture_core::expr::{self, Language, builtins};
 use brewed_texture_core::graph::Node;
 use brewed_texture_core::nodes::{FX_MAP_BUILTINS, FX_MAP_OUTPUTS, MATH_BUILTINS, PIXEL_MATH_BUILTINS};
 use brewed_texture_core::{Edit, NodeKind, Value};
+use iced::alignment::Vertical;
+use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
+use iced::widget::text::{Alignment as TextAlign, LineHeight, Shaping};
+use iced::widget::{button, column, container, pick_list, row, text, text_editor};
+use iced::{Alignment, Element, Length, Pixels, Point, Rectangle, mouse};
 
 use crate::app::{App, Message};
 use crate::highlight::{ExpressionHighlighter, Settings};
@@ -178,11 +178,7 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
             .vertical_spacing(4),
         );
         let args: Vec<f64> = app.eval.node(id).map(|e| e.vars.iter().map(|v| v.value).collect()).unwrap_or_default();
-        col = col.push(
-            iced::widget::canvas(Plot { program: program.clone(), args, var, lo, hi })
-                .width(Length::Fill)
-                .height(Length::Fixed(130.0)),
-        );
+        col = col.push(iced::widget::canvas(Plot { program: program.clone(), args, var, lo, hi }).width(Length::Fill).height(Length::Fixed(130.0)));
     }
 
     // Reference.
@@ -212,11 +208,8 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
         }
         if node.kind == NodeKind::PIXEL_MATH {
             list = list.push(text(format!("Per-pixel built-ins: {}", PIXEL_MATH_BUILTINS.join(", "))).size(style::SMALL));
-            list = list.push(
-                text("u, v: 0..1 image coordinates · px, py: pixel coordinates · width, height: image size")
-                    .size(style::SMALL)
-                    .color(style::TEXT_DIM),
-            );
+            list = list
+                .push(text("u, v: 0..1 image coordinates · px, py: pixel coordinates · width, height: image size").size(style::SMALL).color(style::TEXT_DIM));
         }
         if script {
             let outputs: Vec<&str> = FX_MAP_OUTPUTS.iter().map(|(o, ..)| *o).collect();
@@ -251,8 +244,8 @@ pub fn view<'a>(app: &'a App, node: &'a Node) -> Element<'a, Message> {
                  vec4, worked on component by component; .x .xy .rgb … take their components (of an image input, its \
                  channels) · name = value lines before the value (or ; between them) give names values; # comments",
             )
-                .size(style::SMALL)
-                .color(style::TEXT_DIM),
+            .size(style::SMALL)
+            .color(style::TEXT_DIM),
         );
         // What each does beside it, or under it where the panel is narrow (squeezed beside it,
         // it stood a word a line, seventeen lines high).
@@ -310,9 +303,7 @@ impl canvas::Program<Message> for Plot {
             ymax += 1.0;
         }
         let (w, h) = (bounds.width, bounds.height);
-        let to = |x: f64, y: f64| {
-            Point::new(((x - lo) / (hi - lo)) as f32 * w, h - 6.0 - ((y - ymin) / (ymax - ymin)) as f32 * (h - 12.0))
-        };
+        let to = |x: f64, y: f64| Point::new(((x - lo) / (hi - lo)) as f32 * w, h - 6.0 - ((y - ymin) / (ymax - ymin)) as f32 * (h - 12.0));
         let axis = Stroke::default().with_width(1.0).with_color(style::gray(64));
         if ymin < 0.0 && ymax > 0.0 {
             let y = to(0.0, 0.0).y;

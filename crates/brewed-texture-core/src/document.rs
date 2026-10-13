@@ -95,10 +95,7 @@ impl Document {
 
     /// File name for the title bar.
     pub fn title(&self) -> String {
-        self.path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map_or_else(|| "Untitled".to_string(), |n| n.to_string_lossy().to_string())
+        self.path.as_ref().and_then(|p| p.file_name()).map_or_else(|| "Untitled".to_string(), |n| n.to_string_lossy().to_string())
     }
 
     pub fn is_dirty(&self) -> bool {

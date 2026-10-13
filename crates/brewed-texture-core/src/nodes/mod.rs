@@ -26,21 +26,17 @@ pub use adjustments::CURVE_CHANNELS;
 pub use effects::BEVEL_PROFILES;
 pub use filters::{BLEND_MODES, DISTANCE_MODES, FLOOD_FILL_OUTPUTS, PIXEL_MATH_BUILTINS, READ_CHANNELS};
 pub use generators::{
-    SVG_FITS, SVG_OUTPUTS, TEXT_ALIGNS,
-    DEFAULT_FX_MAP_PROGRAM, FX_MAP_BLEND_MIN, FX_MAP_BLEND_MULTIPLY, FX_MAP_BLENDS, FX_MAP_BUILTINS, FX_MAP_OUTPUTS,
-    FX_MAP_RULES, FX_MAP_STARTS, MAX_SPLATS,
-    NOISE_CELLS, NOISE_CRACKS, NOISE_DIRECTIONAL_SCRATCHES, NOISE_FIBERS, NOISE_SCRATCHES, NOISE_TYPES, NOISE_VEINS,
-    NOISE_WEAVE, NOISE_WHITE, NOISE_WOOD, WEAVE_REPEATS, WEAVES,
-    SHAPE_POLYGON, SHAPE_ROUNDED, SHAPE_STAR, SHAPES, TILE_PATTERN_IMAGE, TILE_SAMPLER_COLORS, TILE_SAMPLER_OVERLAPS,
-};
-pub use output::{
-    DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_DXT1, DEPTH_DXT2, DEPTH_DXT3, DEPTH_DXT4, DEPTH_DXT5, OUTPUT_DEPTHS,
-    OUTPUT_FORMATS, USAGE_AO, USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL,
-    USAGE_ROUGHNESS, output_format_channels,
+    DEFAULT_FX_MAP_PROGRAM, FX_MAP_BLEND_MIN, FX_MAP_BLEND_MULTIPLY, FX_MAP_BLENDS, FX_MAP_BUILTINS, FX_MAP_OUTPUTS, FX_MAP_RULES, FX_MAP_STARTS, MAX_SPLATS,
+    NOISE_CELLS, NOISE_CRACKS, NOISE_DIRECTIONAL_SCRATCHES, NOISE_FIBERS, NOISE_SCRATCHES, NOISE_TYPES, NOISE_VEINS, NOISE_WEAVE, NOISE_WHITE, NOISE_WOOD,
+    SHAPE_POLYGON, SHAPE_ROUNDED, SHAPE_STAR, SHAPES, SVG_FITS, SVG_OUTPUTS, TEXT_ALIGNS, TILE_PATTERN_IMAGE, TILE_SAMPLER_COLORS, TILE_SAMPLER_OVERLAPS,
+    WEAVE_REPEATS, WEAVES,
 };
 pub use hdri::{
-    LIGHT_COLOR_MODES, LIGHT_COLOR_TEMPERATURE, LINE_LIGHT_PATTERNS, PLANE_LIGHT_PATTERNS, PLANE_LIGHT_PLACEMENTS,
-    SHAPE_LIGHT_SHAPES, temperature_color,
+    LIGHT_COLOR_MODES, LIGHT_COLOR_TEMPERATURE, LINE_LIGHT_PATTERNS, PLANE_LIGHT_PATTERNS, PLANE_LIGHT_PLACEMENTS, SHAPE_LIGHT_SHAPES, temperature_color,
+};
+pub use output::{
+    DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_DXT1, DEPTH_DXT2, DEPTH_DXT3, DEPTH_DXT4, DEPTH_DXT5, OUTPUT_DEPTHS, OUTPUT_FORMATS, USAGE_AO,
+    USAGE_BASE_COLOR, USAGE_EMISSIVE, USAGE_HEIGHT, USAGE_METALLIC, USAGE_NORMAL, USAGE_ROUGHNESS, output_format_channels,
 };
 pub use usage::{USAGE_GROUPS, Usage, UsageGroup};
 pub use values::{DEFAULT_MATH_EXPRESSION, MATH_BUILTINS};
@@ -63,15 +59,8 @@ pub enum Category {
 }
 
 impl Category {
-    pub const ALL: [Category; 7] = [
-        Category::Values,
-        Category::Generators,
-        Category::Filters,
-        Category::Effects,
-        Category::Adjustments,
-        Category::Hdri,
-        Category::Output,
-    ];
+    pub const ALL: [Category; 7] =
+        [Category::Values, Category::Generators, Category::Filters, Category::Effects, Category::Adjustments, Category::Hdri, Category::Output];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -372,9 +361,7 @@ impl<'a> ParamDef<'a> {
             ParamKind::Vec2 { default, .. } => ParamValue::Vec2(default),
             ParamKind::Color { default } => ParamValue::Color(default),
             ParamKind::Enum { default, .. } => ParamValue::Enum(default),
-            ParamKind::Text { default } | ParamKind::Expression { default, .. } => {
-                ParamValue::Text(default.to_string())
-            }
+            ParamKind::Text { default } | ParamKind::Expression { default, .. } => ParamValue::Text(default.to_string()),
             ParamKind::File { .. } | ParamKind::Image { .. } => ParamValue::Text(String::new()),
             ParamKind::Gradient { default } => ParamValue::Gradient(Gradient::from_pairs(default)),
             ParamKind::Curve { default } => ParamValue::Curve(Curve::from_points(default)),
@@ -410,10 +397,7 @@ impl<'a> ParamDef<'a> {
         let Some(name) = self.enum_options().get(option) else { return false };
         let name = name.to_lowercase();
         let words = self.words.get(option).map(|w| w.to_lowercase()).unwrap_or_default();
-        query
-            .to_lowercase()
-            .split_whitespace()
-            .all(|q| name.contains(q) || words.split_whitespace().any(|w| w.starts_with(q)))
+        query.to_lowercase().split_whitespace().all(|q| name.contains(q) || words.split_whitespace().any(|w| w.starts_with(q)))
     }
 
     pub fn can_expose(&self) -> bool {
@@ -440,10 +424,7 @@ impl<'a> ParamDef<'a> {
                 | (ParamKind::Vec2 { .. }, ParamValue::Vec2(_))
                 | (ParamKind::Color { .. }, ParamValue::Color(_))
                 | (ParamKind::Enum { .. }, ParamValue::Enum(_))
-                | (
-                    ParamKind::Text { .. } | ParamKind::File { .. } | ParamKind::Image { .. } | ParamKind::Expression { .. },
-                    ParamValue::Text(_)
-                )
+                | (ParamKind::Text { .. } | ParamKind::File { .. } | ParamKind::Image { .. } | ParamKind::Expression { .. }, ParamValue::Text(_))
                 | (ParamKind::Gradient { .. }, ParamValue::Gradient(_))
                 | (ParamKind::Curve { .. }, ParamValue::Curve(_))
         )
@@ -462,19 +443,11 @@ impl<'a> ParamDef<'a> {
         let fin = |v: f32, d: f32| bound(if v.is_finite() { v } else { d });
         match (self.kind, value) {
             (ParamKind::Float { default, .. }, ParamValue::Float(v)) => ParamValue::Float(fin(v, default)),
-            (ParamKind::Int { default, .. }, ParamValue::Int(v)) => {
-                ParamValue::Int(fin(v as f32, default as f32).round() as i32)
-            }
-            (ParamKind::Vec2 { default, .. }, ParamValue::Vec2(v)) => {
-                ParamValue::Vec2([fin(v[0], default[0]), fin(v[1], default[1])])
-            }
+            (ParamKind::Int { default, .. }, ParamValue::Int(v)) => ParamValue::Int(fin(v as f32, default as f32).round() as i32),
+            (ParamKind::Vec2 { default, .. }, ParamValue::Vec2(v)) => ParamValue::Vec2([fin(v[0], default[0]), fin(v[1], default[1])]),
             // (Each channel from 0 to 1: typed or driven past them, a color had negative channels.)
-            (ParamKind::Color { default }, ParamValue::Color(c)) => {
-                ParamValue::Color(std::array::from_fn(|i| fin(c[i], default[i]).clamp(0.0, 1.0)))
-            }
-            (ParamKind::Enum { options, .. }, ParamValue::Enum(v)) => {
-                ParamValue::Enum(v.min(options.len().saturating_sub(1) as u32))
-            }
+            (ParamKind::Color { default }, ParamValue::Color(c)) => ParamValue::Color(std::array::from_fn(|i| fin(c[i], default[i]).clamp(0.0, 1.0))),
+            (ParamKind::Enum { options, .. }, ParamValue::Enum(v)) => ParamValue::Enum(v.min(options.len().saturating_sub(1) as u32)),
             (_, ParamValue::Gradient(g)) => ParamValue::Gradient(g.normalized()),
             (_, ParamValue::Curve(c)) => ParamValue::Curve(c.normalized()),
             (_, v) => v,
@@ -1012,29 +985,14 @@ mod tests {
             assert_eq!(keys.len(), n, "duplicate parameter key in {}", d.name);
             for p in d.params {
                 if let Some((key, _)) = p.visible_if {
-                    assert!(
-                        matches!(d.param(key).map(|p| p.kind), Some(ParamKind::Enum { .. })),
-                        "{}::{} depends on a missing enum",
-                        d.name,
-                        p.key
-                    );
+                    assert!(matches!(d.param(key).map(|p| p.kind), Some(ParamKind::Enum { .. })), "{}::{} depends on a missing enum", d.name, p.key);
                 }
                 if p.pictured {
-                    assert!(
-                        matches!(p.kind, ParamKind::Enum { .. }) && d.has_image(),
-                        "{}::{}: only the choices of image nodes have pictures",
-                        d.name,
-                        p.key
-                    );
+                    assert!(matches!(p.kind, ParamKind::Enum { .. }) && d.has_image(), "{}::{}: only the choices of image nodes have pictures", d.name, p.key);
                 }
                 assert!(p.accepts(&p.default_value()));
                 if p.exposable {
-                    assert!(
-                        p.default_value().socket_type().is_some(),
-                        "{}::{} exposable without socket",
-                        d.name,
-                        p.key
-                    );
+                    assert!(p.default_value().socket_type().is_some(), "{}::{} exposable without socket", d.name, p.key);
                 }
             }
             match d.role {

@@ -54,7 +54,8 @@ impl Capture {
         let turned = transform_box(invert(geometry.transform), logical, (lw, lh));
         let scale = (geometry.pixels.0 as f32 / lw.max(1) as f32, geometry.pixels.1 as f32 / lh.max(1) as f32);
         let (scale_x, scale_y) = if geometry.transform as u32 % 2 == 1 { (scale.1, scale.0) } else { scale };
-        let truncated = ((turned.0 as f32 * scale_x) as i32, (turned.1 as f32 * scale_y) as i32, (turned.2 as f32 * scale_x) as i32, (turned.3 as f32 * scale_y) as i32);
+        let truncated =
+            ((turned.0 as f32 * scale_x) as i32, (turned.1 as f32 * scale_y) as i32, (turned.2 as f32 * scale_x) as i32, (turned.3 as f32 * scale_y) as i32);
         let rounded = (
             (turned.0 as f32 * scale_x).round() as i32,
             (turned.1 as f32 * scale_y).round() as i32,
@@ -226,7 +227,16 @@ mod tests {
     fn pixels_are_found_in_turned_buffers() {
         // An output 4 × 2 pixels upright; its buffer, turned 90°, is 2 × 4.
         let size = (4, 2);
-        for t in [Transform::Normal, Transform::_90, Transform::_180, Transform::_270, Transform::Flipped, Transform::Flipped90, Transform::Flipped180, Transform::Flipped270] {
+        for t in [
+            Transform::Normal,
+            Transform::_90,
+            Transform::_180,
+            Transform::_270,
+            Transform::Flipped,
+            Transform::Flipped90,
+            Transform::Flipped180,
+            Transform::Flipped270,
+        ] {
             let buffer = if t as u32 % 2 == 1 { (2, 4) } else { (4, 2) };
             let mut seen = std::collections::HashSet::new();
             for y in 0..2 {
