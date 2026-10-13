@@ -735,6 +735,50 @@ fn long_names_of_library_graphs_show_whole_in_a_narrow_library() {
     assert!(cut.is_empty() && squeezed.is_empty(), "{cut:?} {squeezed:?}");
 }
 
+/// The count beside a category of the Library keeps the room of its digits however the name of
+/// the category wraps: the Library alone, a pixel wider at a time from the narrowest it is let be
+/// to wider than the name on one line, says the count of a long category whole at every width.
+/// (Laid out after the name, the count had what the name left it: where the longest line of the
+/// name took the row, three pixels of a "1" five wide. Which widths do that depends on the fonts
+/// of the system, so one width alone shows it on some systems and not on others.)
+#[test]
+fn the_count_of_a_library_category_keeps_its_room_however_the_name_wraps() {
+    use brewed_texture_core::project;
+    use brewed_texture_core::{Graph, GraphAttributes, package::Package};
+    let dir = scratch("library-count");
+    let category = "Materials/Architecture/Roofs/Weathered Metal";
+    let mut roof = Graph::default();
+    roof.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+    roof.attributes = GraphAttributes { description: String::new(), category: category.into(), hidden: false };
+    let package = Package::new("Copper Roof", roof);
+    project::save(&dir.join("roof.brewtex"), &package, &std::collections::HashMap::new(), package.first()).unwrap();
+    // (The window as small as it is let be: the Library as narrow.)
+    let mut w = harness!(view::library::view, 1000.0, 640.0);
+    let mut settings = w.app.settings.clone();
+    settings.library_folders = vec![dir.display().to_string()];
+    w.app.set_settings(settings);
+    w.send(Message::LookAtLibrary);
+    w.send(Message::LibrarySearch("copper".into()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let narrowest = view::pane_width(&w.app, crate::app::Pane::Library) as u32;
+    let digit = view::text_width_in("1", crate::style::SMALL, crate::style::ui_font());
+    let mut lines = std::collections::BTreeSet::new();
+    let mut found = Vec::new();
+    for width in narrowest..narrowest + 300 {
+        w.size = Size::new(width as f32, 640.0);
+        let name = *texts(&mut w, &category.to_uppercase()).first().expect("the category");
+        lines.insert((name.height / (crate::style::CAPTION * 1.3)).round() as u32);
+        let counts = texts(&mut w, "1");
+        assert_eq!(counts.len(), 1, "{width} px: the count of the category");
+        if counts[0].width < digit - 0.01 {
+            found.push(format!("{width} px: \"1\" laid out {:.1} of {digit:.1} at {:.0},{:.0}", counts[0].width, counts[0].x, counts[0].y));
+        }
+    }
+    // (The name wrapped each way it comes to, from the narrowest down to one line.)
+    assert!(lines.contains(&1) && lines.len() >= 3, "the name on so many lines: {lines:?}");
+    assert!(found.is_empty(), "the count squeezed:\n{}", found.join("\n"));
+}
+
 /// The name of an input value being typed for an Input node that an undo takes away is forgotten
 /// with it (it was kept: the next Esc went to it, and Enter bound it to a node that is not there).
 #[test]
