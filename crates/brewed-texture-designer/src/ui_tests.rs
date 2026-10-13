@@ -3930,6 +3930,37 @@ fn a_save_that_fails_leaves_no_quit_behind() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A package saved as "walls" where "walls.brewtex" is (the dialogs of GNOME and zenity add no
+/// extension, and asked only about "walls") does not write over it: nothing is written, the
+/// package is not saved, the status bar says why, and what was to follow the save (closing the
+/// package) does not. Saved as "walls.brewtex", which the dialog asked about, it replaces it.
+#[test]
+fn a_file_the_dialog_did_not_ask_about_is_not_written_over() {
+    let dir = scratch("typed-without-extension");
+    let walls = dir.join("walls.brewtex");
+    std::fs::write(&walls, b"another package").expect("a file");
+    let (mut app, _) = App::boot(StartupOptions::default());
+    let key = app.doc_key;
+    let _ = app.update(Message::Edit(Edit::SetResolution([512, 512])));
+    let _ = app.update(Message::Explorer(ExplorerMessage::Close(key)));
+    assert_eq!(app.ui.dialog, Some(Dialog::Unsaved(PendingAction::Close(key))));
+    let _ = app.update(Message::SaveThen(PendingAction::Close(key)));
+    assert_eq!(app.ui.after_save, Some(PendingAction::Close(key)), "the untitled package asks where");
+    let _ = app.update(Message::SavePicked(Some(dir.join("walls"))));
+    let said = app.ui.status.as_ref().map(|s| (s.text.as_str(), s.error));
+    assert_eq!(said, Some(("walls.brewtex is there already: save it as that to replace it", true)));
+    assert_eq!(std::fs::read(&walls).expect("still there"), b"another package", "not written over");
+    let files: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(files, ["walls.brewtex"], "nothing else written");
+    assert!(app.doc.is_dirty() && app.doc.path().is_none(), "not saved");
+    assert_eq!(app.ui.after_save, None, "nothing follows");
+    // As "walls.brewtex": replaced, and the package not closed.
+    let _ = app.update(Message::SavePicked(Some(walls.clone())));
+    assert!(app.package_doc(key).is_some_and(|d| !d.is_dirty() && d.path() == Some(&walls)), "saved, still open");
+    assert!(brewed_texture_core::project::load(&walls).is_ok(), "the package is the file now");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A dialog does not keep the window from being used: what it answers is taken for the package
 /// and the graph it was asked for, not the one edited when it answers; given up, it changes
 /// nothing; for a package closed meanwhile, nothing is done.
