@@ -4,6 +4,7 @@
 //! borders, small radii. What is active or selected is lighter, not colored; color is left
 //! to what carries meaning (data types, node categories, errors) and to the images.
 
+use iced::advanced::graphics::text::cosmic_text::fontdb;
 use iced::border::{self, Border};
 use iced::theme::Palette;
 use iced::widget::button as button_w;
@@ -141,11 +142,60 @@ pub fn color_of(c: [f32; 4]) -> Color {
 /// The fonts of the interface, the same on every system: Inter, one file of every weight and
 /// one of its italics (SIL Open Font License 1.1, see assets/fonts/Inter-LICENSE.txt). A
 /// system's own fonts differ from system to system, and one had no bold of every size.
-pub const UI_FONTS: [&[u8]; 2] =
+const UI_FONTS: [&[u8]; 2] =
     [include_bytes!("../assets/fonts/InterVariable.ttf"), include_bytes!("../assets/fonts/InterVariable-Italic.ttf")];
 
+/// The family the files of [`UI_FONTS`] name.
+const UI_FAMILY: &str = "Inter Variable";
+
+/// Gives the interface's fonts to the font system its text is laid out and drawn with, before any
+/// text is: as the program starts, and in the tests' harness. (Once: given, they stay.)
+pub fn load_fonts() {
+    static LOADED: std::sync::Once = std::sync::Once::new();
+    LOADED.call_once(|| {
+        let mut fonts = iced::advanced::graphics::text::font_system().write().expect("the font system");
+        // (As iced loads a font: text laid out before is laid out again.)
+        for bytes in UI_FONTS {
+            fonts.load_font(std::borrow::Cow::Borrowed(bytes));
+        }
+        own_family(fonts.raw().db_mut());
+    });
+}
+
+/// Makes the files of [`UI_FONTS`] the only faces of their family in `db`, each one at every
+/// weight it has.
+///
+/// The font database lists a variable font once, at the weight of its default instance (400), and
+/// cosmic-text draws a weight in a face of exactly that weight first: of the family asked for, else
+/// of a family the system's text falls back to (Noto Sans, DejaVu Sans, FreeSans on Linux, Segoe UI
+/// on Windows, .SF NS and Menlo on macOS), and only then in the family asked for at another
+/// weight. So the interface's semibold was FreeSans Bold where FreeFont is installed, and its bold
+/// DejaVu Sans Bold; and a system with an Inter Variable of its own (of its own version) drew the
+/// regular in that one. Listed at each weight, the files are drawn at each; what Inter has not
+/// (CJK, emoji) is still drawn in the system's fonts.
+fn own_family(db: &mut fontdb::Database) {
+    use fontdb::{FaceInfo, ID, Weight};
+    let named = |face: &&FaceInfo| face.families.iter().any(|(name, _)| name == UI_FAMILY);
+    let family: Vec<FaceInfo> = db.faces().filter(named).cloned().collect();
+    for face in family {
+        if !embedded(&face) {
+            db.remove_face(face.id);
+            continue;
+        }
+        // (Inter's axis of weight runs from 100 to 900: every weight a font is asked in, Thin to Black.)
+        for weight in (100..=900).step_by(100).filter(|&weight| weight != face.weight.0) {
+            db.push_face_info(FaceInfo { id: ID::dummy(), weight: Weight(weight), ..face.clone() });
+        }
+    }
+}
+
+/// Whether `face` is of one of the files of [`UI_FONTS`] (iced keeps a copy of each).
+fn embedded(face: &fontdb::FaceInfo) -> bool {
+    matches!(&face.source, fontdb::Source::Binary(data) if UI_FONTS.contains(&(**data).as_ref()))
+}
+
 pub fn ui_font() -> Font {
-    Font::with_name("Inter Variable")
+    Font::with_name(UI_FAMILY)
 }
 
 pub fn bold() -> Font {
@@ -604,4 +654,156 @@ pub fn toggler(_: &Theme, status: toggler_w::Status) -> toggler_w::Style {
 /// program's panels.
 pub fn scrollable(theme: &Theme, status: scrollable_w::Status) -> scrollable_w::Style {
     scroll_box::look(PANEL, TEXT_DIM)(theme, status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::advanced::graphics::text::cosmic_text::{self, Fallback as _};
+    use iced::advanced::graphics::text::{to_attributes, to_shaping};
+    use std::sync::Arc;
+
+    /// The interface's font in every weight a font is asked in, upright and in italics.
+    fn every_weight() -> Vec<Font> {
+        use iced::font::{Style, Weight};
+        let weights = [
+            Weight::Thin,
+            Weight::ExtraLight,
+            Weight::Light,
+            Weight::Normal,
+            Weight::Medium,
+            Weight::Semibold,
+            Weight::Bold,
+            Weight::ExtraBold,
+            Weight::Black,
+        ];
+        let styles = [Style::Normal, Style::Italic];
+        styles.into_iter().flat_map(|style| weights.map(|weight| Font { weight, style, ..ui_font() })).collect()
+    }
+
+    /// What `text` in `font` is drawn in, laid out as iced lays out a text: for each glyph, its face,
+    /// the weight it is drawn at, and the glyph (0 where the face has not the character).
+    fn drawn_in(fonts: &mut cosmic_text::FontSystem, text: &str, font: Font) -> Vec<(fontdb::FaceInfo, u16, u16)> {
+        let mut buffer = cosmic_text::Buffer::new(fonts, cosmic_text::Metrics::new(13.0, 17.0));
+        let shaping = to_shaping(iced::advanced::text::Shaping::default(), text);
+        buffer.set_text(fonts, text, &to_attributes(font), shaping, None);
+        buffer.shape_until_scroll(fonts, false);
+        let face = |id| fonts.db().face(id).expect("a face of the database").clone();
+        let glyphs = buffer.layout_runs().flat_map(|run| run.glyphs);
+        glyphs.map(|glyph| (face(glyph.font_id), glyph.font_weight.0, glyph.glyph_id)).collect()
+    }
+
+    /// A face as a failure names it: its family, its PostScript name, and where it is.
+    fn named(face: &fontdb::FaceInfo) -> String {
+        let at = match &face.source {
+            fontdb::Source::Binary(_) if embedded(face) => "embedded".to_owned(),
+            fontdb::Source::Binary(_) => "another font in memory".to_owned(),
+            fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => path.display().to_string(),
+        };
+        format!("{} ({}, {at})", face.families[0].0, face.post_script_name)
+    }
+
+    /// Where `texts` are drawn in another font than the interface's Inter, or at another weight
+    /// than asked, in any weight.
+    fn not_in_inter(fonts: &mut cosmic_text::FontSystem, texts: &[&str]) -> Vec<String> {
+        let mut wrong = Vec::new();
+        for text in texts {
+            for font in every_weight() {
+                for (face, weight, _) in drawn_in(fonts, text, font) {
+                    let said = format!("{text:?} in {:?} {:?}: {} at {weight}", font.weight, font.style, named(&face));
+                    if (!embedded(&face) || weight != to_attributes(font).weight.0) && !wrong.contains(&said) {
+                        wrong.push(said);
+                    }
+                }
+            }
+        }
+        wrong
+    }
+
+    /// The interface's text is drawn in its own Inter at every weight, whatever fonts the system
+    /// has: here it has none but such as were drawn in Inter's place, a face of each family its
+    /// text falls back to at every weight, upright and in italics, and an Inter Variable of its own,
+    /// listed as a variable font is, at 400 (as FreeSans Bold, of weight 600, drew the semibold
+    /// where FreeFont is installed, DejaVu Sans Bold the bold, and a system's Inter Variable the
+    /// regular).
+    #[test]
+    fn every_weight_is_drawn_in_the_embedded_inter_whatever_fonts_the_system_has() {
+        // (Their letters are another Inter's, the engine's 3.19: a face drawn in is told by what it
+        // is, not by how it looks.)
+        let theirs: Arc<dyn AsRef<[u8]> + Sync + Send> =
+            Arc::new(include_bytes!("../../brewed-texture-engine/assets/fonts/Inter-Regular.ttf").as_slice());
+        let mut db = fontdb::Database::new();
+        let mut claim = |family: &str, font: Font| {
+            let asked = to_attributes(font);
+            db.push_face_info(fontdb::FaceInfo {
+                id: fontdb::ID::dummy(),
+                source: fontdb::Source::Binary(theirs.clone()),
+                index: 0,
+                families: vec![(family.to_owned(), fontdb::Language::English_UnitedStates)],
+                post_script_name: format!("{family} {}", asked.weight.0),
+                style: asked.style,
+                weight: asked.weight,
+                stretch: asked.stretch,
+                monospaced: false,
+            });
+        };
+        for family in cosmic_text::PlatformFallback.common_fallback() {
+            for font in every_weight() {
+                claim(family, font);
+            }
+        }
+        for font in every_weight().into_iter().filter(|font| font.weight == iced::font::Weight::Normal) {
+            claim(UI_FAMILY, font);
+        }
+        // The interface's fonts, given as `load_fonts` gives them.
+        for bytes in UI_FONTS {
+            db.load_font_source(fontdb::Source::Binary(Arc::new(bytes)));
+        }
+        own_family(&mut db);
+        let mut fonts = cosmic_text::FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
+        // (A text of ASCII alone is laid out in its first font; any other, in each in turn.)
+        let wrong = not_in_inter(&mut fonts, &["Library", "Ωμέγα Жирный"]);
+        assert!(wrong.is_empty(), "drawn in another font than the interface's Inter:\n{}", wrong.join("\n"));
+    }
+
+    /// In the program's own font system, with the fonts of the system the tests run on: the
+    /// interface's text is drawn in its Inter at every weight, and what Inter has not, CJK and
+    /// emoji, in a font of the system that has it (where one has) at every weight, as at the
+    /// regular. (Not in italics: cosmic-text falls back to faces of the style asked alone, and
+    /// fonts of CJK have no italics; as before.)
+    #[test]
+    fn what_inter_has_not_is_drawn_in_the_systems_fonts() {
+        use cosmic_text::skrifa::{FontRef, MetadataProvider as _};
+        load_fonts();
+        // (Told once the font system is let go: a test that fails holding it would fail every other.)
+        let (wrong, missing) = {
+            let mut fonts = iced::advanced::graphics::text::font_system().write().expect("the font system");
+            let fonts = fonts.raw();
+            let wrong = not_in_inter(fonts, &["Library", "Ωμέγα Жирный"]);
+            // (Of the faces upright text falls back to: of its style and its width.)
+            let upright = to_attributes(ui_font());
+            let like_it = |face: &&fontdb::FaceInfo| face.style == upright.style && face.stretch == upright.stretch;
+            let mut missing = Vec::new();
+            for c in ['漢', 'か', '🙂'] {
+                let has = |id| {
+                    let glyph = |data: &[u8], index| FontRef::from_index(data, index).ok()?.charmap().map(c);
+                    fonts.db().with_face_data(id, |data, index| glyph(data, index).is_some()).unwrap_or(false)
+                };
+                if !fonts.db().faces().filter(like_it).map(|face| face.id).any(has) {
+                    eprintln!("{c:?}: no font of this system has it");
+                    continue;
+                }
+                for font in every_weight().into_iter().filter(|font| font.style == iced::font::Style::Normal) {
+                    for (face, _, glyph) in drawn_in(fonts, &c.to_string(), font) {
+                        if embedded(&face) || glyph == 0 {
+                            missing.push(format!("{c:?} in {:?}: {}, glyph {glyph}", font.weight, named(&face)));
+                        }
+                    }
+                }
+            }
+            (wrong, missing)
+        };
+        assert!(wrong.is_empty(), "drawn in another font than the interface's Inter:\n{}", wrong.join("\n"));
+        assert!(missing.is_empty(), "not drawn in a font of the system that has it:\n{}", missing.join("\n"));
+    }
 }

@@ -200,13 +200,14 @@ fn main() -> iced::Result {
         options.versions = Some(autopilot::folder(flight.seed).join("history"));
     }
 
+    // The interface's fonts, known at every weight they have (given with `.font`, they would be
+    // known at one alone, and fonts of the system drawn at the others: see `style::own_family`).
+    style::load_fonts();
     // A daemon: besides the main window, the eyedropper opens a window on every monitor.
     let ran = iced::daemon(move || App::boot(options.clone()), App::update, App::view)
         .title(App::title)
         .theme(App::theme)
         .subscription(App::subscription)
-        .font(style::UI_FONTS[0])
-        .font(style::UI_FONTS[1])
         .default_font(style::ui_font())
         .antialiasing(antialiasing)
         .run();

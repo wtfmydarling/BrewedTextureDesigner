@@ -42,13 +42,7 @@ impl Harness {
     /// [`Harness::new`], the program started with `opts`.
     fn started(view: View, size: Size, opts: StartupOptions) -> Option<Harness> {
         // The interface's fonts, as the program gives them to the window.
-        static FONTS: std::sync::Once = std::sync::Once::new();
-        FONTS.call_once(|| {
-            let mut fonts = iced::advanced::graphics::text::font_system().write().expect("the font system");
-            for bytes in crate::style::UI_FONTS {
-                fonts.load_font(std::borrow::Cow::Borrowed(bytes));
-            }
-        });
+        crate::style::load_fonts();
         let renderer = futures::executor::block_on(<iced::Renderer as Headless>::new(crate::style::ui_font(), Pixels(13.0), None))?;
         let (mut app, _) = App::boot(opts);
         app.ui.window_size = size;
