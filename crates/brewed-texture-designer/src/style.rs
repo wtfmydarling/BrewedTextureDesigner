@@ -4,7 +4,8 @@
 //! borders, small radii. What is active or selected is lighter, not colored; color is left
 //! to what carries meaning (data types, node categories, errors) and to the images.
 
-use iced::advanced::graphics::text::cosmic_text::fontdb;
+use iced::advanced::graphics::text::cosmic_text::{self, Fallback as _, fontdb};
+use iced::advanced::graphics::text::to_attributes;
 use iced::border::{self, Border};
 use iced::theme::Palette;
 use iced::widget::button as button_w;
@@ -158,8 +159,19 @@ pub fn load_fonts() {
         for bytes in UI_FONTS {
             fonts.load_font(std::borrow::Cow::Borrowed(bytes));
         }
-        own_family(fonts.raw().db_mut());
+        // (Made again of the same faces: what a font system falls back to is given as it is made.)
+        let fonts = fonts.raw();
+        *fonts = interface_fonts(fonts.locale().to_owned(), fonts.db().clone());
     });
+}
+
+/// The font system of the interface's text, of the faces in `db` (the system's, and the files of
+/// [`UI_FONTS`]): its Inter at every weight ([`own_family`]), and what Inter has not in the
+/// system's fonts, drawn as [`fallbacks`] has it.
+fn interface_fonts(locale: String, mut db: fontdb::Database) -> cosmic_text::FontSystem {
+    own_family(&mut db);
+    let fallbacks = fallbacks(&mut db);
+    cosmic_text::FontSystem::new_with_locale_and_db_and_fallback(locale, db, fallbacks)
 }
 
 /// Makes the files of [`UI_FONTS`] the only faces of their family in `db`, each one at every
@@ -172,7 +184,7 @@ pub fn load_fonts() {
 /// weight. So the interface's semibold was FreeSans Bold where FreeFont is installed, and its bold
 /// DejaVu Sans Bold; and a system with an Inter Variable of its own (of its own version) drew the
 /// regular in that one. Listed at each weight, the files are drawn at each; what Inter has not
-/// (CJK, emoji) is still drawn in the system's fonts.
+/// (CJK, emoji) is still drawn in the system's fonts (see [`fallbacks`]).
 fn own_family(db: &mut fontdb::Database) {
     use fontdb::{FaceInfo, ID, Weight};
     let named = |face: &&FaceInfo| face.families.iter().any(|(name, _)| name == UI_FAMILY);
@@ -192,6 +204,109 @@ fn own_family(db: &mut fontdb::Database) {
 /// Whether `face` is of one of the files of [`UI_FONTS`] (iced keeps a copy of each).
 fn embedded(face: &fontdb::FaceInfo) -> bool {
     matches!(&face.source, fontdb::Source::Binary(data) if UI_FONTS.contains(&(**data).as_ref()))
+}
+
+/// Lists every family of the system in `db` the interface's text may fall back to at every weight
+/// from 100 to 900, upright and in italics, and makes each one cosmic-text falls back to, in the
+/// order the regular weight comes to them: what the interface's Inter has not (CJK, emoji,
+/// Hebrew…) is drawn at every weight and in italics in the family the regular weight draws it in,
+/// in that family's face nearest the weight.
+///
+/// cosmic-text draws a character the family asked for has not in a family the system's text falls
+/// back to (by script, CJK in Noto Sans CJK on Linux; then the common ones, emoji in Noto Color
+/// Emoji) in a face of exactly the weight asked and of its style; and only then in any face of the
+/// style (or named "Emoji"), the nearest in weight first, of two as near the lighter, then the
+/// first listed. No font of CJK has italics: CJK in italics was drawn as empty boxes, Inter
+/// Italic's .notdef. And at a weight but 400 the face was all but chance: in an Ubuntu with
+/// WenQuanYi Zen Hei (which says it is of weight 500) and IPAGothic, CJK was IPAGothic up to 400
+/// and WenQuanYi from 500 on; Hebrew was Liberation Serif, DejaVu Sans, FreeSans Bold or Liberation
+/// Mono Bold, by weight.
+///
+/// Where a family has no face of a weight and style, it is listed there as its face of that style
+/// nearest in weight (in italics, its italics, else its obliques, else its upright faces: drawn
+/// upright), the bytes shared. Then every family the regular weight comes to is one cosmic-text
+/// falls back to, after the platform's own, in that order: the same at every weight.
+fn fallbacks(db: &mut fontdb::Database) -> Fallbacks {
+    use fontdb::{FaceInfo, ID, Style, Weight};
+    fn family(face: &FaceInfo) -> &str {
+        face.families.first().map_or("", |(name, _)| name)
+    }
+    let platform = cosmic_text::PlatformFallback;
+    let regular = to_attributes(ui_font());
+    let named = |face: &FaceInfo, names: &[&str]| face.families.iter().any(|(name, _)| names.contains(&name.as_str()));
+    // The system's faces of the interface's width (its text has none of another): not of its own
+    // family, listed at every weight by `own_family`, nor of one never to be fallen back to.
+    let theirs: Vec<FaceInfo> = db
+        .faces()
+        .filter(|face| face.stretch == regular.stretch)
+        .filter(|face| !named(face, &[UI_FAMILY]) && !named(face, platform.forbidden_fallback()))
+        .cloned()
+        .collect();
+    // Their families as the regular weight comes to them: of the faces cosmic-text takes for it
+    // (upright, or named "Emoji", which it takes in any style), the nearest in weight first, of two
+    // as near the lighter, then as the database lists them.
+    let mut regulars: Vec<&FaceInfo> = theirs.iter().filter(|face| regular.matches(face)).collect();
+    regulars.sort_by_key(|face| (face.weight.0.abs_diff(regular.weight.0), face.weight.0, face.id));
+    let mut families: Vec<&str> = Vec::new();
+    for face in regulars {
+        if !families.contains(&family(face)) {
+            families.push(family(face));
+        }
+    }
+    // (Not monospaced, whatever the face is: monospaced text looks through every monospaced face
+    // for each line it lays out, and keeps to the system's own.)
+    let mut list = |face: &FaceInfo, style, weight| {
+        let listed = FaceInfo { id: ID::dummy(), style, weight: Weight(weight), monospaced: false, ..face.clone() };
+        db.push_face_info(listed);
+    };
+    for &name in &families {
+        let faces: Vec<&FaceInfo> = theirs.iter().filter(|face| family(face) == name).collect();
+        let of = |style: Style| faces.iter().copied().filter(move |face| face.style == style);
+        for style in [Style::Normal, Style::Italic] {
+            // (Upright text keeps to upright faces, as it did.)
+            let liked: &[Style] =
+                if style == Style::Italic { &[Style::Italic, Style::Oblique, Style::Normal] } else { &[Style::Normal] };
+            let near = liked.iter().map(|&wanted| of(wanted).collect::<Vec<_>>()).find(|near| !near.is_empty());
+            let Some(near) = near else { continue };
+            for weight in (100..=900).step_by(100).filter(|&weight| !of(style).any(|face| face.weight.0 == weight)) {
+                // (The nearest as cosmic-text has it: of two as near, the lighter.)
+                let nearest = near.iter().map(|face| face.weight.0).min_by_key(|&w| (w.abs_diff(weight), w));
+                for face in near.iter().filter(|face| Some(face.weight.0) == nearest) {
+                    list(face, style, weight);
+                }
+            }
+        }
+    }
+    // (Names leaked: the font system that keeps them is made once and lives as long as the program.)
+    let mut common = platform.common_fallback().to_vec();
+    for name in families {
+        if !common.contains(&name) {
+            common.push(Box::leak(name.to_owned().into_boxed_str()));
+        }
+    }
+    Fallbacks { platform, common }
+}
+
+/// What cosmic-text falls back to for the interface's text (see [`fallbacks`]): by script as the
+/// platform does (CJK in Noto Sans CJK on Linux…), then the platform's common fallbacks (Noto Color
+/// Emoji among them), then every other family of the system.
+struct Fallbacks {
+    platform: cosmic_text::PlatformFallback,
+    common: Vec<&'static str>,
+}
+
+impl cosmic_text::Fallback for Fallbacks {
+    fn common_fallback(&self) -> &[&'static str] {
+        &self.common
+    }
+
+    fn forbidden_fallback(&self) -> &[&'static str] {
+        self.platform.forbidden_fallback()
+    }
+
+    fn script_fallback(&self, script: unicode_script::Script, locale: &str) -> &[&'static str] {
+        self.platform.script_fallback(script, locale)
+    }
 }
 
 pub fn ui_font() -> Font {
@@ -659,8 +774,7 @@ pub fn scrollable(theme: &Theme, status: scrollable_w::Status) -> scrollable_w::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iced::advanced::graphics::text::cosmic_text::{self, Fallback as _};
-    use iced::advanced::graphics::text::{to_attributes, to_shaping};
+    use iced::advanced::graphics::text::to_shaping;
     use std::sync::Arc;
 
     /// The interface's font in every weight a font is asked in, upright and in italics.
@@ -701,6 +815,19 @@ mod tests {
             fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => path.display().to_string(),
         };
         format!("{} ({}, {at})", face.families[0].0, face.post_script_name)
+    }
+
+    /// Whether the face `id` of `db` has `c`; and, `colored`, in color: in bitmaps (CBDT, sbix),
+    /// layers (COLR) or SVG, as fonts of emoji draw.
+    fn has(db: &fontdb::Database, id: fontdb::ID, c: char, colored: bool) -> bool {
+        use cosmic_text::skrifa::{FontRef, MetadataProvider as _, Tag};
+        let has = |data: &[u8], index| {
+            let font = FontRef::from_index(data, index).ok()?;
+            let colors = [b"CBDT", b"sbix", b"COLR", b"SVG "];
+            let in_color = colors.into_iter().any(|tag| font.table_data(Tag::new(tag)).is_some());
+            Some(font.charmap().map(c).is_some() && (in_color || !colored))
+        };
+        db.with_face_data(id, has).flatten().unwrap_or(false)
     }
 
     /// Where `texts` are drawn in another font than the interface's Inter, or at another weight
@@ -759,44 +886,111 @@ mod tests {
         for bytes in UI_FONTS {
             db.load_font_source(fontdb::Source::Binary(Arc::new(bytes)));
         }
-        own_family(&mut db);
-        let mut fonts = cosmic_text::FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
+        let mut fonts = interface_fonts("en-US".to_owned(), db);
         // (A text of ASCII alone is laid out in its first font; any other, in each in turn.)
         let wrong = not_in_inter(&mut fonts, &["Library", "Ωμέγα Жирный"]);
         assert!(wrong.is_empty(), "drawn in another font than the interface's Inter:\n{}", wrong.join("\n"));
     }
 
+    /// What Inter has not is drawn at every weight, upright and in italics, in the family the
+    /// regular weight draws it in, whatever weights and styles the system has of it: here it has
+    /// of it ('ɕ', which the interface's Inter has not) nothing but upright faces such as an Ubuntu
+    /// has of CJK and emoji: of a family its text does not fall back to by name, of 400 alone and
+    /// listed first (as IPAGothic is), one of 500 alone (as WenQuanYi Zen Hei), and then, or not,
+    /// its font of emoji, of 400 alone and named "Emoji" (as Noto Color Emoji), which it falls back
+    /// to by name. Without the emoji font the character is drawn in the family of 400 at every
+    /// weight, with it in the emoji font. (cosmic-text drew it from 500 on in the family of 500,
+    /// the nearest in weight; in italics, as empty boxes, or in the emoji font, as it takes one
+    /// named "Emoji" in any style.) Monospaced text keeps to the monospaced faces there were.
+    #[test]
+    fn what_inter_has_not_is_drawn_in_one_family_at_every_weight_upright_and_in_italics() {
+        // (Their letters are another Inter's, the engine's 3.19, which has some the interface's
+        // has not.)
+        let theirs: Arc<dyn AsRef<[u8]> + Sync + Send> =
+            Arc::new(include_bytes!("../../brewed-texture-engine/assets/fonts/Inter-Regular.ttf").as_slice());
+        let face = |family: &str, weight: u16| fontdb::FaceInfo {
+            id: fontdb::ID::dummy(),
+            source: fontdb::Source::Binary(theirs.clone()),
+            index: 0,
+            families: vec![(family.to_owned(), fontdb::Language::English_UnitedStates)],
+            post_script_name: family.replace(' ', ""),
+            style: fontdb::Style::Normal,
+            weight: fontdb::Weight(weight),
+            stretch: fontdb::Stretch::Normal,
+            // (As Noto Color Emoji and Unifont are.)
+            monospaced: true,
+        };
+        let common = cosmic_text::PlatformFallback.common_fallback();
+        let emoji = common.iter().copied().find(|family| family.contains("Emoji"));
+        let mut wrong = Vec::new();
+        for emoji in [None, emoji] {
+            let mut db = fontdb::Database::new();
+            db.push_face_info(face("Gothic", 400));
+            db.push_face_info(face("Zen Hei", 500));
+            if let Some(emoji) = emoji {
+                db.push_face_info(face(emoji, 400));
+            }
+            for bytes in UI_FONTS {
+                db.load_font_source(fontdb::Source::Binary(Arc::new(bytes)));
+            }
+            let monospaced = db.faces().filter(|face| face.monospaced).count();
+            let mut fonts = interface_fonts("en-US".to_owned(), db);
+            let with = if emoji.is_some() { "with the emoji font" } else { "without the emoji font" };
+            for font in every_weight() {
+                let asked = format!("{with}, in {:?} {:?}", font.weight, font.style);
+                for (face, _, glyph) in drawn_in(&mut fonts, "ɕ", font) {
+                    if face.families[0].0 != emoji.unwrap_or("Gothic") || glyph == 0 {
+                        wrong.push(format!("{asked}: {}, glyph {glyph}", named(&face)));
+                    }
+                }
+            }
+            let now = fonts.db().faces().filter(|face| face.monospaced).count();
+            assert_eq!(now, monospaced, "{with}: monospaced faces listed anew");
+        }
+        assert!(wrong.is_empty(), "not drawn in the family the regular weight draws it in:\n{}", wrong.join("\n"));
+    }
+
     /// In the program's own font system, with the fonts of the system the tests run on: the
     /// interface's text is drawn in its Inter at every weight, and what Inter has not, CJK and
-    /// emoji, in a font of the system that has it (where one has) at every weight, as at the
-    /// regular. (Not in italics: cosmic-text falls back to faces of the style asked alone, and
-    /// fonts of CJK have no italics; as before.)
+    /// emoji, in a font of the system that has it (where one has), at every weight, upright and in
+    /// italics, of the family the regular weight draws it in; emoji, where the system has a font of
+    /// them in color, in color at every weight.
     #[test]
     fn what_inter_has_not_is_drawn_in_the_systems_fonts() {
-        use cosmic_text::skrifa::{FontRef, MetadataProvider as _};
         load_fonts();
         // (Told once the font system is let go: a test that fails holding it would fail every other.)
         let (wrong, missing) = {
             let mut fonts = iced::advanced::graphics::text::font_system().write().expect("the font system");
             let fonts = fonts.raw();
             let wrong = not_in_inter(fonts, &["Library", "Ωμέγα Жирный"]);
-            // (Of the faces upright text falls back to: of its style and its width.)
-            let upright = to_attributes(ui_font());
-            let like_it = |face: &&fontdb::FaceInfo| face.style == upright.style && face.stretch == upright.stretch;
+            // (Of the faces the interface's text may fall back to: of its width, and not of a
+            // family never fallen back to.)
+            let width = to_attributes(ui_font()).stretch;
+            let never = |face: &fontdb::FaceInfo| {
+                let never = cosmic_text::PlatformFallback.forbidden_fallback();
+                face.families.iter().any(|(name, _)| never.contains(&name.as_str()))
+            };
             let mut missing = Vec::new();
             for c in ['漢', 'か', '🙂'] {
-                let has = |id| {
-                    let glyph = |data: &[u8], index| FontRef::from_index(data, index).ok()?.charmap().map(c);
-                    fonts.db().with_face_data(id, |data, index| glyph(data, index).is_some()).unwrap_or(false)
+                let theirs = |face: &&fontdb::FaceInfo| face.stretch == width && !embedded(face) && !never(face);
+                let of_the_system = |colored| {
+                    let db = fonts.db();
+                    db.faces().filter(theirs).any(|face| has(db, face.id, c, colored))
                 };
-                if !fonts.db().faces().filter(like_it).map(|face| face.id).any(has) {
+                if !of_the_system(false) {
                     eprintln!("{c:?}: no font of this system has it");
                     continue;
                 }
-                for font in every_weight().into_iter().filter(|font| font.style == iced::font::Style::Normal) {
+                let colored = of_the_system(true);
+                let regular = drawn_in(fonts, &c.to_string(), ui_font());
+                let regular = regular.first().map_or(String::new(), |(face, _, _)| face.families[0].0.clone());
+                for font in every_weight() {
+                    let asked = format!("{c:?} in {:?} {:?}", font.weight, font.style);
                     for (face, _, glyph) in drawn_in(fonts, &c.to_string(), font) {
-                        if embedded(&face) || glyph == 0 {
-                            missing.push(format!("{c:?} in {:?}: {}, glyph {glyph}", font.weight, named(&face)));
+                        let gray = colored && !has(fonts.db(), face.id, c, true);
+                        if embedded(&face) || glyph == 0 || face.families[0].0 != regular || gray {
+                            let gray = if gray { ", not in color" } else { "" };
+                            missing.push(format!("{asked}: {}, glyph {glyph}{gray} (at 400: {regular})", named(&face)));
                         }
                     }
                 }
@@ -804,6 +998,7 @@ mod tests {
             (wrong, missing)
         };
         assert!(wrong.is_empty(), "drawn in another font than the interface's Inter:\n{}", wrong.join("\n"));
-        assert!(missing.is_empty(), "not drawn in a font of the system that has it:\n{}", missing.join("\n"));
+        let said = "not drawn in a font of the system that has it, in its family at 400, in color where it can be";
+        assert!(missing.is_empty(), "{said}:\n{}", missing.join("\n"));
     }
 }

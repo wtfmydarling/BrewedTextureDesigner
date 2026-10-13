@@ -43,6 +43,9 @@ resvg = { version = "0.45", default-features = false }
 # The model of the Matball is kept deflated (assets/models): what the core writes packages
 # with.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# The scripts cosmic-text falls back by, which the interface's fallbacks are asked of (see
+# `style::fallbacks`): the version cosmic-text is built with, nothing more to build.
+unicode-script = "0.5"
 
 [build-dependencies]
 # ...and at the sizes the Windows executable embeds.
