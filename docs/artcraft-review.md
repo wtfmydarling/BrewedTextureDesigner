@@ -1614,11 +1614,16 @@ looked for in our sources, or in the sources of the libraries we build with. "Ch
 read in the code, not yet seen happen.
 
 **Since this was written (2026-10-13):** items 1, 2, 3, 7 and 13 were fixed on the day by
-separate sessions and merged — a patched winit that takes drops on Wayland (and files pasted
-from a file manager), the command line read as `OsString`s, a log file with a panic hook and
-Help → Reveal Log File, an application id on Linux, filters that match either case — and item
-12 is carried as a change to that same copy of winit (`patches/README.md`). Items 4, 5, 6, 8, 9,
-10 and 11 stand.
+separate sessions and merged — drops taken on Wayland (and files pasted from a file manager),
+the command line read as `OsString`s, a log file with a panic hook and Help → Reveal Log File,
+an application id on Linux, filters that match either case — and item 12 is carried as a change
+to a copy of winit (`patches/README.md`). Items 4, 5, 6, 8, 9, 10 and 11 stand.
+
+The drops on Wayland did not stay where §31 puts them. A data device added to winit, as
+PhotoCraft's fork has it, gets no drag on GNOME: Mutter sends a drag, and the selection, to one
+`wl_data_device` of a program only, the one made last, which is the clipboard's. Tried in a
+GNOME session, the drop was refused. The files are now taken by the clipboard's own data device
+(a changed copy of smithay-clipboard, `patches/README.md`), and winit makes none.
 
 **Faults and gaps (checked)**
 

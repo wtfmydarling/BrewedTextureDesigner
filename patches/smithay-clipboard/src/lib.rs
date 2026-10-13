@@ -12,9 +12,13 @@ use sctk::reexports::calloop::channel::{self, Sender};
 use sctk::reexports::client::Connection;
 use sctk::reexports::client::backend::Backend;
 
+// (Brewed Texture Designer's addition: files dropped on a window, see `dropped.rs`.)
+mod dropped;
 mod mime;
 mod state;
 mod worker;
+
+pub use dropped::{DroppedFiles, dropped_files};
 
 /// Access to a Wayland clipboard.
 pub struct Clipboard {

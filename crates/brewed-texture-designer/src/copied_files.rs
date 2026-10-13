@@ -27,6 +27,16 @@ pub fn of_text(text: &str) -> Option<Vec<PathBuf>> {
     (!files.is_empty()).then_some(files)
 }
 
+/// The files of what was dragged from a file manager, a `text/uri-list`: its `file:` URIs of
+/// this computer, in its order. What else it lists (a link, a file of another computer) is left
+/// out; whether a file is there is not asked: who takes it says what is wrong with it. (Where a
+/// dropped file is the window's own event, nothing asks for this.)
+#[cfg(any(free_unix, test))]
+pub fn of_uri_list(list: &str) -> Vec<PathBuf> {
+    let lines = list.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#'));
+    lines.filter_map(|line| line.strip_prefix("file:").and_then(of_uri)).collect()
+}
+
 /// The path of a `file:` URI (what follows `file:`): `///home/me/a%20b.png`, or with the host,
 /// `//localhost/…` (no other host: the file is not on this computer); `///C:/…` on Windows.
 fn of_uri(uri: &str) -> Option<PathBuf> {
@@ -109,6 +119,14 @@ mod tests {
         assert_eq!(of_text(&format!("\"{pa}\"\r\n\"{pb}\"")), both, "paths in quotes");
         let localhost = uri(&a).replacen("file://", "file://localhost", 1);
         assert_eq!(of_text(&localhost), Some(vec![a.clone()]), "this computer, named");
+
+        // What is dragged from a file manager: its files of this computer, there or not (who
+        // takes them says so); a link and a file of another computer are left out.
+        let gone = dir.join("not there.png");
+        let elsewhere = uri(&a).replacen("file://", "file://elsewhere", 1);
+        let dragged = format!("# dragged\r\n{}\r\nhttps://example.com/bricks.png\r\n{elsewhere}\r\n{}\r\n{}\r\n", uri(&a), uri(&gone), uri(&b));
+        assert_eq!(of_uri_list(&dragged), vec![a.clone(), gone, b.clone()]);
+        assert_eq!(of_uri_list("https://example.com/bricks.png\r\n"), Vec::<PathBuf>::new());
 
         for not in [
             String::new(),

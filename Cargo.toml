@@ -67,11 +67,11 @@ opt-level = 3
 lto = "thin"
 codegen-units = 4
 
-# winit 0.30.13, which iced 0.14 is built on, with two things no release of 0.30 has (what each
-# is, where it is from and what keeps it in the build: patches/README.md): files dropped on a
-# window on Wayland, and a window that does not grow as it is dragged to a display of another
-# scale on Windows 11. Gone once iced is on a winit that has both.
+# Two crates iced 0.14 is built on, each with something no release it can be built with has
+# (what it is, why, where it is from and what keeps it in the build: patches/README.md).
+# winit 0.30.13: a window does not grow as it is dragged to a display of another scale on
+# Windows 11. smithay-clipboard 0.7.3, its clipboard on Wayland: the data device of the
+# clipboard takes the files dropped on a window too, which winit 0.30 does not take there.
 [patch.crates-io]
 winit = { path = "patches/winit" }
-# smithay-clipboard 0.7.3, the clipboard of iced 0.14 on Wayland (patches/README.md).
 smithay-clipboard = { path = "patches/smithay-clipboard" }

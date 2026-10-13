@@ -10,6 +10,7 @@ mod clock;
 #[cfg(feature = "dev-tools")]
 mod compose;
 mod copied_files;
+mod dropped_files;
 mod environment;
 mod eyedropper;
 mod file_dialogs;

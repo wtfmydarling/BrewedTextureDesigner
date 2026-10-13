@@ -6,7 +6,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
-use sctk::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
+use sctk::data_device_manager::data_device::{DataDevice, DataDeviceData, DataDeviceHandler};
 use sctk::data_device_manager::data_offer::{DataOfferError, DataOfferHandler, DragOffer};
 use sctk::data_device_manager::data_source::{CopyPasteSource, DataSourceHandler};
 use sctk::data_device_manager::{DataDeviceManagerState, WritePipe};
@@ -37,6 +37,7 @@ use sctk::reexports::protocols::wp::primary_selection::zv1::client::{
 };
 use wayland_backend::client::ObjectId;
 
+use crate::dropped::{DroppedFiles, MAX_URI_LIST, URI_LIST};
 use crate::mime::{ALLOWED_MIME_TYPES, MimeType, normalize_to_lf};
 
 pub struct State {
@@ -60,6 +61,12 @@ pub struct State {
 
     data_sources: Vec<CopyPasteSource>,
     data_selection_content: Rc<[u8]>,
+
+    /// The files dragged over a surface now (Brewed Texture Designer's addition, as all that
+    /// names a drag below: see `dropped.rs`).
+    drag: Option<Drag>,
+    /// How many drags of files there were: the next one's `Drag::id`.
+    drags: u64,
 }
 
 impl State {
@@ -99,6 +106,8 @@ impl State {
             data_sources: Vec::new(),
             latest_seat: None,
             loop_handle,
+            drag: None,
+            drags: 0,
             exit: false,
             seat_state,
             reply_tx,
@@ -233,6 +242,78 @@ impl State {
         });
 
         Ok(())
+    }
+
+    /// Read the `text/uri-list` of the drag `id`, without blocking the loop.
+    fn read_dragged_list(&mut self, offer: &DragOffer, id: u64) -> Result<()> {
+        let read_pipe = offer.receive(URI_LIST.into())?;
+
+        // Mark FD as non-blocking so we won't block ourselves.
+        set_non_blocking(read_pipe.as_raw_fd())?;
+
+        let mut reader_buffer = [0; 4096];
+        let mut list = Vec::new();
+        self.loop_handle
+            .insert_source(read_pipe, move |_, file, state| {
+                let file = unsafe { file.get_mut() };
+                loop {
+                    // The drag left, or another came: nobody waits for this list.
+                    if state.drag.as_ref().is_none_or(|drag| drag.id != id) {
+                        break PostAction::Remove;
+                    }
+                    match file.read(&mut reader_buffer) {
+                        Ok(0) => {
+                            state.dragged_list_read(id, mem::take(&mut list));
+                            break PostAction::Remove;
+                        },
+                        Ok(n) if list.len() + n > MAX_URI_LIST => {
+                            state.dragged_list_read(id, Vec::new());
+                            break PostAction::Remove;
+                        },
+                        Ok(n) => list.extend_from_slice(&reader_buffer[..n]),
+                        Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                            break PostAction::Continue;
+                        },
+                        Err(err) if err.kind() == ErrorKind::Interrupted => (),
+                        Err(_) => {
+                            state.dragged_list_read(id, Vec::new());
+                            break PostAction::Remove;
+                        },
+                    }
+                }
+            })
+            .map(|_| ())
+            .map_err(|_| Error::other("the list of what is dragged can't be watched"))
+    }
+
+    /// The list of the drag `id` is read to its end (empty: it could not be).
+    fn dragged_list_read(&mut self, id: u64, list: Vec<u8>) {
+        let Some(drag) = self.drag.as_mut().filter(|drag| drag.id == id) else { return };
+        drag.list = Some(list);
+        if drag.dropped {
+            self.say_dropped();
+        }
+    }
+
+    /// The drag is dropped and its list read: the source is told it is done with, and the
+    /// program what was dropped.
+    fn say_dropped(&mut self) {
+        let Some(drag) = self.drag.take() else { return };
+        let list = drag.list.unwrap_or_default();
+        if let Some(offer) = drag_offer(&drag.data_device) {
+            if !list.is_empty() && offer.selected_action == DndAction::Copy {
+                offer.finish();
+            }
+            offer.destroy();
+        }
+        if !list.is_empty() {
+            crate::dropped::say(DroppedFiles {
+                surface: drag.surface,
+                x: drag.x,
+                y: drag.y,
+                uri_list: String::from_utf8_lossy(&list).into_owned(),
+            });
+        }
     }
 
     fn send_request(&mut self, ty: SelectionTarget, write_pipe: WritePipe, mime: String) {
@@ -393,18 +474,62 @@ impl DataDeviceHandler for State {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &WlDataDevice,
-        _: f64,
-        _: f64,
-        _: &WlSurface,
+        data_device: &WlDataDevice,
+        x: f64,
+        y: f64,
+        surface: &WlSurface,
     ) {
+        // A new drag takes the place of one left unfinished.
+        self.drag = None;
+
+        let Some(offer) = drag_offer(data_device) else { return };
+        if !offer.with_mime_types(|mimes| mimes.iter().any(|mime| mime == URI_LIST)) {
+            // Not files: refused, so that the source shows that nothing is taken here.
+            offer.accept_mime_type(offer.serial, None);
+            offer.set_actions(DndAction::empty(), DndAction::empty());
+            return;
+        }
+        offer.accept_mime_type(offer.serial, Some(URI_LIST.into()));
+        // Copy only: a move could have the source delete the file.
+        offer.set_actions(DndAction::Copy, DndAction::Copy);
+
+        self.drags += 1;
+        let mut drag = Drag {
+            id: self.drags,
+            data_device: data_device.clone(),
+            surface: surface.id().as_ptr() as usize,
+            x,
+            y,
+            list: None,
+            dropped: false,
+        };
+        if self.read_dragged_list(&offer, drag.id).is_err() {
+            drag.list = Some(Vec::new());
+        }
+        self.drag = Some(drag);
     }
 
-    fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
+    fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {
+        // After the drop the drag lives on until its list is read and said.
+        if self.drag.as_ref().is_some_and(|drag| !drag.dropped) {
+            self.drag = None;
+        }
+    }
 
-    fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, _: f64, _: f64) {}
+    fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, x: f64, y: f64) {
+        if let Some(drag) = self.drag.as_mut().filter(|drag| !drag.dropped) {
+            drag.x = x;
+            drag.y = y;
+        }
+    }
 
-    fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
+    fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {
+        let Some(drag) = self.drag.as_mut() else { return };
+        drag.dropped = true;
+        if drag.list.is_some() {
+            self.say_dropped();
+        }
+    }
 
     // The selection is finished and ready to be used.
     fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
@@ -447,9 +572,13 @@ impl DataOfferHandler for State {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &mut DragOffer,
+        offer: &mut DragOffer,
         _: DndAction,
     ) {
+        // (What the source lets be done with the files changed as they are dragged.)
+        if self.drag.is_some() {
+            offer.set_actions(DndAction::Copy, DndAction::Copy);
+        }
     }
 
     fn selected_action(
@@ -547,6 +676,27 @@ pub enum SelectionTarget {
     Clipboard,
     /// The target is primary selection.
     Primary,
+}
+
+/// Files dragged over a surface of the program.
+struct Drag {
+    /// Which drag: what is read of an earlier one's list is nothing to this one.
+    id: u64,
+    data_device: WlDataDevice,
+    /// The surface it is over: the address of its proxy (see `DroppedFiles::surface`).
+    surface: usize,
+    /// Where on the surface it is.
+    x: f64,
+    y: f64,
+    /// Its `text/uri-list`: `None` until all of it is read.
+    list: Option<Vec<u8>>,
+    /// It was dropped (maybe before its list was read to its end).
+    dropped: bool,
+}
+
+/// The offer of the drag that is over a surface now.
+fn drag_offer(data_device: &WlDataDevice) -> Option<DragOffer> {
+    data_device.data::<DataDeviceData>()?.drag_offer()
 }
 
 #[derive(Debug, Default)]

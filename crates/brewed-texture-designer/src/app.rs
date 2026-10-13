@@ -871,6 +871,9 @@ pub enum Message {
     PreviewMade(String, Option<std::time::SystemTime>, Result<(Vec<u8>, u32, u32, String), String>),
     Engine(Event),
     Runtime(iced::Event, iced::event::Status, window::Id),
+    /// Files dropped on a window on Wayland, where the window does not say them (see
+    /// [`crate::dropped_files`]), and whether that window is the main one, once it is known.
+    FilesDropped(crate::dropped_files::Dropped, Option<bool>),
     Tick,
     // document
     Edit(Edit),
@@ -1618,6 +1621,8 @@ impl App {
             );
             relevant.then_some(Message::Runtime(event, status, window))
         })];
+        // (Files dropped on a window on Wayland, which no event of the window says.)
+        subs.push(crate::dropped_files::subscription().map(|dropped| Message::FilesDropped(dropped, None)));
         match &self.events {
             Some(source) => subs.push(source.subscription().map(Message::Engine)),
             None => subs.push(iced::time::every(Duration::from_millis(30)).map(|_| Message::PollGpu)),
@@ -2534,6 +2539,26 @@ impl App {
             }
             Message::Engine(event) => return self.engine_event(event),
             Message::Runtime(event, status, id) => return self.runtime_event(event, status, id),
+            // Whose surface they were dropped on, the main window says.
+            Message::FilesDropped(dropped, None) => {
+                let Some(main) = self.window else { return Task::none() };
+                let surface = dropped.surface;
+                return window::run(main, move |window| crate::dropped_files::is_on(window, surface))
+                    .map(move |on_it| Message::FilesDropped(dropped.clone(), Some(on_it)));
+            }
+            Message::FilesDropped(dropped, Some(true)) => {
+                if dropped.files.is_empty() {
+                    self.set_status("Nothing of what was dropped is a file on this computer", true);
+                    return Task::none();
+                }
+                // Where they were dropped is where the pointer is (it said nothing of where it
+                // was while they were dragged): a picture's node goes there.
+                self.ui.cursor = dropped.at;
+                return Task::batch(dropped.files.into_iter().map(|f| self.file_dropped(f)).collect::<Vec<_>>());
+            }
+            // (On another window of the program: nothing there takes files, as where its window
+            // says them.)
+            Message::FilesDropped(_, Some(false)) => {}
             Message::Tick => {
                 if self.ui.status.as_ref().is_some_and(|s| s.at.elapsed() > Duration::from_secs(if s.error { 12 } else { 6 })) {
                     self.ui.status = None;

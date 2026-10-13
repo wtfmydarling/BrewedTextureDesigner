@@ -17,13 +17,18 @@ InterVariable-Italic.ttf, crates/brewed-texture-engine/assets/fonts/Inter-Regula
 Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter). SIL Open Font License 1.1;
 see Inter-LICENSE.txt beside each.
 
-The winit crate (patches/winit) — winit 0.30.13 (https://github.com/rust-windowing/winit), changed
-in two places (patches/README.md says each in full): it takes files dropped on the window on
-Wayland (src/platform_impl/linux/wayland/seat/dnd.rs, of
-https://github.com/MixaDoDs/photocraft/tree/wayland-dnd), and on Windows 11 a window dragged to a
-display of another scale is given the rect the system suggests
+Two crates are kept changed (patches/README.md says each change in full):
+
+The winit crate (patches/winit) — winit 0.30.13 (https://github.com/rust-windowing/winit): on
+Windows 11 a window dragged to a display of another scale is given the rect the system suggests
 (src/platform_impl/windows/event_loop.rs, as winit itself does since its pull request 4341).
 Apache License 2.0; see LICENSE beside it.
+
+The smithay-clipboard crate (patches/smithay-clipboard) — smithay-clipboard 0.7.3
+(https://github.com/smithay/smithay-clipboard): its data device takes the files dropped on a
+window on Wayland too, and says them to the program (src/dropped.rs, src/state.rs; written after
+src/platform_impl/linux/wayland/seat/dnd.rs of
+https://github.com/MixaDoDs/photocraft/tree/wayland-dnd). MIT License; see LICENSE beside it.
 
 The Rust crates the program is built of — each with its license and a link to where it is — are
 listed in the program itself: Help → Third-Party Notices.

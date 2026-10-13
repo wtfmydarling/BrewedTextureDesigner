@@ -302,30 +302,36 @@ mod tests {
         assert_eq!(works().iter().filter(|w| w.kind != Kind::Software).count(), 2, "a work that is not a crate is named in NOTICE too");
     }
 
-    /// The winit the program is built with is the one kept in patches/winit (Cargo.lock has it
-    /// from no registry), with its two changes still in it: files dropped on a window on
-    /// Wayland, and, from Windows 11 on, the rect the system suggests taken as a window comes to
-    /// a display of another scale (see patches/README.md). A dependency moved, or the folder
-    /// copied again from crates.io, would drop them without a word: a file dropped on Wayland
-    /// would be lost again, and a window grow again between displays. (When iced is built on a
-    /// winit that has both, the folder and this test go.)
+    /// The winit and the smithay-clipboard the program is built with are the ones kept in
+    /// `patches` (Cargo.lock has them from no registry), each with its change still in it (see
+    /// patches/README.md): in winit, from Windows 11 on, the rect the system suggests is taken
+    /// as a window comes to a display of another scale; in smithay-clipboard, the files dropped
+    /// on a window on Wayland are taken by its data device and said to the program. A
+    /// dependency moved, or a folder copied again from crates.io, would drop them without a
+    /// word: a window would grow again between displays, a file dropped on Wayland be lost
+    /// again. And winit makes no data device of its own for the drags: on GNOME it would get
+    /// none of them, and anywhere else each file would be dropped twice.
     #[test]
-    fn the_winit_that_is_built_is_ours_with_its_changes() {
+    fn the_crates_kept_changed_are_built_with_their_changes() {
         let lock = include_str!("../../../Cargo.lock");
-        let winit: Vec<&str> = lock.split("[[package]]").filter(|p| p.lines().any(|l| l.trim() == "name = \"winit\"")).collect();
-        assert_eq!(winit.len(), 1, "one winit is built");
-        assert!(winit[0].contains("version = \"0.30.13\"") && !winit[0].contains("source ="), "not the one of crates.io: {}", winit[0]);
-        assert!(include_str!("../../../Cargo.toml").contains("winit = { path = \"patches/winit\" }"));
+        let manifest = include_str!("../../../Cargo.toml");
+        for (name, version) in [("winit", "0.30.13"), ("smithay-clipboard", "0.7.3")] {
+            let built: Vec<&str> = lock.split("[[package]]").filter(|p| p.lines().any(|l| l.trim() == format!("name = \"{name}\""))).collect();
+            assert_eq!(built.len(), 1, "one {name} is built");
+            assert!(built[0].contains(&format!("version = \"{version}\"")) && !built[0].contains("source ="), "not the one of crates.io: {}", built[0]);
+            assert!(manifest.contains(&format!("{name} = {{ path = \"patches/{name}\" }}")), "{name} is taken from patches");
+        }
         let scale = include_str!("../../../patches/winit/src/platform_impl/windows/event_loop.rs").replace("\r\n", "\n");
         let taken = "if !WIN10_BUILD_VERSION.is_some_and(|build| build < 22000) {\n                new_outer_rect = suggested_rect;\n            } else {";
         assert!(scale.contains(taken), "the rect Windows suggests is taken, from Windows 11 on");
         let seat = include_str!("../../../patches/winit/src/platform_impl/linux/wayland/seat/mod.rs");
-        let state = include_str!("../../../patches/winit/src/platform_impl/linux/wayland/state.rs");
-        let dropped = include_str!("../../../patches/winit/src/platform_impl/linux/wayland/seat/dnd.rs");
-        assert!(seat.contains("mod dnd;") && seat.contains("get_data_device(") && state.contains("sctk::delegate_data_device!(WinitState);"));
-        assert!(dropped.contains("WindowEvent::DroppedFile(") && dropped.contains("text/uri-list"), "files dropped on Wayland are said");
-        let said = include_str!("../../../patches/README.md");
-        assert!(said.contains("winit/pull/4341") && said.contains("wayland-dnd"), "what is changed is said beside it");
+        assert!(!seat.contains("data_device"), "winit makes no data device");
+        let device = include_str!("../../../patches/smithay-clipboard/src/state.rs");
+        let (accepted, said) = ("offer.accept_mime_type(offer.serial, Some(URI_LIST.into()));", "crate::dropped::say(DroppedFiles {");
+        assert!(device.contains(accepted) && device.contains(said), "the clipboard's data device takes the files dragged, and says them dropped");
+        assert!(include_str!("../../../patches/smithay-clipboard/src/lib.rs").contains("pub use dropped::{DroppedFiles, dropped_files};"));
+        let beside = include_str!("../../../patches/README.md");
+        assert!(beside.contains("winit/pull/4341") && beside.contains("## smithay-clipboard 0.7.3"), "what is changed is said beside it");
     }
 
     /// No crate built into the program asks that the program be under its own license (the

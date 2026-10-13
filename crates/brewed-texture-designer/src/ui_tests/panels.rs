@@ -1063,6 +1063,46 @@ fn a_file_dropped_while_a_dialog_is_open_waits_for_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Files dropped on the main window on Wayland, where it is not the window that says them but
+/// the clipboard's data device (see `dropped_files`): taken as files the window says are, and a
+/// picture's node goes where it was dropped. Dropped on another window of the program, or with
+/// no file of this computer among them, nothing is added, and the latter is said.
+#[test]
+fn files_dropped_on_wayland_are_taken_where_they_were_dropped() {
+    use crate::dropped_files::Dropped;
+    let dir = scratch("drop-wayland");
+    let (bricks, wood) = (dir.join("bricks.png"), dir.join("old wood.png"));
+    for picture in [&bricks, &wood] {
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 80, 40, 255])).save(picture).unwrap();
+    }
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    w.app.settings.new_files = crate::settings::NewFiles::Link;
+    // (A frame drawn: the graph's canvas says where in the window it is.)
+    draw_frame(&mut w, std::time::Instant::now());
+    let places = |w: &Harness| -> Vec<[f32; 2]> { w.app.graph().nodes_of(NodeKind::BITMAP).map(|n| n.pos).collect() };
+    let before = places(&w);
+    // A place of the graph that is not where the pointer was last, nor the middle of the view.
+    let view = w.app.ui.graph_view;
+    let at = Point::new(view.bounds.center_x() - 150.0, view.bounds.center_y() - 90.0);
+    assert!(view.contains(at), "in the graph: {at:?}");
+    let dropped = |files: &[&std::path::PathBuf]| Dropped { surface: 7, at, files: files.iter().map(|f| (*f).clone()).collect() };
+
+    w.send(Message::FilesDropped(dropped(&[&bricks, &wood]), Some(false)));
+    assert_eq!(places(&w), before, "another window's: not taken");
+    w.send(Message::FilesDropped(dropped(&[]), Some(true)));
+    assert_eq!(places(&w), before, "no files: nothing added");
+    assert!(w.app.ui.status.as_ref().is_some_and(|s| s.error && s.text.contains("on this computer")), "said: {:?}", w.app.ui.status);
+
+    w.send(Message::FilesDropped(dropped(&[&bricks, &wood]), Some(true)));
+    let after = places(&w);
+    assert_eq!(after.len(), before.len() + 2, "both taken: {:?}", w.app.ui.status);
+    let new: Vec<[f32; 2]> = after.into_iter().filter(|p| !before.contains(p)).collect();
+    let there = view.to_graph(at);
+    assert!(new.iter().any(|p| (p[0] - there[0]).abs() < 1.0 && (p[1] - there[1]).abs() < 1.0), "one where they were dropped ({there:?}): {new:?}");
+    assert!(new.iter().all(|p| (p[0] - there[0]).abs() < 1.0), "the other below it: {new:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Pictures copied in a file manager and pasted are taken as dropped ones are: each a Bitmap
 /// node, stacked, whether the clipboard says them as GNOME Files does (a uri-list, CRLF) or as
 /// paths; text that is neither nodes nor files is not pasted, and the status bar says so.
