@@ -43,10 +43,12 @@ fn header<'a>(folded: bool, name: String, marker: Option<Icon>, count: usize, on
     if let Some(marker) = marker {
         label = label.push(icon(marker, 12.0, style::TEXT_FAINT));
     }
+    // The name has the room the others leave it, on as many lines as it takes: what fills a row
+    // is given its room last, so the count keeps the room of its digits however the name wraps.
+    // (Laid out before the count, a name whose longest line took the row left it three pixels.)
     button(
         label
-            .push(crate::view::caption(&name))
-            .push(space().width(Length::Fill))
+            .push(crate::view::caption(&name).width(Length::Fill))
             .push(text(count.to_string()).size(style::SMALL).color(style::TEXT_FAINT)),
     )
     .width(Length::Fill)
