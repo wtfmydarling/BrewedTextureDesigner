@@ -1741,7 +1741,7 @@ opened. We have the first three.
 | `AGENTS.md` / `CLAUDE.md` | the rules for agents working in the repository: where to start, the non-negotiables, what to run before finishing, how several agents share a tree | none in the repository (my notes are outside it) — a contributor's agent would start blind |
 | `docs/gaps.md`, `docs/target-app-parity.md` | where it falls short, measured | none |
 | `.mcp.json`, `docs/agents.md` | the program in an agent's hands | none yet |
-| `clippy.toml`, `rustfmt.toml`, workspace lints | the rules as configuration | `rustfmt.toml` only |
+| `clippy.toml`, `rustfmt.toml`, workspace lints | the rules as configuration | `rustfmt.toml` only (kept to since 2026-10-13: the workspace is as `cargo fmt` writes it) |
 | `.github/workflows` | CI on three systems and wasm; releases as drafts with checksums | none |
 | a pull-request template (VectorCraft) | what a change must say about itself | none |
 | `contributors/people.toml` | credit in the About window: everyone by GitHub name automatically; "anything more is up to you: add YOUR OWN entry… Never add someone else" | none |

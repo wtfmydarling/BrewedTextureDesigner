@@ -314,6 +314,7 @@ The interface does not need changing: the Library, the search, the properties, s
 
 ```bash
 cargo test --workspace                                            # 494 tests
+cargo fmt -- --check                                              # the code is laid out as rustfmt writes it (cargo fmt lays it out)
 WGPU_BACKEND=dx12 cargo test --workspace                          # the same on another backend (vulkan, dx12, metal)
 cargo test --workspace -- --ignored                               # live tests of the eyedropper and of pointer capture (a desktop is needed), measurements, stress tests
 cargo run --release --features dev-tools -- --autopilot 30 --seed 3                  # the program drives itself for 30 minutes (below)
@@ -323,6 +324,8 @@ cargo run --release --features dev-tools -- --screenshot ui.png --scenario gradi
 cargo run --release --features dev-tools -- --scenario "template:pbr;shape:sphere" --picture pbr.png         # a render of a template (the pictures of templates and lessons: --picture, --export, --compose)
 cargo run --release --features dev-tools -- --third-party                          # build the list of crates (name, license, link) again for Help → Third-Party Notices
 ```
+
+The code is formatted by `cargo fmt`, with lines of 160 columns (`rustfmt.toml`), and by nothing else: run it before a commit, and `cargo fmt -- --check` says whether anything is left. The crates kept in `patches` are other projects' code and are not formatted (`patches/rustfmt.toml`). The one commit that laid the whole workspace out is named in `.git-blame-ignore-revs`: GitHub's blame looks through it, and a clone does after `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
 
 **Third-Party Notices** (Help → Third-Party Notices…, the same item in Resources on the Home screen, and a button in About) — a list like that of programs such as Nomad Sculpt: every work of others the program is made of — its name, its license in square brackets, and on the right a link icon; a click opens its repository (or page) in the browser. The works are split into sections (Models — Matball, Fonts — Inter, Software — the Rust standard library and the crates), with a search at the top. The crates are only those that go into the program on Windows, Linux and macOS (without build dependencies, procedural macros and other platforms), each once, whatever its versions, and without those that can be taken under a license that asks nothing (Zlib, Unlicense, 0BSD, CC0, BSL-1.0). The program no longer carries the texts of licenses: the list (name, license, link) is made by the `--third-party` command from `cargo metadata` and kept compressed — 8 KB; a test checks that it was made from the Cargo.lock there is — a new crate without an updated list will not pass the tests. About no longer lists what the program is built on: all of that is in this window.
 

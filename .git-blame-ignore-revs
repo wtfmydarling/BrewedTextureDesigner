@@ -1,0 +1,6 @@
+# Commits that changed how the code is laid out and nothing else: blame looks through them.
+# GitHub reads this file by its name; in a clone, once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# The whole workspace as `cargo fmt` writes it (2026-10-13, rustfmt 1.9.0, lines of 160 columns)
+9c6bf0786c1af0092d75de33a68cb9c41b30458b
