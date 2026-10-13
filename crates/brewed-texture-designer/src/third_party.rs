@@ -170,8 +170,10 @@ pub fn write_crates(out: &std::path::Path) -> Result<(), String> {
     // to run (not to build, nor to test), and not into procedural macros.
     let mut linked: BTreeSet<String> = BTreeSet::new();
     let mut packages: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut own: BTreeSet<String> = BTreeSet::new();
     for platform in PLATFORMS {
         let m = metadata(Some(platform))?;
+        own.extend(m["workspace_members"].as_array().ok_or("no workspace")?.iter().filter_map(|id| id.as_str()).map(str::to_string));
         for p in m["packages"].as_array().ok_or("no packages")? {
             packages.insert(p["id"].as_str().unwrap_or_default().to_string(), p.clone());
         }
@@ -214,8 +216,8 @@ pub fn write_crates(out: &std::path::Path) -> Result<(), String> {
     let (mut built, mut asking_nothing) = (0, 0);
     for id in &linked {
         let p = &packages[id];
-        // (The workspace's own crates have no source.)
-        if p["source"].is_null() {
+        // (Not the workspace's own crates; winit, kept in patches/winit, is not one of them.)
+        if own.contains(id) {
             continue;
         }
         built += 1;
@@ -273,7 +275,7 @@ mod tests {
             assert!(!works.iter().any(|w| w.name == elsewhere), "{elsewhere}: not built into the program for a computer");
         }
         let names: Vec<&str> = works.iter().map(|w| w.name.as_str()).collect();
-        assert!(names.contains(&"wgpu") && names.contains(&"iced"), "{names:?}");
+        assert!(names.contains(&"wgpu") && names.contains(&"iced") && names.contains(&"winit"), "{names:?}");
         assert_eq!(names.iter().filter(|n| **n == "wgpu").count(), 1, "each crate once, whatever its versions");
         let ball = &works[0];
         assert!(ball.name.contains("Shader Ball JL 01") && ball.name.contains("Craneo") && ball.license == "CC BY 4.0" && ball.link == "https://skfb.ly/ozVxI");

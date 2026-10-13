@@ -37,6 +37,7 @@ pub use settings_dialog::{SettingsDialog, SettingsMessage};
 use brewed_texture_engine::{DisplayImage, EngineService, Event, ExportJob, ImageReport, Request};
 use brewed_texture_engine::simd::ImageStats;
 
+use crate::copied_files;
 use crate::gpu::{self, EventSource};
 use crate::eyedropper;
 use crate::file_dialogs::Filters;
@@ -2772,9 +2773,13 @@ impl App {
                     Some(text) => Clipboard::from_text(text),
                     None => self.ui.clipboard.clone(),
                 };
-                match clip {
-                    Some(clip) => self.paste_clipboard(clip),
-                    None => self.set_status("The clipboard holds no nodes", false),
+                // Files copied in a file manager: taken as if dropped on the window (for who would
+                // sooner paste them, and where a drop does not reach the window).
+                let files = text.as_deref().filter(|_| clip.is_none()).and_then(copied_files::of_text);
+                match (clip, files) {
+                    (Some(clip), _) => self.paste_clipboard(clip),
+                    (None, Some(files)) => return Task::batch(files.into_iter().map(|f| self.file_dropped(f)).collect::<Vec<_>>()),
+                    (None, None) => self.set_status("The clipboard holds no nodes and no files", false),
                 }
             }
             Message::Duplicate => {

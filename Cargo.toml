@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/brewed-texture-core", "crates/brewed-texture-engine", "crates/brewed-texture-designer", "crates/home-screen", "crates/scroll-box"]
+# winit as it is on crates.io, with what it lacks (see [patch.crates-io] below): not one of ours.
+exclude = ["patches/winit"]
 
 [workspace.package]
 version = "0.2.0"
@@ -64,3 +66,10 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 4
+
+# winit 0.30.13 with file drag and drop on Wayland, which winit brings only in 0.31
+# (rust-windowing/winit#4571), and iced 0.14 is built on 0.30:
+# patches/winit/src/platform_impl/linux/wayland/seat/dnd.rs, of
+# https://github.com/MixaDoDs/photocraft/tree/wayland-dnd. Gone once iced is on winit 0.31.
+[patch.crates-io]
+winit = { path = "patches/winit" }
