@@ -1103,6 +1103,36 @@ fn files_dropped_on_wayland_are_taken_where_they_were_dropped() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An emoji in a text is drawn, where a font of the system has it: in the status bar, something
+/// is drawn where it is. (In Fedora it was an empty place the width of the emoji: its Noto Color
+/// Emoji paints them as COLR version 1 has it, which the text's renderer does not draw, and the
+/// Noto Emoji beside it, of outlines, was never come to. See `style::undrawn_emoji`.) A system
+/// with no font of emoji draws none, and the test says so.
+#[test]
+fn an_emoji_is_drawn_where_a_font_has_it() {
+    let emoji = "🙂";
+    if !crate::style::some_font_has('🙂') {
+        eprintln!("{emoji}: no font of this system has it");
+        return;
+    }
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    // (Four of them: more to draw than a speck could be taken for.)
+    let said = format!("{emoji}{emoji}{emoji}{emoji}");
+    w.app.set_status(said.clone(), false);
+    w.input(&[]);
+    let at = texts_reading(&mut w, &said);
+    let at = at.first().copied().unwrap_or_else(|| panic!("the status bar says it: {:?}", w.app.ui.status));
+    let pixels = w.pixels();
+    let width = w.size.width as usize;
+    let pixel = |x: usize, y: usize| -> [u8; 4] { pixels[(y * width + x) * 4..][..4].try_into().unwrap() };
+    // What is drawn where the text is that is not the bar itself (its color: the text's corner).
+    let (left, top) = (at.x.ceil() as usize, at.y.ceil() as usize);
+    let (right, bottom) = ((at.x + at.width).floor() as usize, (at.y + at.height).floor() as usize);
+    let bar = pixel(left, top);
+    let drawn = (top..bottom).flat_map(|y| (left..right).map(move |x| (x, y))).filter(|&(x, y)| pixel(x, y) != bar).count();
+    assert!(drawn >= 4 * 20, "four emoji drawn in {at:?}: {drawn} pixels are not the bar's");
+}
+
 /// Pictures copied in a file manager and pasted are taken as dropped ones are: each a Bitmap
 /// node, stacked, whether the clipboard says them as GNOME Files does (a uri-list, CRLF) or as
 /// paths; text that is neither nodes nor files is not pasted, and the status bar says so.

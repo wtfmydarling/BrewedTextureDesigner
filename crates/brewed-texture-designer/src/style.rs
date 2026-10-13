@@ -167,11 +167,83 @@ pub fn load_fonts() {
 
 /// The font system of the interface's text, of the faces in `db` (the system's, and the files of
 /// [`UI_FONTS`]): its Inter at every weight ([`own_family`]), and what Inter has not in the
-/// system's fonts, drawn as [`fallbacks`] has it.
+/// system's fonts, drawn as [`fallbacks`] has it, in those of them that can be drawn
+/// ([`undrawn_emoji`]).
 fn interface_fonts(locale: String, mut db: fontdb::Database) -> cosmic_text::FontSystem {
+    undrawn_emoji(&mut db);
     own_family(&mut db);
     let fallbacks = fallbacks(&mut db);
     cosmic_text::FontSystem::new_with_locale_and_db_and_fallback(locale, db, fallbacks)
+}
+
+/// Takes out of `db` the fonts of emoji the interface's text cannot be drawn in.
+///
+/// Its glyphs are drawn by swash, which paints one in color as layers of flat colors (COLR
+/// version 0) or as a bitmap (CBDT, sbix), and fills its outline otherwise. A font whose emoji are
+/// painted as COLR version 1 says alone (gradients), and have no outlines, is drawn as nothing:
+/// Fedora's Noto Color Emoji is one (Noto-COLRv1.ttf), and an emoji in a name was an empty place
+/// the width of one there. cosmic-text falls back to a font for the characters it has, whatever
+/// can be drawn of them. Without such a font, an emoji is drawn in the next one that has it
+/// (in the outlines of Noto Emoji, in the text's color, where that is installed), or as a
+/// character no font has is.
+fn undrawn_emoji(db: &mut fontdb::Database) {
+    // (The faces cosmic-text takes for emoji are told by their names; so are these.)
+    let of_emoji = |face: &&fontdb::FaceInfo| {
+        face.post_script_name.contains("Emoji") || face.families.iter().any(|(name, _)| name.contains("Emoji"))
+    };
+    let faces: Vec<fontdb::ID> = db.faces().filter(of_emoji).map(|face| face.id).collect();
+    for id in faces {
+        if db.with_face_data(id, drawn_as_nothing).unwrap_or(false) {
+            db.remove_face(id);
+        }
+    }
+}
+
+/// Whether swash draws nothing of the emoji of the face `index` of the font file `data`: it has
+/// no layers of version 0 nor bitmaps of them, and no outline of the first of a few it has.
+fn drawn_as_nothing(data: &[u8], index: u32) -> bool {
+    use cosmic_text::skrifa::instance::{LocationRef, Size};
+    use cosmic_text::skrifa::outline::{DrawSettings, OutlinePen};
+    use cosmic_text::skrifa::{FontRef, MetadataProvider as _, Tag};
+    /// Whether anything was drawn of an outline.
+    struct Drawn(bool);
+    impl OutlinePen for Drawn {
+        fn move_to(&mut self, _: f32, _: f32) {}
+        fn line_to(&mut self, _: f32, _: f32) {
+            self.0 = true;
+        }
+        fn quad_to(&mut self, _: f32, _: f32, _: f32, _: f32) {
+            self.0 = true;
+        }
+        fn curve_to(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: f32) {
+            self.0 = true;
+        }
+        fn close(&mut self) {}
+    }
+    let Ok(font) = FontRef::from_index(data, index) else { return false };
+    let table = |tag: &[u8; 4]| font.table_data(Tag::new(tag));
+    // (COLR: its version, then how many glyphs have layers of version 0.)
+    let layers = table(b"COLR").is_some_and(|colr| colr.as_bytes().get(2..4).is_some_and(|glyphs| glyphs != [0, 0]));
+    if layers || table(b"CBDT").is_some() || table(b"sbix").is_some() {
+        return false;
+    }
+    let Some(glyph) = ['😀', '🙂', '❤', '⭐', '☺'].into_iter().find_map(|emoji| font.charmap().map(emoji)) else { return false };
+    let Some(outline) = font.outline_glyphs().get(glyph) else { return true };
+    let mut drawn = Drawn(false);
+    let whole = outline.draw(DrawSettings::unhinted(Size::unscaled(), LocationRef::default()), &mut drawn);
+    whole.is_ok() && !drawn.0
+}
+
+/// Whether a font the interface's text may be drawn in, its own or the system's, has `c` (for
+/// the tests: what no font has is drawn nowhere).
+#[cfg(test)]
+pub fn some_font_has(c: char) -> bool {
+    use cosmic_text::skrifa::{FontRef, MetadataProvider as _};
+    load_fonts();
+    let mut fonts = iced::advanced::graphics::text::font_system().write().expect("the font system");
+    let db = fonts.raw().db();
+    let has = |data: &[u8], index| FontRef::from_index(data, index).is_ok_and(|font| font.charmap().map(c).is_some());
+    db.faces().any(|face| db.with_face_data(face.id, has).unwrap_or(false))
 }
 
 /// Makes the files of [`UI_FONTS`] the only faces of their family in `db`, each one at every
@@ -277,9 +349,13 @@ fn fallbacks(db: &mut fontdb::Database) -> Fallbacks {
             }
         }
     }
+    // Fonts of emoji before the others: a font of text may have an emoji too, of its own drawing
+    // (in Fedora, where the platform's font of emoji cannot be drawn, they were Adwaita Mono's,
+    // half the size of the letters, with Noto Emoji installed).
+    let (emoji, others): (Vec<&str>, Vec<&str>) = families.into_iter().partition(|name| name.contains("Emoji"));
     // (Names leaked: the font system that keeps them is made once and lives as long as the program.)
     let mut common = platform.common_fallback().to_vec();
-    for name in families {
+    for name in emoji.into_iter().chain(others) {
         if !common.contains(&name) {
             common.push(Box::leak(name.to_owned().into_boxed_str()));
         }
