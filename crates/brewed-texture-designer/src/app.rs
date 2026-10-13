@@ -70,6 +70,9 @@ pub struct StartupOptions {
     /// Start on the Home screen (see [`home`]), with nothing being edited: as the program
     /// starts when it is not given packages to open.
     pub home: bool,
+    /// The log file of this run (see [`crate::log_file`]), which Help → Reveal Log File shows;
+    /// `None` where none was made.
+    pub log: Option<PathBuf>,
     /// What the tools for developing the program are asked for (see [`dev`]).
     #[cfg(any(test, feature = "dev-tools"))]
     pub dev: dev::DevOptions,
@@ -670,6 +673,8 @@ pub struct App {
     picture_pipeline: Option<view::view3d::Pipeline>,
     /// Where the earlier versions of the packages are kept (see [`versions`]).
     versions: Option<brewed_texture_core::versions::Versions>,
+    /// The log file of this run, where there is one (see [`crate::log_file`]).
+    pub log: Option<PathBuf>,
     /// The tools for developing the program: screenshots, the autopilot (see [`dev`]).
     #[cfg(any(test, feature = "dev-tools"))]
     dev: dev::Dev,
@@ -892,6 +897,8 @@ pub enum Message {
     ExportFolderPicked(Option<PathBuf>),
     ExportNode(NodeId),
     ExportNodePicked(NodeId, Option<PathBuf>),
+    /// Show the log file in the file manager (Help → Reveal Log File).
+    RevealLog,
     Quit,
     /// The window's own title bar (where the program draws it, see [`OWN_TITLE_BAR`]).
     Window(WindowAction),
@@ -1200,6 +1207,9 @@ fn main_window_settings(workspace: Option<&Workspace>) -> window::Settings {
             corner_preference: window::settings::platform::CornerPreference::Round,
             ..Default::default()
         },
+        // Its id on Wayland, its class on X11: what ties it to the program's desktop entry.
+        #[cfg(free_unix)]
+        platform_specific: window::settings::PlatformSpecific { application_id: crate::brand::APP_ID.to_string(), ..Default::default() },
         ..Default::default()
     }
 }
@@ -1246,6 +1256,8 @@ pub(crate) fn color_editor_settings(place: Option<ColorEditorPlace>) -> window::
             corner_preference: window::settings::platform::CornerPreference::Round,
             ..Default::default()
         },
+        #[cfg(free_unix)]
+        platform_specific: window::settings::PlatformSpecific { application_id: crate::brand::APP_ID.to_string(), ..Default::default() },
         ..Default::default()
     }
 }
@@ -1452,6 +1464,7 @@ impl App {
             gpu: None,
             picture_pipeline: None,
             versions: opts.versions.clone().map(brewed_texture_core::versions::Versions::new),
+            log: opts.log.clone(),
             #[cfg(any(test, feature = "dev-tools"))]
             dev: dev::Dev::new(&opts.dev),
         };
@@ -2590,6 +2603,11 @@ impl App {
             Message::Open => {
                 self.close_popups();
                 return self.pick_package();
+            }
+            Message::RevealLog => {
+                if let Some(log) = &self.log {
+                    crate::log_file::reveal(log);
+                }
             }
             Message::Quit => {
                 self.ui.discarded.clear();
@@ -4492,4 +4510,27 @@ pub fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> im
         let _ = tx.send(f());
     });
     async move { rx.await.ok() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The main window and the Color Editor's say what program they are to the desktop on Linux
+    /// and the BSDs (the eyedropper's windows too); on Windows they keep their shadow and round
+    /// corners without the system's frame, the Color Editor off the taskbar.
+    #[test]
+    fn the_windows_say_what_program_they_are() {
+        for (settings, tool) in [(main_window_settings(None), false), (color_editor_settings(None), true)] {
+            #[cfg(free_unix)]
+            assert_eq!(settings.platform_specific.application_id, crate::brand::APP_ID);
+            #[cfg(windows)]
+            {
+                let platform = &settings.platform_specific;
+                assert!(platform.undecorated_shadow && platform.skip_taskbar == tool);
+                assert_eq!(platform.corner_preference, window::settings::platform::CornerPreference::Round);
+            }
+            assert!(!settings.exit_on_close_request && settings.icon.is_some() && settings.min_size.is_some(), "{tool}");
+        }
+    }
 }

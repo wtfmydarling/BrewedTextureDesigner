@@ -4628,6 +4628,38 @@ fn the_third_party_notices_say_whose_work_is_used() {
     assert!(matches!(w.app.ui.dialog, Some(Dialog::Notices(_))));
 }
 
+/// Help → Reveal Log File shows the log in the file manager (not in the tests), where a log file
+/// was made; where none was, the item is there but does nothing.
+#[test]
+fn the_log_file_is_revealed_from_the_help_menu() {
+    for log in [Some(std::env::temp_dir().join(crate::log_file::NAME)), None] {
+        let opts = StartupOptions { log: log.clone(), ..StartupOptions::default() };
+        let mut w = match Harness::started(Box::new(view::root), Size::new(1680.0, 1000.0), opts) {
+            Some(w) => w,
+            None => {
+                eprintln!("no GPU for the headless renderer: test skipped");
+                return;
+            }
+        };
+        w.send(Message::Menu(Some(crate::app::MenuId::Help)));
+        let item = *texts(&mut w, "Reveal Log File").first().expect("the item is in the Help menu");
+        click(&mut w, item.center());
+        assert_eq!(w.app.ui.menu.is_none(), log.is_some(), "chosen, the menu closes; with no log, nothing happens");
+    }
+}
+
+/// A file to open whose name is not Unicode text (given on the command line by a file manager
+/// on Linux) is not opened, and the status says why: the program keeps its paths as text, and
+/// would read another file, or none, under the name it could write for it.
+#[test]
+fn a_file_whose_name_is_not_text_is_said_not_to_open() {
+    let odd = crate::tests::not_unicode();
+    let (app, _) = App::boot(StartupOptions { open: vec![odd.into()], ..StartupOptions::default() });
+    let status = app.ui.status.as_ref().expect("a status");
+    assert!(status.error && status.text.contains("not Unicode"), "{}", status.text);
+    assert!(app.ui.opening.is_empty(), "nothing is read");
+}
+
 /// The menu of an Output's usage is one list under headings: a click on a heading closes what is
 /// under it (and opens it again), and goes no further than the menu, as no click on it does;
 /// a closed heading stays closed when the menu opens again; a search finds what is under it
