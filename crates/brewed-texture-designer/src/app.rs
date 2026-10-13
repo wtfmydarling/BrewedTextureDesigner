@@ -2639,9 +2639,19 @@ impl App {
                 return self.pick_save_path();
             }
             Message::SavePicked(path) => match path {
-                Some(mut path) => {
+                Some(picked) => {
+                    let mut path = picked.clone();
                     if path.extension().is_none() {
                         path.set_extension(project::FILE_EXTENSION);
+                    }
+                    // (Not over a file the dialog did not ask about: GNOME's and zenity's add no
+                    // extension, and asked only about the name as it was typed.) What was to
+                    // follow the save does not, as when a save fails.
+                    if path != picked && path.exists() {
+                        self.ui.after_save = None;
+                        let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+                        self.set_status(format!("{name} is there already: save it as that to replace it"), true);
+                        return Task::none();
                     }
                     return self.save_package(self.doc_key, path);
                 }
