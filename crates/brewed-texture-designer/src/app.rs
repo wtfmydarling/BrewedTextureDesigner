@@ -39,6 +39,7 @@ use brewed_texture_engine::simd::ImageStats;
 
 use crate::gpu::{self, EventSource};
 use crate::eyedropper;
+use crate::file_dialogs::Filters;
 use crate::picker::{self, PickTarget, Shot};
 use crate::view;
 use crate::view::frames::FrameRate;
@@ -2237,7 +2238,7 @@ impl App {
             blocking(move || {
                 let mut dialog = rfd::FileDialog::new()
                     .set_title("Save package")
-                    .add_filter(format!("{} package", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION])
+                    .filter_to_save(format!("{} package", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION])
                     .set_file_name(name);
                 if let Some(folder) = folder {
                     dialog = dialog.set_directory(folder);
@@ -2360,7 +2361,7 @@ impl App {
             blocking(move || {
                 let mut dialog = rfd::FileDialog::new()
                     .set_title("Open packages")
-                    .add_filter(format!("{} package", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION, "json"]);
+                    .filter_to_open(format!("{} package", brewed_texture_core::APP_NAME), &[project::FILE_EXTENSION, "json"]);
                 if let Some(folder) = folder {
                     dialog = dialog.set_directory(folder);
                 }
@@ -2677,7 +2678,7 @@ impl App {
                 let folder = self.dialog_folder(None, false);
                 return Task::perform(
                     blocking(move || {
-                        let mut dialog = rfd::FileDialog::new().set_title("Export output").add_filter(ext.to_uppercase(), &[ext]).set_file_name(name);
+                        let mut dialog = rfd::FileDialog::new().set_title("Export output").filter_to_save(ext.to_uppercase(), &[ext]).set_file_name(name);
                         if let Some(folder) = folder {
                             dialog = dialog.set_directory(folder);
                         }
@@ -3021,7 +3022,7 @@ impl App {
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new().set_title("Choose a file");
                         if !extensions.is_empty() {
-                            dialog = dialog.add_filter("Supported files", extensions);
+                            dialog = dialog.filter_to_open("Supported files", extensions);
                         }
                         if let Some(folder) = folder {
                             dialog = dialog.set_directory(folder);
@@ -3925,8 +3926,8 @@ impl App {
                     blocking(move || {
                         let mut dialog = rfd::FileDialog::new()
                             .set_title("Load an environment image")
-                            .add_filter("HDR images", &["hdr", "exr"])
-                            .add_filter("All pictures", &["hdr", "exr", "png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff"]);
+                            .filter_to_open("HDR images", &["hdr", "exr"])
+                            .filter_to_open("All pictures", &["hdr", "exr", "png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff"]);
                         if let Some(folder) = folder {
                             dialog = dialog.set_directory(folder);
                         }
