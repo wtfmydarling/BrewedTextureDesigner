@@ -29,7 +29,9 @@ Windows suggests is taken as it is. `dark_mode.rs`: the build number is seen by 
 - **From.** winit's own fix, [winit#4341](https://github.com/rust-windowing/winit/pull/4341)
   (commit 488c036a on its master), which no release of 0.30 has. Windows 10 keeps the earlier
   code, as it does there.
-- **Tried.** Not by hand yet: the drag needs two displays of different scales on Windows 11.
+- **Tried.** By hand on Windows 11, between displays of different scales (2026-10-13): the window
+  is dragged across better than it was. It still changes its size as it crosses, which is
+  Windows giving it the size it has at the other display's scale.
 
 ## smithay-clipboard 0.7.3
 
