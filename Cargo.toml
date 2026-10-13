@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/brewed-texture-core", "crates/brewed-texture-engine", "crates/brewed-texture-designer", "crates/home-screen", "crates/scroll-box"]
-# winit as it is on crates.io, with what it lacks (see [patch.crates-io] below): not one of ours.
-exclude = ["patches/winit"]
+# Crates as they are on crates.io, with what they lack (see [patch.crates-io] below): not ours.
+exclude = ["patches/winit", "patches/smithay-clipboard"]
 
 [workspace.package]
 version = "0.2.0"
@@ -73,3 +73,5 @@ codegen-units = 4
 # scale on Windows 11. Gone once iced is on a winit that has both.
 [patch.crates-io]
 winit = { path = "patches/winit" }
+# smithay-clipboard 0.7.3, the clipboard of iced 0.14 on Wayland (patches/README.md).
+smithay-clipboard = { path = "patches/smithay-clipboard" }
