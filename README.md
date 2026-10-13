@@ -313,7 +313,7 @@ Output хранит то, что он записывает: свой вход в
 ## Проверка
 
 ```bash
-cargo test --workspace                                            # 474 теста
+cargo test --workspace                                            # 489 тестов
 WGPU_BACKEND=dx12 cargo test --workspace                          # они же на другом бэкенде (vulkan, dx12, metal)
 cargo test --workspace -- --ignored                               # живые тесты пипетки и захвата указателя (нужен рабочий стол), замеры, стресс-тесты
 cargo run --release --features dev-tools -- --autopilot 30 --seed 3                  # программа 30 минут гоняет себя сама (ниже)
@@ -360,7 +360,7 @@ cargo run --release --features dev-tools -- --third-party                       
 
 Brewed Texture Designer — свободная программа с открытым исходным кодом: её можно использовать, изучать, менять и распространять, в том числе в своих продуктах, по лицензии [MIT](LICENSE-MIT) или [Apache-2.0](LICENSE-APACHE), на выбор — как сам Rust и большинство его крейтов. Copyright (c) 2026 The Brewed Texture Designer contributors. То же говорит окно About.
 
-Чужое в программе остаётся под своими лицензиями и названо в [NOTICE](NOTICE): модель Matball (сделана из Shader Ball JL 01, автор Craneo, CC BY 4.0) и шрифт Inter (SIL OFL 1.1), а также winit в `patches/winit` с изменением: файлы, брошенные на окно на Wayland (Apache-2.0). Крейты, из которых программа собрана, перечислены в ней самой: Help → Third-Party Notices — у каждого лицензия и ссылка.
+Чужое в программе остаётся под своими лицензиями и названо в [NOTICE](NOTICE): модель Matball (сделана из Shader Ball JL 01, автор Craneo, CC BY 4.0) и шрифт Inter (SIL OFL 1.1), а также winit в `patches/winit` с двумя изменениями, описанными в [patches/README.md](patches/README.md): файлы, брошенные на окно на Wayland, и окно, которое в Windows 11 не растёт при переносе на монитор с другим масштабом (Apache-2.0). Крейты, из которых программа собрана, перечислены в ней самой: Help → Third-Party Notices — у каждого лицензия и ссылка.
 
 Два теста следят, чтобы так и оставалось. `the_program_is_under_the_licenses_it_says`: манифест, окно About, тексты лицензий и NOTICE говорят одно и то же, и всё, что в программе не крейт, названо в NOTICE. `every_crate_lets_the_program_be_under_its_own_licenses`: среди крейтов, из которых программа собрана, нет ни одного под лицензией, которая требует того же от всей программы (GPL и ей подобные) — каждый можно взять под лицензией, которая просит только назвать его.
 

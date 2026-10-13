@@ -4,11 +4,14 @@ A review of the public `storytold/*` repositories as they were on 2026-10-12, re
 Texture Designer can take from them. Nothing of theirs is copied here or into our code: this file
 says how their programs are built and what follows for ours.
 
-How it was read: every repository cloned (shallow); every `docs/` page, `AGENTS.md`, manifest,
-workflow and packaging script; the code that carries the architecture (registries, sessions,
-automation, control servers, plug-in hosts, file formats, xtask); the rest sampled by search. The
-programs together are about 3 million lines of Rust, so "all of it line by line" is not what this
-is.
+How it was read, in three passes over two days: every repository cloned (shallow); every
+`docs/` page, `AGENTS.md`, manifest, workflow and packaging script; then the code that carries
+the architecture, closest programs first (CADCraft, VectorCraft, EffectCraft: sessions,
+registries, tools, document stores, the GPU compositor, automation, plug-in hosts); then every
+crate of the other nine surveyed and the ones that recur read; and throughout, each trap they
+recorded looked for in our own sources and in the sources of the libraries we build with. The
+programs together are about 3 million lines of Rust, so "all of it line by line" is not what
+this is: codecs, typography, PDF, DXF and the like were sampled, not read.
 
 Repositories: photocraft (Photoshop), vectorcraft (Illustrator), effectcraft (After Effects),
 filmcraft (Premiere Pro), lightcraft (Lightroom), designcraft (InDesign), pdfcraft (Acrobat),
@@ -16,6 +19,41 @@ cadcraft (AutoCAD), soundcraft (Pro Tools), wordcraft / gridcraft / deckcraft (W
 PowerPoint), craft-libs (shared Rust libraries), craft-launcher, craft-common-actions (shared CI),
 craft-fonts, photocraft-corpus, craft-repo-status-app. No program of theirs does what Substance
 Designer does.
+
+## The short version
+
+**What they are.** Twelve programs, each standing in for a known one, each a few hundred
+thousand lines of Rust written by many agents in about two weeks, all on one plan: a document
+that knows no window; a *session* crate over it holding everything that is not pixels; every
+action a command in one table; a thin window; a CLI and an MCP server beside it. By their own
+count they are broad (feature breadth 76–91 %) and not yet deep ("ready for real work" ≈ 45 %).
+
+**How ours compares** (section 16). The costly decisions are the same in ours: the document
+apart from the window, edits as data, undo by shared snapshots, recomputing by content keys,
+atomic and verified saves, a documented format, a GPU engine apart from the interface. Ours is
+ahead in a few places (random-sequence testing, parameters as data, recovery with versions).
+It is behind in one structural thing — **there is no session under the window**: that state
+lives in `App`, inside the interface crate — and in what stands on that: the command table, the
+CLI, the agent's door. And in what a public project has around it: enforced lints, CI,
+installers, translations.
+
+**What reading their code found in ours** (sections 30 and 31) — thirteen checked items, among
+them: files dropped on the window do nothing on Wayland; a non-Unicode file name on the command
+line ends the program; a crash leaves no trace; file dialogs on Linux hide `PHOTO.JPG`; the
+main window has no application id on Linux; running out of video memory is not caught; and the
+window that grows when dragged to a display of another scale is a fault of the winit version we
+build with, fixed upstream, which one of their programs carries as an eight-line patch.
+
+**What to take, in order** (section 8): lock in what is already true (lints, the layering
+check, one crate for `unsafe`); lift the session out of the window and put a command table on
+it; a CLI; an MCP server (theirs is 600 to 2,300 lines); a control port; then what those make
+cheap — plug-ins, lessons, macros — and what a replacement needs measured: a catalogue of the
+original's nodes and menus to count against (25), a picture of every node pinned (22), gates
+instead of a percentage (27).
+
+**What not to mistake.** Their speed came from many agents in parallel under rules a machine
+checks; it bought breadth. Whether a thing feels right when used was not bought that way, by
+their own account, and is what their issue lists are about.
 
 Contents:
 
@@ -54,7 +92,9 @@ Part III — the other nine, by what recurs:
 27. [What "a replacement" is taken to mean, and how behaviour is measured](#27-what-a-replacement-is-taken-to-mean-and-how-behaviour-is-measured)
 28. [Crates of theirs that could be used as they are](#28-crates-of-theirs-that-could-be-used-as-they-are)
 29. [The browser and FreeBSD: what each cost them](#29-the-browser-and-freebsd-what-each-cost-them)
-30. [**What reading their code found in ours**](#30-what-reading-their-code-found-in-ours) — eleven checked gaps, seven things found sound
+30. [**What reading their code found in ours**](#30-what-reading-their-code-found-in-ours) — checked gaps, and things found sound
+31. [**The patches they carry for the windowing library we share**](#31-the-patches-they-carry-for-the-windowing-library-we-share) — our multi-display fault at its root
+32. [The files a public project carries](#32-the-files-a-public-project-carries)
 
 ---
 
@@ -474,6 +514,16 @@ runs the same on every system. Its other commands, across the apps:
 - **Fuzzing in CI** for a fixed number of seconds per target; five fuzz crates in PhotoCraft.
 - **Failure injection**: the atomic writer takes a file system as a parameter so tests can fail
   each step; the GPU has `inject_fault`.
+- **Pictures compared in pairs, with no stored baseline** (craft-libs
+  `docs/ui-visual-regressions.md`): each shared control is drawn twice on the machine running
+  the test, by the same renderer — once by the real component, once by "independent reference
+  painters with fixed geometry and state colors" that never call the component — and the two
+  must be identical, pixel for pixel and mesh for mesh. 414 pairs: light and dark, scales 1,
+  1.5 and 2, normal / hover / pressed / disabled / focused. Because both sides come from one
+  machine there is no difference between drivers to tolerate, and nothing to re-bless. And 36
+  *negative* pairs "deliberately change normal fill color, inter-button spacing or stroke
+  width. Each must differ" — proof that the test can fail. A failure writes before, after and a
+  difference picture in magenta.
 
 ### 5.4 Performance as a contract
 
@@ -483,6 +533,15 @@ but only a regression fails (more than 15 % and more than 1 ms over the baseline
 code cannot run yet carries `not_measurable` and the reason: "never invent a number". A nightly
 workflow runs it. The dev profile builds dependencies optimised and uses
 `debug = "line-tables-only"` (panics keep file and line; test binaries link about twice as fast).
+
+Measuring on a machine that is doing other things (FilmCraft `docs/performance.md`): "Read the
+numbers with the load average… Wall-clock columns swing by 2–5× between back-to-back runs at
+that load and are only comparable within one run. CPU time per frame… and peak [memory] are
+much less sensitive, and are what the before/after comparison relies on"; base and changed runs
+are alternated; a benchmark "deliberately has no machine-dependent timing assertion". Our
+autopilot's false "a change took 4,717 ms" findings while another program held the GPU are the
+same trouble; counting the process's own CPU time beside the wall clock would tell the two
+apart.
 
 ### 5.5 Documents that say where the program stands
 
@@ -624,6 +683,12 @@ a headless `--render`, the autopilot and a UI monkey; licences are checked by a 
 already data: `GraphEdit` (`AddNode`, `Connect`, `SetParam`, `SetExposed`, `SetBypass`,
 `SetResolution`…) and `PackageEdit` (`AddGraph`, `Import`, `Relink`, `GraphFromSelection`,
 `Batch`…).
+
+**Step 0 — the small checked faults (sections 30 and 31).** They need no design: file names
+with capital extensions in Linux dialogs; arguments read as `OsString`; a log file and a panic
+hook; an application id on Linux; a notice (and paste) where Wayland drops do not arrive; and
+upstream's fix for the window that grows between displays, carried as a patch with a test that
+it stays.
 
 **Step 1 — lock in what is true (a day).** A test that fails when a lower crate gains a
 dependency it may not have. Clippy's `unwrap_used`, `panic`, `todo`, `unimplemented` denied in
@@ -1548,6 +1613,13 @@ Each of these began as a trap one of their programs fell into and wrote down; ea
 looked for in our sources, or in the sources of the libraries we build with. "Checked" means
 read in the code, not yet seen happen.
 
+**Since this was written (2026-10-13):** items 1, 2, 3, 7 and 13 were fixed on the day by
+separate sessions and merged — a patched winit that takes drops on Wayland (and files pasted
+from a file manager), the command line read as `OsString`s, a log file with a panic hook and
+Help → Reveal Log File, an application id on Linux, filters that match either case — and item
+12 is carried as a change to that same copy of winit (`patches/README.md`). Items 4, 5, 6, 8, 9,
+10 and 11 stand.
+
 **Faults and gaps (checked)**
 
 | # | In our program | Where | Their fix |
@@ -1642,6 +1714,37 @@ way of carrying a patch is the part to copy whatever we take: the table, the lin
 | # | In our program | Where | Their fix |
 |---|---|---|---|
 | 12 | **A window dragged to a display of another scale grows and may stay at the wrong scale** (Windows 11) — a fault of winit 0.30.13, fixed upstream but in no 0.30 release; we treat the symptom | winit `WM_DPICHANGED`; our `window_size.rs` | carry upstream's fix (winit#4341) as a patch |
+| — | *Looked for and not found in ours:* a lone Alt opening a menu (it would fire on every Alt+Shift change of keyboard layout — they had to guard it) | no handling of a lone Alt anywhere | — |
 | 13 | **On Linux the Open and Import dialogs hide files whose extension is in capitals** (`IMG_0001.JPG`, `SCAN.PNG`): rfd 0.17.2 makes `*.{extension}` of each filter entry for the portal and for zenity, and those patterns are case-sensitive | `app/packages.rs`, `app.rs`: `add_filter(label, &extensions)`; rfd `backend/xdg_desktop_portal.rs` line 58 | on Linux and the BSDs every letter of an extension becomes a class (`[jJ][pP][gG]`), "as the portal spec suggests"; Windows and macOS ignore case already |
+
+---
+
+## 32. The files a public project carries
+
+What every one of their repositories has at its root and under `docs/`, for the day ours is
+opened. We have the first three.
+
+| File | What it is for | Ours |
+|---|---|---|
+| `LICENSE-MIT`, `LICENSE-APACHE` | the two licences | yes |
+| `NOTICE` | whose the program is; what in it is others' | yes |
+| the list of others' works with licences | theirs: `ATTRIBUTION.md` (generated from a table with a hash per file in PdfCraft) | in the program (Help → Third-Party Notices) and NOTICE |
+| `README.md` in English | what it is, pictures, how to get and build it, an honest status paragraph ("early alpha… it is not yet a replacement for daily professional work"), a trademark line | ours is in Russian and is the whole design record — an English front page and the Russian text moved under `docs/` would serve both readers |
+| `CONTRIBUTING.md` | the ground rules in ten lines, and **"How to add…" an effect / a command / a panel** | "Как добавить ноду" is in the README |
+| `SECURITY.md` | how to report a fault that could be abused: privately first; what to include; "do not attach a potentially harmful … file to a public issue" — its format, size, hash and effect instead | none |
+| `ROADMAP.md` | one page: stage, numbers, what is next | my notes |
+| `AGENTS.md` / `CLAUDE.md` | the rules for agents working in the repository: where to start, the non-negotiables, what to run before finishing, how several agents share a tree | none in the repository (my notes are outside it) — a contributor's agent would start blind |
+| `docs/gaps.md`, `docs/target-app-parity.md` | where it falls short, measured | none |
+| `.mcp.json`, `docs/agents.md` | the program in an agent's hands | none yet |
+| `clippy.toml`, `rustfmt.toml`, workspace lints | the rules as configuration | `rustfmt.toml` only |
+| `.github/workflows` | CI on three systems and wasm; releases as drafts with checksums | none |
+| a pull-request template (VectorCraft) | what a change must say about itself | none |
+| `contributors/people.toml` | credit in the About window: everyone by GitHub name automatically; "anything more is up to you: add YOUR OWN entry… Never add someone else" | none |
+| a link to where people talk | Discord, in the README and the Help menu | the Home screen's Website / Forum entries wait for one |
+
+Two of their rules about this are worth taking word for word. On credit: nobody's name is
+added, guessed or copied from a commit or a profile by anyone but themselves. On pictures in
+the README: "Every screenshot here is the real app at work on public-domain art, rendered
+offscreen through its control channel" — and the sources of the art are listed.
 
 <!-- end -->

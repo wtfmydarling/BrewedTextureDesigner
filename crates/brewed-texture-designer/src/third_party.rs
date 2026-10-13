@@ -302,6 +302,32 @@ mod tests {
         assert_eq!(works().iter().filter(|w| w.kind != Kind::Software).count(), 2, "a work that is not a crate is named in NOTICE too");
     }
 
+    /// The winit the program is built with is the one kept in patches/winit (Cargo.lock has it
+    /// from no registry), with its two changes still in it: files dropped on a window on
+    /// Wayland, and, from Windows 11 on, the rect the system suggests taken as a window comes to
+    /// a display of another scale (see patches/README.md). A dependency moved, or the folder
+    /// copied again from crates.io, would drop them without a word: a file dropped on Wayland
+    /// would be lost again, and a window grow again between displays. (When iced is built on a
+    /// winit that has both, the folder and this test go.)
+    #[test]
+    fn the_winit_that_is_built_is_ours_with_its_changes() {
+        let lock = include_str!("../../../Cargo.lock");
+        let winit: Vec<&str> = lock.split("[[package]]").filter(|p| p.lines().any(|l| l.trim() == "name = \"winit\"")).collect();
+        assert_eq!(winit.len(), 1, "one winit is built");
+        assert!(winit[0].contains("version = \"0.30.13\"") && !winit[0].contains("source ="), "not the one of crates.io: {}", winit[0]);
+        assert!(include_str!("../../../Cargo.toml").contains("winit = { path = \"patches/winit\" }"));
+        let scale = include_str!("../../../patches/winit/src/platform_impl/windows/event_loop.rs").replace("\r\n", "\n");
+        let taken = "if !WIN10_BUILD_VERSION.is_some_and(|build| build < 22000) {\n                new_outer_rect = suggested_rect;\n            } else {";
+        assert!(scale.contains(taken), "the rect Windows suggests is taken, from Windows 11 on");
+        let seat = include_str!("../../../patches/winit/src/platform_impl/linux/wayland/seat/mod.rs");
+        let state = include_str!("../../../patches/winit/src/platform_impl/linux/wayland/state.rs");
+        let dropped = include_str!("../../../patches/winit/src/platform_impl/linux/wayland/seat/dnd.rs");
+        assert!(seat.contains("mod dnd;") && seat.contains("get_data_device(") && state.contains("sctk::delegate_data_device!(WinitState);"));
+        assert!(dropped.contains("WindowEvent::DroppedFile(") && dropped.contains("text/uri-list"), "files dropped on Wayland are said");
+        let said = include_str!("../../../patches/README.md");
+        assert!(said.contains("winit/pull/4341") && said.contains("wayland-dnd"), "what is changed is said beside it");
+    }
+
     /// No crate built into the program asks that the program be under its own license (the
     /// GPL's kind), or keeps anyone from using it: each may be taken under licenses that only
     /// ask to be named. The program could not be under MIT or Apache-2.0 otherwise.

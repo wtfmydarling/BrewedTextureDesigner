@@ -71,7 +71,7 @@ use crate::event::{
 use crate::event_loop::{ActiveEventLoop as RootAEL, ControlFlow, DeviceEvents, EventLoopClosed};
 use crate::keyboard::ModifiersState;
 use crate::platform::pump_events::PumpStatus;
-use crate::platform_impl::platform::dark_mode::try_theme;
+use crate::platform_impl::platform::dark_mode::{try_theme, WIN10_BUILD_VERSION};
 use crate::platform_impl::platform::dpi::{become_dpi_aware, dpi_to_scale_factor};
 use crate::platform_impl::platform::drop_handler::FileDropHandler;
 use crate::platform_impl::platform::icon::WinCursor;
@@ -2306,7 +2306,16 @@ unsafe fn public_window_callback_inner(
             }
 
             let new_outer_rect: RECT;
-            {
+            // Brewed Texture Designer's change: from Windows 11 (build 22000) on, the rect Windows
+            // suggests is taken as it is, as winit does since its commit 488c036a
+            // (rust-windowing/winit#4341), which no release of 0.30 has. What follows asks
+            // `MonitorFromWindow`, which while a window is dragged still names the display it is
+            // leaving: the window is nudged back onto that one, which sends WM_DPICHANGED again,
+            // and the window grows, and stays on the wrong display at the wrong scale
+            // (rust-windowing/winit#4041). Windows 10 keeps what follows, as it does there.
+            if !WIN10_BUILD_VERSION.is_some_and(|build| build < 22000) {
+                new_outer_rect = suggested_rect;
+            } else {
                 let suggested_ul =
                     (suggested_rect.left + margin_left, suggested_rect.top + margin_top);
 
