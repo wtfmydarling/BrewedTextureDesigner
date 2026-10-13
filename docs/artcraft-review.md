@@ -1735,7 +1735,7 @@ opened. We have the first three.
 | `NOTICE` | whose the program is; what in it is others' | yes |
 | the list of others' works with licences | theirs: `ATTRIBUTION.md` (generated from a table with a hash per file in PdfCraft) | in the program (Help → Third-Party Notices) and NOTICE |
 | `README.md` in English | what it is, pictures, how to get and build it, an honest status paragraph ("early alpha… it is not yet a replacement for daily professional work"), a trademark line | ours is in Russian and is the whole design record — an English front page and the Russian text moved under `docs/` would serve both readers |
-| `CONTRIBUTING.md` | the ground rules in ten lines, and **"How to add…" an effect / a command / a panel** | "Как добавить ноду" is in the README |
+| `CONTRIBUTING.md` | the ground rules in ten lines, and **"How to add…" an effect / a command / a panel** | "How to add a node" is in the README |
 | `SECURITY.md` | how to report a fault that could be abused: privately first; what to include; "do not attach a potentially harmful … file to a public issue" — its format, size, hash and effect instead | none |
 | `ROADMAP.md` | one page: stage, numbers, what is next | my notes |
 | `AGENTS.md` / `CLAUDE.md` | the rules for agents working in the repository: where to start, the non-negotiables, what to run before finishing, how several agents share a tree | none in the repository (my notes are outside it) — a contributor's agent would start blind |
