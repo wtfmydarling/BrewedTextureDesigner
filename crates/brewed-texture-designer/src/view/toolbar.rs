@@ -527,10 +527,10 @@ pub fn status_bar(app: &App) -> Element<'_, Message> {
 
     let gpu = if app.engine.is_none() {
         "Starting the GPU…".to_string()
-    } else if app.adapter.is_empty() {
+    } else if app.adapter.is_empty() && app.backend.is_empty() {
         "GPU".to_string()
     } else {
-        app.adapter.clone()
+        crate::gpu::said(&app.adapter, app.backend)
     };
     // (It never should.)
     let gpu: Element<'_, Message> = match &app.res.stopped {

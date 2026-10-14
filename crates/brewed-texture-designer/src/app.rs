@@ -660,6 +660,8 @@ pub struct App {
     pub engine: Option<EngineService>,
     events: Option<EventSource>,
     pub adapter: String,
+    /// What the GPU runs on (see [`gpu::backend_of`]), once the device is there.
+    pub backend: &'static str,
     pub res: Results,
     pub ui: Ui,
     opts: StartupOptions,
@@ -1436,6 +1438,7 @@ impl App {
             engine: None,
             events: None,
             adapter: String::new(),
+            backend: "",
             res: Results::default(),
             ui: Ui {
                 selection: BTreeSet::new(),
@@ -2581,6 +2584,7 @@ impl App {
             Message::PreviewMade(path, of, made) => return self.preview_made(path, of, made),
             Message::PollGpu => {
                 if let Some(handles) = gpu::take() {
+                    self.backend = gpu::backend_of(&handles.device);
                     self.gpu = Some(handles.clone());
                     #[cfg(any(test, feature = "dev-tools"))]
                     if let Some(pilot) = &mut self.dev.pilot {
@@ -2597,7 +2601,7 @@ impl App {
                 }
             }
             Message::GpuName(name) => {
-                log::info!("GPU: {name}");
+                log::info!("GPU: {}", gpu::said(&name, self.backend));
                 self.adapter = name;
             }
             Message::Engine(event) => return self.engine_event(event),

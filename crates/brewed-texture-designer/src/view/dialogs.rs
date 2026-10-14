@@ -144,7 +144,7 @@ pub fn view<'a>(app: &'a App, dialog: &'a Dialog) -> Element<'a, Message> {
             modal(dialog.into(), Some(Message::Dialog(None)))
         }
         Dialog::About => {
-            let gpu = if app.adapter.is_empty() { "detecting…".to_string() } else { app.adapter.clone() };
+            let gpu = if app.adapter.is_empty() { "detecting…".to_string() } else { crate::gpu::said(&app.adapter, app.backend) };
             let title = row![
                 iced::widget::image(crate::brand::logo_large()).width(Length::Fixed(48.0)).height(Length::Fixed(48.0)),
                 column![

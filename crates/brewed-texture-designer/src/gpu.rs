@@ -47,6 +47,43 @@ pub fn take() -> Option<GpuHandles> {
     SLOT.get()?.lock().ok()?.take()
 }
 
+/// What `device` runs on, said: Vulkan, DirectX 12, Metal or OpenGL (iced picks it, of those
+/// the settings let it, and does not say; a normal map's green, for one, is read as the backend
+/// draws it, so the status bar says it).
+pub fn backend_of(device: &wgpu::Device) -> &'static str {
+    use brewed_texture_engine::wgpu::hal::api;
+    // SAFETY: each guard is only asked whether it is there and let go at once; nothing of the
+    // device under it is touched.
+    unsafe {
+        #[cfg(not(target_vendor = "apple"))]
+        if device.as_hal::<api::Vulkan>().is_some() {
+            return "Vulkan";
+        }
+        #[cfg(windows)]
+        if device.as_hal::<api::Dx12>().is_some() {
+            return "DirectX 12";
+        }
+        #[cfg(target_vendor = "apple")]
+        if device.as_hal::<api::Metal>().is_some() {
+            return "Metal";
+        }
+        #[cfg(not(target_vendor = "apple"))]
+        if device.as_hal::<api::Gles>().is_some() {
+            return "OpenGL";
+        }
+    }
+    ""
+}
+
+/// The GPU's name, and the backend in brackets where it is known: `RTX 4070 SUPER (Vulkan)`.
+pub fn said(adapter: &str, backend: &str) -> String {
+    match (adapter.is_empty(), backend.is_empty()) {
+        (_, true) => adapter.to_string(),
+        (true, false) => format!("GPU ({backend})"),
+        (false, false) => format!("{adapter} ({backend})"),
+    }
+}
+
 /// Name of the GPU, for display only (iced does not expose the adapter it picked).
 ///
 /// Only enumerates Vulkan / Metal adapters, without debug layers: probing D3D12 creates
