@@ -350,6 +350,7 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
     let content = export_window::Content {
         name: app.doc.entry().name.clone(),
         thing: "graph",
+        presets: crate::app::export_dialog::presets().to_vec(),
         size: format!("{width} × {height}"),
         mine: &dialog.templates,
         templates_folder: crate::app::export_dialog::templates_folder().map(|f| f.display().to_string()),
@@ -360,7 +361,7 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
         folder: crate::view::fitted(folder, style::TEXT_SIZE, style::ui_font(), None),
         folder_chosen: dialog.folder.is_some(),
         files,
-        tokens: &texture_export::naming::GRAPH_TOKENS,
+        tokens: &brewed_texture_core::export_presets::TOKENS,
         values: app.export_values(),
         inputs,
         custom,

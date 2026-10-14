@@ -686,17 +686,18 @@ fn packages_opened_last_have_their_pictures() {
 #[test]
 fn exports_follow_the_template_chosen() {
     use crate::app::export_dialog::ExportMessage as X;
+    use crate::app::export_dialog::chosen_of;
     use brewed_texture_core::export_presets::Preset;
-    use export_window::{Chosen, Event, Tab};
+    use export_window::{Event, Tab};
     let mut w = harness!(view::root, 1400.0, 900.0);
     let dir = std::env::temp_dir().join(format!("brewed-export-dialog-{}", std::process::id()));
     w.send(Message::Export(X::Open));
     let Some(Dialog::Export(dialog)) = w.app.ui.dialog.clone() else { panic!("the export window") };
-    assert_eq!((dialog.chosen, dialog.directx), (Chosen::Preset(Preset::Maps), false), "as before; the demo's normals are OpenGL's");
+    assert_eq!((dialog.chosen, dialog.directx), (chosen_of(Preset::Maps), false), "as before; the demo's normals are OpenGL's");
     // As they are: every Output, as the export always wrote them.
     let outputs = w.app.graph().nodes_of(NodeKind::OUTPUT).count();
     assert_eq!(w.app.export_plan(&dialog, &dir).len(), outputs);
-    w.send(Message::Export(X::Window(Event::ExportWith(Chosen::Preset(Preset::Unreal)))));
+    w.send(Message::Export(X::Window(Event::ExportWith(chosen_of(Preset::Unreal)))));
     w.send(Message::Export(X::Folder(Some(dir.clone()))));
     w.input(&[]);
     for said in ["SETTINGS", "OUTPUT TEMPLATES", "LIST OF EXPORTS", "General Export Parameters", "Output template", "4 texture(s) selected for export"] {
@@ -733,6 +734,7 @@ fn exports_follow_the_template_chosen() {
 #[test]
 fn templates_are_made_and_changed_in_the_export_window() {
     use crate::app::export_dialog::ExportMessage as X;
+    use crate::app::export_dialog::chosen_of;
     use brewed_texture_core::export_presets::Preset;
     use export_window::{Chosen, Event, Tab};
     use texture_export::{Edit, Format, Layout, MapId};
@@ -751,14 +753,14 @@ fn templates_are_made_and_changed_in_the_export_window() {
     {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
-    assert_eq!(dialog(&w).window.shown, Chosen::Preset(Preset::Unreal), "the Unreal Engine's shown first");
+    assert_eq!(dialog(&w).window.shown, chosen_of(Preset::Unreal), "the Unreal Engine's shown first");
     w.snapshot("export_templates");
     // A copy, and an output map of three channels, each of a map of its own.
-    say(&mut w, Event::Duplicate(Chosen::Preset(Preset::Unreal)));
+    say(&mut w, Event::Duplicate(chosen_of(Preset::Unreal)));
     assert_eq!(dialog(&w).templates.len(), 1);
     assert_eq!(dialog(&w).window.shown, Chosen::Mine(0));
     assert_eq!(dialog(&w).templates[0].name, "Unreal Engine (copy)");
-    say(&mut w, Event::Edit(0, Edit::AddFile(Layout::Separate)));
+    say(&mut w, Event::Edit(0, Edit::AddFile { layout: Layout::Separate, name: "$(graph)_6".into() }));
     let file = dialog(&w).templates[0].files.len() - 1;
     // A map dragged onto a channel: its label follows the pointer, the channel under it lit; let
     // go over it, it is what the channel is made of.
@@ -777,12 +779,18 @@ fn templates_are_made_and_changed_in_the_export_window() {
     // Its name: a part chosen from the menu of them, which says what each is.
     say(&mut w, Event::Tokens(Some(file)));
     w.input(&[]);
-    for said in ["$(graph)", "$(package)", "The graph's name, as a file's (blanks and what a file name cannot have as _)", "1 − it", "Where the graph has none"]
-    {
+    for said in [
+        "$(graph)",
+        "$(package)",
+        "( … )",
+        "The graph's name, as a file's (blanks and what a file name cannot have as _)",
+        "1 − it",
+        "Where the graph has none",
+    ] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
     w.snapshot("export_editor");
-    say(&mut w, Event::Edit(0, Edit::FileName { file, name: "HR_$(graph)".into() }));
+    say(&mut w, Event::Edit(0, Edit::FileName { file, name: "HR_$(graph)(_$(mesh))".into() }));
     assert_eq!(dialog(&w).window.tokens, None, "the menu closes");
     say(&mut w, Event::Edit(0, Edit::Format { file, format: Some(Format::Exr16) }));
     // Exported with: what it says now.
@@ -803,7 +811,7 @@ fn templates_are_made_and_changed_in_the_export_window() {
     w.send(Message::Export(X::Open));
     let Some(Dialog::Export(open)) = &mut w.app.ui.dialog else { panic!() };
     // (As the window would have read it from the folder: the tests read nothing of the user's.)
-    open.templates.push(texture_export::Preset::Unreal.template().cloned().expect("Unreal's"));
+    open.templates.push(Preset::Unreal.template().cloned().expect("Unreal's"));
     open.paths.push(None);
     say(&mut w, Event::ExportWith(Chosen::Mine(0)));
     say(&mut w, Event::Show(Chosen::Mine(0)));
@@ -813,7 +821,7 @@ fn templates_are_made_and_changed_in_the_export_window() {
     assert!(!texts(&mut w, "Delete \"Unreal Engine\" and its file?").is_empty(), "asked first");
     say(&mut w, Event::Delete(0));
     assert!(dialog(&w).templates.is_empty());
-    assert_eq!((dialog(&w).chosen, dialog(&w).window.shown), (Chosen::Preset(Preset::Unreal), Chosen::Preset(Preset::Unreal)));
+    assert_eq!((dialog(&w).chosen, dialog(&w).window.shown), (chosen_of(Preset::Unreal), chosen_of(Preset::Unreal)));
 }
 
 /// Each save keeps a version of the package, beside the settings and never beside it: File →

@@ -1,14 +1,81 @@
 //! What an export writes of a graph (File → Export…): its Outputs as they are, or the files a
 //! game engine or a format expects of a material, made of the Outputs by their usages (Base
-//! Color, Normal, Roughness…), some packed into the channels of one file. What each preset
-//! writes is the `texture-export` crate's, which the programs of the set share; this says
-//! which maps a graph has: its Outputs, in the order a node of the graph has them, each with
-//! its usage.
+//! Color, Normal, Roughness…), some packed into the channels of one file. How a template is
+//! written and what it writes is the `texture-export` crate's, which the programs of the set
+//! share; this is what is this program's: its presets (in `export-templates/`), the parts of a
+//! file's name it fills in (`$(graph)`, `$(package)`), and which maps a graph has: its Outputs,
+//! in the order a node of the graph has them, each with its usage.
 
 use crate::graph::{Graph, NodeId};
 use crate::nodes::{NodeKind, Usage};
+use texture_export::naming::Token;
+use texture_export::{Normals, Template};
 
-pub use texture_export::Preset;
+/// The parts of a file's name an export of a graph fills in.
+pub const TOKENS: [Token; 2] = [
+    Token { key: "graph", about: "The graph's name, as a file's (blanks and what a file name cannot have as _)" },
+    Token { key: "package", about: "The package's name, as a file's" },
+];
+
+/// What an export writes, of the program's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Preset {
+    /// Each Output, as its node says (its name, channels and format).
+    Maps,
+    /// Unreal Engine: base color, a normal map of DirectX (Y−), and occlusion, roughness and
+    /// metallic packed in red, green and blue (ORM).
+    Unreal,
+    /// Unity's Universal pipeline (URP Lit): base map, a normal map of OpenGL (Y+), metallic
+    /// with smoothness (1 − roughness) in alpha, and occlusion.
+    UnityUrp,
+    /// Unity's High Definition pipeline (HDRP Lit): base map, normal map, and the mask map:
+    /// metallic, occlusion, detail mask and smoothness.
+    UnityHdrp,
+    /// glTF 2.0: base color, normal map, and occlusion, roughness and metallic in red, green
+    /// and blue (occlusionTexture and metallicRoughnessTexture read the one file).
+    Gltf,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 5] = [Preset::Maps, Preset::Unreal, Preset::UnityUrp, Preset::UnityHdrp, Preset::Gltf];
+
+    /// The template it is (all but the Outputs as they are): its own in `export-templates/`.
+    pub fn template(self) -> Option<&'static Template> {
+        static BUILT_IN: std::sync::OnceLock<Vec<Template>> = std::sync::OnceLock::new();
+        let all = BUILT_IN.get_or_init(|| {
+            [
+                include_str!("../export-templates/unreal.json"),
+                include_str!("../export-templates/unity-urp.json"),
+                include_str!("../export-templates/unity-hdrp.json"),
+                include_str!("../export-templates/gltf.json"),
+            ]
+            .into_iter()
+            .map(|text| texture_export::template_of(text).expect("a template of the program's own"))
+            .collect()
+        });
+        match self {
+            Preset::Maps => None,
+            Preset::Unreal => all.first(),
+            Preset::UnityUrp => all.get(1),
+            Preset::UnityHdrp => all.get(2),
+            Preset::Gltf => all.get(3),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        self.template().map_or("Outputs as They Are", |t| t.name.as_str())
+    }
+
+    pub fn about(self) -> &'static str {
+        self.template().map_or("Each Output, named and in the channels and format its node says.", |t| t.about.as_str())
+    }
+
+    /// The normal maps it writes: DirectX's (Y−), or OpenGL's (Y+). Unreal Engine reads only
+    /// DirectX's (it has since 4.x), whatever the program makes.
+    pub fn directx(self) -> bool {
+        self.template().is_some_and(|t| t.normals == Normals::DirectX)
+    }
+}
 
 /// A channel of a file packed of several, of a graph: of an Output's image, or a value.
 pub type Source = texture_export::Source<NodeId>;
@@ -52,9 +119,13 @@ pub fn graph_normals_directx(graph: &Graph) -> bool {
 }
 
 /// The files `preset` writes of `graph` (called `name`), its normal maps being DirectX's
-/// where `directx`.
+/// where `directx`. Of several Outputs of a usage, the upper is taken.
 pub fn plan(graph: &Graph, name: &str, preset: Preset, directx: bool) -> Vec<PlannedFile> {
-    texture_export::plan(&maps(graph), name, preset, directx)
+    let maps = maps(graph);
+    match preset.template() {
+        Some(template) => texture_export::plan_template(template, &maps, &[("graph", name)], directx),
+        None => texture_export::as_they_are(&maps),
+    }
 }
 
 #[cfg(test)]
@@ -143,5 +214,20 @@ mod tests {
         let gltf = plan(&only, "Leaf", Preset::Gltf, false);
         assert_eq!(gltf.len(), 1);
         assert_eq!(gltf[0].what, Planned::Pack(vec![Source::Value(0.8), Source::Value(0.8), Source::Value(0.8), source(id, 0, false)]));
+    }
+
+    /// What a file of a preset is made of is said channel by channel: the gray of a map in three
+    /// of them as RGB, a value with what it stands for.
+    #[test]
+    fn packed_files_say_what_each_channel_is() {
+        let map = |reference: u32, name: &str, usage: &str| texture_export::Map { reference, name: name.into(), usage: Some(usage.into()) };
+        let plan = |maps: &[texture_export::Map<u32>], preset: Preset| texture_export::plan_template(preset.template().expect("a template"), maps, &[], false);
+        let maps = [map(1, "metal", "metallic"), map(2, "rough", "roughness")];
+        let urp = plan(&maps, Preset::UnityUrp);
+        assert_eq!(urp[0].said, "RGB metal · A 1 − rough");
+        let hdrp = plan(&maps, Preset::UnityHdrp);
+        assert_eq!(hdrp[0].said, "R metal · G 1 (no ambient occlusion) · B 1 (detail mask) · A 1 − rough");
+        let base = plan(&[map(3, "alpha", "opacity")], Preset::Gltf);
+        assert_eq!(base[0].said, "RGB 0.8 (no base color) · A alpha");
     }
 }

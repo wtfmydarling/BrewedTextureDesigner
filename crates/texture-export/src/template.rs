@@ -263,8 +263,11 @@ pub enum Edit {
     Name(String),
     About(String),
     Normals(Normals),
-    /// A file of so many channels, as `Layout` lays them out, its parts no map yet.
-    AddFile(Layout),
+    /// A file named `name`, of so many channels as `layout` lays them out, its parts no map yet.
+    AddFile {
+        layout: Layout,
+        name: String,
+    },
     RemoveFile(usize),
     /// The file `from` put at `to`.
     MoveFile {
@@ -371,8 +374,7 @@ impl Template {
             Edit::Name(name) => self.name = name,
             Edit::About(about) => self.about = about,
             Edit::Normals(normals) => self.normals = normals,
-            Edit::AddFile(layout) => {
-                let name = format!("$(graph)_{}", self.files.len() + 1);
+            Edit::AddFile { layout, name } => {
                 self.files.push(File { name, needs: Vec::new(), format: None, parts: layout.parts() });
             }
             Edit::RemoveFile(at) => {
@@ -584,7 +586,6 @@ pub fn template_of(text: &str) -> Result<Template, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Preset;
 
     fn map(reference: u32, name: &str, usage: MapId) -> Map<u32> {
         Map { reference, name: name.into(), usage: Some(usage) }
@@ -650,8 +651,9 @@ mod tests {
     fn templates_are_read_from_a_folder() {
         let folder = std::env::temp_dir().join(format!("texture-export-templates-{}", std::process::id()));
         std::fs::create_dir_all(&folder).expect("a folder");
-        let unreal = serde_json::to_string(Preset::Unreal.template().expect("Unreal's")).expect("JSON");
-        std::fs::write(folder.join("b.json"), &unreal).expect("written");
+        let unreal = r#"{ "name": "Unreal Engine", "about": "", "normals": "DirectX",
+            "files": [{ "name": "T_$(graph)_Normal", "needs": ["normal"], "parts": [{ "rgb": { "map": "normal" } }] }] }"#;
+        std::fs::write(folder.join("b.json"), unreal).expect("written");
         std::fs::write(folder.join("a.json"), unreal.replace("Unreal Engine", "Mine")).expect("written");
         std::fs::write(folder.join("c.json"), "not JSON").expect("written");
         std::fs::write(folder.join("notes.txt"), "not a template").expect("written");
@@ -662,19 +664,6 @@ mod tests {
         assert!(problems[0].starts_with("c.json: "), "{problems:?}");
         assert_eq!(read_templates(&folder.join("not there")), (Vec::new(), Vec::new()));
         let _ = std::fs::remove_dir_all(&folder);
-    }
-
-    /// What a file of a preset is made of is said channel by channel: the gray of a map in three
-    /// of them as RGB, a value with what it stands for.
-    #[test]
-    fn packed_files_say_what_each_channel_is() {
-        let maps = [map(1, "metal", MapId::from("metallic")), map(2, "rough", MapId::from("roughness"))];
-        let urp = crate::plan(&maps, "x", Preset::UnityUrp, false);
-        assert_eq!(urp[0].said, "RGB metal · A 1 − rough");
-        let hdrp = crate::plan(&maps, "x", Preset::UnityHdrp, false);
-        assert_eq!(hdrp[0].said, "R metal · G 1 (no ambient occlusion) · B 1 (detail mask) · A 1 − rough");
-        let base = crate::plan(&[map(3, "alpha", MapId::from("opacity"))], "x", Preset::Gltf, false);
-        assert_eq!(base[0].said, "RGB 0.8 (no base color) · A alpha");
     }
 }
 
@@ -689,8 +678,8 @@ mod edits {
     #[test]
     fn templates_are_made_by_edits_and_kept() {
         let mut t = Template { name: "Mine".into(), about: String::new(), normals: Normals::OpenGL, files: Vec::new() };
-        t.apply(Edit::AddFile(Layout::RgbAlpha)).expect("a file");
-        t.apply(Edit::AddFile(Layout::Separate)).expect("another");
+        t.apply(Edit::AddFile { layout: Layout::RgbAlpha, name: "$(graph)_C".into() }).expect("a file");
+        t.apply(Edit::AddFile { layout: Layout::Separate, name: "$(graph)_2".into() }).expect("another");
         assert_eq!(t.files.iter().map(File::channels).collect::<Vec<_>>(), [4, 3]);
         t.apply(Edit::Map { file: 0, part: 0, map: Some(MapId::from("base_color")), invert: false, normals: None }).expect("RGB of a map");
         t.apply(Edit::Map { file: 0, part: 1, map: Some(MapId::from("opacity")), invert: false, normals: None }).expect("alpha of a map");

@@ -3,8 +3,9 @@
 //! in what), OUTPUT TEMPLATES (the presets, the program's and the user's; the output maps of
 //! the one shown, each a row of a name and channels; the input maps, dragged onto the channels),
 //! LIST OF EXPORTS (the files before they are written). A program gives what it has (see
-//! [`Content`]) and its look, keeps the window's [`State`], and takes what is done as
-//! [`Event`]s: it writes the files, and keeps the templates of the user's (see
+//! [`Content`]: its presets, the parts of a name it fills in, its maps, its word for what it
+//! exports) and its look, keeps the window's [`State`], and takes what is done as [`Event`]s:
+//! it writes the files, and keeps the templates of the user's (see
 //! `texture_export::write_template`). It knows nothing of the program.
 
 mod editor;
@@ -14,13 +15,22 @@ use iced::widget::{Column, button, column, container, mouse_area, pick_list, pin
 use iced::{Alignment, Color, Element, Font, Length, Point, Theme};
 use scroll_box::scroll_box;
 use texture_export::naming::Token;
-use texture_export::{Edit, FileType, Format, MapId, Normals, Preset, Template};
+use texture_export::{Edit, FileType, Format, MapId, Normals, Template};
 
-/// Which template: one of the program's (or its maps as they are), or one of the user's.
+/// Which template: one of the program's presets (its place in [`Content::presets`]), or one of
+/// the user's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Chosen {
-    Preset(Preset),
+    Preset(usize),
     Mine(usize),
+}
+
+/// A preset of the program's: its name, and the template it is; of none, the program's maps
+/// as they are, each written with the name, channels and format it has.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Preset<'a> {
+    pub name: &'a str,
+    pub template: Option<&'a Template>,
 }
 
 /// The tabs of the window.
@@ -74,10 +84,12 @@ pub struct State {
 
 impl State {
     /// The window as it opens: SETTINGS, the template written with shown in OUTPUT TEMPLATES (the
-    /// Unreal Engine's, where it is the maps as they are).
-    pub fn new(chosen: Chosen) -> State {
+    /// first of `presets` that is one, where it is the maps as they are).
+    pub fn new(chosen: Chosen, presets: &[Preset]) -> State {
         let shown = match chosen {
-            Chosen::Preset(Preset::Maps) => Chosen::Preset(Preset::Unreal),
+            Chosen::Preset(i) if presets.get(i).is_none_or(|p| p.template.is_none()) => {
+                presets.iter().position(|p| p.template.is_some()).map_or(chosen, Chosen::Preset)
+            }
             chosen => chosen,
         };
         State { tab: Tab::Settings, shown, slot: None, tokens: None, deleting: None, dragging: None, pointer: Point::ORIGIN, over: None }
@@ -118,7 +130,7 @@ impl State {
                 self.slot = Some((*file, *part));
                 self.tokens = None;
             }
-            Event::Edit(_, Edit::RemoveFile(_) | Edit::AddFile(_) | Edit::MoveFile { .. }) => {
+            Event::Edit(_, Edit::RemoveFile(_) | Edit::AddFile { .. } | Edit::MoveFile { .. }) => {
                 self.slot = None;
                 self.tokens = None;
             }
@@ -235,6 +247,8 @@ pub struct Content<'a, M> {
     /// The program's word for what it exports, as the window says it: "graph" (a texture
     /// designer exports a graph's outputs), "texture set" (a texture painter).
     pub thing: &'a str,
+    /// The program's presets, in its order: each the template it is, or its maps as they are.
+    pub presets: Vec<Preset<'a>>,
     pub size: String,
     /// The templates of the user's, the folder they are kept in, and what could not be read.
     pub mine: &'a [Template],
@@ -262,19 +276,12 @@ pub struct Content<'a, M> {
 }
 
 impl Chosen {
-    /// The template it is (none: the maps as they are).
-    pub fn template(self, mine: &[Template]) -> Option<&Template> {
+    /// The template it is, of the program's `presets` or of the user's (none: the maps as they
+    /// are).
+    pub fn template<'t>(self, presets: &[Preset<'t>], mine: &'t [Template]) -> Option<&'t Template> {
         match self {
-            Chosen::Preset(preset) => preset.template(),
+            Chosen::Preset(i) => presets.get(i).and_then(|p| p.template),
             Chosen::Mine(i) => mine.get(i),
-        }
-    }
-
-    /// Its name.
-    pub fn name(self, mine: &[Template]) -> String {
-        match self {
-            Chosen::Preset(preset) => preset.name().into(),
-            Chosen::Mine(i) => mine.get(i).map_or_else(String::new, |t| t.name.clone()),
         }
     }
 }
@@ -404,7 +411,7 @@ fn settings<'a, M: Clone + 'a>(content: &Content<'a, M>, folder: Element<'a, M>,
     let side = container(list).width(Length::Fixed(240.0)).height(Length::Fill).style(style::sunken(&look));
 
     // The template, the file's kind and depth, the normals, the size.
-    let mut offered: Vec<Offered> = Preset::ALL.into_iter().map(|p| Offered(Chosen::Preset(p), p.name().into())).collect();
+    let mut offered: Vec<Offered> = content.presets.iter().enumerate().map(|(i, p)| Offered(Chosen::Preset(i), p.name.into())).collect();
     offered.extend(content.mine.iter().enumerate().map(|(i, t)| Offered(Chosen::Mine(i), format!("{} (yours)", t.name))));
     let chosen = offered.iter().find(|o| o.0 == content.export_with).cloned();
     let template = pick_list(offered, chosen, move |o: Offered| say(Event::ExportWith(o.0)))
@@ -412,7 +419,7 @@ fn settings<'a, M: Clone + 'a>(content: &Content<'a, M>, folder: Element<'a, M>,
         .text_size(look.text_size)
         .padding([4, 8])
         .style(look.pick_list);
-    let packs = content.export_with.template(content.mine).is_some();
+    let packs = content.export_with.template(&content.presets, content.mine).is_some();
     let kind = content.format.file_type();
     let kinds = pick_list(FileType::ALL, Some(kind), move |k: FileType| say(Event::Format(k.formats()[0])))
         .width(Length::Fixed(110.0))

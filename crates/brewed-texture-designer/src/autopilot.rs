@@ -969,10 +969,10 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                 5..=8 => {
                     use crate::app::export_dialog::ExportMessage as X;
                     use brewed_texture_core::export_presets::Preset;
-                    use export_window::{Chosen, Event};
+                    use export_window::Event;
                     let folder = export.join(format!("preset-{exported}"));
                     let _ = std::fs::create_dir_all(&folder);
-                    let chosen = Chosen::Preset(Preset::ALL[exported - 4]);
+                    let chosen = crate::app::export_dialog::chosen_of(Preset::ALL[exported - 4]);
                     let directx = exported % 2 == 0;
                     let format = if exported % 2 == 0 { texture_export::Format::Png16 } else { texture_export::Format::Png8 };
                     let mut steps = vec![

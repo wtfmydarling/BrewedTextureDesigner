@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 /// have, and blanks, as `_`.
 pub fn file_stem(name: &str) -> String {
     let stem: String = name.trim().chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-    if stem.is_empty() { "graph".into() } else { stem }
+    if stem.is_empty() { "untitled".into() } else { stem }
 }
 
 /// Make a name safe to use as a file name.
@@ -80,6 +80,6 @@ mod tests {
         let names: Vec<String> = paths.iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect();
         assert_eq!(names, vec!["a.png", "A_2.png", "a.exr"]);
         assert_eq!(file_stem("Rusty Metal"), "Rusty_Metal");
-        assert_eq!(file_stem(" "), "graph");
+        assert_eq!(file_stem(" "), "untitled");
     }
 }

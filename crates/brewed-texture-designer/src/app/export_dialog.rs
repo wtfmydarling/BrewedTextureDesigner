@@ -39,6 +39,18 @@ pub fn depth_of(format: Format) -> u32 {
     }
 }
 
+/// The program's presets, as the window offers them: in the order of [`Preset::ALL`], a
+/// [`Chosen::Preset`] being the place of one in it.
+pub fn presets() -> &'static [export_window::Preset<'static>] {
+    static PRESETS: std::sync::OnceLock<Vec<export_window::Preset<'static>>> = std::sync::OnceLock::new();
+    PRESETS.get_or_init(|| Preset::ALL.iter().map(|p| export_window::Preset { name: p.name(), template: p.template() }).collect())
+}
+
+/// `preset`, as the window chooses it.
+pub fn chosen_of(preset: Preset) -> Chosen {
+    Chosen::Preset(Preset::ALL.iter().position(|p| *p == preset).unwrap_or(0))
+}
+
 /// The export window, open.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportDialog {
@@ -70,7 +82,7 @@ pub enum ExportMessage {
 impl ExportDialog {
     /// The template the files are written with (none: the Outputs as they are).
     pub fn template(&self) -> Option<&Template> {
-        self.chosen.template(&self.templates)
+        self.chosen.template(presets(), &self.templates)
     }
 
     /// Whether the Outputs are written as they are (no template packs them).
@@ -104,7 +116,7 @@ impl App {
             let (read, problems) = templates_folder().map_or_else(Default::default, |f| texture_export::read_templates(&f));
             let (paths, templates): (Vec<_>, Vec<_>) = read.into_iter().map(|(path, template)| (Some(path), template)).unzip();
             let mine = self.ui.export_template.as_ref().and_then(|name| templates.iter().position(|t: &Template| &t.name == name));
-            let chosen = mine.map_or(Chosen::Preset(self.ui.export_preset), Chosen::Mine);
+            let chosen = mine.map_or(chosen_of(self.ui.export_preset), Chosen::Mine);
             let dialog = ExportDialog {
                 chosen,
                 templates,
@@ -113,7 +125,7 @@ impl App {
                 directx: export_presets::graph_normals_directx(self.graph()),
                 format: self.ui.export_format,
                 folder: self.ui.export_folder.clone().or_else(|| self.doc.path().and_then(|p| p.parent()).map(Path::to_path_buf)),
-                window: export_window::State::new(chosen),
+                window: export_window::State::new(chosen, presets()),
             };
             self.ui.dialog = Some(Dialog::Export(Box::new(dialog)));
             return Task::none();
@@ -156,11 +168,12 @@ impl App {
             }
             Event::New => {
                 let mut template = Template { name: "New Template".into(), about: String::new(), normals: Default::default(), files: Vec::new() };
-                let _ = template.apply(texture_export::Edit::AddFile(texture_export::Layout::Rgb));
+                let name = format!("{}_1", export_presets::TOKENS[0].written());
+                let _ = template.apply(texture_export::Edit::AddFile { layout: texture_export::Layout::Rgb, name });
                 said = dialog.add(template);
             }
             Event::Duplicate(of) => {
-                if let Some(mut template) = of.template(&dialog.templates).cloned() {
+                if let Some(mut template) = of.template(presets(), &dialog.templates).cloned() {
                     template.name = format!("{} (copy)", template.name);
                     said = dialog.add(template);
                 }
@@ -177,7 +190,7 @@ impl App {
                     dialog.paths.remove(index);
                     // What named the ones after it names them still.
                     let after = |chosen: Chosen| match chosen {
-                        Chosen::Mine(i) if i == index => Chosen::Preset(Preset::Unreal),
+                        Chosen::Mine(i) if i == index => chosen_of(Preset::Unreal),
                         Chosen::Mine(i) if i > index => Chosen::Mine(i - 1),
                         chosen => chosen,
                     };
@@ -228,8 +241,8 @@ impl App {
         let Some(folder) = dialog.folder.clone() else { return Task::none() };
         self.ui.dialog = None;
         match dialog.chosen {
-            Chosen::Preset(preset) => {
-                self.ui.export_preset = preset;
+            Chosen::Preset(i) => {
+                self.ui.export_preset = Preset::ALL.get(i).copied().unwrap_or(Preset::Maps);
                 self.ui.export_template = None;
             }
             Chosen::Mine(_) => self.ui.export_template = dialog.template().map(|t| t.name.clone()),

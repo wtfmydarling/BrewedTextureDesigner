@@ -7,7 +7,7 @@
 use iced::widget::{Column, Row, button, column, container, mouse_area, pick_list, row, space, text, text_input};
 use iced::{Alignment, Element, Length};
 use scroll_box::scroll_box;
-use texture_export::{Edit, FileType, Format, Layout, MapId, Missing, Normals, Part, Preset, Template};
+use texture_export::{Edit, FileType, Format, Layout, MapId, Missing, Normals, Part, Template};
 
 use crate::{Chosen, Content, Dragged, Event, Look, State, caption, style};
 
@@ -93,8 +93,8 @@ fn presets<'a, M: Clone + 'a>(content: &Content<'a, M>, state: &'a State, look: 
         let face = row![text(name).size(look.text_size), text(note).size(look.small_size).color(c.faint)].spacing(6).align_y(Alignment::Center);
         button(face).width(Length::Fill).padding([3, 8]).style(style::item(&look, chosen)).on_press(say(Event::Show(to)))
     };
-    for preset in Preset::ALL.into_iter().filter(|p| p.template().is_some()) {
-        list = list.push(item(preset.name().into(), "built in", state.shown == Chosen::Preset(preset), Chosen::Preset(preset)));
+    for (i, preset) in content.presets.iter().enumerate().filter(|(_, p)| p.template.is_some()) {
+        list = list.push(item(preset.name.into(), "built in", state.shown == Chosen::Preset(i), Chosen::Preset(i)));
     }
     for (i, template) in content.mine.iter().enumerate() {
         list = list.push(item(template.name.clone(), "", state.shown == Chosen::Mine(i), Chosen::Mine(i)));
@@ -122,7 +122,7 @@ fn outputs<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let look = *look;
     let c = look.colors;
-    let Some(template) = state.shown.template(content.mine) else {
+    let Some(template) = state.shown.template(&content.presets, content.mine) else {
         return text("No preset is shown.").size(look.text_size).color(c.dim).into();
     };
     // Its name: changed where it is the user's.
@@ -169,8 +169,10 @@ fn outputs<'a, M: Clone + 'a>(
     let mut create = row![caption(&look, "Output maps"), space().width(Length::Fill)].spacing(4).align_y(Alignment::Center);
     if let Some(i) = editable {
         create = create.push(text("Create:").size(look.small_size).color(c.dim));
+        // (Named by the first part of a name the program has, and its place.)
+        let name = format!("{}_{}", content.tokens.first().map_or_else(String::new, |t| t.written()), template.files.len() + 1);
         for layout in Layout::ALL {
-            create = create.push(small(&look, layout.name(), Some(say(Event::Edit(i, Edit::AddFile(layout))))));
+            create = create.push(small(&look, layout.name(), Some(say(Event::Edit(i, Edit::AddFile { layout, name: name.clone() })))));
         }
     }
     let mut rows = Column::new().spacing(4);
@@ -370,6 +372,23 @@ fn output_row<'a, M: Clone + 'a>(
                 .on_press(say(Event::Edit(i, Edit::FileName { file: f, name }))),
             );
         }
+        // What brackets do, with an example of the program's parts.
+        let example = match content.tokens {
+            [first, second, ..] => format!("T_{}(_{})", first.written(), second.written()),
+            [first] => format!("T(_{})", first.written()),
+            [] => String::new(),
+        };
+        if !example.is_empty() {
+            menu = menu.push(
+                row![
+                    text("( … )").size(look.small_size).font(look.mono).color(c.bright).width(Length::Fixed(100.0)),
+                    text(format!("Left out, with all in the brackets, where a part in them stands for nothing: {example}"))
+                        .size(look.small_size)
+                        .color(c.faint)
+                ]
+                .padding([3, 8]),
+            );
+        }
         body = body.push(row![space().width(12), container(menu).padding(4).width(Length::Fixed(520.0)).style(style::menu(&look))]);
     }
     // The options of the channel chosen.
@@ -471,7 +490,7 @@ fn maps<'a, M: Clone + 'a>(
     // The maps the preset shown is made of: marked.
     let used: Vec<MapId> = state
         .shown
-        .template(content.mine)
+        .template(&content.presets, content.mine)
         .map(|t| {
             t.files.iter().flat_map(|f| f.parts.iter()).filter_map(|p| if let Part::Rgb(i) | Part::One(i) = p { Some(i.map.clone()) } else { None }).collect()
         })
