@@ -2,77 +2,43 @@
 
 use crate::template::{Normals, Template, plan_template};
 
-/// What a map is, of what the presets read. (A program says what its maps are as it names
-/// them; a map of no usage here is written by [`Preset::Maps`] alone.)
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum Usage {
-    BaseColor,
-    Normal,
-    Height,
-    Roughness,
-    Metallic,
-    AmbientOcclusion,
-    Emissive,
-    Opacity,
-    /// Of the models before PBR: what stands for the base color, the roughness turned over,
-    /// and the height.
-    Diffuse,
-    Glossiness,
-    Displacement,
+/// What a map is, by the id a program and its templates know it by: of a material's maps, the
+/// ids of the program's usages ("base_color", "roughness", "normal"…: here those of the
+/// Output's usage, see `brewed_texture_core::nodes::Usage::id`); of a map of no usage,
+/// `custom:` and its name.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct MapId(pub String);
+
+impl MapId {
+    /// A map of no usage, by its name.
+    pub fn custom(name: &str) -> MapId {
+        MapId(format!("custom:{name}"))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// What it is called in a sentence: "no ambient occlusion".
+    pub fn word(&self) -> String {
+        self.0.strip_prefix("custom:").unwrap_or(&self.0).replace('_', " ")
+    }
+
+    /// Whether the map is gray: one channel of it is written as a map of three.
+    pub(crate) fn gray(&self) -> bool {
+        matches!(self.as_str(), "height" | "ambient_occlusion" | "roughness" | "metallic")
+    }
+
+    /// Whether it is a normal map: its green turned over to be the other way's.
+    pub fn is_normal(&self) -> bool {
+        matches!(self.as_str(), "normal" | "coat_normal" | "detail_normal")
+    }
 }
 
-impl Usage {
-    pub const ALL: [Usage; 11] = [
-        Usage::BaseColor,
-        Usage::Normal,
-        Usage::Height,
-        Usage::Roughness,
-        Usage::Metallic,
-        Usage::AmbientOcclusion,
-        Usage::Emissive,
-        Usage::Opacity,
-        Usage::Diffuse,
-        Usage::Glossiness,
-        Usage::Displacement,
-    ];
-
-    /// Its name, as a list of maps says it.
-    pub fn name(self) -> &'static str {
-        match self {
-            Usage::BaseColor => "Base Color",
-            Usage::Normal => "Normal",
-            Usage::Height => "Height",
-            Usage::Roughness => "Roughness",
-            Usage::Metallic => "Metallic",
-            Usage::AmbientOcclusion => "Ambient Occlusion",
-            Usage::Emissive => "Emissive",
-            Usage::Opacity => "Opacity",
-            Usage::Diffuse => "Diffuse",
-            Usage::Glossiness => "Glossiness",
-            Usage::Displacement => "Displacement",
-        }
-    }
-
-    /// What it is called in a sentence: "no roughness".
-    pub fn word(self) -> &'static str {
-        match self {
-            Usage::BaseColor => "base color",
-            Usage::Normal => "normal map",
-            Usage::Height => "height",
-            Usage::Roughness => "roughness",
-            Usage::Metallic => "metallic",
-            Usage::AmbientOcclusion => "occlusion",
-            Usage::Emissive => "emissive",
-            Usage::Opacity => "opacity",
-            Usage::Diffuse => "diffuse",
-            Usage::Glossiness => "glossiness",
-            Usage::Displacement => "displacement",
-        }
-    }
-
-    /// Whether the map is gray: one channel of it is written.
-    pub(crate) fn gray(self) -> bool {
-        matches!(self, Usage::Height | Usage::AmbientOcclusion | Usage::Roughness | Usage::Metallic)
+impl From<&str> for MapId {
+    fn from(id: &str) -> MapId {
+        MapId(id.into())
     }
 }
 
@@ -82,7 +48,7 @@ impl Usage {
 pub struct Map<R> {
     pub reference: R,
     pub name: String,
-    pub usage: Option<Usage>,
+    pub usage: Option<MapId>,
 }
 
 /// What an export writes.
@@ -190,19 +156,19 @@ pub fn plan<R: Copy>(maps: &[Map<R>], name: &str, preset: Preset, directx: bool)
 mod tests {
     use super::*;
 
-    fn map(reference: u32, name: &str, usage: Option<Usage>) -> Map<u32> {
+    fn map(reference: u32, name: &str, usage: Option<MapId>) -> Map<u32> {
         Map { reference, name: name.into(), usage }
     }
 
     /// The maps of a material of OpenPBR, in the order a program has them.
     fn pbr() -> Vec<Map<u32>> {
         vec![
-            map(1, "base_color", Some(Usage::BaseColor)),
-            map(2, "base_metalness", Some(Usage::Metallic)),
-            map(3, "specular_roughness", Some(Usage::Roughness)),
-            map(4, "height", Some(Usage::Height)),
-            map(5, "normal", Some(Usage::Normal)),
-            map(6, "ambient_occlusion", Some(Usage::AmbientOcclusion)),
+            map(1, "base_color", Some(MapId::from("base_color"))),
+            map(2, "base_metalness", Some(MapId::from("metallic"))),
+            map(3, "specular_roughness", Some(MapId::from("roughness"))),
+            map(4, "height", Some(MapId::from("height"))),
+            map(5, "normal", Some(MapId::from("normal"))),
+            map(6, "ambient_occlusion", Some(MapId::from("ambient_occlusion"))),
             map(7, "mask", None),
         ]
     }
@@ -248,10 +214,10 @@ mod tests {
     #[test]
     fn maps_that_stand_for_others_are_exported_as_them() {
         let maps = [
-            map(1, "diffuse", Some(Usage::Diffuse)),
-            map(2, "glossiness", Some(Usage::Glossiness)),
-            map(3, "displacement", Some(Usage::Displacement)),
-            map(4, "opacity", Some(Usage::Opacity)),
+            map(1, "diffuse", Some(MapId::from("diffuse"))),
+            map(2, "glossiness", Some(MapId::from("glossiness"))),
+            map(3, "displacement", Some(MapId::from("displacement"))),
+            map(4, "opacity", Some(MapId::from("opacity"))),
         ];
         let unreal = plan(&maps, "Leather", Preset::Unreal, false);
         assert_eq!(unreal.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["T_Leather_BaseColor", "T_Leather_ORM", "T_Leather_Height"]);

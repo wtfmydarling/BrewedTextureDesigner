@@ -5,19 +5,19 @@
   "files": [
     {
       "name": "$(graph)_baseColor",
-      "needs": ["BaseColor", "Opacity"],
-      "parts": [{ "rgb": { "map": "BaseColor", "missing": 0.8 } }, { "one": { "map": "Opacity", "optional": true } }]
+      "needs": ["base_color", "opacity"],
+      "parts": [{ "rgb": { "map": "base_color", "missing": 0.8 } }, { "one": { "map": "opacity", "optional": true } }]
     },
-    { "name": "$(graph)_normal", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
+    { "name": "$(graph)_normal", "needs": ["normal"], "parts": [{ "rgb": { "map": "normal" } }] },
     {
       "name": "$(graph)_occlusionRoughnessMetallic",
-      "needs": ["AmbientOcclusion", "Roughness", "Metallic"],
+      "needs": ["ambient_occlusion", "roughness", "metallic"],
       "parts": [
-        { "one": { "map": "AmbientOcclusion", "missing": 1.0 } },
-        { "one": { "map": "Roughness", "missing": 0.5 } },
-        { "one": { "map": "Metallic", "missing": 0.0 } }
+        { "one": { "map": "ambient_occlusion", "missing": 1.0 } },
+        { "one": { "map": "roughness", "missing": 0.5 } },
+        { "one": { "map": "metallic", "missing": 0.0 } }
       ]
     },
-    { "name": "$(graph)_emissive", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
+    { "name": "$(graph)_emissive", "needs": ["emissive"], "parts": [{ "rgb": { "map": "emissive" } }] }
   ]
 }

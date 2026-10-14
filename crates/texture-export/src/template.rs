@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::plan::{Map, Planned, PlannedFile, Source, Usage};
+use crate::plan::{Map, MapId, Planned, PlannedFile, Source};
 
 /// What files an export writes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -43,32 +43,96 @@ pub enum Normals {
     DirectX,
 }
 
-/// What a file is written as.
+/// What a file is written as: each of what an Output writes (PNG of 8 or 16 bits, OpenEXR of
+/// half floats or floats, DDS compressed as game engines read textures).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Format {
     Png8,
     Png16,
     Exr16,
     Exr32,
+    Dxt1,
+    Dxt2,
+    Dxt3,
+    Dxt4,
+    Dxt5,
 }
 
-impl Format {
-    pub const ALL: [Format; 4] = [Format::Png8, Format::Png16, Format::Exr16, Format::Exr32];
+/// The kind of a file, of which a format is one depth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FileType {
+    Png,
+    Exr,
+    Dds,
+}
+
+impl FileType {
+    pub const ALL: [FileType; 3] = [FileType::Png, FileType::Exr, FileType::Dds];
 
     pub fn name(self) -> &'static str {
         match self {
-            Format::Png8 => "PNG 8 bits",
-            Format::Png16 => "PNG 16 bits",
-            Format::Exr16 => "EXR 16 bits float",
-            Format::Exr32 => "EXR 32 bits float",
+            FileType::Png => "png",
+            FileType::Exr => "exr",
+            FileType::Dds => "dds",
         }
     }
 
-    pub fn extension(self) -> &'static str {
+    /// Its formats, as a list of depths says them.
+    pub fn formats(self) -> &'static [Format] {
         match self {
-            Format::Png8 | Format::Png16 => "png",
-            Format::Exr16 | Format::Exr32 => "exr",
+            FileType::Png => &[Format::Png8, Format::Png16],
+            FileType::Exr => &[Format::Exr16, Format::Exr32],
+            FileType::Dds => &[Format::Dxt1, Format::Dxt2, Format::Dxt3, Format::Dxt4, Format::Dxt5],
         }
+    }
+}
+
+impl std::fmt::Display for FileType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl Format {
+    pub const ALL: [Format; 9] =
+        [Format::Png8, Format::Png16, Format::Exr16, Format::Exr32, Format::Dxt1, Format::Dxt2, Format::Dxt3, Format::Dxt4, Format::Dxt5];
+
+    pub fn file_type(self) -> FileType {
+        match self {
+            Format::Png8 | Format::Png16 => FileType::Png,
+            Format::Exr16 | Format::Exr32 => FileType::Exr,
+            _ => FileType::Dds,
+        }
+    }
+
+    /// Its depth, as an Output says it.
+    pub fn depth(self) -> &'static str {
+        match self {
+            Format::Png8 => "8 bits",
+            Format::Png16 => "16 bits",
+            Format::Exr16 => "16 bits float",
+            Format::Exr32 => "32 bits float",
+            Format::Dxt1 => "DXT1 / BC1",
+            Format::Dxt2 => "DXT2 / BC2",
+            Format::Dxt3 => "DXT3 / BC2",
+            Format::Dxt4 => "DXT4 / BC3",
+            Format::Dxt5 => "DXT5 / BC3",
+        }
+    }
+
+    /// Its file's kind and depth: "png 8 bits".
+    pub fn name(self) -> String {
+        format!("{} {}", self.file_type().name(), self.depth())
+    }
+
+    pub fn extension(self) -> &'static str {
+        self.file_type().name()
+    }
+}
+
+impl std::fmt::Display for Format {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.depth())
     }
 }
 
@@ -82,7 +146,7 @@ pub struct File {
     /// It is written where the program has a map of one of these (or of one that stands for it);
     /// where it says none, of one its parts are made of; where they are values alone, always.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub needs: Vec<Usage>,
+    pub needs: Vec<MapId>,
     /// What it is written as, where not as the export says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<Format>,
@@ -97,7 +161,7 @@ impl File {
     }
 
     /// The maps it needs: those it says, or else those its parts are made of.
-    pub fn needed(&self) -> Vec<Usage> {
+    pub fn needed(&self) -> Vec<MapId> {
         if !self.needs.is_empty() {
             return self.needs.clone();
         }
@@ -106,7 +170,7 @@ impl File {
             if let Part::Rgb(input) | Part::One(input) = part
                 && !used.contains(&input.map)
             {
-                used.push(input.map);
+                used.push(input.map.clone());
             }
         }
         used
@@ -151,7 +215,7 @@ impl Part {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
-    pub map: Usage,
+    pub map: MapId,
     /// Of `one`: the map's channel, 0 red … 3 alpha.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub channel: u8,
@@ -164,6 +228,10 @@ pub struct Input {
     /// Left out where the program has no such map (the base color's alpha of an opacity).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub optional: bool,
+    /// Of a normal map: written as these, whatever the template's (a converted map: Normal
+    /// DirectX, Normal OpenGL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normals: Option<Normals>,
 }
 
 fn is_zero(v: &u8) -> bool {
@@ -173,8 +241,8 @@ fn is_zero(v: &u8) -> bool {
 impl Input {
     /// A map's part, as it is: no channel but the first, not turned over, and the file not
     /// written without it.
-    pub fn of(map: Usage) -> Input {
-        Input { map, channel: 0, invert: false, missing: None, optional: false }
+    pub fn of(map: MapId) -> Input {
+        Input { map, channel: 0, invert: false, missing: None, optional: false, normals: None }
     }
 }
 
@@ -216,8 +284,9 @@ pub enum Edit {
     Map {
         file: usize,
         part: usize,
-        map: Option<Usage>,
+        map: Option<MapId>,
         invert: bool,
+        normals: Option<Normals>,
     },
     Channel {
         file: usize,
@@ -238,6 +307,11 @@ pub enum Edit {
         file: usize,
         part: usize,
         value: f32,
+    },
+    /// The part given no map: empty, as a new file's are.
+    Clear {
+        file: usize,
+        part: usize,
     },
 }
 
@@ -312,13 +386,13 @@ impl Template {
             }
             Edit::FileName { file: at, name } => self.files.get_mut(at).ok_or("no such file")?.name = name,
             Edit::Format { file: at, format } => self.files.get_mut(at).ok_or("no such file")?.format = format,
-            Edit::Map { file: at, part, map, invert } => {
+            Edit::Map { file: at, part, map, invert, normals } => {
                 let file = self.files.get_mut(at).ok_or("no such file")?;
                 let slot = file.parts.get_mut(part).ok_or("no such part")?;
                 let channels = slot.channels();
                 *slot = match map {
-                    Some(map) if channels == 3 => Part::Rgb(Input { invert, ..Input::of(map) }),
-                    Some(map) => Part::One(Input { invert, ..Input::of(map) }),
+                    Some(map) if channels == 3 => Part::Rgb(Input { invert, normals, ..Input::of(map) }),
+                    Some(map) => Part::One(Input { invert, normals, ..Input::of(map) }),
                     None => Part::Value { value: 0.0, said: "value".into(), rgb: channels == 3 },
                 };
                 // (What it needs is what it is made of, now.)
@@ -340,6 +414,12 @@ impl Template {
                     Missing::NoFile => (None, false),
                 };
             }
+            Edit::Clear { file: at, part } => {
+                let file = self.files.get_mut(at).ok_or("no such file")?;
+                let slot = file.parts.get_mut(part).ok_or("no such part")?;
+                *slot = Part::empty(slot.channels());
+                file.needs.clear();
+            }
             Edit::Value { file: at, part, value } => match self.files.get_mut(at).ok_or("no such file")?.parts.get_mut(part) {
                 Some(Part::Value { value: v, .. }) => *v = value.clamp(0.0, 1.0),
                 _ => return Err("that channel is a map, not a value".into()),
@@ -355,20 +435,19 @@ impl Template {
 pub fn plan_template<R: Copy>(template: &Template, maps: &[Map<R>], values: &[(&str, &str)], directx: bool) -> Vec<PlannedFile<R>> {
     // The map of a usage, or where the program has none, of one that stands for it, and whether
     // it is turned over to be it.
-    let of = |usage: Usage| -> Option<(&Map<R>, bool)> {
-        let find = |u: Usage| maps.iter().find(|m| m.usage == Some(u));
-        find(usage).map(|m| (m, false)).or_else(|| match usage {
-            Usage::BaseColor => find(Usage::Diffuse).map(|m| (m, false)),
-            Usage::Roughness => find(Usage::Glossiness).map(|m| (m, true)),
-            Usage::Height => find(Usage::Displacement).map(|m| (m, false)),
+    let find = |id: &str| maps.iter().find(|m| m.usage.as_ref().is_some_and(|u| u.as_str() == id));
+    let of = |id: &MapId| -> Option<(&Map<R>, bool)> {
+        find(id.as_str()).map(|m| (m, false)).or_else(|| match id.as_str() {
+            "base_color" => find("diffuse").map(|m| (m, false)),
+            "roughness" => find("glossiness").map(|m| (m, true)),
+            "height" => find("displacement").map(|m| (m, false)),
             _ => None,
         })
     };
-    let flip = directx != (template.normals == Normals::DirectX);
     let mut files = Vec::new();
     'files: for file in &template.files {
         let needs = file.needed();
-        if !needs.is_empty() && !needs.iter().any(|&u| of(u).is_some()) {
+        if !needs.is_empty() && !needs.iter().any(|u| of(u).is_some()) {
             continue;
         }
         let mut sources: Vec<Source<R>> = Vec::new();
@@ -386,7 +465,7 @@ pub fn plan_template<R: Copy>(template: &Template, maps: &[Map<R>], values: &[(&
                 Part::Rgb(input) | Part::One(input) => {
                     let rgb = matches!(part, Part::Rgb(_));
                     let channels = if rgb { 3 } else { 1 };
-                    let Some((map, over)) = of(input.map) else {
+                    let Some((map, over)) = of(&input.map) else {
                         match (input.missing, input.optional) {
                             (_, true) => continue,
                             (Some(value), false) => {
@@ -398,17 +477,20 @@ pub fn plan_template<R: Copy>(template: &Template, maps: &[Map<R>], values: &[(&
                         }
                     };
                     let invert = input.invert != over;
+                    // A normal map's green, turned over where the graph's are not what is written.
+                    let target = input.normals.unwrap_or(template.normals);
+                    let flip = input.map.is_normal() && directx != (target == Normals::DirectX);
                     if rgb {
                         // A map's color, or a gray map's gray in all three.
                         let gray = input.map.gray();
                         for channel in 0..3 {
-                            let turn = input.map == Usage::Normal && flip && channel == 1;
+                            let turn = flip && channel == 1;
                             flipped |= turn;
                             let channel = if gray { 0 } else { channel };
                             sources.push(Source::Map { map: map.reference, channel, invert: invert != turn });
                         }
                     } else {
-                        let turn = input.map == Usage::Normal && flip && input.channel == 1;
+                        let turn = flip && input.channel == 1;
                         flipped |= turn;
                         sources.push(Source::Map { map: map.reference, channel: input.channel.min(3), invert: invert != turn });
                     }
@@ -504,7 +586,7 @@ mod tests {
     use super::*;
     use crate::Preset;
 
-    fn map(reference: u32, name: &str, usage: Usage) -> Map<u32> {
+    fn map(reference: u32, name: &str, usage: MapId) -> Map<u32> {
         Map { reference, name: name.into(), usage: Some(usage) }
     }
 
@@ -518,29 +600,29 @@ mod tests {
             "about": "Occlusion, roughness, metallic and height in one file.",
             "normals": "DirectX",
             "files": [
-                { "name": "$(graph)_N", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
+                { "name": "$(graph)_N", "needs": ["normal"], "parts": [{ "rgb": { "map": "normal" } }] },
                 {
                     "name": "$(graph)_ORMH",
-                    "needs": ["AmbientOcclusion", "Roughness", "Metallic", "Height"],
+                    "needs": ["ambient_occlusion", "roughness", "metallic", "height"],
                     "parts": [
-                        { "one": { "map": "AmbientOcclusion", "missing": 1.0 } },
-                        { "one": { "map": "Roughness", "missing": 0.5 } },
-                        { "one": { "map": "Metallic", "missing": 0.0 } },
-                        { "one": { "map": "Height", "missing": 0.5 } }
+                        { "one": { "map": "ambient_occlusion", "missing": 1.0 } },
+                        { "one": { "map": "roughness", "missing": 0.5 } },
+                        { "one": { "map": "metallic", "missing": 0.0 } },
+                        { "one": { "map": "height", "missing": 0.5 } }
                     ]
                 },
-                { "name": "$(graph)_Emissive", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
+                { "name": "$(graph)_Emissive", "needs": ["emissive"], "parts": [{ "rgb": { "map": "emissive" } }] }
             ]
         }"#;
         let template = template_of(text).expect("a template");
-        let maps = [map(1, "normal", Usage::Normal), map(2, "rough", Usage::Roughness), map(3, "height", Usage::Height)];
+        let maps = [map(1, "normal", MapId::from("normal")), map(2, "rough", MapId::from("roughness")), map(3, "height", MapId::from("height"))];
         let files = plan_template(&template, &maps, &[("graph", "Old Brick")], false);
         assert_eq!(files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["Old_Brick_N", "Old_Brick_ORMH"], "no emissive map, no file of it");
         let source = |map, channel, invert| Source::Map { map, channel, invert };
         assert_eq!(files[0].what, Planned::Pack(vec![source(1, 0, false), source(1, 1, true), source(1, 2, false)]), "OpenGL's made DirectX's");
         assert_eq!(files[0].said, "normal (green turned over)");
         assert_eq!(files[1].what, Planned::Pack(vec![Source::Value(1.0), source(2, 0, false), Source::Value(0.0), source(3, 0, false)]));
-        assert_eq!(files[1].said, "R 1 (no occlusion) · G rough · B 0 (no metallic) · A height");
+        assert_eq!(files[1].said, "R 1 (no ambient occlusion) · G rough · B 0 (no metallic) · A height");
         // Written as it was read.
         assert_eq!(template_of(&serde_json::to_string(&template).expect("JSON")), Ok(template));
     }
@@ -550,12 +632,11 @@ mod tests {
     #[test]
     fn a_template_that_cannot_be_read_says_why() {
         let file = |parts: &str, needs: &str| format!(r#"{{ "name": "T", "files": [{{ "name": "x", "needs": [{needs}], "parts": [{parts}] }}] }}"#);
-        let one = r#"{ "one": { "map": "Height" } }"#;
+        let one = r#"{ "one": { "map": "height" } }"#;
         for (text, said) in [
             ("{".to_string(), "EOF"),
-            (file(r#"{ "two": { "map": "Height" } }"#, r#""Height""#), "unknown variant"),
+            (file(r#"{ "two": { "map": "height" } }"#, r#""Height""#), "unknown variant"),
             (file(&format!("{one}, {one}"), r#""Height""#), "1, 3 or 4 channels"),
-            (file(one, r#""Heights""#), "unknown variant"),
             (r#"{ "name": " ", "files": [] }"#.to_string(), "no name"),
         ] {
             let error = template_of(&text).expect_err(&text);
@@ -587,12 +668,12 @@ mod tests {
     /// of them as RGB, a value with what it stands for.
     #[test]
     fn packed_files_say_what_each_channel_is() {
-        let maps = [map(1, "metal", Usage::Metallic), map(2, "rough", Usage::Roughness)];
+        let maps = [map(1, "metal", MapId::from("metallic")), map(2, "rough", MapId::from("roughness"))];
         let urp = crate::plan(&maps, "x", Preset::UnityUrp, false);
         assert_eq!(urp[0].said, "RGB metal · A 1 − rough");
         let hdrp = crate::plan(&maps, "x", Preset::UnityHdrp, false);
-        assert_eq!(hdrp[0].said, "R metal · G 1 (no occlusion) · B 1 (detail mask) · A 1 − rough");
-        let base = crate::plan(&[map(3, "alpha", Usage::Opacity)], "x", Preset::Gltf, false);
+        assert_eq!(hdrp[0].said, "R metal · G 1 (no ambient occlusion) · B 1 (detail mask) · A 1 − rough");
+        let base = crate::plan(&[map(3, "alpha", MapId::from("opacity"))], "x", Preset::Gltf, false);
         assert_eq!(base[0].said, "RGB 0.8 (no base color) · A alpha");
     }
 }
@@ -611,23 +692,26 @@ mod edits {
         t.apply(Edit::AddFile(Layout::RgbAlpha)).expect("a file");
         t.apply(Edit::AddFile(Layout::Separate)).expect("another");
         assert_eq!(t.files.iter().map(File::channels).collect::<Vec<_>>(), [4, 3]);
-        t.apply(Edit::Map { file: 0, part: 0, map: Some(Usage::BaseColor), invert: false }).expect("RGB of a map");
-        t.apply(Edit::Map { file: 0, part: 1, map: Some(Usage::Opacity), invert: false }).expect("alpha of a map");
+        t.apply(Edit::Map { file: 0, part: 0, map: Some(MapId::from("base_color")), invert: false, normals: None }).expect("RGB of a map");
+        t.apply(Edit::Map { file: 0, part: 1, map: Some(MapId::from("opacity")), invert: false, normals: None }).expect("alpha of a map");
         t.apply(Edit::Missing { file: 0, part: 1, missing: Missing::LeaveOut }).expect("left out");
-        t.apply(Edit::Map { file: 1, part: 0, map: Some(Usage::Roughness), invert: true }).expect("smoothness");
+        t.apply(Edit::Map { file: 1, part: 0, map: Some(MapId::from("roughness")), invert: true, normals: None }).expect("smoothness");
         t.apply(Edit::Missing { file: 1, part: 0, missing: Missing::Value(2.0) }).expect("a value");
         t.apply(Edit::FileName { file: 1, name: "$(graph)_S".into() }).expect("a name");
         t.apply(Edit::Format { file: 1, format: Some(Format::Exr32) }).expect("a format");
-        assert!(matches!(&t.files[0].parts[0], Part::Rgb(input) if input.map == Usage::BaseColor));
-        assert!(matches!(&t.files[1].parts[0], Part::One(Input { map: Usage::Roughness, invert: true, missing: Some(1.0), .. })), "kept within 0 … 1");
-        assert_eq!(t.files[0].needed(), [Usage::BaseColor, Usage::Opacity], "what it needs is what it is made of");
+        assert!(matches!(&t.files[0].parts[0], Part::Rgb(input) if input.map == MapId::from("base_color")));
+        assert!(
+            matches!(&t.files[1].parts[0], Part::One(input) if input.map.as_str() == "roughness" && input.invert && input.missing == Some(1.0)),
+            "kept within 0 … 1"
+        );
+        assert_eq!(t.files[0].needed(), [MapId::from("base_color"), MapId::from("opacity")], "what it needs is what it is made of");
         assert!(t.apply(Edit::Channel { file: 0, part: 0, channel: 2 }).is_err(), "a channel of one alone");
         assert!(t.apply(Edit::Value { file: 1, part: 0, value: 0.5 }).is_err(), "a map is not a value");
         assert!(t.apply(Edit::RemoveFile(7)).is_err());
         // Planned: base color without its alpha where there is no opacity; the smoothness of the
         // roughness; a file of a map the graph has not, not written.
-        let color = Map { reference: 1u32, name: "color".into(), usage: Some(Usage::BaseColor) };
-        let rough = Map { reference: 2u32, name: "rough".into(), usage: Some(Usage::Roughness) };
+        let color = Map { reference: 1u32, name: "color".into(), usage: Some(MapId::from("base_color")) };
+        let rough = Map { reference: 2u32, name: "rough".into(), usage: Some(MapId::from("roughness")) };
         let files = plan_template(&t, &[color.clone(), rough], &[("graph", "Wall")], false);
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].said, "color");

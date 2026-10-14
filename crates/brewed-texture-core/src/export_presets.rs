@@ -16,33 +16,33 @@ pub type Source = texture_export::Source<NodeId>;
 pub type Planned = texture_export::Planned<NodeId>;
 pub type PlannedFile = texture_export::PlannedFile<NodeId>;
 
-/// What an Output's usage is to an export, where it is one the presets read.
-fn usage(index: u32) -> Option<texture_export::Usage> {
-    use texture_export::Usage as U;
-    [
-        (Usage::BaseColor, U::BaseColor),
-        (Usage::Normal, U::Normal),
-        (Usage::Height, U::Height),
-        (Usage::Roughness, U::Roughness),
-        (Usage::Metallic, U::Metallic),
-        (Usage::AmbientOcclusion, U::AmbientOcclusion),
-        (Usage::Emissive, U::Emissive),
-        (Usage::Opacity, U::Opacity),
-        (Usage::Diffuse, U::Diffuse),
-        (Usage::Glossiness, U::Glossiness),
-        (Usage::Displacement, U::Displacement),
-    ]
-    .into_iter()
-    .find_map(|(ours, theirs)| (ours.index() == index).then_some(theirs))
+/// What an Output's map is to an export: its usage's id; of an Output of no usage, its name
+/// (`custom:` and the name).
+fn map_of(node: &crate::graph::Node) -> texture_export::MapId {
+    let index = node.enum_value("usage");
+    match Usage::ALL.iter().find(|u| u.index() == index) {
+        Some(Usage::Custom) | None => texture_export::MapId::custom(node.text("name")),
+        Some(usage) => texture_export::MapId::from(usage.id()),
+    }
 }
 
 /// The maps of `graph` to an export: its Outputs, the upper first (as a node of the graph has
-/// them), each by its name and usage.
+/// them), each by its name and what it is.
 pub fn maps(graph: &Graph) -> Vec<texture_export::Map<NodeId>> {
     crate::instance::port_nodes(graph)
         .into_iter()
-        .map(|n| texture_export::Map { reference: n.id, name: n.text("name").to_string(), usage: usage(n.enum_value("usage")) })
+        .map(|n| texture_export::Map { reference: n.id, name: n.text("name").to_string(), usage: Some(map_of(n)) })
         .collect()
+}
+
+/// The maps a template may be made of, as an Output's usage offers them, each with its name and
+/// its group (OpenPBR's parts: Base, Specular…), by their groups; of no usage, the
+/// maps are the graph's own (see [`maps`]).
+pub fn input_maps() -> Vec<(texture_export::MapId, &'static str, &'static str)> {
+    let mut usages: Vec<Usage> = Usage::ALL.into_iter().filter(|u| !matches!(u, Usage::Custom | Usage::Panorama)).collect();
+    // (By their groups, in the order of the groups; within one, in the order of the usages.)
+    usages.sort_by_key(|u| crate::nodes::UsageGroup::ALL.iter().position(|g| *g == u.group()));
+    usages.into_iter().map(|u| (texture_export::MapId::from(u.id()), u.name(), u.group().name())).collect()
 }
 
 /// Whether the normal maps of `graph` are DirectX's (Y−): as its Normal nodes make them (the

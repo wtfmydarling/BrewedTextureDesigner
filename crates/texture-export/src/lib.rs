@@ -17,7 +17,8 @@ mod plan;
 mod template;
 
 pub use names::{file_stem, sanitize_file_name, unique_paths};
-pub use plan::{Map, Planned, PlannedFile, Preset, Source, Usage, plan};
+pub use plan::{Map, MapId, Planned, PlannedFile, Preset, Source, plan};
 pub use template::{
-    Edit, File, Format, Input, Layout, Missing, Normals, Part, Template, new_template_path, plan_template, read_templates, template_of, write_template,
+    Edit, File, FileType, Format, Input, Layout, Missing, Normals, Part, Template, new_template_path, plan_template, read_templates, template_of,
+    write_template,
 };

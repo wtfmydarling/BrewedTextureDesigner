@@ -5,20 +5,20 @@
   "files": [
     {
       "name": "T_$(graph)_BaseColor",
-      "needs": ["BaseColor", "Opacity"],
-      "parts": [{ "rgb": { "map": "BaseColor", "missing": 0.8 } }, { "one": { "map": "Opacity", "optional": true } }]
+      "needs": ["base_color", "opacity"],
+      "parts": [{ "rgb": { "map": "base_color", "missing": 0.8 } }, { "one": { "map": "opacity", "optional": true } }]
     },
-    { "name": "T_$(graph)_Normal", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
+    { "name": "T_$(graph)_Normal", "needs": ["normal"], "parts": [{ "rgb": { "map": "normal" } }] },
     {
       "name": "T_$(graph)_ORM",
-      "needs": ["AmbientOcclusion", "Roughness", "Metallic"],
+      "needs": ["ambient_occlusion", "roughness", "metallic"],
       "parts": [
-        { "one": { "map": "AmbientOcclusion", "missing": 1.0 } },
-        { "one": { "map": "Roughness", "missing": 0.5 } },
-        { "one": { "map": "Metallic", "missing": 0.0 } }
+        { "one": { "map": "ambient_occlusion", "missing": 1.0 } },
+        { "one": { "map": "roughness", "missing": 0.5 } },
+        { "one": { "map": "metallic", "missing": 0.0 } }
       ]
     },
-    { "name": "T_$(graph)_Height", "needs": ["Height"], "parts": [{ "one": { "map": "Height" } }] },
-    { "name": "T_$(graph)_Emissive", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
+    { "name": "T_$(graph)_Height", "needs": ["height"], "parts": [{ "one": { "map": "height" } }] },
+    { "name": "T_$(graph)_Emissive", "needs": ["emissive"], "parts": [{ "rgb": { "map": "emissive" } }] }
   ]
 }

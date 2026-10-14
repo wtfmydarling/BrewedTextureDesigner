@@ -333,10 +333,19 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
         .map(|(path, file, format)| export_window::Listed {
             name: path.file_name().map_or_else(|| file.name.clone(), |n| n.to_string_lossy().into_owned()),
             said: file.said.clone(),
-            format: format.map_or_else(|| "As its Output says".to_string(), |f| f.name().to_string()),
+            kind: format.map_or_else(|| path.extension().map_or_else(String::new, |e| e.to_string_lossy().into_owned()), |f| f.file_type().name().to_string()),
+            depth: format.map_or_else(|| "as its output says".to_string(), |f| f.depth().to_string()),
         })
         .collect();
-    let has = brewed_texture_core::export_presets::maps(app.graph()).into_iter().filter_map(|m| m.usage).collect();
+    // The maps a template may be made of: every usage of an Output; of the graph's Outputs of no
+    // usage, each by its name.
+    let maps = brewed_texture_core::export_presets::maps(app.graph());
+    let has: Vec<texture_export::MapId> = maps.iter().filter_map(|m| m.usage.clone()).collect();
+    let custom = maps.iter().filter_map(|m| m.usage.clone().filter(|u| u.as_str().starts_with("custom:")).map(|u| (u, m.name.clone()))).collect();
+    let inputs = brewed_texture_core::export_presets::input_maps()
+        .into_iter()
+        .map(|(map, name, group)| export_window::InputMap { map, name: name.into(), group: group.into() })
+        .collect();
     let [width, height] = app.graph().resolution;
     let content = export_window::Content {
         name: app.doc.entry().name.clone(),
@@ -352,6 +361,8 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
         files,
         tokens: &texture_export::naming::GRAPH_TOKENS,
         values: app.export_values(),
+        inputs,
+        custom,
         has,
     };
     let window = export_window::view(content, &dialog.window, &style::export_look(), |event| Message::Export(X::Window(event)));

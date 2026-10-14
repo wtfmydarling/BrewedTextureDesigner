@@ -1,20 +1,20 @@
 //! The window an export of textures is set up in, made to be the same in every program of a
-//! set, as Substance Painter's is in essence: what is exported, where and in what (Settings),
-//! the templates that say what files are written of which maps, the program's own and the
-//! user's, made and changed there (Output Templates), and the files, listed before they are
-//! written (List of Exports). A program gives what it has (see [`Content`]) and its look, keeps
-//! the window's [`State`], and takes what is done as [`Event`]s: it writes the files, and keeps
-//! the templates of the user's (see `texture_export::write_template`). It knows nothing of the
-//! program.
+//! set, as Substance Painter's export window is: SETTINGS (where, with which output template,
+//! in what), OUTPUT TEMPLATES (the presets, the program's and the user's; the output maps of
+//! the one shown, each a row of a name and channels; the input maps, dragged onto the channels),
+//! LIST OF EXPORTS (the files before they are written). A program gives what it has (see
+//! [`Content`]) and its look, keeps the window's [`State`], and takes what is done as
+//! [`Event`]s: it writes the files, and keeps the templates of the user's (see
+//! `texture_export::write_template`). It knows nothing of the program.
 
 mod editor;
 pub mod style;
 
-use iced::widget::{Column, button, column, container, row, space, text};
-use iced::{Alignment, Color, Element, Font, Length, Padding, Theme};
+use iced::widget::{Column, button, column, container, mouse_area, pick_list, pin, row, space, stack, text, text_input};
+use iced::{Alignment, Color, Element, Font, Length, Point, Theme};
 use scroll_box::scroll_box;
 use texture_export::naming::Token;
-use texture_export::{Edit, Format, Preset, Template, Usage};
+use texture_export::{Edit, FileType, Format, MapId, Normals, Preset, Template};
 
 /// Which template: one of the program's (or its maps as they are), or one of the user's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,7 +23,7 @@ pub enum Chosen {
     Mine(usize),
 }
 
-/// The pages of the window.
+/// The tabs of the window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tab {
     #[default]
@@ -37,37 +37,50 @@ impl Tab {
 
     pub fn name(self) -> &'static str {
         match self {
-            Tab::Settings => "Settings",
-            Tab::Templates => "Output Templates",
-            Tab::Files => "List of Exports",
+            Tab::Settings => "SETTINGS",
+            Tab::Templates => "OUTPUT TEMPLATES",
+            Tab::Files => "LIST OF EXPORTS",
         }
     }
+}
+
+/// A map being dragged onto a channel: what it is (`None`: a value), turned over, written as
+/// normals of a way, and what it is called.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dragged {
+    pub map: Option<MapId>,
+    pub invert: bool,
+    pub normals: Option<Normals>,
+    pub label: String,
 }
 
 /// What the window keeps between frames (the program keeps it for it).
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
     pub tab: Tab,
-    /// The template shown in Output Templates.
+    /// The template shown in OUTPUT TEMPLATES.
     pub shown: Chosen,
-    /// The channel of a file chosen there (the file, its part): a map pressed goes to it.
+    /// The channel of an output map chosen there (the map, its part): its options shown.
     pub slot: Option<(usize, usize)>,
-    /// The file whose menu of the parts of a name is open, and the one whose menu of formats is.
+    /// The output map whose menu of the parts of a name is open.
     pub tokens: Option<usize>,
-    pub formats: Option<usize>,
     /// A template of the user's asked to be deleted, waiting for a yes.
     pub deleting: Option<usize>,
+    /// A map being dragged, where the pointer is, and the channel it is over.
+    pub dragging: Option<Dragged>,
+    pub pointer: Point,
+    pub over: Option<(usize, usize)>,
 }
 
 impl State {
-    /// The window as it opens, on what is exported with: a template of the user's shown, or the
-    /// Unreal Engine's.
+    /// The window as it opens: SETTINGS, the template written with shown in OUTPUT TEMPLATES (the
+    /// Unreal Engine's, where it is the maps as they are).
     pub fn new(chosen: Chosen) -> State {
         let shown = match chosen {
             Chosen::Preset(Preset::Maps) => Chosen::Preset(Preset::Unreal),
             chosen => chosen,
         };
-        State { tab: Tab::Settings, shown, slot: None, tokens: None, formats: None, deleting: None }
+        State { tab: Tab::Settings, shown, slot: None, tokens: None, deleting: None, dragging: None, pointer: Point::ORIGIN, over: None }
     }
 
     /// What `event` does to the window itself (what it does to the export and the templates is
@@ -76,39 +89,42 @@ impl State {
         match event {
             Event::Tab(tab) => {
                 self.tab = *tab;
-                self.close_menus();
+                self.tokens = None;
             }
             Event::Show(chosen) => {
                 self.shown = *chosen;
                 self.slot = None;
+                self.tokens = None;
                 self.deleting = None;
-                self.close_menus();
             }
             Event::Slot(slot) => {
                 self.slot = *slot;
-                self.close_menus();
-            }
-            Event::Tokens(file) => {
-                self.tokens = *file;
-                self.formats = None;
-            }
-            Event::Formats(file) => {
-                self.formats = *file;
                 self.tokens = None;
             }
+            Event::Tokens(file) => self.tokens = *file,
             Event::Deleting(asked) => self.deleting = *asked,
+            Event::Drag(dragged) => {
+                self.dragging = Some(dragged.clone());
+                self.over = None;
+            }
+            Event::Pointer(at) => self.pointer = *at,
+            Event::Over(slot) => self.over = *slot,
+            Event::DragEnd => {
+                self.dragging = None;
+                self.over = None;
+            }
+            Event::Edit(_, Edit::Map { file, part, .. }) => {
+                // (A map dropped on a channel chooses it.)
+                self.slot = Some((*file, *part));
+                self.tokens = None;
+            }
             Event::Edit(_, Edit::RemoveFile(_) | Edit::AddFile(_) | Edit::MoveFile { .. }) => {
                 self.slot = None;
-                self.close_menus();
+                self.tokens = None;
             }
-            Event::Edit(_, Edit::FileName { .. } | Edit::Format { .. }) => self.close_menus(),
+            Event::Edit(_, Edit::FileName { .. }) => self.tokens = None,
             _ => {}
         }
-    }
-
-    fn close_menus(&mut self) {
-        self.tokens = None;
-        self.formats = None;
     }
 }
 
@@ -120,8 +136,11 @@ pub enum Event {
     Show(Chosen),
     Slot(Option<(usize, usize)>),
     Tokens(Option<usize>),
-    Formats(Option<usize>),
     Deleting(Option<usize>),
+    Drag(Dragged),
+    Pointer(Point),
+    Over(Option<(usize, usize)>),
+    DragEnd,
     // The export's.
     ExportWith(Chosen),
     /// The graph's normal maps are DirectX's.
@@ -130,45 +149,52 @@ pub enum Event {
     /// Choose the folder (the program shows a dialog of the system), and show it.
     Browse,
     OpenFolder,
-    // The templates of the user's.
-    /// A template of one's own: new, a copy of another, deleted, changed.
+    // The templates of the user's: new, a copy of another, deleted, changed; their folder shown.
     New,
     Duplicate(Chosen),
     Delete(usize),
     Edit(usize, Edit),
-    /// Show the folder they are kept in.
     OpenTemplates,
     Export,
     Cancel,
 }
 
-/// A file the export writes, as the window lists it.
+/// A file the export writes, as LIST OF EXPORTS lists it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Listed {
     pub name: String,
     /// What it is made of, said.
     pub said: String,
-    pub format: String,
+    /// Its kind and depth ("png", "8 bits").
+    pub kind: String,
+    pub depth: String,
+}
+
+/// A map a template may be made of, as the input maps list it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputMap {
+    pub map: MapId,
+    pub name: String,
+    /// What it is listed under (OpenPBR's parts: Base, Specular…).
+    pub group: String,
 }
 
 /// The colors of the window's surfaces and text, darkest first.
 #[derive(Clone, Copy, Debug)]
 pub struct Colors {
-    /// The bar of the tabs and the footer.
+    /// The bar of the tabs and the footer; the strip over a list.
     pub header: Color,
-    /// A side pane, sunk below the page; the page a tab shows; a card of a file over it; a menu.
+    pub strip: Color,
+    /// A list beside the page, sunk; the page; a row raised on it, and its edge; a menu.
     pub sunken: Color,
     pub page: Color,
-    pub card: Color,
-    pub card_edge: Color,
+    pub raised: Color,
+    pub edge: Color,
     pub menu: Color,
-    /// A field, and the rows of a list (every other one lighter).
+    /// A field sunk in; a row under the mouse; the row chosen; a line between parts.
     pub field: Color,
-    pub row: Color,
-    pub row_alt: Color,
-    /// Under the mouse; what is chosen; a line between parts.
     pub hover: Color,
-    pub lit: Color,
+    pub chosen: Color,
     pub line: Color,
     /// Text: as any, headings and what is chosen, what is said of it, what is only hinted.
     pub text: Color,
@@ -176,24 +202,21 @@ pub struct Colors {
     pub dim: Color,
     pub faint: Color,
     pub warning: Color,
-    pub error: Color,
+    /// The maps made of others (Painter's converted maps).
+    pub converted: Color,
 }
 
-/// How the window looks: the program's fonts, colors and widgets.
+/// How the window looks: the program's fonts, sizes, colors and widgets.
 #[derive(Clone, Copy)]
 pub struct Look {
-    /// The font of text, and its weights: of what is chosen, and of headings.
     pub font: Font,
     pub bold: Font,
-    pub heavy: Font,
-    /// The font of file names.
     pub mono: Font,
-    /// The size of text, and of small text.
+    /// Text, small text, and the captions of lists (in capitals, as the program's panes).
     pub text_size: f32,
     pub small_size: f32,
+    pub caption_size: f32,
     pub colors: Colors,
-    /// An option of a list, the one chosen where `chosen`.
-    pub option: fn(&Theme, button::Status, bool) -> button::Style,
     /// An option of a segmented control, the one chosen where `chosen`, and the control.
     pub segment: fn(&Theme, button::Status, bool) -> button::Style,
     pub segments: fn(&Theme) -> container::Style,
@@ -201,12 +224,13 @@ pub struct Look {
     pub button: fn(&Theme, button::Status) -> button::Style,
     pub flat_button: fn(&Theme, button::Status) -> button::Style,
     pub primary_button: fn(&Theme, button::Status) -> button::Style,
-    pub text_input: fn(&Theme, iced::widget::text_input::Status) -> iced::widget::text_input::Style,
+    pub text_input: fn(&Theme, text_input::Status) -> text_input::Style,
+    pub pick_list: fn(&Theme, pick_list::Status) -> pick_list::Style,
 }
 
 /// What the window shows.
 pub struct Content<'a, M> {
-    /// What is exported (of a graph: its name), and how large it is, said.
+    /// What is exported (of a graph: its name), and its size, said.
     pub name: String,
     pub size: String,
     /// The templates of the user's, the folder they are kept in, and what could not be read.
@@ -227,8 +251,11 @@ pub struct Content<'a, M> {
     /// The parts a name may have (`$(graph)`…), and what each stands for here.
     pub tokens: &'a [Token],
     pub values: Vec<(String, String)>,
-    /// The maps the program has.
-    pub has: Vec<Usage>,
+    /// The maps a template may be made of; the maps of no usage the program has, each by its
+    /// name; and the maps it has.
+    pub inputs: Vec<InputMap>,
+    pub custom: Vec<(MapId, String)>,
+    pub has: Vec<MapId>,
 }
 
 impl Chosen {
@@ -240,223 +267,224 @@ impl Chosen {
         }
     }
 
-    /// Its name and what it is said to be.
-    pub fn said(self, mine: &[Template]) -> (String, String) {
+    /// Its name.
+    pub fn name(self, mine: &[Template]) -> String {
         match self {
-            Chosen::Preset(preset) => (preset.name().into(), preset.about().into()),
-            Chosen::Mine(i) => mine.get(i).map_or_else(Default::default, |t| (t.name.clone(), t.about.clone())),
+            Chosen::Preset(preset) => preset.name().into(),
+            Chosen::Mine(i) => mine.get(i).map_or_else(String::new, |t| t.name.clone()),
         }
     }
+}
+
+/// What a list of templates offers: its name, as a list shows it.
+#[derive(Clone, Debug, PartialEq)]
+struct Offered(Chosen, String);
+
+impl std::fmt::Display for Offered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.1)
+    }
+}
+
+/// A caption in capitals, as the program's panes have.
+fn caption<'a>(look: &Look, title: &str) -> iced::widget::Text<'a> {
+    text(title.to_uppercase()).size(look.caption_size).font(look.bold).color(look.colors.dim)
 }
 
 /// The window, its frame and all: `say` makes what is done a message of the program's. The
 /// program puts it over its own (it fills what it is given, up to a size).
 pub fn view<'a, M: Clone + 'a>(mut content: Content<'a, M>, state: &'a State, look: &Look, say: impl Fn(Event) -> M + Copy + 'a) -> Element<'a, M> {
     let look = *look;
-    // (The program's element of the folder, shown on the settings page.)
-    let folder = std::mem::replace(&mut content.folder, text("").into());
     let c = look.colors;
-    // The head: what is exported, and the tabs.
-    let mut tabs = row![].spacing(4).align_y(Alignment::End);
+    // (The program's element of the folder, shown in SETTINGS.)
+    let folder = std::mem::replace(&mut content.folder, text("").into());
+    let mut tabs = row![].spacing(0).align_y(Alignment::Center);
     for tab in Tab::ALL {
         let chosen = tab == state.tab;
-        let font = if chosen { look.bold } else { look.font };
-        tabs = tabs
-            .push(button(text(tab.name()).size(look.text_size).font(font)).padding([8, 16]).style(style::tab(&look, chosen)).on_press(say(Event::Tab(tab))));
+        // (The tab shown has a light line on its top, and is of the page's color.)
+        let top = container(space())
+            .width(Length::Fill)
+            .height(2)
+            .style(move |_: &Theme| container::Style { background: chosen.then_some(c.bright.into()), ..Default::default() });
+        let label =
+            button(text(tab.name()).size(look.small_size).font(look.bold)).padding([8, 14]).style(style::tab(&look, chosen)).on_press(say(Event::Tab(tab)));
+        tabs = tabs.push(column![top, label].width(Length::Shrink));
     }
-    let title = text(format!("Export {}", content.name)).size(16).font(look.heavy).color(c.bright);
-    let head = container(column![title, tabs].spacing(10))
-        .padding(Padding { top: 14.0, right: 18.0, bottom: 0.0, left: 18.0 })
-        .width(Length::Fill)
-        .style(style::bar(&look));
+    let tools: Element<'a, M> = match state.tab {
+        Tab::Files => button(text("Open output directory").size(look.small_size))
+            .padding([4, 10])
+            .style(look.button)
+            .on_press_maybe(content.folder_chosen.then(|| say(Event::OpenFolder)))
+            .into(),
+        _ => text(format!("Export  ·  {}", content.name)).size(look.small_size).color(c.dim).into(),
+    };
+    let head = container(row![tabs, space().width(Length::Fill), tools].align_y(Alignment::Center).padding(iced::Padding {
+        top: 6.0,
+        right: 12.0,
+        bottom: 0.0,
+        left: 8.0,
+    }))
+    .width(Length::Fill)
+    .style(style::bar(&look));
 
     let count = content.files.len();
     let ready = content.folder_chosen && count > 0;
     let page: Element<'a, M> = match state.tab {
         Tab::Settings => settings(&content, folder, &look, say),
         Tab::Templates => editor::view(&content, state, &look, say),
-        Tab::Files => files(&content, &look, say),
+        Tab::Files => files(&content, &look),
     };
     let said = match (count, content.folder_chosen) {
-        (0, _) => text("Nothing to export: the graph has no Output of what this writes (give Outputs their Usage)").color(c.warning),
-        (_, false) => text(format!("{count} file(s) to export: choose the folder they go to")).color(c.warning),
-        (1, true) => text("1 file will be exported").color(c.dim),
-        (_, true) => text(format!("{count} files will be exported")).color(c.dim),
+        (0, _) => text("Nothing to export: the graph has no output of what the template writes").color(c.warning),
+        (_, false) => text(format!("{count} texture(s) selected for export: choose the output directory")).color(c.warning),
+        (_, true) => text(format!("{count} texture(s) selected for export")).color(c.dim),
     };
     let footer = container(
         row![
             said.size(look.small_size),
             space().width(Length::Fill),
-            button(text("Cancel").size(look.text_size)).padding([6, 16]).style(look.button).on_press(say(Event::Cancel)),
-            button(text("Export").size(look.text_size)).padding([6, 22]).style(look.primary_button).on_press_maybe(ready.then(|| say(Event::Export))),
+            button(text("Cancel").size(look.text_size).center()).width(Length::Fixed(110.0)).padding([5, 12]).style(look.button).on_press(say(Event::Cancel)),
+            button(text("Export").size(look.text_size).center())
+                .width(Length::Fixed(110.0))
+                .padding([5, 12])
+                .style(look.primary_button)
+                .on_press_maybe(ready.then(|| say(Event::Export))),
         ]
-        .spacing(10)
+        .spacing(8)
         .align_y(Alignment::Center),
     )
-    .padding([10, 18])
+    .padding([8, 12])
     .width(Length::Fill)
     .style(style::bar(&look));
     let line = move || {
         container(space()).width(Length::Fill).height(1).style(move |_: &Theme| container::Style { background: Some(c.line.into()), ..Default::default() })
     };
-    column![head, line(), container(page).width(Length::Fill).height(Length::Fill).style(style::page(&look)), line(), footer].into()
-}
-
-/// A heading of a part of a page.
-fn heading<'a>(look: &Look, title: &'a str) -> iced::widget::Text<'a> {
-    text(title).size(look.text_size).font(look.bold).color(look.colors.bright)
-}
-
-/// A row of settings: what it is on the left, the control on the right, every other one lighter.
-fn setting<'a, M: 'a>(look: &Look, even: bool, label: &'a str, control: impl Into<Element<'a, M>>) -> Element<'a, M> {
-    container(
-        row![text(label).size(look.text_size).color(look.colors.dim).width(Length::Fixed(150.0)), container(control).width(Length::Fill)]
-            .align_y(Alignment::Center),
-    )
-    .padding([10, 14])
-    .width(Length::Fill)
-    .style(style::row(look, even))
-    .into()
-}
-
-/// A segmented control of `options` (each a name, what it says, and whether it is chosen).
-fn segmented<'a, M: Clone + 'a>(look: &Look, options: Vec<(String, M, bool)>) -> Element<'a, M> {
-    let look = *look;
-    let mut r = row![].spacing(0);
-    for (name, message, chosen) in options {
-        let font = if chosen { look.bold } else { look.font };
-        r = r.push(button(text(name).size(look.text_size).font(font)).padding([5, 11]).style(move |t, s| (look.segment)(t, s, chosen)).on_press(message));
+    let window: Element<'a, M> =
+        column![head, line(), container(page).width(Length::Fill).height(Length::Fill).style(style::page(&look)), line(), footer].into();
+    // A map dragged: its label follows the pointer; let go anywhere, the drag ends (on a channel,
+    // the channel took it first).
+    match &state.dragging {
+        Some(dragged) => {
+            let label = container(text(dragged.label.clone()).size(look.small_size)).padding([3, 8]).style(style::dragged(&look));
+            let at = Point::new(state.pointer.x + 14.0, state.pointer.y + 10.0);
+            let layer = stack![window, pin(label).position(at)];
+            mouse_area(layer).on_move(move |p| say(Event::Pointer(p))).on_release(say(Event::DragEnd)).interaction(iced::mouse::Interaction::Grabbing).into()
+        }
+        None => window,
     }
-    container(r).style(look.segments).into()
 }
 
-/// What the export writes, where and in what.
+/// A row of SETTINGS: what it is on the left, the control on the right.
+fn setting<'a, M: 'a>(look: &Look, label: &'a str, control: impl Into<Element<'a, M>>) -> Element<'a, M> {
+    row![text(label).size(look.text_size).color(look.colors.dim).width(Length::Fixed(220.0)), container(control).width(Length::Fill).max_width(620)]
+        .align_y(Alignment::Center)
+        .height(Length::Fixed(34.0))
+        .into()
+}
+
+/// SETTINGS: what is exported (the graph), and the general export parameters.
 fn settings<'a, M: Clone + 'a>(content: &Content<'a, M>, folder: Element<'a, M>, look: &Look, say: impl Fn(Event) -> M + Copy + 'a) -> Element<'a, M> {
     let look = *look;
     let c = look.colors;
-    // The templates: the maps as they are, the program's, the user's.
-    let mut choices = column![].spacing(2).padding(4);
-    let mut options: Vec<Chosen> = Preset::ALL.into_iter().map(Chosen::Preset).collect();
-    options.extend((0..content.mine.len()).map(Chosen::Mine));
-    for chosen in options {
-        let (name, about) = chosen.said(content.mine);
-        let is = chosen == content.export_with;
-        let mine = if matches!(chosen, Chosen::Mine(_)) { "  · yours" } else { "" };
-        let label = column![
-            row![text(name).size(look.text_size).font(look.bold), text(mine).size(look.small_size).color(c.dim)].align_y(Alignment::Center),
-            text(about).size(look.small_size).color(c.dim),
-        ]
-        .spacing(2);
-        choices = choices
-            .push(button(label).width(Length::Fill).padding([6, 10]).style(move |t, s| (look.option)(t, s, is)).on_press(say(Event::ExportWith(chosen))));
-    }
-    let templates = column![
-        container(scroll_box(choices).height(Length::Shrink)).max_height(250.0).width(Length::Fill).style(style::well(&look)),
-        row![
-            text("Templates are made and changed in Output Templates.").size(look.small_size).color(c.faint),
-            space().width(Length::Fill),
-            button(text("Output Templates").size(look.small_size)).padding([3, 10]).style(look.button).on_press(say(Event::Tab(Tab::Templates))),
-        ]
-        .align_y(Alignment::Center),
+    // What is exported: the graph open, as Painter lists its texture sets.
+    let item = |label: Element<'a, M>, chosen: bool| button(label).width(Length::Fill).padding([4, 10]).style(style::item(&look, chosen));
+    let graph = row![
+        container(text("✓").size(look.small_size).color(c.bright)).width(16).height(16).center_x(16).center_y(16).style(style::well(&look)),
+        text(content.name.clone()).size(look.text_size),
     ]
-    .spacing(6);
+    .spacing(8)
+    .align_y(Alignment::Center);
+    let list = column![
+        container(caption(&look, "Export")).padding([7, 10]).width(Length::Fill).style(style::strip(&look)),
+        column![item(text("Global settings").size(look.text_size).font(look.bold).into(), true), item(graph.into(), false)].spacing(1).padding(4),
+    ];
+    let side = container(list).width(Length::Fixed(240.0)).height(Length::Fill).style(style::sunken(&look));
 
+    // The template, the file's kind and depth, the normals, the size.
+    let mut offered: Vec<Offered> = Preset::ALL.into_iter().map(|p| Offered(Chosen::Preset(p), p.name().into())).collect();
+    offered.extend(content.mine.iter().enumerate().map(|(i, t)| Offered(Chosen::Mine(i), format!("{} (yours)", t.name))));
+    let chosen = offered.iter().find(|o| o.0 == content.export_with).cloned();
+    let template = pick_list(offered, chosen, move |o: Offered| say(Event::ExportWith(o.0)))
+        .width(Length::Fill)
+        .text_size(look.text_size)
+        .padding([4, 8])
+        .style(look.pick_list);
     let packs = content.export_with.template(content.mine).is_some();
-    let mut rows: Vec<Element<'a, M>> = Vec::new();
-    rows.push(setting(
+    let kind = content.format.file_type();
+    let kinds = pick_list(FileType::ALL, Some(kind), move |k: FileType| say(Event::Format(k.formats()[0])))
+        .width(Length::Fixed(110.0))
+        .text_size(look.text_size)
+        .padding([4, 8])
+        .style(look.pick_list);
+    let depths = pick_list(kind.formats(), Some(content.format), move |f: Format| say(Event::Format(f)))
+        .width(Length::Fixed(200.0))
+        .text_size(look.text_size)
+        .padding([4, 8])
+        .style(look.pick_list);
+    let normals = ["OpenGL (Y+)", "DirectX (Y−)"];
+    let graph_normals = pick_list(normals, Some(normals[usize::from(content.directx)]), move |n: &str| say(Event::DirectX(n.starts_with("DirectX"))))
+        .width(Length::Fixed(200.0))
+        .text_size(look.text_size)
+        .padding([4, 8])
+        .style(look.pick_list);
+    let mut rows = column![text("General Export Parameters").size(look.text_size).font(look.bold).color(c.bright), space().height(6)].spacing(2);
+    rows = rows.push(setting(
         &look,
-        true,
-        "Output folder",
+        "Output directory",
         row![
-            container(container(folder).padding([5, 8]).width(Length::Fill).style(style::well(&look))).width(Length::Fill).clip(true),
-            button(text("Browse…").size(look.text_size)).padding([5, 12]).style(look.button).on_press(say(Event::Browse)),
+            container(folder).padding([5, 8]).width(Length::Fill).style(style::well(&look)).clip(true),
+            button(text("Browse…").size(look.text_size)).padding([4, 10]).style(look.button).on_press(say(Event::Browse)),
         ]
-        .spacing(8)
+        .spacing(6)
         .align_y(Alignment::Center),
     ));
-    rows.push(setting(&look, false, "Template", templates));
+    rows = rows.push(setting(&look, "Output template", template));
     if packs {
-        let template = content.export_with.template(content.mine);
-        let writes = template.is_some_and(|t| t.normals == texture_export::Normals::DirectX);
-        let (name, _) = content.export_with.said(content.mine);
-        let (wants, written) = if writes { ("DirectX (Y−)", "DirectX's") } else { ("OpenGL (Y+)", "OpenGL's") };
-        let told = if content.directx == writes {
-            format!("{name} writes {wants} normal maps: written as the graph makes them")
-        } else {
-            format!("{name} writes {wants} normal maps: the green channel is turned over to make them {written}")
-        };
-        let normals = segmented(
-            &look,
-            vec![("OpenGL (Y+)".into(), say(Event::DirectX(false)), !content.directx), ("DirectX (Y−)".into(), say(Event::DirectX(true)), content.directx)],
-        );
-        rows.push(setting(&look, true, "Graph's normals", column![normals, text(told).size(look.small_size).color(c.dim)].spacing(5)));
-        let formats = Format::ALL.into_iter().map(|f| (f.name().to_string(), say(Event::Format(f)), f == content.format)).collect();
-        rows.push(setting(
-            &look,
-            false,
-            "File format",
-            column![segmented(&look, formats), text("A file whose template says its own format is written in that.").size(look.small_size).color(c.dim)]
-                .spacing(5),
-        ));
+        rows = rows.push(setting(&look, "File type", row![kinds, depths].spacing(6)));
+        rows = rows.push(setting(&look, "Normals of the graph", graph_normals));
     } else {
-        rows.push(setting(&look, true, "File format", text("As each Output's node says (its channels and format).").size(look.text_size).color(c.dim)));
+        rows = rows.push(setting(&look, "File type", text("As each output's node says").size(look.text_size).color(c.dim)));
     }
-    rows.push(setting(&look, !packs, "Size", text(format!("{} (the graph's)", content.size)).size(look.text_size).color(c.text)));
-    let list = rows.into_iter().fold(Column::new().spacing(1), Column::push);
-    let page = column![heading(&look, "General Export Parameters"), container(list).width(Length::Fill).style(style::well(&look))].spacing(10).padding(18);
-    scroll_box(page).height(Length::Fill).into()
+    rows = rows.push(setting(
+        &look,
+        "Size",
+        container(text(content.size.clone()).size(look.text_size).color(c.dim)).padding([5, 8]).width(Length::Fixed(200.0)).style(style::well(&look)),
+    ));
+    let note = if packs {
+        "An output map whose template says its own file type is written in it. A normal map's green is turned over where the template writes it the other way."
+    } else {
+        "Each output of the graph is written with its name, channels and format."
+    };
+    rows = rows.push(space().height(6)).push(text(note).size(look.small_size).color(c.faint));
+    let page = scroll_box(container(rows).padding([14, 20])).height(Length::Fill);
+    row![side, page].spacing(0).padding(8).into()
 }
 
-/// The files, listed before they are written.
-fn files<'a, M: Clone + 'a>(content: &Content<'a, M>, look: &Look, say: impl Fn(Event) -> M + Copy + 'a) -> Element<'a, M> {
+/// LIST OF EXPORTS: the files, under what they are of, before they are written.
+fn files<'a, M: Clone + 'a>(content: &Content<'a, M>, look: &Look) -> Element<'a, M> {
     let look = *look;
     let c = look.colors;
-    let cell = |s: String, width: Length, color: Color, font: Font| {
-        text(s).size(look.small_size).color(color).font(font).width(width).wrapping(text::Wrapping::WordOrGlyph)
-    };
-    let mut table = column![
-        container(
+    let cell =
+        |s: String, width: Length, color: Color, font: Font| text(s).size(look.text_size).color(color).font(font).width(width).wrapping(text::Wrapping::None);
+    let mut list: Column<'a, M> =
+        column![row![text("⌄").size(look.text_size).color(c.dim), text(content.name.clone()).size(look.text_size).color(c.bright)].spacing(6)].spacing(2);
+    for file in &content.files {
+        list = list.push(
             row![
-                cell("File".into(), Length::FillPortion(5), c.dim, look.bold),
-                cell("Size".into(), Length::FillPortion(2), c.dim, look.bold),
-                cell("Format".into(), Length::FillPortion(2), c.dim, look.bold),
-                cell("Made of".into(), Length::FillPortion(6), c.dim, look.bold),
+                space().width(22),
+                cell(file.name.clone(), Length::Fixed(380.0), c.text, look.font),
+                cell(content.size.clone(), Length::Fixed(110.0), c.text, look.font),
+                cell(file.kind.clone(), Length::Fixed(50.0), c.text, look.font),
+                cell(file.depth.clone(), Length::Fixed(120.0), c.text, look.font),
+                cell(file.said.clone(), Length::Fill, c.dim, look.font),
             ]
             .spacing(10)
-        )
-        .padding([7, 12])
-        .width(Length::Fill)
-        .style(style::bar(&look))
-    ]
-    .spacing(0);
-    for (i, file) in content.files.iter().enumerate() {
-        table = table.push(
-            container(
-                row![
-                    cell(file.name.clone(), Length::FillPortion(5), c.bright, look.mono),
-                    cell(content.size.clone(), Length::FillPortion(2), c.text, look.font),
-                    cell(file.format.clone(), Length::FillPortion(2), c.text, look.font),
-                    cell(file.said.clone(), Length::FillPortion(6), c.dim, look.font),
-                ]
-                .spacing(10),
-            )
-            .padding([6, 12])
-            .width(Length::Fill)
-            .style(style::row(&look, i % 2 == 0)),
+            .height(Length::Fixed(22.0))
+            .align_y(Alignment::Center),
         );
     }
     if content.files.is_empty() {
-        table = table.push(container(text("None: the graph has no Output of what the template writes.").size(look.small_size).color(c.warning)).padding(12));
+        list = list.push(row![space().width(22), text("None: the graph has no output of what the template writes.").size(look.text_size).color(c.warning)]);
     }
-    let head = row![
-        heading(&look, "The files, before they are written"),
-        space().width(Length::Fill),
-        button(text("Open Output Folder").size(look.small_size))
-            .padding([4, 10])
-            .style(look.button)
-            .on_press_maybe(content.folder_chosen.then(|| say(Event::OpenFolder))),
-    ]
-    .align_y(Alignment::Center);
-    let page = column![head, container(table).width(Length::Fill).style(style::well(&look))].spacing(10).padding(18);
-    scroll_box(page).height(Length::Fill).into()
+    container(scroll_box(container(list).padding([10, 12])).height(Length::Fill)).padding(8).into()
 }

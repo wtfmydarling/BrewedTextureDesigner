@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use brewed_texture_core::NodeKind;
 use brewed_texture_core::export_presets::{self, Planned, PlannedFile, Preset, Source};
-use brewed_texture_core::nodes::{DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F};
+use brewed_texture_core::nodes::{DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_DXT1, DEPTH_DXT2, DEPTH_DXT3, DEPTH_DXT4, DEPTH_DXT5};
 use brewed_texture_engine::export::{self, Packed};
 use brewed_texture_engine::{ExportJob, Request};
 use export_window::{Chosen, Event};
@@ -31,6 +31,11 @@ pub fn depth_of(format: Format) -> u32 {
         Format::Png16 => DEPTH_16,
         Format::Exr16 => DEPTH_16F,
         Format::Exr32 => DEPTH_32F,
+        Format::Dxt1 => DEPTH_DXT1,
+        Format::Dxt2 => DEPTH_DXT2,
+        Format::Dxt3 => DEPTH_DXT3,
+        Format::Dxt4 => DEPTH_DXT4,
+        Format::Dxt5 => DEPTH_DXT5,
     }
 }
 
