@@ -974,6 +974,9 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                     let _ = std::fs::create_dir_all(&folder);
                     let dialog = ExportDialog {
                         preset: Preset::ALL[exported - 4],
+                        template: None,
+                        templates: Vec::new(),
+                        problems: Vec::new(),
                         directx: exported % 2 == 0,
                         depth: if exported % 2 == 0 { DEPTH_16 } else { DEPTH_8 },
                         folder: Some(folder.clone()),
@@ -987,7 +990,13 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                     ];
                     let asked = dialog.clone();
                     steps.push(Step::Check(Box::new(move |app: &App| match &app.ui.dialog {
-                        Some(Dialog::Export(open)) if *open == asked => None,
+                        // (The templates of the user's, read as it opened, are theirs.)
+                        Some(Dialog::Export(open))
+                            if (open.preset, open.template, open.directx, open.depth, &open.folder)
+                                == (asked.preset, asked.template, asked.directx, asked.depth, &asked.folder) =>
+                        {
+                            None
+                        }
                         other => Some(format!("the export dialog is {other:?}, not {asked:?}")),
                     })));
                     steps.extend([Step::Do(Message::Export(X::Export)), Step::Wait]);

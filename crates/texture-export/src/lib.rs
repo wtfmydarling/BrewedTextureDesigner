@@ -6,12 +6,15 @@
 //! `brewed_texture_engine::export` for this program's).
 //!
 //! The presets are those of game engines and formats (Unreal Engine, Unity's pipelines, glTF),
-//! and the maps as they are. Where a program has no map of what a preset reads, one that stands
+//! and the maps as they are. Each but the last is a [`Template`], data a template of someone's
+//! own is made of too (see the `template` module). Where a program has no map of what a preset reads, one that stands
 //! for it is taken (a diffuse color for the base color, glossiness turned over for the
 //! roughness, a displacement for the height), or a value where none does.
 
 mod names;
 mod plan;
+mod template;
 
 pub use names::{file_stem, sanitize_file_name, unique_paths};
 pub use plan::{Map, Planned, PlannedFile, Preset, Source, Usage, plan};
+pub use template::{File, Input, Normals, Part, Template, plan_template, read_templates, template_of};

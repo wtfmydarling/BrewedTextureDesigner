@@ -464,6 +464,9 @@ pub struct Ui {
     /// What the last export wrote, and where (the next is offered them).
     pub export_preset: brewed_texture_core::export_presets::Preset,
     pub export_folder: Option<PathBuf>,
+    /// The template of the user's chosen last in the export dialog (its name), in place of
+    /// `export_preset`.
+    pub export_template: Option<String>,
     pub menu: Option<MenuId>,
     pub submenu: Option<SubMenu>,
     pub context: Option<ContextMenu>,
@@ -1471,6 +1474,7 @@ impl App {
                 last_template: brewed_texture_core::templates::Template::Pbr,
                 export_preset: brewed_texture_core::export_presets::Preset::Maps,
                 export_folder: None,
+                export_template: None,
                 menu: None,
                 submenu: None,
                 context: None,

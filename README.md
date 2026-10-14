@@ -191,6 +191,29 @@ A package is saved as a `.brewtex` — a ZIP archive that any archiver opens: `p
 - **Unity (HDRP)** — `_BaseMap`, `_Normal`, `_MaskMap` (metallic, occlusion, detail mask, smoothness), `_Height`, `_Emission`;
 - **glTF 2.0** — `_baseColor`, `_normal`, `_occlusionRoughnessMetallic` (both textures of a glTF material read the one file), `_emissive`.
 
+**Export templates.** Each of these presets is a template: data, in `crates/texture-export/templates/` (Substance Painter's output templates are the model, in essence). A template of one's own is a file of the same JSON in the folder `Export Templates` beside the settings; the export window lists those after the presets, says which files of the folder it could not read and why, and remembers the one chosen last by its name. **Open Templates Folder** makes the folder, with a copy of the Unreal Engine's in it to start from where it is empty, and shows it. A template has a `name`, an `about`, the `normals` it writes (`"OpenGL"` or `"DirectX"`: a normal map's green is turned over where the graph's are the other way) and its `files`. A file has a `name` (`$name` is the graph's name: `T_$name_BaseColor`), the maps it `needs` (it is written where the graph has an Output of one of them) and its `parts`, in the order of its channels: `{ "rgb": … }` a map's red, green and blue (a gray map's gray in all three), `{ "one": … }` one channel of a map, `{ "value": { "value": 1.0, "said": "detail mask" } }` a value everywhere. A part of a map says the `map` (`BaseColor`, `Normal`, `Height`, `Roughness`, `Metallic`, `AmbientOcclusion`, `Emissive`, `Opacity`, `Diffuse`, `Glossiness`, `Displacement`), and may say the `channel` (0 red … 3 alpha), `invert` (1 − it: smoothness of a roughness), the value where the graph has no such map (`missing`), or that the part is left out then (`optional`, as the base color's alpha of an opacity); a part with neither leaves the file unwritten. Where a graph has no Output of a map, one that stands for it is taken, as the presets do. A file has 1, 3 or 4 channels. For example, occlusion, roughness, metallic and height in one file:
+
+```json
+{
+  "name": "ORM and height",
+  "normals": "DirectX",
+  "files": [
+    {
+      "name": "T_$name_ORMH",
+      "needs": ["AmbientOcclusion", "Roughness", "Metallic", "Height"],
+      "parts": [
+        { "one": { "map": "AmbientOcclusion", "missing": 1.0 } },
+        { "one": { "map": "Roughness", "missing": 0.5 } },
+        { "one": { "map": "Metallic", "missing": 0.0 } },
+        { "one": { "map": "Height", "missing": 0.5 } }
+      ]
+    }
+  ]
+}
+```
+
+The window to make and change templates in (as Painter's, its maps dragged onto the channels of a file) is still to come.
+
 A preset takes the image that comes into an Output at the graph's precision (16-bit float by default) and at full size: an Output's own channels and format belong to its own file. So a 16-bit PNG from a preset is a real 16 bits, even if the Output itself writes 8, and an Output that writes only alpha does not turn the base color into a white sheet. A preset's file is always the size of the texture, even if the map is one pixel of Uniform Color. A channel of a packed file for which the graph has no Output gets the default value: without AO, 1; without roughness, 0.5; without metallic, 0. If there is no Output of the Usage needed, the one that stands in for it is taken, as in the 3D view: Diffuse as base color, Glossiness turned over as roughness (and Unity's smoothness is Glossiness itself), Displacement as Height. Opacity becomes the base color's alpha (glTF and Unity read it from there); if the graph has no base color, its RGB is 0.8, as in OpenPBR. The graph makes its normals in one convention (the OpenGL/DirectX switch, by default as its Normal nodes have it); if the preset needs the other, the green channel is turned over. The preset files are PNG 8 or 16 bits. Before writing, the window shows what files will come out and what is in each channel; the preset and the folder are remembered while the program is open. A preset's files are assembled in bands, straight into the file's samples, like an ordinary export, without an intermediate copy of the whole picture.
 
 Export reads an Output's image as the graphics card keeps it (RGB 8 bits is 4 bytes a pixel, R 8 bits one) and converts it into the file's samples in bands of a million pixels: it takes memory for the image itself and for the finished file, no more. The demo's five maps at 8192² are exported in about 1.4 GB of RAM; before, each map first became RGBA float (1 GB a map), and all five went at once — about 7 GB. Levels' histogram is computed the same way, in bands. An Output's name becomes a file name the same way on every system: forbidden characters are replaced with `_`, names that Windows keeps for devices (`aux`, `con`, `nul`, `com1`…) get a `_` (`aux_.png`), and a long name is cut to 200 bytes.
@@ -316,7 +339,7 @@ The interface does not need changing: the Library, the search, the properties, s
 ## Testing
 
 ```bash
-cargo test --workspace                                            # 497 tests
+cargo test --workspace                                            # 502 tests
 cargo fmt -- --check                                              # the code is laid out as rustfmt writes it (cargo fmt lays it out)
 WGPU_BACKEND=dx12 cargo test --workspace                          # the same on another backend (vulkan, dx12, metal)
 cargo test --workspace -- --ignored                               # live tests of the eyedropper and of pointer capture (a desktop is needed), measurements, stress tests

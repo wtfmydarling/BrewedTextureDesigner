@@ -467,6 +467,7 @@ dependencies = [
  "serde_json",
  "smithay-client-toolkit 0.19.2",
  "smithay-clipboard",
+ "texture-export",
  "toml_edit",
  "unicode-script",
  "wayland-backend",
@@ -4303,6 +4304,10 @@ dependencies = [
 [[package]]
 name = "texture-export"
 version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "thiserror"

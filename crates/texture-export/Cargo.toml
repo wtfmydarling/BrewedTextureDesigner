@@ -8,3 +8,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Templates are files of JSON.
+serde.workspace = true
+serde_json.workspace = true

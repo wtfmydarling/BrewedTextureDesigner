@@ -23,6 +23,7 @@ brewed-texture-core.workspace = true
 brewed-texture-engine.workspace = true
 home-screen.workspace = true
 export-window.workspace = true
+texture-export.workspace = true
 scroll-box.workspace = true
 iced.workspace = true
 rfd.workspace = true

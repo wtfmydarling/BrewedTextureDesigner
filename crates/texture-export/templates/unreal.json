@@ -1,0 +1,24 @@
+{
+  "name": "Unreal Engine",
+  "about": "Base color (its alpha the opacity, where the graph has one), a normal map of DirectX (Y−), and occlusion, roughness and metallic packed in red, green and blue (ORM), named T_<graph>_…; height and emissive where the graph has them.",
+  "normals": "DirectX",
+  "files": [
+    {
+      "name": "T_$name_BaseColor",
+      "needs": ["BaseColor", "Opacity"],
+      "parts": [{ "rgb": { "map": "BaseColor", "missing": 0.8 } }, { "one": { "map": "Opacity", "optional": true } }]
+    },
+    { "name": "T_$name_Normal", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
+    {
+      "name": "T_$name_ORM",
+      "needs": ["AmbientOcclusion", "Roughness", "Metallic"],
+      "parts": [
+        { "one": { "map": "AmbientOcclusion", "missing": 1.0 } },
+        { "one": { "map": "Roughness", "missing": 0.5 } },
+        { "one": { "map": "Metallic", "missing": 0.0 } }
+      ]
+    },
+    { "name": "T_$name_Height", "needs": ["Height"], "parts": [{ "one": { "map": "Height" } }] },
+    { "name": "T_$name_Emissive", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
+  ]
+}

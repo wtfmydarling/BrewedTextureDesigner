@@ -1,0 +1,21 @@
+{
+  "name": "Unity (URP)",
+  "about": "Base map (its alpha the opacity, where the graph has one), a normal map of OpenGL (Y+), metallic with smoothness (1 − roughness) in alpha, and occlusion; height and emission where the graph has them.",
+  "normals": "OpenGL",
+  "files": [
+    {
+      "name": "$name_BaseMap",
+      "needs": ["BaseColor", "Opacity"],
+      "parts": [{ "rgb": { "map": "BaseColor", "missing": 0.8 } }, { "one": { "map": "Opacity", "optional": true } }]
+    },
+    { "name": "$name_Normal", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
+    {
+      "name": "$name_MetallicSmoothness",
+      "needs": ["AmbientOcclusion", "Roughness", "Metallic"],
+      "parts": [{ "rgb": { "map": "Metallic", "missing": 0.0 } }, { "one": { "map": "Roughness", "invert": true, "missing": 0.5 } }]
+    },
+    { "name": "$name_Occlusion", "needs": ["AmbientOcclusion"], "parts": [{ "one": { "map": "AmbientOcclusion" } }] },
+    { "name": "$name_Height", "needs": ["Height"], "parts": [{ "one": { "map": "Height" } }] },
+    { "name": "$name_Emission", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
+  ]
+}

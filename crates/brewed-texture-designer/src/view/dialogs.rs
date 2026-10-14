@@ -342,6 +342,13 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
     let content = export_window::Content {
         name: app.doc.entry().name.clone(),
         preset: dialog.preset,
+        templates: dialog.templates.iter().map(|t| (t.name.clone(), t.about.clone())).collect(),
+        template: dialog.template,
+        templates_folder: crate::app::export_dialog::templates_folder().map(|f| f.display().to_string()),
+        problems: dialog.problems.clone(),
+        packs: !dialog.as_they_are(),
+        writes_directx: dialog.writes_directx(),
+        chosen: dialog.chosen_name().to_string(),
         directx: dialog.directx,
         formats: &EXPORT_FORMATS,
         format: dialog.depth,
@@ -351,6 +358,8 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
     };
     let say = |event| match event {
         Event::Preset(preset) => Message::Export(X::Preset(preset)),
+        Event::Template(index) => Message::Export(X::Template(index)),
+        Event::OpenTemplates => Message::Export(X::OpenTemplates),
         Event::DirectX(directx) => Message::Export(X::DirectX(directx)),
         Event::Format(depth) => Message::Export(X::Depth(depth)),
         Event::Browse => Message::Export(X::Browse),

@@ -717,6 +717,41 @@ fn exports_follow_the_preset_chosen() {
     assert_eq!(w.app.res.exports_pending, 4);
 }
 
+/// A template of the user's (a file of JSON in the folder of templates) is offered after the
+/// presets and exports as it says; chosen, it is offered first the next time, by its name. A
+/// preset chosen after it is the one written.
+#[test]
+fn a_template_of_the_users_exports_as_it_says() {
+    use crate::app::export_dialog::ExportMessage as X;
+    use brewed_texture_core::export_presets::Preset;
+    let mut w = harness!(view::root, 1400.0, 900.0);
+    let dir = std::env::temp_dir().join(format!("brewed-export-template-{}", std::process::id()));
+    w.send(Message::Export(X::Open));
+    let template = texture_export::template_of(
+        r#"{ "name": "Packed Height", "about": "The height alone, in a file of its own.",
+             "files": [{ "name": "H_$name", "needs": ["Height"], "parts": [{ "one": { "map": "Height" } }] }] }"#,
+    )
+    .expect("a template");
+    // (As the dialog would have read it from the folder: the tests read nothing of the user's.)
+    let Some(Dialog::Export(dialog)) = &mut w.app.ui.dialog else { panic!("the export dialog") };
+    dialog.templates.push(template);
+    w.send(Message::Export(X::Template(0)));
+    w.send(Message::Export(X::Folder(Some(dir.clone()))));
+    w.input(&[]);
+    for said in ["Your templates", "Packed Height", "H_Brick_Wall.png"] {
+        assert!(!texts(&mut w, said).is_empty(), "{said}");
+    }
+    let Some(Dialog::Export(dialog)) = w.app.ui.dialog.clone() else { panic!() };
+    let names: Vec<String> = w.app.export_plan(&dialog, &dir).iter().map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, ["H_Brick_Wall.png"]);
+    w.send(Message::Export(X::Export));
+    assert_eq!(w.app.ui.export_template.as_deref(), Some("Packed Height"), "offered next time");
+    w.send(Message::Export(X::Open));
+    w.send(Message::Export(X::Preset(Preset::Gltf)));
+    let Some(Dialog::Export(dialog)) = w.app.ui.dialog.clone() else { panic!() };
+    assert_eq!((dialog.template, dialog.chosen_name()), (None, "glTF 2.0"));
+}
+
 /// Each save keeps a version of the package, beside the settings and never beside it: File →
 /// Package History… lists them, the newest first; one restored takes the package's place, not
 /// saved yet (the unsaved changes it replaces kept as a version first); one opened as a copy is

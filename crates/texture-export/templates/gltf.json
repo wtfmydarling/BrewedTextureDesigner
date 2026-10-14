@@ -1,0 +1,23 @@
+{
+  "name": "glTF 2.0",
+  "about": "Base color (its alpha the opacity, where the graph has one), a normal map of OpenGL (Y+), and occlusion, roughness and metallic in red, green and blue, which glTF's occlusion and metallic-roughness textures both read; emissive where it is.",
+  "normals": "OpenGL",
+  "files": [
+    {
+      "name": "$name_baseColor",
+      "needs": ["BaseColor", "Opacity"],
+      "parts": [{ "rgb": { "map": "BaseColor", "missing": 0.8 } }, { "one": { "map": "Opacity", "optional": true } }]
+    },
+    { "name": "$name_normal", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
+    {
+      "name": "$name_occlusionRoughnessMetallic",
+      "needs": ["AmbientOcclusion", "Roughness", "Metallic"],
+      "parts": [
+        { "one": { "map": "AmbientOcclusion", "missing": 1.0 } },
+        { "one": { "map": "Roughness", "missing": 0.5 } },
+        { "one": { "map": "Metallic", "missing": 0.0 } }
+      ]
+    },
+    { "name": "$name_emissive", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
+  ]
+}

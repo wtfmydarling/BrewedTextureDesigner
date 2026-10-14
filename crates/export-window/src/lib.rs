@@ -49,6 +49,17 @@ pub struct Content<'a, M> {
     /// What is exported (of a graph: its name).
     pub name: String,
     pub preset: Preset,
+    /// The templates of the user's (each its name and what it is said to be), the one chosen in
+    /// place of the preset, the folder they are kept in, and what could not be read there.
+    pub templates: Vec<(String, String)>,
+    pub template: Option<usize>,
+    pub templates_folder: Option<String>,
+    pub problems: Vec<String>,
+    /// What is chosen packs maps into files (it is not the maps as they are), the normal maps it
+    /// writes are DirectX's, and its name.
+    pub packs: bool,
+    pub writes_directx: bool,
+    pub chosen: String,
     /// The program's normal maps are DirectX's (Y−), not OpenGL's.
     pub directx: bool,
     /// The formats the files of a preset may be written in, each with what the program calls
@@ -66,6 +77,10 @@ pub struct Content<'a, M> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
     Preset(Preset),
+    /// A template of the user's, of those given.
+    Template(usize),
+    /// Show the folder the templates of the user's are kept in.
+    OpenTemplates,
     DirectX(bool),
     Format(u32),
     /// Choose the folder (the program shows a dialog of the system).
@@ -79,16 +94,32 @@ pub enum Event {
 pub fn view<'a, M: Clone + 'a>(content: Content<'a, M>, look: &Look, say: impl Fn(Event) -> M + Copy + 'a) -> Element<'a, M> {
     let look = *look;
     let label = move |t: &'static str| text(t).size(look.text_size).color(look.dim).width(Length::Fixed(110.0));
+    let option = move |name: String, about: String, chosen: bool, event: Event| {
+        button(column![text(name).size(look.text_size).font(look.bold), text(about).size(look.small_size).color(look.dim)].spacing(3))
+            .width(Length::Fill)
+            .padding([7, 10])
+            .style(move |theme, status| (look.option)(theme, status, chosen))
+            .on_press(say(event))
+    };
     let mut presets = column![].spacing(4);
     for preset in Preset::ALL {
-        let chosen = preset == content.preset;
-        presets = presets.push(
-            button(column![text(preset.name()).size(look.text_size).font(look.bold), text(preset.about()).size(look.small_size).color(look.dim)].spacing(3))
-                .width(Length::Fill)
-                .padding([7, 10])
-                .style(move |theme, status| (look.option)(theme, status, chosen))
-                .on_press(say(Event::Preset(preset))),
-        );
+        let chosen = content.template.is_none() && preset == content.preset;
+        presets = presets.push(option(preset.name().into(), preset.about().into(), chosen, Event::Preset(preset)));
+    }
+    // The templates of the user's, after the presets: what each says, and where they are kept.
+    let mine = text("Your templates").size(look.text_size).font(look.bold).color(look.bright);
+    let open = button(text("Open Templates Folder").size(look.small_size)).padding([4, 10]).style(look.button).on_press(say(Event::OpenTemplates));
+    presets = presets.push(row![mine, space().width(Length::Fill), open].align_y(Alignment::Center).padding([6, 0]));
+    for (index, (name, about)) in content.templates.iter().enumerate() {
+        presets = presets.push(option(name.clone(), about.clone(), content.template == Some(index), Event::Template(index)));
+    }
+    if content.templates.is_empty() {
+        let kept = content.templates_folder.as_deref().map_or_else(String::new, |f| format!(" in {f}"));
+        let none = format!("None yet. A template is a file of JSON{kept}: open the folder for an example to start from.");
+        presets = presets.push(text(none).size(look.small_size).color(look.dim));
+    }
+    for problem in &content.problems {
+        presets = presets.push(text(format!("Not read: {problem}")).size(look.small_size).color(look.warning));
     }
     let segmented = move |options: Vec<(&'a str, M, bool)>| {
         let mut r = row![].spacing(0);
@@ -110,13 +141,13 @@ pub fn view<'a, M: Clone + 'a>(content: Content<'a, M>, look: &Look, say: impl F
         row![label("Preset"), presets].align_y(Alignment::Start),
     ]
     .spacing(12);
-    if content.preset != Preset::Maps {
-        // What the program makes, and what the preset writes of it.
-        let (wants, writes) = if content.preset.directx() { ("DirectX (Y−)", "DirectX") } else { ("OpenGL (Y+)", "OpenGL") };
-        let written = if content.directx == content.preset.directx() {
-            format!("{} reads {wants} normal maps: written as the graph makes them", content.preset.name())
+    if content.packs {
+        // What the program makes, and what the preset or the template writes of it.
+        let (wants, writes) = if content.writes_directx { ("DirectX (Y−)", "DirectX") } else { ("OpenGL (Y+)", "OpenGL") };
+        let written = if content.directx == content.writes_directx {
+            format!("{} reads {wants} normal maps: written as the graph makes them", content.chosen)
         } else {
-            format!("{} reads {wants} normal maps: the green channel is turned over to make them {writes}'s", content.preset.name())
+            format!("{} reads {wants} normal maps: the green channel is turned over to make them {writes}'s", content.chosen)
         };
         body = body.push(
             row![
