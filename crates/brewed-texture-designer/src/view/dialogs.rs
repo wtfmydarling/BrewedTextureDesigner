@@ -349,6 +349,7 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
     let [width, height] = app.graph().resolution;
     let content = export_window::Content {
         name: app.doc.entry().name.clone(),
+        thing: "graph",
         size: format!("{width} × {height}"),
         mine: &dialog.templates,
         templates_folder: crate::app::export_dialog::templates_folder().map(|f| f.display().to_string()),

@@ -232,6 +232,9 @@ pub struct Look {
 pub struct Content<'a, M> {
     /// What is exported (of a graph: its name), and its size, said.
     pub name: String,
+    /// The program's word for what it exports, as the window says it: "graph" (a texture
+    /// designer exports a graph's outputs), "texture set" (a texture painter).
+    pub thing: &'a str,
     pub size: String,
     /// The templates of the user's, the folder they are kept in, and what could not be read.
     pub mine: &'a [Template],
@@ -335,7 +338,7 @@ pub fn view<'a, M: Clone + 'a>(mut content: Content<'a, M>, state: &'a State, lo
         Tab::Files => files(&content, &look),
     };
     let said = match (count, content.folder_chosen) {
-        (0, _) => text("Nothing to export: the graph has no output of what the template writes").color(c.warning),
+        (0, _) => text(format!("Nothing to export: the {} has none of the maps the template writes", content.thing)).color(c.warning),
         (_, false) => text(format!("{count} texture(s) selected for export: choose the output directory")).color(c.warning),
         (_, true) => text(format!("{count} texture(s) selected for export")).color(c.dim),
     };
@@ -375,20 +378,20 @@ pub fn view<'a, M: Clone + 'a>(mut content: Content<'a, M>, state: &'a State, lo
 }
 
 /// A row of SETTINGS: what it is on the left, the control on the right.
-fn setting<'a, M: 'a>(look: &Look, label: &'a str, control: impl Into<Element<'a, M>>) -> Element<'a, M> {
+fn setting<'a, M: 'a>(look: &Look, label: impl text::IntoFragment<'a>, control: impl Into<Element<'a, M>>) -> Element<'a, M> {
     row![text(label).size(look.text_size).color(look.colors.dim).width(Length::Fixed(220.0)), container(control).width(Length::Fill).max_width(620)]
         .align_y(Alignment::Center)
         .height(Length::Fixed(34.0))
         .into()
 }
 
-/// SETTINGS: what is exported (the graph), and the general export parameters.
+/// SETTINGS: what is exported (a graph, texture sets), and the general export parameters.
 fn settings<'a, M: Clone + 'a>(content: &Content<'a, M>, folder: Element<'a, M>, look: &Look, say: impl Fn(Event) -> M + Copy + 'a) -> Element<'a, M> {
     let look = *look;
     let c = look.colors;
-    // What is exported: the graph open, as Painter lists its texture sets.
+    // What is exported, as Painter lists its texture sets.
     let item = |label: Element<'a, M>, chosen: bool| button(label).width(Length::Fill).padding([4, 10]).style(style::item(&look, chosen));
-    let graph = row![
+    let exported = row![
         container(text("✓").size(look.small_size).color(c.bright)).width(16).height(16).center_x(16).center_y(16).style(style::well(&look)),
         text(content.name.clone()).size(look.text_size),
     ]
@@ -396,7 +399,7 @@ fn settings<'a, M: Clone + 'a>(content: &Content<'a, M>, folder: Element<'a, M>,
     .align_y(Alignment::Center);
     let list = column![
         container(caption(&look, "Export")).padding([7, 10]).width(Length::Fill).style(style::strip(&look)),
-        column![item(text("Global settings").size(look.text_size).font(look.bold).into(), true), item(graph.into(), false)].spacing(1).padding(4),
+        column![item(text("Global settings").size(look.text_size).font(look.bold).into(), true), item(exported.into(), false)].spacing(1).padding(4),
     ];
     let side = container(list).width(Length::Fixed(240.0)).height(Length::Fill).style(style::sunken(&look));
 
@@ -422,7 +425,7 @@ fn settings<'a, M: Clone + 'a>(content: &Content<'a, M>, folder: Element<'a, M>,
         .padding([4, 8])
         .style(look.pick_list);
     let normals = ["OpenGL (Y+)", "DirectX (Y−)"];
-    let graph_normals = pick_list(normals, Some(normals[usize::from(content.directx)]), move |n: &str| say(Event::DirectX(n.starts_with("DirectX"))))
+    let its_normals = pick_list(normals, Some(normals[usize::from(content.directx)]), move |n: &str| say(Event::DirectX(n.starts_with("DirectX"))))
         .width(Length::Fixed(200.0))
         .text_size(look.text_size)
         .padding([4, 8])
@@ -441,9 +444,9 @@ fn settings<'a, M: Clone + 'a>(content: &Content<'a, M>, folder: Element<'a, M>,
     rows = rows.push(setting(&look, "Output template", template));
     if packs {
         rows = rows.push(setting(&look, "File type", row![kinds, depths].spacing(6)));
-        rows = rows.push(setting(&look, "Normals of the graph", graph_normals));
+        rows = rows.push(setting(&look, format!("Normals of the {}", content.thing), its_normals));
     } else {
-        rows = rows.push(setting(&look, "File type", text("As each output's node says").size(look.text_size).color(c.dim)));
+        rows = rows.push(setting(&look, "File type", text(format!("As each map of the {} says", content.thing)).size(look.text_size).color(c.dim)));
     }
     rows = rows.push(setting(
         &look,
@@ -452,8 +455,9 @@ fn settings<'a, M: Clone + 'a>(content: &Content<'a, M>, folder: Element<'a, M>,
     ));
     let note = if packs {
         "An output map whose template says its own file type is written in it. A normal map's green is turned over where the template writes it the other way."
+            .to_string()
     } else {
-        "Each output of the graph is written with its name, channels and format."
+        format!("Each map of the {} is written with its own name, channels and format.", content.thing)
     };
     rows = rows.push(space().height(6)).push(text(note).size(look.small_size).color(c.faint));
     let page = scroll_box(container(rows).padding([14, 20])).height(Length::Fill);
@@ -484,7 +488,10 @@ fn files<'a, M: Clone + 'a>(content: &Content<'a, M>, look: &Look) -> Element<'a
         );
     }
     if content.files.is_empty() {
-        list = list.push(row![space().width(22), text("None: the graph has no output of what the template writes.").size(look.text_size).color(c.warning)]);
+        list = list.push(row![
+            space().width(22),
+            text(format!("None: the {} has none of the maps the template writes.", content.thing)).size(look.text_size).color(c.warning)
+        ]);
     }
     container(scroll_box(container(list).padding([10, 12])).height(Length::Fill)).padding(8).into()
 }

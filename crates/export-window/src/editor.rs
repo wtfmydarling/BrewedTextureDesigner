@@ -243,8 +243,9 @@ fn output_row<'a, M: Clone + 'a>(
     let mut line: Row<'a, M> = row![handle].spacing(6).align_y(Alignment::Center);
     match editable {
         Some(i) => {
+            let placeholder = content.tokens.first().map_or_else(|| "BaseColor".to_string(), |t| format!("{}_BaseColor", t.written()));
             line = line.push(
-                text_input("$(graph)_BaseColor", &file.name)
+                text_input(&placeholder, &file.name)
                     .width(Length::Fixed(176.0))
                     .size(look.small_size)
                     .font(look.mono)
@@ -376,19 +377,20 @@ fn output_row<'a, M: Clone + 'a>(
         && at == f
         && let Some(part) = file.parts.get(p)
     {
-        body = body.push(row![space().width(12), options(i, f, p, part, state, &look, say)]);
+        body = body.push(row![space().width(12), options(i, f, p, part, content.thing, state, &look, say)]);
     }
     container(body).padding([5, 6]).width(Length::Fill).style(style::raised(&look)).into()
 }
 
-/// The options of a channel: the map's channel, turned over, what is written where the graph
-/// has no such map; or its value. Emptied.
+/// The options of a channel: the map's channel, turned over, what is written where what is
+/// exported has no such map; or its value. Emptied.
 #[allow(clippy::too_many_arguments)]
 fn options<'a, M: Clone + 'a>(
     i: usize,
     f: usize,
     p: usize,
     part: &Part,
+    thing: &str,
     state: &'a State,
     look: &Look,
     say: impl Fn(Event) -> M + Copy + 'a,
@@ -439,7 +441,7 @@ fn options<'a, M: Clone + 'a>(
                 ("As it is", edit(Edit::Invert { file: f, part: p, invert: false }), !input.invert),
                 ("1 − it", edit(Edit::Invert { file: f, part: p, invert: true }), input.invert),
             ]));
-            strip = strip.push(label("Where the graph has none"));
+            strip = strip.push(text(format!("Where the {thing} has none")).size(look.small_size).color(c.dim));
             let value = input.missing.unwrap_or(0.0);
             strip = strip.push(seg(vec![
                 ("No file", edit(Edit::Missing { file: f, part: p, missing: Missing::NoFile }), input.missing.is_none() && !input.optional),
@@ -503,7 +505,8 @@ fn maps<'a, M: Clone + 'a>(
         custom = custom.push(entry(dragged, true, used.contains(map), None));
     }
     if content.custom.is_empty() {
-        custom = custom.push(container(text("The graph has no output of usage Custom.").size(look.caption_size).color(c.faint)).padding([2, 8]));
+        custom =
+            custom.push(container(text(format!("The {} has no maps of usage Custom.", content.thing)).size(look.caption_size).color(c.faint)).padding([2, 8]));
     }
     let mut converted = column![].spacing(0).padding([4, 2]);
     let made = [
