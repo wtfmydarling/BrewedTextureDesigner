@@ -95,7 +95,7 @@ impl App {
 
     /// The files the dialog writes of the graph being edited: planned, each with its path.
     pub(crate) fn export_plan(&self, dialog: &ExportDialog, folder: &Path) -> Vec<(PathBuf, PlannedFile)> {
-        if dialog.preset == Preset::Outputs {
+        if dialog.preset == Preset::Maps {
             // Every Output, as each says: its name made a file's, its format's extension (as
             // File → Export wrote them before there were presets).
             let outputs: Vec<&brewed_texture_core::Node> = self.graph().nodes_of(NodeKind::OUTPUT).collect();
@@ -103,7 +103,7 @@ impl App {
             return export::output_paths(folder, &names)
                 .into_iter()
                 .zip(outputs)
-                .map(|(path, n)| (path, PlannedFile { name: n.text("name").to_string(), what: Planned::Output(n.id), said: String::new() }))
+                .map(|(path, n)| (path, PlannedFile { name: n.text("name").to_string(), what: Planned::AsItIs(n.id), said: String::new() }))
                 .collect();
         }
         let plan = export_presets::plan(self.graph(), &self.doc.entry().name, dialog.preset, dialog.directx);
@@ -112,7 +112,7 @@ impl App {
     }
 
     fn export_dialog_jobs(&self, dialog: &ExportDialog, folder: &Path) -> Vec<ExportJob> {
-        if dialog.preset == Preset::Outputs {
+        if dialog.preset == Preset::Maps {
             return self.export_jobs(folder);
         }
         // Each file of what arrives at the Outputs, in the channels and format the preset says.
@@ -120,11 +120,11 @@ impl App {
             .into_iter()
             .filter_map(|(path, file)| {
                 let pack: Vec<Packed> = match file.what {
-                    Planned::Output(node) => (0..3).map(|channel| Packed::Channel { node, channel, invert: false }).collect(),
+                    Planned::AsItIs(node) => (0..3).map(|channel| Packed::Channel { node, channel, invert: false }).collect(),
                     Planned::Pack(sources) => sources
                         .into_iter()
                         .map(|s| match s {
-                            Source::Output { node, channel, invert } => Packed::Channel { node, channel, invert },
+                            Source::Map { map: node, channel, invert } => Packed::Channel { node, channel, invert },
                             Source::Value(v) => Packed::Value(v),
                         })
                         .collect(),

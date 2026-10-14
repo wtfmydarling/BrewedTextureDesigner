@@ -721,6 +721,28 @@ pub fn option_button(current: bool, lit: bool) -> impl Fn(&Theme, button_w::Stat
     }
 }
 
+/// The look of the export window (the `export-window` crate): the program's.
+pub fn export_look() -> export_window::Look {
+    export_window::Look {
+        font: ui_font(),
+        bold: bold(),
+        heavy: heavy(),
+        mono: mono(),
+        text_size: TEXT_SIZE,
+        small_size: SMALL,
+        bright: TEXT_BRIGHT,
+        dim: TEXT_DIM,
+        warning: WARNING,
+        error: ERROR,
+        option: |theme, status, chosen| option_button(chosen, false)(theme, status),
+        segment: |theme, status, chosen| segment(chosen)(theme, status),
+        segments,
+        button,
+        flat_button,
+        primary_button,
+    }
+}
+
 /// Where the templates of a new graph are: darker than the dialog.
 pub fn template_area(_: &Theme) -> container::Style {
     container::Style { background: Some(gray(22).into()), border: Border { color: LINE, width: 1.0, radius: 4.0.into() }, ..Default::default() }

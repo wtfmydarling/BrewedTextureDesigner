@@ -9,6 +9,8 @@ repository.workspace = true
 
 [dependencies]
 brewed-texture-core.workspace = true
+# The names of the files an export writes (shared by the programs of the set).
+texture-export.workspace = true
 wgpu.workspace = true
 pollster.workspace = true
 bytemuck.workspace = true

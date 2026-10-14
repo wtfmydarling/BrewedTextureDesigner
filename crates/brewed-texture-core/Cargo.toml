@@ -18,3 +18,5 @@ crc32fast = "1.5"
 sha2 = "0.11"
 # What a package's file holds is hashed and compressed on every core.
 rayon.workspace = true
+# What an export of a graph writes (see `export_presets`).
+texture-export.workspace = true

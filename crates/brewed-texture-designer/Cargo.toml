@@ -22,6 +22,7 @@ dev-tools = ["brewed-texture-engine/dev-tools"]
 brewed-texture-core.workspace = true
 brewed-texture-engine.workspace = true
 home-screen.workspace = true
+export-window.workspace = true
 scroll-box.workspace = true
 iced.workspace = true
 rfd.workspace = true

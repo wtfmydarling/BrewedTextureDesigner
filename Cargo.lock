@@ -434,6 +434,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "texture-export",
 ]
 
 [[package]]
@@ -446,6 +447,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "env_logger",
+ "export-window",
  "flate2",
  "futures",
  "half",
@@ -492,6 +494,7 @@ dependencies = [
  "rayon",
  "resvg",
  "texpresso",
+ "texture-export",
  "wgpu",
  "wide",
 ]
@@ -1206,6 +1209,15 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "export-window"
+version = "0.2.0"
+dependencies = [
+ "iced",
+ "scroll-box",
+ "texture-export",
 ]
 
 [[package]]
@@ -4287,6 +4299,10 @@ dependencies = [
  "libm",
  "rayon",
 ]
+
+[[package]]
+name = "texture-export"
+version = "0.2.0"
 
 [[package]]
 name = "thiserror"

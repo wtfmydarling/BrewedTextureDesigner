@@ -1466,7 +1466,7 @@ impl App {
                 home_sort: home::sort_of(opts.workspace.as_ref().and_then(|w| w.home_sort.as_deref())),
                 template_layout: home::layout_of(opts.workspace.as_ref().and_then(|w| w.template_layout.as_deref())),
                 last_template: brewed_texture_core::templates::Template::Pbr,
-                export_preset: brewed_texture_core::export_presets::Preset::Outputs,
+                export_preset: brewed_texture_core::export_presets::Preset::Maps,
                 export_folder: None,
                 menu: None,
                 submenu: None,

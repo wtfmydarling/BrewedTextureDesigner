@@ -1,0 +1,13 @@
+[package]
+name = "export-window"
+description = "The window an export of textures is chosen in, the same in every program of a set: the preset, the normals, the format, the folder, and the files it writes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+iced.workspace = true
+scroll-box.workspace = true
+texture-export.workspace = true

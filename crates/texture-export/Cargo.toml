@@ -1,0 +1,10 @@
+[package]
+name = "texture-export"
+description = "What an export of textures writes, the same in every program of a set: the files a game engine or a format expects of a material, packed of the maps a program has, and their names"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

@@ -691,7 +691,7 @@ fn exports_follow_the_preset_chosen() {
     let dir = std::env::temp_dir().join(format!("brewed-export-dialog-{}", std::process::id()));
     w.send(Message::Export(X::Open));
     let Some(Dialog::Export(dialog)) = w.app.ui.dialog.clone() else { panic!("the export dialog") };
-    assert_eq!((dialog.preset, dialog.directx), (Preset::Outputs, false), "as before; the demo's normals are OpenGL's");
+    assert_eq!((dialog.preset, dialog.directx), (Preset::Maps, false), "as before; the demo's normals are OpenGL's");
     // As they are: every Output, as the export always wrote them.
     let outputs = w.app.graph().nodes_of(NodeKind::OUTPUT).count();
     assert_eq!(w.app.export_plan(&dialog, &dir).len(), outputs);

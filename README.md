@@ -184,7 +184,7 @@ A package is saved as a `.brewtex` — a ZIP archive that any archiver opens: `p
 
 **Saving does not damage files.** A package, an exported texture and the settings are written beside the file, forced to disk (fsync) and put in its place in one step (on Linux and macOS the file's entry in its folder is forced to disk too): whatever stops on the way — the program, the system, the power — the file is either the old one or the new one, whole. An engine that watches a folder of textures (Unreal, Unity) does not import half a file. A file that an antivirus, an indexer or OneDrive holds for a moment on Windows, the program waits for, up to a second, rather than reporting an error. Before, a package was written beside the file and renamed, but without fsync: after a power cut an empty file could turn up in the file's place.
 
-**The export window** (File → Export…, Ctrl+E) writes the open graph: its Outputs as they are — each with the name, channels and format of its node, as before — or the files a game engine expects of a material. Such a preset assembles the files from the Outputs by their purpose (Usage):
+**The export window** (File → Export…, Ctrl+E; the `export-window` crate, what it writes the `texture-export` crate's) writes the open graph: its Outputs as they are — each with the name, channels and format of its node, as before — or the files a game engine expects of a material. Such a preset assembles the files from the Outputs by their purpose (Usage):
 
 - **Unreal Engine** — `T_<graph>_BaseColor`, `_Normal` (DirectX normals, Y−), `_ORM` (ambient occlusion, roughness and metallic in red, green and blue), `_Height` and `_Emissive` if the graph has them;
 - **Unity (URP)** — `<graph>_BaseMap`, `_Normal` (OpenGL, Y+), `_MetallicSmoothness` (metallic, with smoothness = 1 − roughness in alpha), `_Occlusion`, `_Height`, `_Emission`;
@@ -268,13 +268,16 @@ Each splat is a quad the graphics card draws, blending it with what is under it 
 
 ## Architecture
 
-Three crates, with dependencies going only downward:
+Three crates, with dependencies going only downward, and beside them crates the programs of the set share, which know nothing of this one:
 
 | Crate | What is inside | Depends on |
 |---|---|---|
 | `brewed-texture-core` | the model: the node registry (`NodeDef`), the graph, socket types, variables, expressions (lexer → Pratt parser → AST → constant folding → evaluator and WGSL codegen), evaluation of values on the CPU, `Edit` commands, packages (graphs, files, graphs as nodes and how they are laid out), the document with undo, project files (ZIP, JSON) | serde, log, flate2, sha2, rayon |
 | `brewed-texture-engine` | GPU: kernels on wgpu with their errors caught, incremental recomputation (a node has a hash of its type, effective parameters, resolution and the versions of its inputs), SIMD code, export, a service thread with requests and events | core, wgpu |
 | `brewed-texture-designer` | the interface on iced (a daemon: the main window and the eyedropper's windows) | core, engine, iced |
+| `texture-export` | what an export of textures writes: the presets (Unreal Engine, Unity URP and HDRP, glTF, the maps as they are), the files each makes of the maps a program has (a map as it is, or channels of maps and values packed into one file; a map that stands for another where there is none), and the names of the files. No graph, no GPU, no window: a program says what its maps are and writes the files; the command line and agents are to use it as the window does | — |
+| `export-window` | the window an export is chosen in (preset, normals, format, folder, the files listed), in the look a program gives it | `texture-export`, `scroll-box`, iced |
+| `home-screen`, `scroll-box` | the Home screen; the box of what scrolls | iced |
 
 The interface changes nothing itself. Each action of the user becomes a message; `App::update` turns it into an `Edit` command (an edit of a graph) or a `PackageEdit` (an edit of a package), and `Document` applies it: checks it, records an undo step (or merges it with the previous one) and marks the document changed. An undo step is the package as it was: its graphs are shared with the snapshots (`Arc`), and an edit copies only the graph it changes. Then the graph is evaluated on the CPU, the graphs it uses are laid out in it, and it goes to the engine's thread. The engine answers with events (images, thumbnails, statistics), which come to the interface through a subscription. Everything the engine reads back from the GPU (the thumbnails of nodes, the pictures of options in menus, the pixel under the pointer, exports), it waits for: "the GPU has finished all it was given" does not yet mean "the copy is mine" — a finished copy is announced by whichever thread polled the device first, and the window's drawing polls it too, so a copy could arrive a moment later. Before, the engine looked at once and took it that there was no copy: the thumbnails of all the nodes changed in one recomputation vanished at once (the nodes stayed black or kept their earlier picture), the pictures in the menus of options stayed black for good, and an export could fail. On a software GPU on Linux this happened to about one copy in six if three more threads polled the device; a test does just that and checks each of three thousand copies. The 2D and 3D views draw the engine's textures right on the GPU, without copying through the CPU: iced and the engine work on one wgpu device.
 
@@ -313,7 +316,7 @@ The interface does not need changing: the Library, the search, the properties, s
 ## Testing
 
 ```bash
-cargo test --workspace                                            # 494 tests
+cargo test --workspace                                            # 497 tests
 cargo fmt -- --check                                              # the code is laid out as rustfmt writes it (cargo fmt lays it out)
 WGPU_BACKEND=dx12 cargo test --workspace                          # the same on another backend (vulkan, dx12, metal)
 cargo test --workspace -- --ignored                               # live tests of the eyedropper and of pointer capture (a desktop is needed), measurements, stress tests
