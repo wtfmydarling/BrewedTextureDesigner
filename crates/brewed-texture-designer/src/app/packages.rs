@@ -745,6 +745,16 @@ impl App {
         package::flatten(&lib, own.as_deref(), self.doc.current()).unwrap_or_default()
     }
 
+    /// The graph `graph` of the package open as `key` with every graph it uses laid out in it:
+    /// what the engine computes of it (to export it). Its own nodes keep their ids.
+    pub(crate) fn flatten_graph(&self, key: u64, graph: GraphId) -> Option<Flat> {
+        let doc = self.package_doc(key)?;
+        let own = doc.key();
+        let docs = self.shelf.iter().map(|p| &p.doc).chain(self.doc.key().is_some().then_some(&self.doc));
+        let lib = Shelf::new(Some(doc.package()), docs, &self.deps);
+        package::flatten(&lib, own.as_deref(), graph)
+    }
+
     /// Add a node that uses the graph `graph` of the package open as `key`, at `pos`.
     pub(super) fn add_graph_node(&mut self, key: u64, graph: GraphId, pos: [f32; 2]) {
         if let Some(why) = self.graph_refusal(key, graph) {

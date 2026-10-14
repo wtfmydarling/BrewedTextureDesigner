@@ -43,14 +43,22 @@ pub enum Normals {
     DirectX,
 }
 
-/// What a file is written as: each of what an Output writes (PNG of 8 or 16 bits, OpenEXR of
-/// half floats or floats, DDS compressed as game engines read textures).
+/// What a file is written as: a kind of file and its depth (PNG of 8 or 16 bits, JPEG, Targa
+/// and BMP of 8, TIFF of 8, 16 or 32 bits float, OpenEXR of half floats or floats, Radiance HDR,
+/// DDS compressed as game engines read textures).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Format {
     Png8,
     Png16,
+    Jpeg8,
+    Tga8,
+    Bmp8,
+    Tiff8,
+    Tiff16,
+    Tiff32,
     Exr16,
     Exr32,
+    Hdr32,
     Dxt1,
     Dxt2,
     Dxt3,
@@ -62,17 +70,28 @@ pub enum Format {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FileType {
     Png,
+    Jpeg,
+    Tga,
+    Bmp,
+    Tiff,
     Exr,
+    Hdr,
     Dds,
 }
 
 impl FileType {
-    pub const ALL: [FileType; 3] = [FileType::Png, FileType::Exr, FileType::Dds];
+    pub const ALL: [FileType; 8] = [FileType::Png, FileType::Jpeg, FileType::Tga, FileType::Bmp, FileType::Tiff, FileType::Exr, FileType::Hdr, FileType::Dds];
 
+    /// As a list says it: its extension.
     pub fn name(self) -> &'static str {
         match self {
             FileType::Png => "png",
+            FileType::Jpeg => "jpg",
+            FileType::Tga => "tga",
+            FileType::Bmp => "bmp",
+            FileType::Tiff => "tif",
             FileType::Exr => "exr",
+            FileType::Hdr => "hdr",
             FileType::Dds => "dds",
         }
     }
@@ -81,7 +100,12 @@ impl FileType {
     pub fn formats(self) -> &'static [Format] {
         match self {
             FileType::Png => &[Format::Png8, Format::Png16],
+            FileType::Jpeg => &[Format::Jpeg8],
+            FileType::Tga => &[Format::Tga8],
+            FileType::Bmp => &[Format::Bmp8],
+            FileType::Tiff => &[Format::Tiff8, Format::Tiff16, Format::Tiff32],
             FileType::Exr => &[Format::Exr16, Format::Exr32],
+            FileType::Hdr => &[Format::Hdr32],
             FileType::Dds => &[Format::Dxt1, Format::Dxt2, Format::Dxt3, Format::Dxt4, Format::Dxt5],
         }
     }
@@ -94,24 +118,45 @@ impl std::fmt::Display for FileType {
 }
 
 impl Format {
-    pub const ALL: [Format; 9] =
-        [Format::Png8, Format::Png16, Format::Exr16, Format::Exr32, Format::Dxt1, Format::Dxt2, Format::Dxt3, Format::Dxt4, Format::Dxt5];
+    pub const ALL: [Format; 16] = [
+        Format::Png8,
+        Format::Png16,
+        Format::Jpeg8,
+        Format::Tga8,
+        Format::Bmp8,
+        Format::Tiff8,
+        Format::Tiff16,
+        Format::Tiff32,
+        Format::Exr16,
+        Format::Exr32,
+        Format::Hdr32,
+        Format::Dxt1,
+        Format::Dxt2,
+        Format::Dxt3,
+        Format::Dxt4,
+        Format::Dxt5,
+    ];
 
     pub fn file_type(self) -> FileType {
         match self {
             Format::Png8 | Format::Png16 => FileType::Png,
+            Format::Jpeg8 => FileType::Jpeg,
+            Format::Tga8 => FileType::Tga,
+            Format::Bmp8 => FileType::Bmp,
+            Format::Tiff8 | Format::Tiff16 | Format::Tiff32 => FileType::Tiff,
             Format::Exr16 | Format::Exr32 => FileType::Exr,
-            _ => FileType::Dds,
+            Format::Hdr32 => FileType::Hdr,
+            Format::Dxt1 | Format::Dxt2 | Format::Dxt3 | Format::Dxt4 | Format::Dxt5 => FileType::Dds,
         }
     }
 
     /// Its depth, as an Output says it.
     pub fn depth(self) -> &'static str {
         match self {
-            Format::Png8 => "8 bits",
-            Format::Png16 => "16 bits",
+            Format::Png8 | Format::Jpeg8 | Format::Tga8 | Format::Bmp8 | Format::Tiff8 => "8 bits",
+            Format::Png16 | Format::Tiff16 => "16 bits",
             Format::Exr16 => "16 bits float",
-            Format::Exr32 => "32 bits float",
+            Format::Exr32 | Format::Tiff32 | Format::Hdr32 => "32 bits float",
             Format::Dxt1 => "DXT1 / BC1",
             Format::Dxt2 => "DXT2 / BC2",
             Format::Dxt3 => "DXT3 / BC2",
@@ -128,11 +173,51 @@ impl Format {
     pub fn extension(self) -> &'static str {
         self.file_type().name()
     }
+
+    /// Whether it keeps an alpha channel (JPEG and Radiance HDR have none).
+    pub fn has_alpha(self) -> bool {
+        !matches!(self, Format::Jpeg8 | Format::Hdr32)
+    }
 }
 
 impl std::fmt::Display for Format {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.depth())
+    }
+}
+
+/// What an export writes its files as: as the program makes each map (an Output's own format;
+/// a file packed of several, as the first of them), or one format.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FileFormat {
+    #[default]
+    AsMade,
+    Of(Format),
+}
+
+/// How large an export writes its files: as the program makes its maps (its project's size, a
+/// preview of what is exported), or with their longer side so many pixels, the other in
+/// proportion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Size {
+    #[default]
+    AsMade,
+    Side(u32),
+}
+
+impl Size {
+    /// The sides offered.
+    pub const SIDES: [u32; 7] = [128, 256, 512, 1024, 2048, 4096, 8192];
+
+    /// The size of a file of a map made `made`.
+    pub fn of(self, made: [u32; 2]) -> [u32; 2] {
+        match self {
+            Size::AsMade => made,
+            Size::Side(side) => {
+                let longer = made[0].max(made[1]).max(1) as f64;
+                made.map(|m| ((m as f64 * side as f64 / longer).round() as u32).max(1))
+            }
+        }
     }
 }
 

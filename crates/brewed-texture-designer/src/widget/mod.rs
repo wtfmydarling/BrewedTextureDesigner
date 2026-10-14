@@ -3,7 +3,7 @@
 pub mod blind;
 pub mod color;
 pub mod curve;
-pub mod dropdown;
+pub use drop_down as dropdown;
 pub mod gradient;
 pub mod layered;
 pub mod number;

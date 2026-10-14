@@ -446,6 +446,7 @@ dependencies = [
  "brewed-texture-engine",
  "bytemuck",
  "bytes",
+ "drop-down",
  "env_logger",
  "export-window",
  "flate2",
@@ -1090,6 +1091,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "drop-down"
+version = "0.2.0"
+dependencies = [
+ "iced",
+]
+
+[[package]]
 name = "dtor"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1216,6 +1224,7 @@ dependencies = [
 name = "export-window"
 version = "0.2.0"
 dependencies = [
+ "drop-down",
  "iced",
  "scroll-box",
  "texture-export",

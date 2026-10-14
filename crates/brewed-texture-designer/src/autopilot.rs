@@ -964,30 +964,32 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                     Step::Wait,
                     Step::Note("exported into a folder that is not there".into()),
                 ]),
-                // Through the export dialog: a preset of a game engine a round, the normal maps
-                // one way and the other, 8 and 16 bits; the files it listed are those written.
+                // Through the export dialog: a preset of a game engine a round, PNG of 16 bits and
+                // Targa, as large as the graph is made and smaller (computed on its own); the
+                // files it listed are those written, as large as it said.
                 5..=8 => {
                     use crate::app::export_dialog::ExportMessage as X;
                     use brewed_texture_core::export_presets::Preset;
-                    use export_window::Event;
+                    use export_window::{Event, Setting};
+                    use texture_export::{FileFormat, Format, Size};
                     let folder = export.join(format!("preset-{exported}"));
                     let _ = std::fs::create_dir_all(&folder);
                     let chosen = crate::app::export_dialog::chosen_of(Preset::ALL[exported - 4]);
-                    let directx = exported % 2 == 0;
-                    let format = if exported % 2 == 0 { texture_export::Format::Png16 } else { texture_export::Format::Png8 };
+                    let format = FileFormat::Of(if exported % 2 == 0 { Format::Png16 } else { Format::Tga8 });
+                    let size = if exported >= 7 { Size::Side(256) } else { Size::AsMade };
                     let mut steps = vec![
                         Step::Do(Message::Export(X::Open)),
-                        Step::Do(Message::Export(X::Window(Event::ExportWith(chosen)))),
-                        Step::Do(Message::Export(X::Window(Event::DirectX(directx)))),
-                        Step::Do(Message::Export(X::Window(Event::Format(format)))),
+                        Step::Do(Message::Export(X::Window(Event::Set(None, Setting::Template(chosen))))),
+                        Step::Do(Message::Export(X::Window(Event::Set(None, Setting::Format(format))))),
+                        Step::Do(Message::Export(X::Window(Event::Set(None, Setting::Size(size))))),
                         Step::Do(Message::Export(X::Folder(Some(folder.clone())))),
                     ];
-                    let asked = (chosen, directx, format, Some(folder.clone()));
+                    let asked = (export_window::Settings { template: chosen, format, size }, Some(folder.clone()));
                     let kept = std::sync::Arc::new(std::sync::Mutex::new(None));
                     let keep = kept.clone();
                     steps.push(Step::Check(Box::new(move |app: &App| match &app.ui.dialog {
                         // (The templates of the user's, read as it opened, are theirs.)
-                        Some(Dialog::Export(open)) if (open.chosen, open.directx, open.format, open.folder.clone()) == asked => {
+                        Some(Dialog::Export(open)) if (open.global, open.folder.clone()) == asked => {
                             if let Ok(mut kept) = keep.lock() {
                                 *kept = Some(open.as_ref().clone());
                             }
@@ -1001,17 +1003,21 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                             return Some(format!("the export dialog stays open: {:?}", app.ui.dialog));
                         }
                         let Some(dialog) = kept.lock().ok().and_then(|k| k.clone()) else { return Some("the export window was not seen open".into()) };
-                        let planned: Vec<PathBuf> = app.export_plan(&dialog, &folder).into_iter().map(|(path, _, _)| path).collect();
+                        let planned = app.export_plan(&dialog, &folder);
                         let files = match files_in(&folder) {
                             Ok(files) => files,
                             Err(e) => return Some(e),
                         };
                         if files.len() != planned.len() {
-                            return Some(format!("{} files exported with {:?}, {} planned", files.len(), dialog.chosen, planned.len()));
+                            return Some(format!("{} files exported with {:?}, {} planned", files.len(), dialog.global, planned.len()));
                         }
-                        for path in &planned {
-                            if let Err(e) = image::open(path) {
-                                return Some(format!("{} ({:?}) cannot be read back: {e}", path.display(), dialog.chosen));
+                        for p in &planned {
+                            match image::open(&p.path) {
+                                Ok(read) if [read.width(), read.height()] != p.size => {
+                                    return Some(format!("{} is {}×{}, not {:?}", p.path.display(), read.width(), read.height(), p.size));
+                                }
+                                Ok(_) => {}
+                                Err(e) => return Some(format!("{} ({:?}) cannot be read back: {e}", p.path.display(), dialog.global)),
                             }
                         }
                         None

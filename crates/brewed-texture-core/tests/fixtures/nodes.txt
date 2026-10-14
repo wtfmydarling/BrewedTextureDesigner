@@ -1266,6 +1266,13 @@ output p:bit_depth = dxt2
 output p:bit_depth = dxt3
 output p:bit_depth = dxt4
 output p:bit_depth = dxt5
+output p:bit_depth = jpeg8
+output p:bit_depth = tga8
+output p:bit_depth = bmp8
+output p:bit_depth = tiff8
+output p:bit_depth = tiff16
+output p:bit_depth = tiff32f
+output p:bit_depth = hdr32f
 output p:usage choice
 output p:usage = custom
 output p:usage = base_color

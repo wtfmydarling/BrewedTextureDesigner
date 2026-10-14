@@ -25,6 +25,7 @@ home-screen.workspace = true
 export-window.workspace = true
 texture-export.workspace = true
 scroll-box.workspace = true
+drop-down.workspace = true
 iced.workspace = true
 rfd.workspace = true
 futures.workspace = true

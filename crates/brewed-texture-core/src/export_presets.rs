@@ -7,9 +7,47 @@
 //! in the order a node of the graph has them, each with its usage.
 
 use crate::graph::{Graph, NodeId};
+use crate::instance::GraphId;
 use crate::nodes::{NodeKind, Usage};
 use texture_export::naming::Token;
-use texture_export::{Normals, Template};
+use texture_export::{FileFormat, Normals, Size, Template};
+
+/// What the export window keeps with a package (its Save settings, see `docs/package-format.md`):
+/// where the files go, what they are written with, as what and how large, and of each graph
+/// whether it is exported and what it says of its own.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExportSettings {
+    /// The folder the files go to (relative to the package's file where it can be).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub folder: String,
+    /// The template, by its name: of a preset of the program's (`Raw Outputs`: each Output as it
+    /// is), or of one of the user's.
+    #[serde(default)]
+    pub template: String,
+    #[serde(default)]
+    pub format: FileFormat,
+    #[serde(default)]
+    pub size: Size,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub graphs: Vec<GraphExportSettings>,
+}
+
+/// What a graph's export says of its own: whether it is exported, and where it is not as the
+/// package's settings say, its template, format, size, and the way its normal maps point.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GraphExportSettings {
+    pub graph: GraphId,
+    #[serde(default)]
+    pub checked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<FileFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<Size>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normals: Option<Normals>,
+}
 
 /// The parts of a file's name an export of a graph fills in.
 pub const TOKENS: [Token; 2] = [
@@ -20,7 +58,7 @@ pub const TOKENS: [Token; 2] = [
 /// What an export writes, of the program's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Preset {
-    /// Each Output, as its node says (its name, channels and format).
+    /// Each Output, as its node says (its name, channels and format): Raw Outputs.
     Maps,
     /// Unreal Engine: base color, a normal map of DirectX (Y−), and occlusion, roughness and
     /// metallic packed in red, green and blue (ORM).
@@ -35,6 +73,9 @@ pub enum Preset {
     /// and blue (occlusionTexture and metallicRoughnessTexture read the one file).
     Gltf,
 }
+
+/// What exports each Output as it is, as an Output says: its name, channels and format.
+pub const RAW_OUTPUTS: &str = "Raw Outputs";
 
 impl Preset {
     pub const ALL: [Preset; 5] = [Preset::Maps, Preset::Unreal, Preset::UnityUrp, Preset::UnityHdrp, Preset::Gltf];
@@ -62,8 +103,19 @@ impl Preset {
         }
     }
 
+    /// What it is called in a file's name (the user's changes of it are kept as `<id>.json`).
+    pub fn id(self) -> &'static str {
+        match self {
+            Preset::Maps => "raw",
+            Preset::Unreal => "unreal",
+            Preset::UnityUrp => "unity-urp",
+            Preset::UnityHdrp => "unity-hdrp",
+            Preset::Gltf => "gltf",
+        }
+    }
+
     pub fn name(self) -> &'static str {
-        self.template().map_or("Outputs as They Are", |t| t.name.as_str())
+        self.template().map_or(RAW_OUTPUTS, |t| t.name.as_str())
     }
 
     pub fn about(self) -> &'static str {

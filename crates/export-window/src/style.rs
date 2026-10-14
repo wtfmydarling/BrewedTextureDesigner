@@ -136,16 +136,6 @@ pub fn item(look: &Look, chosen: bool) -> impl Fn(&Theme, button::Status) -> but
     }
 }
 
-/// A map in the list of maps: a row of the list; dragged, it is.
-pub fn map_row(look: &Look, hovered: bool) -> impl Fn(&Theme) -> container::Style + use<> {
-    let c = look.colors;
-    move |_| container::Style {
-        background: hovered.then_some(Background::Color(c.hover)),
-        border: Border { radius: 2.0.into(), ..Border::default() },
-        ..Default::default()
-    }
-}
-
 /// The label of a map being dragged: over everything, its shadow deep.
 pub fn dragged(look: &Look) -> impl Fn(&Theme) -> container::Style + use<> {
     let c = look.colors;
@@ -176,5 +166,81 @@ pub fn swatch(color: Color) -> impl Fn(&Theme) -> container::Style {
         background: Some(color.into()),
         border: Border { color: alpha(Color::BLACK, 0.5), width: 1.0, radius: 1.0.into() },
         ..Default::default()
+    }
+}
+
+/// A line between parts (of a list of options, of the window).
+pub fn line(look: &Look) -> impl Fn(&Theme) -> container::Style + use<> {
+    let c = look.colors;
+    move |_| container::Style { background: Some(c.line.into()), ..Default::default() }
+}
+
+/// The field of a list to choose from: sunk in, lit under the mouse, edged bright while its
+/// options are open.
+pub fn field(look: &Look, open: bool) -> impl Fn(&Theme, button::Status) -> button::Style + use<> {
+    let c = look.colors;
+    move |_, status| {
+        let lit = open || matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(Background::Color(if lit { c.hover } else { c.field })),
+            text_color: c.text,
+            border: Border { color: if open { c.bright } else { c.edge }, width: 1.0, radius: 2.0.into() },
+            shadow: Shadow::default(),
+            snap: true,
+        }
+    }
+}
+
+/// An option of a list: lit under the mouse, the one chosen of the field's color.
+pub fn option(look: &Look, chosen: bool) -> impl Fn(&Theme, button::Status) -> button::Style + use<> {
+    let c = look.colors;
+    move |_, status| {
+        let (background, text) = match status {
+            button::Status::Hovered | button::Status::Pressed => (Some(c.hover), c.bright),
+            _ if chosen => (Some(c.chosen), c.bright),
+            _ => (None, c.text),
+        };
+        button::Style {
+            background: background.map(Background::Color),
+            text_color: text,
+            border: Border { radius: 2.0.into(), ..Border::default() },
+            shadow: Shadow::default(),
+            snap: true,
+        }
+    }
+}
+
+/// A box to check: sunk in, edged, lit under the mouse; checked, edged bright.
+pub fn check(look: &Look, checked: bool) -> impl Fn(&Theme, button::Status) -> button::Style + use<> {
+    let c = look.colors;
+    move |_, status| {
+        let lit = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(Background::Color(if lit { c.hover } else { c.field })),
+            text_color: c.bright,
+            border: Border { color: if checked || lit { c.bright } else { c.edge }, width: 1.0, radius: 2.0.into() },
+            shadow: Shadow::default(),
+            snap: true,
+        }
+    }
+}
+
+/// A map of the lists of maps: a box of its own, apart from the next; under the mouse lit, edged
+/// bright and raised, so it is plain which is taken; while one is dragged, as it is.
+pub fn map_box(look: &Look) -> impl Fn(&Theme, button::Status) -> button::Style + use<> {
+    let c = look.colors;
+    move |_, status| {
+        let lit = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(Background::Color(if lit { c.hover } else { c.raised })),
+            text_color: c.text,
+            border: Border { color: if lit { c.bright } else { c.edge }, width: 1.0, radius: 2.0.into() },
+            shadow: if lit {
+                Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.4), offset: Vector::new(0.0, 1.0), blur_radius: 3.0 }
+            } else {
+                Shadow::default()
+            },
+            snap: true,
+        }
     }
 }

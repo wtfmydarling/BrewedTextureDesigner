@@ -41,6 +41,16 @@ pub struct ExportJob {
     pub pack: Vec<export::Packed>,
 }
 
+/// Files to write of a graph other than the one the views show: another graph of a package, or
+/// the same at a size of its own. It is computed on its own (see `Engine::set_aside`), its files
+/// written, and what the views show is as it was.
+#[derive(Clone, Debug)]
+pub struct GraphExport {
+    pub graph: Arc<Graph>,
+    pub eval: Arc<Evaluation>,
+    pub jobs: Vec<ExportJob>,
+}
+
 pub enum Request {
     Evaluate {
         revision: u64,
@@ -59,6 +69,8 @@ pub enum Request {
         pixel: [u32; 2],
     },
     Export(Vec<ExportJob>),
+    /// Files of a graph other than the views' (see [`GraphExport`]).
+    ExportGraph(GraphExport),
     /// Pictures of what a node of a kind makes with each option of one of its choices.
     Choices {
         kind: NodeKind,
@@ -234,6 +246,7 @@ struct Pending {
     probe: Option<(NodeId, [u32; 2])>,
     choices: Vec<(NodeKind, String)>,
     exports: Vec<ExportJob>,
+    graph_exports: Vec<GraphExport>,
     preview_changed: bool,
     materials_changed: bool,
     panorama_changed: bool,
@@ -308,6 +321,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                 }
                 Request::Probe { node, pixel } => pending.probe = Some((node, pixel)),
                 Request::Export(jobs) => pending.exports.extend(jobs),
+                Request::ExportGraph(export) => pending.graph_exports.push(export),
                 Request::Choices { kind, key } => {
                     if !pending.choices.iter().any(|(k, c)| *k == kind && *c == key) {
                         pending.choices.push((kind, key));
@@ -320,7 +334,7 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
                 Request::Reset => {
                     // Files asked of the document that goes are written of it first: the
                     // reset waits for the next round, and what came after it too.
-                    if !pending.exports.is_empty() {
+                    if !pending.exports.is_empty() || !pending.graph_exports.is_empty() {
                         reset = true;
                         break;
                     }
@@ -412,46 +426,27 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
         if let Some((node, pixel)) = pending.probe {
             (emit)(Event::Probe { node, pixel, rgba: engine.probe(node, pixel) });
         }
-        for job in pending.exports {
-            // Packed of several images: each read as it is stored, at its own size (a uniform
-            // color's one pixel), the file made of them off the engine thread.
-            if !job.pack.is_empty() {
-                let mut images = std::collections::HashMap::new();
-                let mut failed = None;
-                for node in export::nodes_of(&job) {
-                    if images.contains_key(&node) {
-                        continue;
-                    }
-                    match engine.read_own(node) {
-                        Ok(image) => {
-                            images.insert(node, image);
-                        }
-                        Err(e) => failed = Some(e),
-                    }
-                }
-                match failed {
-                    Some(e) => (emit)(Event::Exported(Err(e))),
-                    None => {
-                        let (emit, size) = (emit.clone(), engine.resolution());
-                        write(&mut writing, job.path.clone(), move || {
-                            let result = export::write_packed(&job.path, &job.pack, &images, size, job.bit_depth).map(|_| job.path);
-                            (emit)(Event::Exported(result));
-                        });
-                    }
-                }
-                continue;
+        write_files(&mut engine, pending.exports, &mut writing, &emit);
+        // Graphs of their own: each computed alone, the graph of the views set aside meanwhile.
+        let mut again = false;
+        for export in pending.graph_exports {
+            let aside = engine.set_aside();
+            let mut jobs = export.jobs;
+            for job in jobs.iter_mut().filter(|j| !j.pack.is_empty()) {
+                export::read_what_arrives(job, &export.graph);
             }
-            match engine.read_stored(job.node) {
-                Ok(image) => {
-                    let emit = emit.clone();
-                    // Converting and encoding happen off the engine thread, from the image as
-                    // the GPU stores it, a band at a time.
-                    write(&mut writing, job.path.clone(), move || {
-                        let result = export::write_stored(&job.path, &image, job.format, job.bit_depth).map(|_| job.path);
-                        (emit)(Event::Exported(result));
-                    });
-                }
-                Err(e) => (emit)(Event::Exported(Err(e))),
+            engine.ask(jobs.iter().flat_map(export::nodes_of).collect());
+            engine.evaluate_whole(&export.graph, &export.eval);
+            write_files(&mut engine, jobs, &mut writing, &emit);
+            engine.put_back(aside);
+            again = true;
+        }
+        // (What the graph of the views waited for came meanwhile: it is computed with it.)
+        if again && current.is_some() {
+            waiting = waiting.or_else(|| rx.try_recv().ok());
+            if waiting.is_none() {
+                let (revision, graph, eval) = current.clone().expect("a graph");
+                waiting = Some(Request::Evaluate { revision, graph, eval });
             }
         }
         let errors = engine.gpu.take_errors();
@@ -470,6 +465,53 @@ fn run(mut engine: Engine, rx: Receiver<Request>, emit: Emit) {
     // once they are, and leaves none half written.
     for file in writing.into_values() {
         let _ = file.join();
+    }
+}
+
+/// Write the files of `jobs`, of the images the engine has: each read as it is stored, made a
+/// file off the engine thread.
+fn write_files(engine: &mut Engine, jobs: Vec<ExportJob>, writing: &mut HashMap<PathBuf, JoinHandle<()>>, emit: &Emit) {
+    for job in jobs {
+        // Packed of several images: each read as it is stored, at its own size (a uniform
+        // color's one pixel), the file made of them off the engine thread.
+        if !job.pack.is_empty() {
+            let mut images = std::collections::HashMap::new();
+            let mut failed = None;
+            for node in export::nodes_of(&job) {
+                if images.contains_key(&node) {
+                    continue;
+                }
+                match engine.read_own(node) {
+                    Ok(image) => {
+                        images.insert(node, image);
+                    }
+                    Err(e) => failed = Some(e),
+                }
+            }
+            match failed {
+                Some(e) => (emit)(Event::Exported(Err(e))),
+                None => {
+                    let (emit, size) = (emit.clone(), engine.resolution());
+                    write(writing, job.path.clone(), move || {
+                        let result = export::write_packed(&job.path, &job.pack, &images, size, job.bit_depth).map(|_| job.path);
+                        (emit)(Event::Exported(result));
+                    });
+                }
+            }
+            continue;
+        }
+        match engine.read_stored(job.node) {
+            Ok(image) => {
+                let emit = emit.clone();
+                // Converting and encoding happen off the engine thread, from the image as
+                // the GPU stores it, a band at a time.
+                write(writing, job.path.clone(), move || {
+                    let result = export::write_stored(&job.path, &image, job.format, job.bit_depth).map(|_| job.path);
+                    (emit)(Event::Exported(result));
+                });
+            }
+            Err(e) => (emit)(Event::Exported(Err(e))),
+        }
     }
 }
 

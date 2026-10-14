@@ -3641,3 +3641,37 @@ fn panorama_lights_are_where_they_are() {
     let row: Vec<f32> = (0..RES).map(|x| pixel(&d, x, (0.1 * RES as f32) as u32)[0]).collect();
     assert!(row.iter().any(|v| *v > 1.9) && row.iter().filter(|v| **v < 0.05).count() > 20, "stripes: {row:?}");
 }
+
+/// A graph exported at a size of its own, or another graph, is computed with what the engine
+/// holds of the graph of the views set aside: it gets images of its size, and the graph of the
+/// views has its own back as they were, of the same versions, nothing computed again.
+#[test]
+fn a_graph_computed_aside_leaves_the_one_of_the_views_as_it_was() {
+    let Some(mut e) = engine() else { return };
+    let mut g = graph();
+    let noise = g.add_node(NodeKind::NOISE, [0.0, 0.0]);
+    let out = g.add_node(NodeKind::OUTPUT, [0.0, 0.0]);
+    g.connect(noise, "o:output", out, "i:input").unwrap();
+    let before = eval_read(&mut e, &g, out);
+    let version = e.version(out);
+    // The same graph at a quarter of the size, and another graph, its node ids the same.
+    let mut small = g.clone();
+    small.resolution = [RES / 4, RES / 4];
+    let mut other = graph();
+    let color = other.add_node(NodeKind::UNIFORM_COLOR, [0.0, 0.0]);
+    set(&mut other, color, "color", ParamValue::Color([0.25, 0.5, 0.75, 1.0]));
+    for (aside, read) in [(&small, out), (&other, color)] {
+        let held = e.set_aside();
+        assert!(e.image(out).is_none(), "nothing held of the graph set aside");
+        let eval = brewed_texture_core::eval::evaluate(aside);
+        e.ask(vec![read]);
+        e.evaluate_whole(aside, &eval);
+        let stored = e.read_stored(read).expect("its image");
+        if read == out {
+            assert_eq!(stored.width, RES / 4, "of its own size");
+        }
+        e.put_back(held);
+        assert_eq!(e.version(out), version, "the same image");
+        assert_eq!(e.read_image(out).expect("its image").2, before);
+    }
+}

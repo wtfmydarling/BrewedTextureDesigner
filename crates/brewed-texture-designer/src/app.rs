@@ -461,14 +461,12 @@ pub struct Ui {
     pub home_sort: home_screen::Sort,
     /// The template a new graph was made from last (the next one is offered it).
     pub last_template: brewed_texture_core::templates::Template,
-    /// What the last export wrote, and where (the next is offered them).
-    pub export_preset: brewed_texture_core::export_presets::Preset,
+    /// What the last export wrote, and where (the next is offered them, where a package keeps no
+    /// settings of its own): the template by its name, the format, the size.
+    pub export_template: String,
     pub export_folder: Option<PathBuf>,
-    /// The template of the user's chosen last in the export dialog (its name), in place of
-    /// `export_preset`.
-    pub export_template: Option<String>,
-    /// The format chosen last for the files of a template that says none.
-    pub export_format: texture_export::Format,
+    pub export_format: texture_export::FileFormat,
+    pub export_size: texture_export::Size,
     pub menu: Option<MenuId>,
     pub submenu: Option<SubMenu>,
     pub context: Option<ContextMenu>,
@@ -1474,10 +1472,10 @@ impl App {
                 home_sort: home::sort_of(opts.workspace.as_ref().and_then(|w| w.home_sort.as_deref())),
                 template_layout: home::layout_of(opts.workspace.as_ref().and_then(|w| w.template_layout.as_deref())),
                 last_template: brewed_texture_core::templates::Template::Pbr,
-                export_preset: brewed_texture_core::export_presets::Preset::Maps,
+                export_template: brewed_texture_core::export_presets::RAW_OUTPUTS.into(),
                 export_folder: None,
-                export_template: None,
-                export_format: texture_export::Format::Png8,
+                export_format: texture_export::FileFormat::AsMade,
+                export_size: texture_export::Size::AsMade,
                 menu: None,
                 submenu: None,
                 context: None,

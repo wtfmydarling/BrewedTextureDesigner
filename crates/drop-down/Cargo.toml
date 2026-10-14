@@ -1,0 +1,11 @@
+[package]
+name = "drop-down"
+description = "A menu that floats below what opens it (or beside it, a submenu), the same in every program of a set and in each of their parts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+iced.workspace = true

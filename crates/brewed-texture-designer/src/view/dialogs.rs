@@ -328,41 +328,71 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
     use crate::app::export_dialog::ExportMessage as X;
     let folder = dialog.folder.as_ref().map_or_else(|| "No folder chosen yet".to_string(), |f| f.display().to_string());
     let planned = app.export_plan(dialog, dialog.folder.as_deref().unwrap_or(std::path::Path::new("")));
-    let files = planned
+    // The files, under the graph each is of.
+    let files = dialog
+        .rows
         .iter()
-        .map(|(path, file, format)| export_window::Listed {
-            name: path.file_name().map_or_else(|| file.name.clone(), |n| n.to_string_lossy().into_owned()),
-            said: file.said.clone(),
-            kind: format.map_or_else(|| path.extension().map_or_else(String::new, |e| e.to_string_lossy().into_owned()), |f| f.file_type().name().to_string()),
-            depth: format.map_or_else(|| "as its output says".to_string(), |f| f.depth().to_string()),
+        .enumerate()
+        .filter(|(_, row)| row.checked && row.graph.is_some())
+        .map(|(i, row)| {
+            let listed = planned
+                .iter()
+                .filter(|p| p.row == i)
+                .map(|p| export_window::Listed {
+                    name: p.path.file_name().map_or_else(|| p.file.name.clone(), |n| n.to_string_lossy().into_owned()),
+                    said: p.file.said.clone(),
+                    size: format!("{} × {}", p.size[0], p.size[1]),
+                    kind: p.format.file_type().name().to_string(),
+                    depth: p.format.depth().to_string(),
+                })
+                .collect();
+            (row.name.clone(), listed)
         })
         .collect();
-    // The maps a template may be made of: every usage of an Output; of the graph's Outputs of no
-    // usage, each by its name.
-    let maps = brewed_texture_core::export_presets::maps(app.graph());
+    // The maps a template may be made of: every usage of an Output; of the Outputs of no usage of
+    // the graph whose settings are shown (or the first checked, or the one edited), each by its
+    // name.
+    let row = dialog
+        .window
+        .selected
+        .filter(|&i| dialog.rows.get(i).is_some_and(|r| r.graph.is_some()))
+        .or_else(|| dialog.rows.iter().position(|r| r.checked && r.graph.is_some()))
+        .and_then(|i| dialog.rows.get(i));
+    let entry = row.and_then(|r| app.package_doc(r.key)?.package().graph(r.graph?));
+    let graph = entry.map_or_else(|| app.graph(), |e| &*e.graph);
+    let maps = brewed_texture_core::export_presets::maps(graph);
     let has: Vec<texture_export::MapId> = maps.iter().filter_map(|m| m.usage.clone()).collect();
     let custom = maps.iter().filter_map(|m| m.usage.clone().filter(|u| u.as_str().starts_with("custom:")).map(|u| (u, m.name.clone()))).collect();
     let inputs = brewed_texture_core::export_presets::input_maps()
         .into_iter()
         .map(|(map, name, group)| export_window::InputMap { map, name: name.into(), group: group.into() })
         .collect();
-    let [width, height] = app.graph().resolution;
+    let values = row.map_or_else(|| app.export_values_of(app.doc_key, None), |r| app.export_values_of(r.key, r.graph));
+    let exported = dialog
+        .rows
+        .iter()
+        .map(|r| export_window::Exported {
+            name: r.name.clone(),
+            depth: u8::from(r.graph.is_some()),
+            checked: r.checked,
+            own: r.own,
+            size: r.size,
+            normals: r.normals,
+        })
+        .collect();
     let content = export_window::Content {
-        name: app.doc.entry().name.clone(),
         thing: "graph",
-        presets: crate::app::export_dialog::presets().to_vec(),
-        size: format!("{width} × {height}"),
+        presets: dialog.presets(),
         mine: &dialog.templates,
         templates_folder: crate::app::export_dialog::templates_folder().map(|f| f.display().to_string()),
         problems: &dialog.problems,
-        export_with: dialog.chosen,
-        directx: dialog.directx,
-        format: dialog.format,
+        exported,
+        global: dialog.global,
         folder: crate::view::fitted(folder, style::TEXT_SIZE, style::ui_font(), None),
         folder_chosen: dialog.folder.is_some(),
         files,
         tokens: &brewed_texture_core::export_presets::TOKENS,
-        values: app.export_values(),
+        values,
         inputs,
         custom,
         has,

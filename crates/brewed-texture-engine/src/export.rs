@@ -13,7 +13,10 @@ use brewed_texture_core::nodes::output_format_channels;
 use crate::gpu::StoredImage;
 use crate::simd;
 
-pub use brewed_texture_core::nodes::{DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_DXT1, DEPTH_DXT2, DEPTH_DXT3, DEPTH_DXT4, DEPTH_DXT5};
+pub use brewed_texture_core::nodes::{
+    DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_BMP8, DEPTH_DXT1, DEPTH_DXT2, DEPTH_DXT3, DEPTH_DXT4, DEPTH_DXT5, DEPTH_HDR32F, DEPTH_JPEG8, DEPTH_TGA8,
+    DEPTH_TIFF8, DEPTH_TIFF16, DEPTH_TIFF32F,
+};
 
 /// A channel of a file packed of several images (see [`write_packed`], and
 /// `brewed_texture_core::export_presets`).
@@ -153,11 +156,19 @@ impl Rows for PackedRows<'_> {
 /// of the set).
 pub use texture_export::sanitize_file_name;
 
+/// The quality of a JPEG an export writes (of 100): high, as a texture's detail wants it.
+pub const JPEG_QUALITY: u8 = 95;
+
 /// File extension for an Output's format.
 pub fn extension(bit_depth: u32) -> &'static str {
     match bit_depth {
         DEPTH_16F | DEPTH_32F => "exr",
         DEPTH_DXT1..=DEPTH_DXT5 => "dds",
+        DEPTH_JPEG8 => "jpg",
+        DEPTH_TGA8 => "tga",
+        DEPTH_BMP8 => "bmp",
+        DEPTH_TIFF8 | DEPTH_TIFF16 | DEPTH_TIFF32F => "tif",
+        DEPTH_HDR32F => "hdr",
         _ => "png",
     }
 }
@@ -241,33 +252,55 @@ fn write_in_bands(path: &Path, image: &impl Rows, format: u32, bit_depth: u32, r
             };
             written.map_err(|e| e.to_string())
         }
-        DEPTH_32F => {
-            // OpenEXR stores RGB or RGBA; single channels are replicated to gray.
-            let keep: &[usize] = if channels.len() == 4 { &[0, 1, 2, 3] } else { &[0, 1, 2] };
+        DEPTH_32F | DEPTH_TIFF32F | DEPTH_HDR32F => {
+            // OpenEXR and TIFF store RGB or RGBA, Radiance HDR RGB alone; single channels are
+            // replicated to gray.
+            let four = channels.len() == 4 && bit_depth != DEPTH_HDR32F;
+            let keep: &[usize] = if four { &[0, 1, 2, 3] } else { &[0, 1, 2] };
             let data = samples(image, keep, rows, |s, d| d.copy_from_slice(s));
-            let img = if channels.len() == 4 {
+            let img = if four {
                 image::DynamicImage::ImageRgba32F(image::ImageBuffer::from_raw(width, height, data).ok_or_else(size_err)?)
             } else {
                 image::DynamicImage::ImageRgb32F(image::ImageBuffer::from_raw(width, height, data).ok_or_else(size_err)?)
             };
-            img.save_with_format(path, image::ImageFormat::OpenExr).map_err(err)
+            let format = match bit_depth {
+                DEPTH_TIFF32F => image::ImageFormat::Tiff,
+                DEPTH_HDR32F => image::ImageFormat::Hdr,
+                _ => image::ImageFormat::OpenExr,
+            };
+            img.save_with_format(path, format).map_err(err)
         }
-        DEPTH_16 => {
+        DEPTH_16 | DEPTH_TIFF16 => {
+            let format = if bit_depth == DEPTH_TIFF16 { image::ImageFormat::Tiff } else { image::ImageFormat::Png };
             let data = samples(image, channels, rows, simd::quantize_u16);
             match channels.len() {
-                4 => image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
-                3 => image::ImageBuffer::<image::Rgb<u16>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
-                _ => image::ImageBuffer::<image::Luma<u16>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
+                4 => image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, format)),
+                3 => image::ImageBuffer::<image::Rgb<u16>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, format)),
+                _ => image::ImageBuffer::<image::Luma<u16>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, format)),
             }
             .ok_or_else(size_err)?
             .map_err(err)
         }
+        DEPTH_JPEG8 => {
+            // JPEG keeps no alpha: RGB, or gray; of a quality textures keep their detail at.
+            let keep: &[usize] = if channels.len() == 1 { &[0] } else { &[0, 1, 2] };
+            let data = samples(image, keep, rows, simd::quantize_u8);
+            let color = if keep.len() == 1 { image::ExtendedColorType::L8 } else { image::ExtendedColorType::Rgb8 };
+            let file = std::io::BufWriter::new(std::fs::File::create(path).map_err(|e| e.to_string())?);
+            image::codecs::jpeg::JpegEncoder::new_with_quality(file, JPEG_QUALITY).encode(&data, width, height, color).map_err(err)
+        }
         _ => {
+            let format = match bit_depth {
+                DEPTH_TGA8 => image::ImageFormat::Tga,
+                DEPTH_BMP8 => image::ImageFormat::Bmp,
+                DEPTH_TIFF8 => image::ImageFormat::Tiff,
+                _ => image::ImageFormat::Png,
+            };
             let data = samples(image, channels, rows, simd::quantize_u8);
             match channels.len() {
-                4 => image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
-                3 => image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
-                _ => image::ImageBuffer::<image::Luma<u8>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, image::ImageFormat::Png)),
+                4 => image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, format)),
+                3 => image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, format)),
+                _ => image::ImageBuffer::<image::Luma<u8>, _>::from_raw(width, height, data).map(|b| b.save_with_format(path, format)),
             }
             .ok_or_else(size_err)?
             .map_err(err)
@@ -406,7 +439,21 @@ mod tests {
             };
             let stored = StoredImage { width: w, height: h, format, bytes };
             let rgba = stored.to_f32();
-            for depth in [DEPTH_8, DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_DXT1, DEPTH_DXT4] {
+            for depth in [
+                DEPTH_8,
+                DEPTH_16,
+                DEPTH_16F,
+                DEPTH_32F,
+                DEPTH_DXT1,
+                DEPTH_DXT4,
+                DEPTH_JPEG8,
+                DEPTH_TGA8,
+                DEPTH_BMP8,
+                DEPTH_TIFF8,
+                DEPTH_TIFF16,
+                DEPTH_TIFF32F,
+                DEPTH_HDR32F,
+            ] {
                 for channels in 0..7 {
                     let ext = extension(depth);
                     let (a, b) = (dir.join(format!("a.{ext}")), dir.join(format!("b.{ext}")));

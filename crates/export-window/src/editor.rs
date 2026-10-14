@@ -1,15 +1,15 @@
 //! OUTPUT TEMPLATES, as Substance Painter's: the presets on the left; the output maps of the one
 //! shown in the middle, each a row of its name (and the parts a name may have, from the `$`
 //! button), its channels, its file type and depth; the input maps on the right, dragged onto
-//! the channels. A channel pressed shows its options under its row. A preset of the program's
-//! is shown as it is, and copied to be changed.
+//! the channels. A channel pressed shows its options under its row. Every preset is changed
+//! where it is shown, the program's too (each then made again as it was with Reset).
 
-use iced::widget::{Column, Row, button, column, container, mouse_area, pick_list, row, space, text, text_input};
+use iced::widget::{Column, Row, button, column, container, mouse_area, row, space, text, text_input};
 use iced::{Alignment, Element, Length};
 use scroll_box::scroll_box;
 use texture_export::{Edit, FileType, Format, Layout, MapId, Missing, Normals, Part, Template};
 
-use crate::{Chosen, Content, Dragged, Event, Look, State, caption, style};
+use crate::{Chosen, Content, Dragged, Event, Look, Menu, Offer, State, caption, choice, style};
 
 /// The tags of the channels of `file`'s parts: `RGB`, `A`; `Gray` of a file of one channel.
 fn tags(file: &texture_export::File) -> Vec<String> {
@@ -43,10 +43,8 @@ fn label(part: &Part, names: &dyn Fn(&MapId) -> String) -> (String, bool) {
 
 pub(crate) fn view<'a, M: Clone + 'a>(content: &Content<'a, M>, state: &'a State, look: &Look, say: impl Fn(Event) -> M + Copy + 'a) -> Element<'a, M> {
     let look = *look;
-    let editable = match state.shown {
-        Chosen::Mine(i) => (i < content.mine.len()).then_some(i),
-        Chosen::Preset(_) => None,
-    };
+    // (Whatever is shown is changed there.)
+    let editable = state.shown.template(&content.presets, content.mine).is_some().then_some(state.shown);
     row![
         container(presets(content, state, &look, say)).width(Length::Fixed(230.0)).height(Length::Fill).style(style::sunken(&look)),
         container(outputs(content, state, editable, &look, say)).width(Length::Fill).height(Length::Fill),
@@ -70,7 +68,12 @@ fn presets<'a, M: Clone + 'a>(content: &Content<'a, M>, state: &'a State, look: 
         Chosen::Mine(i) => Some(i),
         Chosen::Preset(_) => None,
     };
+    let changed = match state.shown {
+        Chosen::Preset(i) => content.presets.get(i).is_some_and(|p| p.changed).then_some(i),
+        Chosen::Mine(_) => None,
+    };
     let tools = row![
+        small(&look, "Reset", changed.map(|i| say(Event::Reset(i)))),
         small(&look, "Copy", Some(say(Event::Duplicate(state.shown)))),
         small(&look, "−", mine.map(|i| say(Event::Deleting(Some(i))))),
         small(&look, "+", Some(say(Event::New))),
@@ -90,14 +93,16 @@ fn presets<'a, M: Clone + 'a>(content: &Content<'a, M>, state: &'a State, look: 
         list = list.push(container(asked).padding(6).width(Length::Fill).style(style::menu(&look)));
     }
     let item = move |name: String, note: &'static str, chosen: bool, to: Chosen| {
-        let face = row![text(name).size(look.text_size), text(note).size(look.small_size).color(c.faint)].spacing(6).align_y(Alignment::Center);
+        let color = if note == "changed" { c.converted } else { c.faint };
+        let face = row![text(name).size(look.text_size), text(note).size(look.small_size).color(color)].spacing(6).align_y(Alignment::Center);
         button(face).width(Length::Fill).padding([3, 8]).style(style::item(&look, chosen)).on_press(say(Event::Show(to)))
     };
     for (i, preset) in content.presets.iter().enumerate().filter(|(_, p)| p.template.is_some()) {
-        list = list.push(item(preset.name.into(), "built in", state.shown == Chosen::Preset(i), Chosen::Preset(i)));
+        let note = if preset.changed { "changed" } else { "" };
+        list = list.push(item(preset.name.into(), note, state.shown == Chosen::Preset(i), Chosen::Preset(i)));
     }
     for (i, template) in content.mine.iter().enumerate() {
-        list = list.push(item(template.name.clone(), "", state.shown == Chosen::Mine(i), Chosen::Mine(i)));
+        list = list.push(item(template.name.clone(), "yours", state.shown == Chosen::Mine(i), Chosen::Mine(i)));
     }
     for problem in content.problems {
         list = list.push(text(format!("Not read: {problem}")).size(look.small_size).color(c.warning));
@@ -116,7 +121,7 @@ fn presets<'a, M: Clone + 'a>(content: &Content<'a, M>, state: &'a State, look: 
 fn outputs<'a, M: Clone + 'a>(
     content: &Content<'a, M>,
     state: &'a State,
-    editable: Option<usize>,
+    editable: Option<Chosen>,
     look: &Look,
     say: impl Fn(Event) -> M + Copy + 'a,
 ) -> Element<'a, M> {
@@ -127,17 +132,24 @@ fn outputs<'a, M: Clone + 'a>(
     };
     // Its name: changed where it is the user's.
     let mut head: Row<'a, M> = row![text("Current preset:").size(look.text_size).color(c.dim)].spacing(8).align_y(Alignment::Center);
-    head = match editable {
-        Some(i) => head.push(
+    head = match state.shown {
+        Chosen::Mine(i) => head.push(
             text_input("Name", &template.name)
                 .width(Length::Fixed(280.0))
                 .size(look.text_size)
                 .padding([4, 8])
                 .style(look.text_input)
-                .on_input(move |s| say(Event::Edit(i, Edit::Name(s)))),
+                .on_input(move |s| say(Event::Edit(Chosen::Mine(i), Edit::Name(s)))),
         ),
-        None => head.push(text(template.name.clone()).size(look.text_size).font(look.bold).color(c.bright)),
+        // (A preset of the program's keeps its name: settings find it by it.)
+        Chosen::Preset(_) => head.push(text(template.name.clone()).size(look.text_size).font(look.bold).color(c.bright)),
     };
+    if let Chosen::Preset(i) = state.shown
+        && content.presets.get(i).is_some_and(|p| p.changed)
+    {
+        head = head.push(text("changed").size(look.small_size).color(c.converted));
+        head = head.push(small(&look, "Reset to default", Some(say(Event::Reset(i)))));
+    }
     head = head.push(space().width(Length::Fill));
     let normals = |n: Normals| match n {
         Normals::OpenGL => "OpenGL (Y+)",
@@ -158,11 +170,7 @@ fn outputs<'a, M: Clone + 'a>(
             }
             head = head.push(container(seg).style(look.segments));
         }
-        None => {
-            head =
-                head.push(text(format!("Normal maps: {}  ·  built in: copy it to change it", normals(template.normals))).size(look.small_size).color(c.faint));
-            head = head.push(small(&look, "Copy", Some(say(Event::Duplicate(state.shown)))));
-        }
+        None => head = head.push(text(format!("Normal maps: {}", normals(template.normals))).size(look.small_size).color(c.faint)),
     }
 
     // The output maps: a new one laid out as Painter lays them out.
@@ -182,11 +190,7 @@ fn outputs<'a, M: Clone + 'a>(
     if template.files.is_empty() {
         rows = rows.push(text("No output maps: create one above.").size(look.small_size).color(c.dim));
     }
-    let hint = if editable.is_some() {
-        "Drag and drop maps on output's channels to set up your export."
-    } else {
-        "A built-in preset: copy it to make one of your own you can change."
-    };
+    let hint = "Drag and drop maps on output's channels to set up your export.";
     let said = match template.files.len() {
         1 => "1 output map will be exported.".to_string(),
         n => format!("{n} output maps will be exported."),
@@ -203,23 +207,13 @@ fn outputs<'a, M: Clone + 'a>(
     column![container(head).padding([2, 4]), line, create, scroll_box(rows).height(Length::Fill), foot].spacing(6).into()
 }
 
-/// The file type of an output map, as its list offers it: "as set" (the export's), or a kind.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Kind(Option<FileType>);
-
-impl std::fmt::Display for Kind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0.map_or("as set", FileType::name))
-    }
-}
-
 /// An output map: its name, channels, file type and depth; under it, what it is written as, the
 /// parts of a name where asked, and the options of its channel chosen.
 #[allow(clippy::too_many_arguments)]
 fn output_row<'a, M: Clone + 'a>(
     content: &Content<'a, M>,
     state: &'a State,
-    editable: Option<usize>,
+    editable: Option<Chosen>,
     template: &Template,
     f: usize,
     file: &texture_export::File,
@@ -310,24 +304,26 @@ fn output_row<'a, M: Clone + 'a>(
     // The file type and depth: as the export sets them, or its own.
     match editable {
         Some(i) => {
-            let kinds: Vec<Kind> = std::iter::once(Kind(None)).chain(FileType::ALL.into_iter().map(|k| Kind(Some(k)))).collect();
-            let kind = pick_list(kinds, Some(Kind(file.format.map(Format::file_type))), move |k: Kind| {
-                say(Event::Edit(i, Edit::Format { file: f, format: k.0.map(|t| t.formats()[0]) }))
-            })
-            .width(Length::Fixed(88.0))
-            .text_size(look.small_size)
-            .padding([3, 6])
-            .style(look.pick_list);
+            let to = move |format: Option<Format>| say(Event::Edit(i, Edit::Format { file: f, format }));
+            let kind_of = file.format.map(Format::file_type);
+            let kinds = FileType::ALL.into_iter().map(|k| Offer::new(k.name(), to(Some(k.formats()[0])), kind_of == Some(k))).collect();
+            let kind = choice(
+                &look,
+                state,
+                Menu::Kind(f),
+                kind_of.map_or("as set", FileType::name).into(),
+                kind_of.is_none(),
+                96.0,
+                vec![vec![Offer::new("As set", to(None), kind_of.is_none())], kinds],
+                say,
+            );
             let depth: Element<'a, M> = match file.format {
-                Some(format) => {
-                    pick_list(format.file_type().formats(), Some(format), move |d: Format| say(Event::Edit(i, Edit::Format { file: f, format: Some(d) })))
-                        .width(Length::Fixed(108.0))
-                        .text_size(look.small_size)
-                        .padding([3, 6])
-                        .style(look.pick_list)
-                        .into()
+                Some(format) if format.file_type().formats().len() > 1 => {
+                    let depths = format.file_type().formats().iter().map(|d| Offer::new(d.depth(), to(Some(*d)), *d == format)).collect();
+                    choice(&look, state, Menu::FileDepth(f), format.depth().into(), false, 120.0, vec![depths], say)
                 }
-                None => container(text(content.format.depth()).size(look.small_size).color(c.faint)).width(Length::Fixed(108.0)).padding([4, 6]).into(),
+                Some(format) => container(text(format.depth()).size(look.small_size).color(c.dim)).width(Length::Fixed(120.0)).padding([4, 8]).into(),
+                None => container(text(content.global_depth()).size(look.small_size).color(c.faint)).width(Length::Fixed(120.0)).padding([4, 8]).into(),
             };
             line = line.push(column![kind, depth].spacing(2).align_x(Alignment::End));
             line = line.push(
@@ -347,10 +343,11 @@ fn output_row<'a, M: Clone + 'a>(
     }
     let mut body = column![line].spacing(4);
     // The name it is written by now; parts of a name not known here.
-    let extension = file.format.unwrap_or(content.format).extension();
+    let extension = file.format.map(Format::extension).or(content.global_extension());
     let values: Vec<(&str, &str)> = content.values.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let written = texture_export::naming::expand(&file.name, &values);
-    let mut said = row![space().width(12), text(format!("{written}.{extension}")).size(look.caption_size).font(look.mono).color(c.faint)].spacing(8);
+    let shown = extension.map_or_else(|| written.clone(), |e| format!("{written}.{e}"));
+    let mut said = row![space().width(12), text(shown).size(look.caption_size).font(look.mono).color(c.faint)].spacing(8);
     let unknown = texture_export::naming::unknown_parts(&file.name, content.tokens);
     if !unknown.is_empty() {
         said = said.push(text(format!("{} stands for nothing here", unknown.join(", "))).size(look.caption_size).color(c.warning));
@@ -405,7 +402,7 @@ fn output_row<'a, M: Clone + 'a>(
 /// exported has no such map; or its value. Emptied.
 #[allow(clippy::too_many_arguments)]
 fn options<'a, M: Clone + 'a>(
-    i: usize,
+    i: Chosen,
     f: usize,
     p: usize,
     part: &Part,
@@ -481,7 +478,7 @@ fn options<'a, M: Clone + 'a>(
 fn maps<'a, M: Clone + 'a>(
     content: &Content<'a, M>,
     state: &'a State,
-    editable: Option<usize>,
+    editable: Option<Chosen>,
     look: &Look,
     say: impl Fn(Event) -> M + Copy + 'a,
 ) -> Element<'a, M> {
@@ -499,26 +496,22 @@ fn maps<'a, M: Clone + 'a>(
         let mark: Element<'a, M> =
             if uses { container(space()).width(9).height(9).style(style::swatch(c.bright)).into() } else { container(space()).width(9).height(9).into() };
         let tint = color.unwrap_or(if has { c.bright } else { c.dim });
-        let face = container(row![mark, text(dragged.label.clone()).size(look.small_size).color(tint)].spacing(7).align_y(Alignment::Center))
-            .padding([2, 8])
-            .width(Length::Fill);
-        let mut area = mouse_area(face);
-        if editable.is_some() {
-            area = area.on_press(say(Event::Drag(dragged))).interaction(iced::mouse::Interaction::Grab);
-        }
-        area
+        let face = row![mark, text(dragged.label.clone()).size(look.small_size).color(tint)].spacing(7).align_y(Alignment::Center);
+        // (A box of its own, lit under the mouse: plain which is taken.)
+        let taken = button(face).width(Length::Fill).padding([3, 8]).style(style::map_box(&look)).on_press_maybe(editable.map(|_| say(Event::Drag(dragged))));
+        mouse_area(taken).interaction(if editable.is_some() { iced::mouse::Interaction::Grab } else { iced::mouse::Interaction::default() })
     };
-    let mut list = column![].spacing(0).padding([4, 2]);
+    let mut list = column![].spacing(2).padding([4, 4]);
     let mut group = String::new();
     for input in &content.inputs {
         if input.group != group {
             group = input.group.clone();
-            list = list.push(container(text(group.clone()).size(look.caption_size).color(c.faint)).padding([6, 8]));
+            list = list.push(container(text(group.clone()).size(look.caption_size).color(c.faint)).padding([6, 4]));
         }
         let dragged = Dragged { map: Some(input.map.clone()), invert: false, normals: None, label: input.name.clone() };
         list = list.push(entry(dragged, content.has.contains(&input.map), used.contains(&input.map), None));
     }
-    let mut custom = column![].spacing(0).padding([4, 2]);
+    let mut custom = column![].spacing(2).padding([4, 4]);
     for (map, name) in &content.custom {
         let dragged = Dragged { map: Some(map.clone()), invert: false, normals: None, label: name.clone() };
         custom = custom.push(entry(dragged, true, used.contains(map), None));
@@ -527,7 +520,7 @@ fn maps<'a, M: Clone + 'a>(
         custom =
             custom.push(container(text(format!("The {} has no maps of usage Custom.", content.thing)).size(look.caption_size).color(c.faint)).padding([2, 8]));
     }
-    let mut converted = column![].spacing(0).padding([4, 2]);
+    let mut converted = column![].spacing(2).padding([4, 4]);
     let made = [
         ("Normal DirectX", "normal", false, Some(Normals::DirectX)),
         ("Normal OpenGL", "normal", false, Some(Normals::OpenGL)),

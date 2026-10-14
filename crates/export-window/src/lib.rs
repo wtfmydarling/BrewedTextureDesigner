@@ -1,21 +1,24 @@
 //! The window an export of textures is set up in, made to be the same in every program of a
-//! set, as Substance Painter's export window is: SETTINGS (where, with which output template,
-//! in what), OUTPUT TEMPLATES (the presets, the program's and the user's; the output maps of
-//! the one shown, each a row of a name and channels; the input maps, dragged onto the channels),
-//! LIST OF EXPORTS (the files before they are written). A program gives what it has (see
-//! [`Content`]: its presets, the parts of a name it fills in, its maps, its word for what it
-//! exports) and its look, keeps the window's [`State`], and takes what is done as [`Event`]s:
-//! it writes the files, and keeps the templates of the user's (see
-//! `texture_export::write_template`). It knows nothing of the program.
+//! set, as Substance Painter's export window is: SETTINGS (what is exported, checked in a list
+//! of the projects open and what each exports; the global settings, and those of each where
+//! they differ: the template, the format, the size), OUTPUT TEMPLATES (the presets, the
+//! program's and the user's, each changed where it is shown; the output maps of the one shown,
+//! each a row of a name and channels; the input maps, dragged onto the channels), LIST OF
+//! EXPORTS (the files before they are written). A program gives what it has (see [`Content`]:
+//! its presets, the parts of a name it fills in, its maps, what it exports and its word for
+//! it) and its look, keeps the window's [`State`], and takes what is done as [`Event`]s: it
+//! writes the files, keeps the templates (see `texture_export::write_template`) and the settings
+//! with its projects. It knows nothing of the program.
 
 mod editor;
 pub mod style;
 
+use drop_down::dropdown;
 use iced::widget::{Column, button, column, container, mouse_area, pick_list, pin, row, space, stack, text, text_input};
 use iced::{Alignment, Color, Element, Font, Length, Point, Theme};
 use scroll_box::scroll_box;
 use texture_export::naming::Token;
-use texture_export::{Edit, FileType, Format, MapId, Normals, Template};
+use texture_export::{Edit, FileFormat, FileType, Format, MapId, Normals, Size, Template};
 
 /// Which template: one of the program's presets (its place in [`Content::presets`]), or one of
 /// the user's.
@@ -25,12 +28,14 @@ pub enum Chosen {
     Mine(usize),
 }
 
-/// A preset of the program's: its name, and the template it is; of none, the program's maps
-/// as they are, each written with the name, channels and format it has.
+/// A preset of the program's: its name, and the template it is (as the user changed it, where
+/// `changed`: it can be reset); of none, the program's maps as they are, each written with the
+/// name, channels and format it has (as in the project).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Preset<'a> {
     pub name: &'a str,
     pub template: Option<&'a Template>,
+    pub changed: bool,
 }
 
 /// The tabs of the window.
@@ -64,10 +69,87 @@ pub struct Dragged {
     pub label: String,
 }
 
+/// A list of options of the window, open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Menu {
+    /// Of the settings shown: the template, the kind of file and its depth, the size, the normals.
+    Template,
+    FileType,
+    Depth,
+    Size,
+    Normals,
+    /// Of an output map of the template shown: its kind of file, its depth.
+    Kind(usize),
+    FileDepth(usize),
+}
+
+/// What an export is set to, of all that is exported (the global settings): the template the
+/// files are written with, as what, and how large.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Settings {
+    pub template: Chosen,
+    pub format: FileFormat,
+    pub size: Size,
+}
+
+/// What one of what is exported says of its own; where it says nothing, it is as the global
+/// settings say (of its normal maps: as it makes them).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Own {
+    pub template: Option<Chosen>,
+    pub format: Option<FileFormat>,
+    pub size: Option<Size>,
+    pub normals: Option<Normals>,
+}
+
+impl Settings {
+    /// The settings of one that says `own`.
+    pub fn with(self, own: &Own) -> Settings {
+        Settings { template: own.template.unwrap_or(self.template), format: own.format.unwrap_or(self.format), size: own.size.unwrap_or(self.size) }
+    }
+}
+
+/// A setting, as it is set.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Setting {
+    Template(Chosen),
+    Format(FileFormat),
+    Size(Size),
+    Normals(Normals),
+}
+
+/// Which setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Which {
+    Template,
+    Format,
+    Size,
+    Normals,
+}
+
+/// A row of the list of what is exported: a project (a heading, checked where all of it is), or
+/// what it exports (a graph; a texture set, and its UV sets under it), with what it says of
+/// its own.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Exported {
+    pub name: String,
+    /// How deep in the list: 0 a project.
+    pub depth: u8,
+    pub checked: bool,
+    pub own: Own,
+    /// The size it is made at, and which way its normal maps point as it makes them.
+    pub size: [u32; 2],
+    pub normals: Normals,
+}
+
 /// What the window keeps between frames (the program keeps it for it).
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
     pub tab: Tab,
+    /// The row of the list of what is exported whose settings are shown (none: the global ones).
+    pub selected: Option<usize>,
+    /// The list of options open.
+    pub menu: Option<Menu>,
     /// The template shown in OUTPUT TEMPLATES.
     pub shown: Chosen,
     /// The channel of an output map chosen there (the map, its part): its options shown.
@@ -83,8 +165,8 @@ pub struct State {
 }
 
 impl State {
-    /// The window as it opens: SETTINGS, the template written with shown in OUTPUT TEMPLATES (the
-    /// first of `presets` that is one, where it is the maps as they are).
+    /// The window as it opens: SETTINGS, the global settings; the template written with shown in
+    /// OUTPUT TEMPLATES (the first of `presets` that is one, where it is the maps as they are).
     pub fn new(chosen: Chosen, presets: &[Preset]) -> State {
         let shown = match chosen {
             Chosen::Preset(i) if presets.get(i).is_none_or(|p| p.template.is_none()) => {
@@ -92,17 +174,34 @@ impl State {
             }
             chosen => chosen,
         };
-        State { tab: Tab::Settings, shown, slot: None, tokens: None, deleting: None, dragging: None, pointer: Point::ORIGIN, over: None }
+        State {
+            tab: Tab::Settings,
+            selected: None,
+            menu: None,
+            shown,
+            slot: None,
+            tokens: None,
+            deleting: None,
+            dragging: None,
+            pointer: Point::ORIGIN,
+            over: None,
+        }
     }
 
     /// What `event` does to the window itself (what it does to the export and the templates is
     /// the program's).
     pub fn update(&mut self, event: &Event) {
+        // (Whatever is done closes the list of options open.)
+        if !matches!(event, Event::Pointer(_) | Event::Over(_)) {
+            self.menu = None;
+        }
         match event {
             Event::Tab(tab) => {
                 self.tab = *tab;
                 self.tokens = None;
             }
+            Event::Select(row) => self.selected = *row,
+            Event::Menu(menu) => self.menu = *menu,
             Event::Show(chosen) => {
                 self.shown = *chosen;
                 self.slot = None;
@@ -130,7 +229,7 @@ impl State {
                 self.slot = Some((*file, *part));
                 self.tokens = None;
             }
-            Event::Edit(_, Edit::RemoveFile(_) | Edit::AddFile { .. } | Edit::MoveFile { .. }) => {
+            Event::Edit(_, Edit::RemoveFile(_) | Edit::AddFile { .. } | Edit::MoveFile { .. }) | Event::Reset(_) => {
                 self.slot = None;
                 self.tokens = None;
             }
@@ -145,6 +244,8 @@ impl State {
 pub enum Event {
     // The window's own (see `State::update`).
     Tab(Tab),
+    Select(Option<usize>),
+    Menu(Option<Menu>),
     Show(Chosen),
     Slot(Option<(usize, usize)>),
     Tokens(Option<usize>),
@@ -153,20 +254,26 @@ pub enum Event {
     Pointer(Point),
     Over(Option<(usize, usize)>),
     DragEnd,
-    // The export's.
-    ExportWith(Chosen),
-    /// The graph's normal maps are DirectX's.
-    DirectX(bool),
-    Format(Format),
+    // What is exported: a row checked (a project: all of it), or all.
+    Check(usize, bool),
+    IncludeAll,
+    /// A setting, of the global settings (`None`) or of a row's own; a row's own no more.
+    Set(Option<usize>, Setting),
+    Unset(usize, Which),
     /// Choose the folder (the program shows a dialog of the system), and show it.
     Browse,
     OpenFolder,
-    // The templates of the user's: new, a copy of another, deleted, changed; their folder shown.
+    // The templates: of the user's, new, a copy of another, deleted; any changed; a preset of
+    // the program's as it was made again; their folder shown.
     New,
     Duplicate(Chosen),
     Delete(usize),
-    Edit(usize, Edit),
+    Edit(Chosen, Edit),
+    Reset(usize),
     OpenTemplates,
+    /// The settings kept with the projects; all as they are by default.
+    SaveSettings,
+    ResetAll,
     Export,
     Cancel,
 }
@@ -177,7 +284,8 @@ pub struct Listed {
     pub name: String,
     /// What it is made of, said.
     pub said: String,
-    /// Its kind and depth ("png", "8 bits").
+    /// Its size, kind and depth ("1024 × 1024", "png", "8 bits").
+    pub size: String,
     pub kind: String,
     pub depth: String,
 }
@@ -242,30 +350,25 @@ pub struct Look {
 
 /// What the window shows.
 pub struct Content<'a, M> {
-    /// What is exported (of a graph: its name), and its size, said.
-    pub name: String,
     /// The program's word for what it exports, as the window says it: "graph" (a texture
     /// designer exports a graph's outputs), "texture set" (a texture painter).
     pub thing: &'a str,
     /// The program's presets, in its order: each the template it is, or its maps as they are.
     pub presets: Vec<Preset<'a>>,
-    pub size: String,
     /// The templates of the user's, the folder they are kept in, and what could not be read.
     pub mine: &'a [Template],
     pub templates_folder: Option<String>,
     pub problems: &'a [String],
-    /// What the files are written with.
-    pub export_with: Chosen,
-    /// The program's normal maps are DirectX's (Y−), not OpenGL's.
-    pub directx: bool,
-    /// The format of a file whose template says none.
-    pub format: Format,
+    /// The projects open and what each exports, and the settings of all.
+    pub exported: Vec<Exported>,
+    pub global: Settings,
     /// The folder the files go to, as the program shows a path; whether one is chosen.
     pub folder: Element<'a, M>,
     pub folder_chosen: bool,
-    /// The files written, before they are.
-    pub files: Vec<Listed>,
-    /// The parts a name may have (`$(graph)`…), and what each stands for here.
+    /// The files written, under what each is of, before they are.
+    pub files: Vec<(String, Vec<Listed>)>,
+    /// The parts a name may have (`$(graph)`…), and what each stands for here (of the first of
+    /// what is exported).
     pub tokens: &'a [Token],
     pub values: Vec<(String, String)>,
     /// The maps a template may be made of; the maps of no usage the program has, each by its
@@ -284,21 +387,116 @@ impl Chosen {
             Chosen::Mine(i) => mine.get(i),
         }
     }
+
+    /// Its name, as a list says it.
+    pub fn name(self, presets: &[Preset], mine: &[Template]) -> String {
+        match self {
+            Chosen::Preset(i) => presets.get(i).map_or_else(String::new, |p| p.name.to_string()),
+            Chosen::Mine(i) => mine.get(i).map_or_else(String::new, |t| format!("{} (yours)", t.name)),
+        }
+    }
 }
 
-/// What a list of templates offers: its name, as a list shows it.
-#[derive(Clone, Debug, PartialEq)]
-struct Offered(Chosen, String);
+/// What a format of the files is, said: "png 8 bits", as in the project.
+pub fn format_said(format: FileFormat) -> String {
+    match format {
+        FileFormat::AsMade => "As in the project".into(),
+        FileFormat::Of(format) => format.name(),
+    }
+}
 
-impl std::fmt::Display for Offered {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.1)
+/// What a size is, said, of what is made `made` (none: of several sizes).
+pub fn size_said(size: Size, made: Option<[u32; 2]>) -> String {
+    let of = |[w, h]: [u32; 2]| if w == h { format!("{w}") } else { format!("{w} × {h}") };
+    match (size, made) {
+        (Size::AsMade, Some(made)) => format!("As in the project ({})", of(made)),
+        (Size::AsMade, None) => "As in the project".into(),
+        (Size::Side(side), Some(made)) => of(Size::Side(side).of(made)),
+        (Size::Side(side), None) => format!("{side}"),
+    }
+}
+
+fn normals_said(normals: Normals) -> &'static str {
+    match normals {
+        Normals::OpenGL => "OpenGL (Y+)",
+        Normals::DirectX => "DirectX (Y−)",
     }
 }
 
 /// A caption in capitals, as the program's panes have.
 fn caption<'a>(look: &Look, title: &str) -> iced::widget::Text<'a> {
     text(title.to_uppercase()).size(look.caption_size).font(look.bold).color(look.colors.dim)
+}
+
+/// An option of a list: what it says, what choosing it does, whether it is the one chosen.
+pub(crate) struct Offer<M> {
+    pub label: String,
+    pub message: M,
+    pub chosen: bool,
+}
+
+impl<M> Offer<M> {
+    pub fn new(label: impl Into<String>, message: M, chosen: bool) -> Offer<M> {
+        Offer { label: label.into(), message, chosen }
+    }
+}
+
+/// A list to choose from, as the program's: a field that says what is chosen (`as_else`: as
+/// something else says, dim), and pressed, its options below it, in groups, a line between
+/// them: the first, what the project makes, apart from the others, at the top.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn choice<'a, M: Clone + 'a>(
+    look: &Look,
+    state: &State,
+    menu: Menu,
+    said: String,
+    as_else: bool,
+    width: f32,
+    groups: Vec<Vec<Offer<M>>>,
+    say: impl Fn(Event) -> M + Copy + 'a,
+) -> Element<'a, M> {
+    let look = *look;
+    let c = look.colors;
+    let open = state.menu == Some(menu);
+    let field = button(
+        row![
+            text(said).size(look.small_size).color(if as_else { c.dim } else { c.text }).wrapping(text::Wrapping::None),
+            space().width(Length::Fill),
+            text("▾").size(look.small_size).color(c.dim),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fixed(width))
+    .padding([4, 8])
+    .clip(true)
+    .style(style::field(&look, open))
+    .on_press(say(Event::Menu(if open { None } else { Some(menu) })));
+    let mut items: Column<'a, M> = column![].spacing(1);
+    for (g, group) in groups.into_iter().filter(|g| !g.is_empty()).enumerate() {
+        if g > 0 {
+            items = items.push(container(container(space()).width(Length::Fill).height(1).style(style::line(&look))).padding([3, 4]));
+        }
+        for offer in group {
+            let mark = text(if offer.chosen { "✓" } else { "" }).size(look.small_size).color(c.bright).width(Length::Fixed(14.0));
+            items = items.push(
+                button(row![mark, text(offer.label).size(look.small_size).wrapping(text::Wrapping::None)].align_y(Alignment::Center))
+                    .width(Length::Fill)
+                    .padding([4, 8])
+                    .style(style::option(&look, offer.chosen))
+                    .on_press(offer.message),
+            );
+        }
+    }
+    let list = container(scroll_box(items).height(Length::Shrink)).padding(4).width(Length::Fixed(width.max(180.0))).max_height(380).style(style::menu(&look));
+    dropdown(field, list, open).on_dismiss(say(Event::Menu(None))).into()
+}
+
+/// A box to check, as the program's: a mark in a field.
+fn check<'a, M: Clone + 'a>(look: &Look, checked: bool, on: M) -> Element<'a, M> {
+    let look = *look;
+    let mark = text(if checked { "✓" } else { "" }).size(look.small_size).color(look.colors.bright);
+    button(container(mark).center_x(14).center_y(14)).padding(0).style(style::check(&look, checked)).on_press(on).into()
 }
 
 /// The window, its frame and all: `say` makes what is done a message of the program's. The
@@ -308,25 +506,39 @@ pub fn view<'a, M: Clone + 'a>(mut content: Content<'a, M>, state: &'a State, lo
     let c = look.colors;
     // (The program's element of the folder, shown in SETTINGS.)
     let folder = std::mem::replace(&mut content.folder, text("").into());
+    let any = content.exported.iter().any(|e| e.checked && e.depth > 0);
     let mut tabs = row![].spacing(0).align_y(Alignment::Center);
     for tab in Tab::ALL {
         let chosen = tab == state.tab;
-        // (The tab shown has a light line on its top, and is of the page's color.)
+        // (The tab shown has a light line on its top, and is of the page's color; the list of
+        // exports is of nothing where nothing is exported.)
         let top = container(space())
             .width(Length::Fill)
             .height(2)
             .style(move |_: &Theme| container::Style { background: chosen.then_some(c.bright.into()), ..Default::default() });
-        let label =
-            button(text(tab.name()).size(look.small_size).font(look.bold)).padding([8, 14]).style(style::tab(&look, chosen)).on_press(say(Event::Tab(tab)));
+        let can = tab != Tab::Files || any;
+        let label = button(text(tab.name()).size(look.small_size).font(look.bold))
+            .padding([8, 14])
+            .style(style::tab(&look, chosen))
+            .on_press_maybe(can.then(|| say(Event::Tab(tab))));
         tabs = tabs.push(column![top, label].width(Length::Shrink));
     }
     let tools: Element<'a, M> = match state.tab {
+        Tab::Settings => {
+            let all = content.exported.iter().all(|e| e.checked);
+            button(text("Include all").size(look.small_size).center())
+                .width(Length::Fixed(150.0))
+                .padding([4, 10])
+                .style(look.button)
+                .on_press_maybe((!all).then(|| say(Event::IncludeAll)))
+                .into()
+        }
         Tab::Files => button(text("Open output directory").size(look.small_size))
             .padding([4, 10])
             .style(look.button)
             .on_press_maybe(content.folder_chosen.then(|| say(Event::OpenFolder)))
             .into(),
-        _ => text(format!("Export  ·  {}", content.name)).size(look.small_size).color(c.dim).into(),
+        Tab::Templates => space().into(),
     };
     let head = container(row![tabs, space().width(Length::Fill), tools].align_y(Alignment::Center).padding(iced::Padding {
         top: 6.0,
@@ -337,28 +549,31 @@ pub fn view<'a, M: Clone + 'a>(mut content: Content<'a, M>, state: &'a State, lo
     .width(Length::Fill)
     .style(style::bar(&look));
 
-    let count = content.files.len();
+    let count: usize = content.files.iter().map(|(_, files)| files.len()).sum();
     let ready = content.folder_chosen && count > 0;
     let page: Element<'a, M> = match state.tab {
-        Tab::Settings => settings(&content, folder, &look, say),
+        Tab::Settings => settings(&content, folder, state, &look, say),
         Tab::Templates => editor::view(&content, state, &look, say),
         Tab::Files => files(&content, &look),
     };
-    let said = match (count, content.folder_chosen) {
-        (0, _) => text(format!("Nothing to export: the {} has none of the maps the template writes", content.thing)).color(c.warning),
-        (_, false) => text(format!("{count} texture(s) selected for export: choose the output directory")).color(c.warning),
-        (_, true) => text(format!("{count} texture(s) selected for export")).color(c.dim),
+    let said = match (any, count, content.folder_chosen) {
+        (false, ..) => text(format!("No {} is checked for export", content.thing)).color(c.warning),
+        (_, 0, _) => text(format!("Nothing to export: the {}s checked have none of the maps the templates write", content.thing)).color(c.warning),
+        (_, _, false) => text(format!("{count} texture(s) selected for export: choose the output directory")).color(c.warning),
+        (_, _, true) => text(format!("{count} texture(s) selected for export")).color(c.dim),
+    };
+    let wide = |label: &'static str, style: fn(&Theme, button::Status) -> button::Style, on: Option<M>| {
+        button(text(label).size(look.text_size).center()).width(Length::Fixed(130.0)).padding([5, 12]).style(style).on_press_maybe(on)
     };
     let footer = container(
         row![
-            said.size(look.small_size),
+            wide("Reset all", look.button, Some(say(Event::ResetAll))),
             space().width(Length::Fill),
-            button(text("Cancel").size(look.text_size).center()).width(Length::Fixed(110.0)).padding([5, 12]).style(look.button).on_press(say(Event::Cancel)),
-            button(text("Export").size(look.text_size).center())
-                .width(Length::Fixed(110.0))
-                .padding([5, 12])
-                .style(look.primary_button)
-                .on_press_maybe(ready.then(|| say(Event::Export))),
+            said.size(look.small_size),
+            space().width(12),
+            wide("Cancel", look.button, Some(say(Event::Cancel))),
+            wide("Save settings", look.button, Some(say(Event::SaveSettings))),
+            wide("Export", look.primary_button, ready.then(|| say(Event::Export))),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -366,9 +581,7 @@ pub fn view<'a, M: Clone + 'a>(mut content: Content<'a, M>, state: &'a State, lo
     .padding([8, 12])
     .width(Length::Fill)
     .style(style::bar(&look));
-    let line = move || {
-        container(space()).width(Length::Fill).height(1).style(move |_: &Theme| container::Style { background: Some(c.line.into()), ..Default::default() })
-    };
+    let line = move || container(space()).width(Length::Fill).height(1).style(style::line(&look));
     let window: Element<'a, M> =
         column![head, line(), container(page).width(Length::Fill).height(Length::Fill).style(style::page(&look)), line(), footer].into();
     // A map dragged: its label follows the pointer; let go anywhere, the drag ends (on a channel,
@@ -392,51 +605,146 @@ fn setting<'a, M: 'a>(look: &Look, label: impl text::IntoFragment<'a>, control: 
         .into()
 }
 
-/// SETTINGS: what is exported (a graph, texture sets), and the general export parameters.
-fn settings<'a, M: Clone + 'a>(content: &Content<'a, M>, folder: Element<'a, M>, look: &Look, say: impl Fn(Event) -> M + Copy + 'a) -> Element<'a, M> {
+/// SETTINGS: what is exported, checked in the list of the projects open and what each exports;
+/// the global settings, or those of the row chosen.
+fn settings<'a, M: Clone + 'a>(
+    content: &Content<'a, M>,
+    folder: Element<'a, M>,
+    state: &'a State,
+    look: &Look,
+    say: impl Fn(Event) -> M + Copy + 'a,
+) -> Element<'a, M> {
     let look = *look;
     let c = look.colors;
-    // What is exported, as Painter lists its texture sets.
-    let item = |label: Element<'a, M>, chosen: bool| button(label).width(Length::Fill).padding([4, 10]).style(style::item(&look, chosen));
-    let exported = row![
-        container(text("✓").size(look.small_size).color(c.bright)).width(16).height(16).center_x(16).center_y(16).style(style::well(&look)),
-        text(content.name.clone()).size(look.text_size),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-    let list = column![
-        container(caption(&look, "Export")).padding([7, 10]).width(Length::Fill).style(style::strip(&look)),
-        column![item(text("Global settings").size(look.text_size).font(look.bold).into(), true), item(exported.into(), false)].spacing(1).padding(4),
-    ];
-    let side = container(list).width(Length::Fixed(240.0)).height(Length::Fill).style(style::sunken(&look));
-
-    // The template, the file's kind and depth, the normals, the size.
-    let mut offered: Vec<Offered> = content.presets.iter().enumerate().map(|(i, p)| Offered(Chosen::Preset(i), p.name.into())).collect();
-    offered.extend(content.mine.iter().enumerate().map(|(i, t)| Offered(Chosen::Mine(i), format!("{} (yours)", t.name))));
-    let chosen = offered.iter().find(|o| o.0 == content.export_with).cloned();
-    let template = pick_list(offered, chosen, move |o: Offered| say(Event::ExportWith(o.0)))
+    // What is exported, as Painter lists its texture sets: the global settings first.
+    let selected = state.selected.filter(|&i| content.exported.get(i).is_some_and(|e| e.depth > 0));
+    let global = button(text("Global settings").size(look.text_size).font(look.bold).color(if selected.is_none() { c.bright } else { c.text }))
         .width(Length::Fill)
-        .text_size(look.text_size)
-        .padding([4, 8])
-        .style(look.pick_list);
-    let packs = content.export_with.template(&content.presets, content.mine).is_some();
-    let kind = content.format.file_type();
-    let kinds = pick_list(FileType::ALL, Some(kind), move |k: FileType| say(Event::Format(k.formats()[0])))
-        .width(Length::Fixed(110.0))
-        .text_size(look.text_size)
-        .padding([4, 8])
-        .style(look.pick_list);
-    let depths = pick_list(kind.formats(), Some(content.format), move |f: Format| say(Event::Format(f)))
-        .width(Length::Fixed(200.0))
-        .text_size(look.text_size)
-        .padding([4, 8])
-        .style(look.pick_list);
-    let normals = ["OpenGL (Y+)", "DirectX (Y−)"];
-    let its_normals = pick_list(normals, Some(normals[usize::from(content.directx)]), move |n: &str| say(Event::DirectX(n.starts_with("DirectX"))))
-        .width(Length::Fixed(200.0))
-        .text_size(look.text_size)
-        .padding([4, 8])
-        .style(look.pick_list);
+        .padding([5, 10])
+        .style(style::item(&look, selected.is_none()))
+        .on_press(say(Event::Select(None)));
+    let mut list = column![global].spacing(1).padding(4);
+    for (i, row) in content.exported.iter().enumerate() {
+        let heading = row.depth == 0;
+        let name =
+            text(row.name.clone()).size(look.text_size).font(if heading { look.bold } else { look.font }).color(if row.checked { c.text } else { c.dim });
+        let line = row![space().width(f32::from(row.depth) * 16.0), check(&look, row.checked, say(Event::Check(i, !row.checked))), name]
+            .spacing(8)
+            .align_y(Alignment::Center);
+        let chosen = selected == Some(i);
+        list = list.push(
+            button(line).width(Length::Fill).padding([4, 8]).style(style::item(&look, chosen)).on_press_maybe((!heading).then(|| say(Event::Select(Some(i))))),
+        );
+    }
+    let side = container(column![
+        container(caption(&look, "Export")).padding([7, 10]).width(Length::Fill).style(style::strip(&look)),
+        scroll_box(list).height(Length::Fill)
+    ])
+    .width(Length::Fixed(260.0))
+    .height(Length::Fill)
+    .style(style::sunken(&look));
+
+    let page = match selected.and_then(|i| content.exported.get(i).map(|row| (i, row))) {
+        None => global_settings(content, folder, state, &look, say),
+        Some((i, row)) => own_settings(content, i, row, state, &look, say),
+    };
+    row![side, scroll_box(container(page).padding([14, 20])).height(Length::Fill)].spacing(0).padding(8).into()
+}
+
+/// The templates offered: the program's maps as they are (as in the project), apart and first;
+/// then `between` (as the global settings, of a row); the presets; the user's.
+fn template_offers<'a, M: Clone + 'a>(
+    content: &Content<'a, M>,
+    chosen: Option<Chosen>,
+    between: Vec<Offer<M>>,
+    to: impl Fn(Chosen) -> M,
+) -> Vec<Vec<Offer<M>>> {
+    let offer = |i: usize, p: &Preset| Offer::new(p.name, to(Chosen::Preset(i)), chosen == Some(Chosen::Preset(i)));
+    let raw = content.presets.iter().enumerate().filter(|(_, p)| p.template.is_none()).map(|(i, p)| offer(i, p)).collect();
+    let presets = content.presets.iter().enumerate().filter(|(_, p)| p.template.is_some()).map(|(i, p)| offer(i, p)).collect();
+    let mine =
+        content.mine.iter().enumerate().map(|(i, t)| Offer::new(format!("{} (yours)", t.name), to(Chosen::Mine(i)), chosen == Some(Chosen::Mine(i)))).collect();
+    vec![raw, between, presets, mine]
+}
+
+/// The kinds of file offered: as in the project, apart and first; then `between`; the kinds.
+fn kind_offers<M: Clone>(chosen: Option<FileFormat>, between: Vec<Offer<M>>, to: impl Fn(FileFormat) -> M) -> Vec<Vec<Offer<M>>> {
+    let kind = chosen.and_then(|f| if let FileFormat::Of(f) = f { Some(f.file_type()) } else { None });
+    let kinds = FileType::ALL.into_iter().map(|k| Offer::new(k.name(), to(FileFormat::Of(k.formats()[0])), kind == Some(k))).collect();
+    vec![vec![Offer::new("As in the project", to(FileFormat::AsMade), chosen == Some(FileFormat::AsMade))], between, kinds]
+}
+
+/// The sizes offered, of what is made `made`: as in the project, apart and first; then
+/// `between`; the sizes.
+fn size_offers<M: Clone>(chosen: Option<Size>, made: Option<[u32; 2]>, between: Vec<Offer<M>>, to: impl Fn(Size) -> M) -> Vec<Vec<Offer<M>>> {
+    let sides = Size::SIDES.into_iter().map(|s| Offer::new(size_said(Size::Side(s), made), to(Size::Side(s)), chosen == Some(Size::Side(s)))).collect();
+    vec![vec![Offer::new(size_said(Size::AsMade, made), to(Size::AsMade), chosen == Some(Size::AsMade))], between, sides]
+}
+
+/// The depth of a kind of file: a list where it has several.
+fn depth_choice<'a, M: Clone + 'a>(
+    look: &Look,
+    state: &State,
+    format: Format,
+    to: impl Fn(Format) -> M,
+    say: impl Fn(Event) -> M + Copy + 'a,
+) -> Element<'a, M> {
+    let formats = format.file_type().formats();
+    if formats.len() == 1 {
+        return container(text(format.depth()).size(look.small_size).color(look.colors.dim)).padding([4, 8]).into();
+    }
+    let offers = formats.iter().map(|f| Offer::new(f.depth(), to(*f), *f == format)).collect();
+    choice(look, state, Menu::Depth, format.depth().into(), false, 200.0, vec![offers], say)
+}
+
+/// The global settings: where the files go, with which template, as what, how large.
+fn global_settings<'a, M: Clone + 'a>(
+    content: &Content<'a, M>,
+    folder: Element<'a, M>,
+    state: &'a State,
+    look: &Look,
+    say: impl Fn(Event) -> M + Copy + 'a,
+) -> Element<'a, M> {
+    let look = *look;
+    let c = look.colors;
+    let global = content.global;
+    let set = move |s: Setting| say(Event::Set(None, s));
+    let template = choice(
+        &look,
+        state,
+        Menu::Template,
+        global.template.name(&content.presets, content.mine),
+        false,
+        420.0,
+        template_offers(content, Some(global.template), Vec::new(), move |t| set(Setting::Template(t))),
+        say,
+    );
+    let kind = choice(
+        &look,
+        state,
+        Menu::FileType,
+        kind_said(global.format),
+        false,
+        160.0,
+        kind_offers(Some(global.format), Vec::new(), move |f| set(Setting::Format(f))),
+        say,
+    );
+    let depth: Element<'a, M> = match global.format {
+        FileFormat::Of(format) => depth_choice(&look, state, format, move |f| set(Setting::Format(FileFormat::Of(f))), say),
+        FileFormat::AsMade => text("Each map as its Output says").size(look.small_size).color(c.faint).into(),
+    };
+    let sizes = content.exported.iter().filter(|e| e.depth > 0).map(|e| e.size).collect::<Vec<_>>();
+    let made = sizes.first().copied().filter(|first| sizes.iter().all(|s| s == first));
+    let size = choice(
+        &look,
+        state,
+        Menu::Size,
+        size_said(global.size, made),
+        false,
+        260.0,
+        size_offers(Some(global.size), made, Vec::new(), move |s| set(Setting::Size(s))),
+        say,
+    );
     let mut rows = column![text("General Export Parameters").size(look.text_size).font(look.bold).color(c.bright), space().height(6)].spacing(2);
     rows = rows.push(setting(
         &look,
@@ -449,26 +757,146 @@ fn settings<'a, M: Clone + 'a>(content: &Content<'a, M>, folder: Element<'a, M>,
         .align_y(Alignment::Center),
     ));
     rows = rows.push(setting(&look, "Output template", template));
-    if packs {
-        rows = rows.push(setting(&look, "File type", row![kinds, depths].spacing(6)));
-        rows = rows.push(setting(&look, format!("Normals of the {}", content.thing), its_normals));
-    } else {
-        rows = rows.push(setting(&look, "File type", text(format!("As each map of the {} says", content.thing)).size(look.text_size).color(c.dim)));
-    }
-    rows = rows.push(setting(
-        &look,
-        "Size",
-        container(text(content.size.clone()).size(look.text_size).color(c.dim)).padding([5, 8]).width(Length::Fixed(200.0)).style(style::well(&look)),
-    ));
-    let note = if packs {
-        "An output map whose template says its own file type is written in it. A normal map's green is turned over where the template writes it the other way."
-            .to_string()
-    } else {
-        format!("Each map of the {} is written with its own name, channels and format.", content.thing)
+    rows = rows.push(setting(&look, "File type", row![kind, depth].spacing(6).align_y(Alignment::Center)));
+    rows = rows.push(setting(&look, "Size", size));
+    let normals = match global.template.template(&content.presets, content.mine) {
+        Some(t) => format!(
+            "{} writes normal maps of {}; a {}'s that point the other way have their green turned over.",
+            t.name,
+            normals_said(t.normals),
+            content.thing
+        ),
+        None => format!("Raw Outputs: each Output of a {} is written with its own name, channels and format.", content.thing),
     };
-    rows = rows.push(space().height(6)).push(text(note).size(look.small_size).color(c.faint));
-    let page = scroll_box(container(rows).padding([14, 20])).height(Length::Fill);
-    row![side, page].spacing(0).padding(8).into()
+    rows = rows.push(space().height(6)).push(text(normals).size(look.small_size).color(c.faint));
+    rows = rows.push(
+        text(format!("What a {} says of its own (choose it on the left) is written so; the rest, as these say.", content.thing))
+            .size(look.small_size)
+            .color(c.faint),
+    );
+    rows.into()
+}
+
+/// What a kind of file is, said, in its list.
+fn kind_said(format: FileFormat) -> String {
+    match format {
+        FileFormat::AsMade => "As in the project".into(),
+        FileFormat::Of(format) => format.file_type().name().into(),
+    }
+}
+
+/// The settings of one of what is exported: each as the global settings say, or its own.
+fn own_settings<'a, M: Clone + 'a>(
+    content: &Content<'a, M>,
+    i: usize,
+    row: &Exported,
+    state: &'a State,
+    look: &Look,
+    say: impl Fn(Event) -> M + Copy + 'a,
+) -> Element<'a, M> {
+    let look = *look;
+    let c = look.colors;
+    let global = content.global;
+    let own = row.own;
+    let mine = global.with(&own);
+    let set = move |s: Setting| say(Event::Set(Some(i), s));
+    let unset = move |w: Which| say(Event::Unset(i, w));
+    let as_global = |said: String, which: Which, is: bool| vec![Offer::new(format!("As global settings ({said})"), unset(which), is)];
+    let template = choice(
+        &look,
+        state,
+        Menu::Template,
+        match own.template {
+            Some(t) => t.name(&content.presets, content.mine),
+            None => format!("As global settings ({})", global.template.name(&content.presets, content.mine)),
+        },
+        own.template.is_none(),
+        420.0,
+        template_offers(
+            content,
+            own.template,
+            as_global(global.template.name(&content.presets, content.mine), Which::Template, own.template.is_none()),
+            move |t| set(Setting::Template(t)),
+        ),
+        say,
+    );
+    let kind = choice(
+        &look,
+        state,
+        Menu::FileType,
+        match own.format {
+            Some(f) => kind_said(f),
+            None => format!("As global settings ({})", format_said(global.format)),
+        },
+        own.format.is_none(),
+        240.0,
+        kind_offers(own.format, as_global(format_said(global.format), Which::Format, own.format.is_none()), move |f| set(Setting::Format(f))),
+        say,
+    );
+    let depth: Element<'a, M> = match (own.format, mine.format) {
+        (Some(_), FileFormat::Of(format)) => depth_choice(&look, state, format, move |f| set(Setting::Format(FileFormat::Of(f))), say),
+        (Some(_), FileFormat::AsMade) => text("Each map as its Output says").size(look.small_size).color(c.faint).into(),
+        (None, _) => space().into(),
+    };
+    let size = choice(
+        &look,
+        state,
+        Menu::Size,
+        match own.size {
+            Some(s) => size_said(s, Some(row.size)),
+            None => format!("As global settings ({})", size_said(global.size, Some(row.size))),
+        },
+        own.size.is_none(),
+        300.0,
+        size_offers(own.size, Some(row.size), as_global(size_said(global.size, Some(row.size)), Which::Size, own.size.is_none()), move |s| {
+            set(Setting::Size(s))
+        }),
+        say,
+    );
+    let normals = choice(
+        &look,
+        state,
+        Menu::Normals,
+        match own.normals {
+            Some(n) => normals_said(n).into(),
+            None => format!("As in the project ({})", normals_said(row.normals)),
+        },
+        own.normals.is_none(),
+        300.0,
+        vec![
+            vec![Offer::new(format!("As in the project ({})", normals_said(row.normals)), unset(Which::Normals), own.normals.is_none())],
+            [Normals::OpenGL, Normals::DirectX].into_iter().map(|n| Offer::new(normals_said(n), set(Setting::Normals(n)), own.normals == Some(n))).collect(),
+        ],
+        say,
+    );
+    let [w, h] = row.size;
+    let mut rows = column![
+        row![
+            text(row.name.clone()).size(look.text_size).font(look.bold).color(c.bright),
+            text(format!("{w} × {h} in the project")).size(look.small_size).color(c.dim)
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+        text(format!("What this {} says of its own; what says \"as global settings\" follows them.", content.thing)).size(look.small_size).color(c.faint),
+        space().height(6),
+    ]
+    .spacing(2);
+    rows = rows.push(setting(&look, "Output template", template));
+    rows = rows.push(setting(&look, "File type", row![kind, depth].spacing(6).align_y(Alignment::Center)));
+    rows = rows.push(setting(&look, "Size", size));
+    rows = rows.push(setting(&look, "Its normal maps", normals));
+    let written = match mine.template.template(&content.presets, content.mine) {
+        Some(t) => format!(
+            "Its normal maps are made as {}; {} writes them as {}{}.",
+            normals_said(own.normals.unwrap_or(row.normals)),
+            t.name,
+            normals_said(t.normals),
+            if own.normals.unwrap_or(row.normals) == t.normals { "" } else { ", their green turned over" }
+        ),
+        None => "Raw Outputs: each of its Outputs is written with its own name, channels and format.".into(),
+    };
+    rows = rows.push(space().height(6)).push(text(written).size(look.small_size).color(c.faint));
+    rows.into()
 }
 
 /// LIST OF EXPORTS: the files, under what they are of, before they are written.
@@ -477,28 +905,49 @@ fn files<'a, M: Clone + 'a>(content: &Content<'a, M>, look: &Look) -> Element<'a
     let c = look.colors;
     let cell =
         |s: String, width: Length, color: Color, font: Font| text(s).size(look.text_size).color(color).font(font).width(width).wrapping(text::Wrapping::None);
-    let mut list: Column<'a, M> =
-        column![row![text("⌄").size(look.text_size).color(c.dim), text(content.name.clone()).size(look.text_size).color(c.bright)].spacing(6)].spacing(2);
-    for file in &content.files {
-        list = list.push(
-            row![
+    let mut list: Column<'a, M> = column![].spacing(2);
+    for (of, files) in &content.files {
+        list = list.push(row![text("⌄").size(look.text_size).color(c.dim), text(of.clone()).size(look.text_size).color(c.bright)].spacing(6));
+        for file in files {
+            list = list.push(
+                row![
+                    space().width(22),
+                    cell(file.name.clone(), Length::Fixed(380.0), c.text, look.font),
+                    cell(file.size.clone(), Length::Fixed(110.0), c.text, look.font),
+                    cell(file.kind.clone(), Length::Fixed(50.0), c.text, look.font),
+                    cell(file.depth.clone(), Length::Fixed(120.0), c.text, look.font),
+                    cell(file.said.clone(), Length::Fill, c.dim, look.font),
+                ]
+                .spacing(10)
+                .height(Length::Fixed(22.0))
+                .align_y(Alignment::Center),
+            );
+        }
+        if files.is_empty() {
+            list = list.push(row![
                 space().width(22),
-                cell(file.name.clone(), Length::Fixed(380.0), c.text, look.font),
-                cell(content.size.clone(), Length::Fixed(110.0), c.text, look.font),
-                cell(file.kind.clone(), Length::Fixed(50.0), c.text, look.font),
-                cell(file.depth.clone(), Length::Fixed(120.0), c.text, look.font),
-                cell(file.said.clone(), Length::Fill, c.dim, look.font),
-            ]
-            .spacing(10)
-            .height(Length::Fixed(22.0))
-            .align_y(Alignment::Center),
-        );
-    }
-    if content.files.is_empty() {
-        list = list.push(row![
-            space().width(22),
-            text(format!("None: the {} has none of the maps the template writes.", content.thing)).size(look.text_size).color(c.warning)
-        ]);
+                text(format!("None: the {} has none of the maps its template writes.", content.thing)).size(look.text_size).color(c.warning)
+            ]);
+        }
+        list = list.push(space().height(6));
     }
     container(scroll_box(container(list).padding([10, 12])).height(Length::Fill)).padding(8).into()
+}
+
+impl<M> Content<'_, M> {
+    /// The depth the global settings write a file at that says no format of its own, said.
+    fn global_depth(&self) -> String {
+        match self.global.format {
+            FileFormat::AsMade => "as in the project".into(),
+            FileFormat::Of(format) => format.depth().into(),
+        }
+    }
+
+    /// The extension of such a file, where the global settings say one.
+    fn global_extension(&self) -> Option<&'static str> {
+        match self.global.format {
+            FileFormat::AsMade => None,
+            FileFormat::Of(format) => Some(format.extension()),
+        }
+    }
 }

@@ -180,6 +180,8 @@ pub struct Package {
     next_graph: u64,
     /// What other programs keep with the package (see [`crate::project`]): kept as it is.
     pub extras: serde_json::Map<String, serde_json::Value>,
+    /// How its graphs are exported, as the export window's Save settings kept it.
+    pub export: Option<crate::export_presets::ExportSettings>,
     /// The entries of its file other programs put there, by name: written back as they were
     /// (see [`crate::project`]).
     pub other_entries: Vec<(String, Arc<Vec<u8>>)>,
@@ -197,13 +199,13 @@ impl Package {
     /// A package with nothing in it: no graph, no file. A package may have no graph (as in
     /// Substance Designer): files only, say, a set of pictures other packages link to.
     pub fn empty() -> Package {
-        Package { graphs: Vec::new(), resources: Vec::new(), next_graph: 1, extras: serde_json::Map::new(), other_entries: Vec::new() }
+        Package { graphs: Vec::new(), resources: Vec::new(), next_graph: 1, extras: serde_json::Map::new(), export: None, other_entries: Vec::new() }
     }
 
     /// Put together from what a file says (`next_graph`: the id the next graph gets, see
     /// [`Package::next_graph`]); [`Package::normalize`] makes it whole.
     pub fn from_parts(graphs: Vec<GraphEntry>, resources: Vec<Resource>, next_graph: u64) -> Package {
-        let mut package = Package { graphs, resources, next_graph, extras: serde_json::Map::new(), other_entries: Vec::new() };
+        let mut package = Package { graphs, resources, next_graph, extras: serde_json::Map::new(), export: None, other_entries: Vec::new() };
         package.normalize();
         package
     }
@@ -349,6 +351,10 @@ impl Package {
         for i in renamed {
             let path = self.resources[i].path.clone();
             self.resources[i].name = self.unique_resource_name(&default_name(&path), Some(&path));
+        }
+        // (The folder its graphs are exported to.)
+        if let Some(export) = &mut self.export {
+            map(&mut export.folder);
         }
         for entry in &mut self.graphs {
             let graph = Arc::make_mut(&mut entry.graph);
@@ -550,6 +556,9 @@ pub enum PackageEdit {
     Import(Vec<(String, crate::files::Held)>),
     /// Take out the files no node reads.
     RemoveUnused,
+    /// Keep how the graphs are exported with the package (the export window's Save settings),
+    /// or no more.
+    SetExport(Option<Box<crate::export_presets::ExportSettings>>),
     /// Put nodes of a graph in a graph of their own, and use that graph in their place (see
     /// [`graph_from_selection`]).
     GraphFromSelection {
@@ -588,6 +597,7 @@ impl PackageEdit {
             PackageEdit::Embed(_) => "Embed Files",
             PackageEdit::Import(_) => "Import Files",
             PackageEdit::RemoveUnused => "Remove Unused Files",
+            PackageEdit::SetExport(_) => "Save Export Settings",
             PackageEdit::GraphFromSelection { .. } => "Create Graph from Selection",
             PackageEdit::Batch(edits) => edits.first().map_or("Edit", PackageEdit::label),
         }
@@ -756,6 +766,14 @@ impl PackageEdit {
                 }
                 let notice = (!unknown.is_empty()).then(|| format!("Not files the package can use: {}", unknown.join(", ")));
                 PackageResult { notice, ..changed }
+            }
+            PackageEdit::SetExport(export) => {
+                let export = export.map(|e| *e);
+                if package.export == export {
+                    return Ok(PackageResult::default());
+                }
+                package.export = export;
+                changed
             }
             PackageEdit::RemoveUnused => {
                 let unused: HashSet<String> = package.unused_resources().into_iter().map(|r| r.path.clone()).collect();

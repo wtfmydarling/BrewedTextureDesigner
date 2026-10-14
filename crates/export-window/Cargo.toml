@@ -10,4 +10,5 @@ repository.workspace = true
 [dependencies]
 iced.workspace = true
 scroll-box.workspace = true
+drop-down.workspace = true
 texture-export.workspace = true

@@ -142,6 +142,8 @@ struct Manifest {
     extensions_required: Vec<String>,
     #[serde(default, skip_serializing_if = "Map::is_empty", deserialize_with = "lenient")]
     extras: Map<String, Json>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    export: Option<crate::export_presets::ExportSettings>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -366,6 +368,7 @@ fn manifest(package: &Package) -> Result<Manifest, String> {
         extensions_used: Vec::new(),
         extensions_required: Vec::new(),
         extras: package.extras.clone(),
+        export: package.export.clone(),
     })
 }
 
@@ -617,6 +620,7 @@ pub fn read_from<R: Read + Seek>(source: R, dir: Option<&Path>) -> Result<Loaded
     };
     let mut package = Package::from_parts(entries, resources, manifest.next_graph);
     package.extras = manifest.extras;
+    package.export = manifest.export;
     package.other_entries = other_entries;
     if let Some(dir) = dir {
         package.map_paths(|p| resolve_path(p, dir));
@@ -1231,10 +1235,26 @@ mod tests {
             p.map_paths(|x| if x.ends_with("a.png") { texture.clone() } else { x.to_string() });
             p
         };
+        // How it is exported, its folder beside it too.
+        package.export = Some(crate::export_presets::ExportSettings {
+            folder: dir.join("Exports").display().to_string(),
+            template: "Unreal Engine".into(),
+            format: texture_export::FileFormat::Of(texture_export::Format::Tga8),
+            size: texture_export::Size::Side(1024),
+            graphs: vec![crate::export_presets::GraphExportSettings {
+                graph: package.first(),
+                checked: true,
+                template: None,
+                format: None,
+                size: Some(texture_export::Size::AsMade),
+                normals: Some(texture_export::Normals::DirectX),
+            }],
+        });
         save(&path, &package, &HashMap::new(), package.first()).unwrap();
         let mut archive = Archive::new(std::fs::File::open(&path).unwrap()).unwrap();
         let manifest = String::from_utf8(archive.read(MANIFEST, 1 << 20).unwrap()).unwrap();
         assert!(manifest.contains("\"textures/a.png\""), "relative: {manifest}");
+        assert!(manifest.contains("\"folder\": \"Exports\"") || manifest.contains("\"folder\":\"Exports\""), "relative: {manifest}");
         assert_eq!(load(&path).unwrap().package, package);
         let moved = dir.join("moved");
         std::fs::create_dir_all(moved.join("textures")).unwrap();
@@ -1242,6 +1262,7 @@ mod tests {
         let there = load(&moved.join("a.brewtex")).unwrap().package;
         let found: Vec<&str> = there.files().map(|(.., p)| p).collect();
         assert_eq!(found, [moved.join("textures").join("a.png").display().to_string()]);
+        assert_eq!(there.export.map(|e| e.folder), Some(moved.join("Exports").display().to_string()), "exported beside it still");
         // What is not a package says so.
         let not = |bytes: &[u8]| {
             std::fs::write(&path, bytes).unwrap();

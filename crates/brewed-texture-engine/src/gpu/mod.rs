@@ -101,7 +101,7 @@ pub fn filterable(format: wgpu::TextureFormat) -> bool {
 /// PNG of 16 bits) as precisely as it arrives, in half floats at least: a file of 16 bits of an
 /// image of floats has all its steps.
 pub fn output_format(channels: u32, depth: u32, arriving: ImageKind, arriving_format: Option<wgpu::TextureFormat>) -> wgpu::TextureFormat {
-    use brewed_texture_core::nodes::{DEPTH_16, DEPTH_16F, DEPTH_32F};
+    use brewed_texture_core::nodes::{DEPTH_16, DEPTH_16F, DEPTH_32F, DEPTH_HDR32F, DEPTH_TIFF16, DEPTH_TIFF32F};
     use wgpu::TextureFormat as F;
     let channels = match (channels, arriving) {
         (2, _) => 2,
@@ -109,9 +109,9 @@ pub fn output_format(channels: u32, depth: u32, arriving: ImageKind, arriving_fo
         _ => 1,
     };
     let precision = match depth {
-        DEPTH_16 => arriving_format.map_or(Precision::Half, precision_of).max(Precision::Half),
+        DEPTH_16 | DEPTH_TIFF16 => arriving_format.map_or(Precision::Half, precision_of).max(Precision::Half),
         DEPTH_16F => Precision::Half,
-        DEPTH_32F => Precision::Full,
+        DEPTH_32F | DEPTH_TIFF32F | DEPTH_HDR32F => Precision::Full,
         _ => Precision::Bits8,
     };
     match (channels, precision) {

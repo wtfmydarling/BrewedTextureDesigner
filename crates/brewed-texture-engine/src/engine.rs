@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use brewed_texture_core::eval::{Evaluation, VarSource};
 use brewed_texture_core::graph::{Graph, Node, NodeId, input_socket_key};
@@ -363,7 +363,121 @@ pub struct Engine {
     pub report: EvalReport,
 }
 
+/// What an engine holds of the graph it computes, put aside while it computes another (a graph
+/// exported at a size of its own, or a graph not being edited, see [`Engine::set_aside`]): its
+/// nodes' images and what is known of them, the files and drawings they read, what the views
+/// read of them, and the size and precision it was computed at.
+pub struct Aside {
+    states: HashMap<NodeId, NodeState>,
+    bitmaps: HashMap<String, BitmapEntry>,
+    drawings: HashMap<NodeId, Drawing>,
+    luts: HashMap<NodeId, Lut>,
+    preview: Option<NodeId>,
+    preview_sent: Option<(NodeId, u64, wgpu::Texture)>,
+    materials: Vec<NodeId>,
+    materials_sent: Vec<(NodeId, u64, wgpu::Texture)>,
+    asked: Vec<NodeId>,
+    given: Vec<wgpu::Texture>,
+    shown_copies: HashMap<NodeId, (u64, GpuImage)>,
+    boundary: HashSet<NodeId>,
+    thumbnails: Vec<(NodeId, u64, GpuImage, Readback)>,
+    last_resolution: [u32; 2],
+    last_precision: Precision,
+    report: EvalReport,
+}
+
+impl Aside {
+    /// Nothing held yet: what an engine starts another graph with.
+    fn empty() -> Aside {
+        Aside {
+            states: HashMap::new(),
+            bitmaps: HashMap::new(),
+            drawings: HashMap::new(),
+            luts: HashMap::new(),
+            preview: None,
+            preview_sent: None,
+            materials: Vec::new(),
+            materials_sent: Vec::new(),
+            asked: Vec::new(),
+            given: Vec::new(),
+            shown_copies: HashMap::new(),
+            boundary: HashSet::new(),
+            thumbnails: Vec::new(),
+            last_resolution: [0, 0],
+            last_precision: Precision::default(),
+            report: EvalReport::default(),
+        }
+    }
+}
+
 impl Engine {
+    /// Put what the engine holds of the graph it computes aside, and start on another with
+    /// nothing; [`Engine::put_back`] gives it back, as it was. The kernels and the scratch
+    /// images are the GPU's, and serve both. Files and drawings still being made for the graph
+    /// set aside come first (see [`Engine::wait_for_files`]): what arrives once it is aside
+    /// would be taken for the other's.
+    pub fn set_aside(&mut self) -> Aside {
+        self.wait_for_files();
+        let mut aside = Aside::empty();
+        self.swap_held(&mut aside);
+        aside
+    }
+
+    /// Give back what [`Engine::set_aside`] put aside; what the engine held since goes (its
+    /// images go back to the GPU), files and drawings made for it waited for first.
+    pub fn put_back(&mut self, mut aside: Aside) {
+        self.wait_for_files();
+        self.swap_held(&mut aside);
+    }
+
+    fn swap_held(&mut self, aside: &mut Aside) {
+        use std::mem::swap;
+        swap(&mut self.states, &mut aside.states);
+        swap(&mut self.bitmaps, &mut aside.bitmaps);
+        swap(&mut self.drawings, &mut aside.drawings);
+        swap(&mut self.luts, &mut aside.luts);
+        swap(&mut self.preview, &mut aside.preview);
+        swap(&mut self.preview_sent, &mut aside.preview_sent);
+        swap(&mut self.materials, &mut aside.materials);
+        swap(&mut self.materials_sent, &mut aside.materials_sent);
+        swap(&mut self.asked, &mut aside.asked);
+        swap(&mut self.given, &mut aside.given);
+        swap(&mut self.shown_copies, &mut aside.shown_copies);
+        swap(&mut self.boundary, &mut aside.boundary);
+        swap(&mut self.thumbnails, &mut aside.thumbnails);
+        swap(&mut self.last_resolution, &mut aside.last_resolution);
+        swap(&mut self.last_precision, &mut aside.last_precision);
+        swap(&mut self.report, &mut aside.report);
+    }
+
+    /// Wait (a minute at most) for the files and drawings being made in the background, taking
+    /// them as they come. Whether any came: the graph is to be computed again with them.
+    pub fn wait_for_files(&mut self) -> bool {
+        let start = Instant::now();
+        let mut came = self.receive_files();
+        while self.files_loading() && start.elapsed() < Duration::from_secs(60) {
+            std::thread::sleep(Duration::from_millis(5));
+            came |= self.receive_files();
+        }
+        came
+    }
+
+    /// Compute `graph` whole, as [`Engine::evaluate`] does, and again with the files and
+    /// drawings it reads as they come, until all have; the GPU waited for.
+    pub fn evaluate_whole(&mut self, graph: &Graph, eval: &Evaluation) {
+        self.evaluate(graph, eval);
+        let start = Instant::now();
+        while self.files_loading() && start.elapsed() < Duration::from_secs(60) {
+            std::thread::sleep(Duration::from_millis(5));
+            if self.receive_files() {
+                self.evaluate(graph, eval);
+            }
+        }
+        // (Its thumbnails are of no node shown.)
+        self.thumbnails.clear();
+        self.wait_idle();
+    }
+
     pub fn new(gpu: Gpu) -> Engine {
         let (bitmap_tx, bitmap_rx) = channel();
         let (drawn_tx, drawn_rx) = channel();
