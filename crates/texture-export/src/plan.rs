@@ -22,6 +22,37 @@ pub enum Usage {
 }
 
 impl Usage {
+    pub const ALL: [Usage; 11] = [
+        Usage::BaseColor,
+        Usage::Normal,
+        Usage::Height,
+        Usage::Roughness,
+        Usage::Metallic,
+        Usage::AmbientOcclusion,
+        Usage::Emissive,
+        Usage::Opacity,
+        Usage::Diffuse,
+        Usage::Glossiness,
+        Usage::Displacement,
+    ];
+
+    /// Its name, as a list of maps says it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Usage::BaseColor => "Base Color",
+            Usage::Normal => "Normal",
+            Usage::Height => "Height",
+            Usage::Roughness => "Roughness",
+            Usage::Metallic => "Metallic",
+            Usage::AmbientOcclusion => "Ambient Occlusion",
+            Usage::Emissive => "Emissive",
+            Usage::Opacity => "Opacity",
+            Usage::Diffuse => "Diffuse",
+            Usage::Glossiness => "Glossiness",
+            Usage::Displacement => "Displacement",
+        }
+    }
+
     /// What it is called in a sentence: "no roughness".
     pub fn word(self) -> &'static str {
         match self {
@@ -141,6 +172,8 @@ pub struct PlannedFile<R> {
     pub name: String,
     pub what: Planned<R>,
     pub said: String,
+    /// What it is written as, where its template says (else as the export says).
+    pub format: Option<crate::Format>,
 }
 
 /// The files `preset` writes of `maps` (of what is called `name`, a graph or a set of
@@ -148,8 +181,8 @@ pub struct PlannedFile<R> {
 /// usage, the first is taken: a program gives its maps in the order it would have them taken.
 pub fn plan<R: Copy>(maps: &[Map<R>], name: &str, preset: Preset, directx: bool) -> Vec<PlannedFile<R>> {
     match preset.template() {
-        Some(template) => plan_template(template, maps, name, directx),
-        None => maps.iter().map(|m| PlannedFile { name: m.name.clone(), what: Planned::AsItIs(m.reference), said: m.name.clone() }).collect(),
+        Some(template) => plan_template(template, maps, &[("graph", name)], directx),
+        None => maps.iter().map(|m| PlannedFile { name: m.name.clone(), what: Planned::AsItIs(m.reference), said: m.name.clone(), format: None }).collect(),
     }
 }
 

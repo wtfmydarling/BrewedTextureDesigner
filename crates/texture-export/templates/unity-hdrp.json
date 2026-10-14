@@ -4,13 +4,13 @@
   "normals": "OpenGL",
   "files": [
     {
-      "name": "$name_BaseMap",
+      "name": "$(graph)_BaseMap",
       "needs": ["BaseColor", "Opacity"],
       "parts": [{ "rgb": { "map": "BaseColor", "missing": 0.8 } }, { "one": { "map": "Opacity", "optional": true } }]
     },
-    { "name": "$name_Normal", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
+    { "name": "$(graph)_Normal", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
     {
-      "name": "$name_MaskMap",
+      "name": "$(graph)_MaskMap",
       "needs": ["AmbientOcclusion", "Roughness", "Metallic"],
       "parts": [
         { "one": { "map": "Metallic", "missing": 0.0 } },
@@ -19,7 +19,7 @@
         { "one": { "map": "Roughness", "invert": true, "missing": 0.5 } }
       ]
     },
-    { "name": "$name_Height", "needs": ["Height"], "parts": [{ "one": { "map": "Height" } }] },
-    { "name": "$name_Emission", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
+    { "name": "$(graph)_Height", "needs": ["Height"], "parts": [{ "one": { "map": "Height" } }] },
+    { "name": "$(graph)_Emission", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
   ]
 }

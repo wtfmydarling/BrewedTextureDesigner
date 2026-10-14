@@ -4,13 +4,13 @@
   "normals": "OpenGL",
   "files": [
     {
-      "name": "$name_baseColor",
+      "name": "$(graph)_baseColor",
       "needs": ["BaseColor", "Opacity"],
       "parts": [{ "rgb": { "map": "BaseColor", "missing": 0.8 } }, { "one": { "map": "Opacity", "optional": true } }]
     },
-    { "name": "$name_normal", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
+    { "name": "$(graph)_normal", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
     {
-      "name": "$name_occlusionRoughnessMetallic",
+      "name": "$(graph)_occlusionRoughnessMetallic",
       "needs": ["AmbientOcclusion", "Roughness", "Metallic"],
       "parts": [
         { "one": { "map": "AmbientOcclusion", "missing": 1.0 } },
@@ -18,6 +18,6 @@
         { "one": { "map": "Metallic", "missing": 0.0 } }
       ]
     },
-    { "name": "$name_emissive", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
+    { "name": "$(graph)_emissive", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
   ]
 }

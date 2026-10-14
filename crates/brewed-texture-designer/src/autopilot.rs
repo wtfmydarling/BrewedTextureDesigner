@@ -967,54 +967,51 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                 // Through the export dialog: a preset of a game engine a round, the normal maps
                 // one way and the other, 8 and 16 bits; the files it listed are those written.
                 5..=8 => {
-                    use crate::app::export_dialog::{ExportDialog, ExportMessage as X};
+                    use crate::app::export_dialog::ExportMessage as X;
                     use brewed_texture_core::export_presets::Preset;
-                    use brewed_texture_core::nodes::{DEPTH_8, DEPTH_16};
+                    use export_window::{Chosen, Event};
                     let folder = export.join(format!("preset-{exported}"));
                     let _ = std::fs::create_dir_all(&folder);
-                    let dialog = ExportDialog {
-                        preset: Preset::ALL[exported - 4],
-                        template: None,
-                        templates: Vec::new(),
-                        problems: Vec::new(),
-                        directx: exported % 2 == 0,
-                        depth: if exported % 2 == 0 { DEPTH_16 } else { DEPTH_8 },
-                        folder: Some(folder.clone()),
-                    };
+                    let chosen = Chosen::Preset(Preset::ALL[exported - 4]);
+                    let directx = exported % 2 == 0;
+                    let format = if exported % 2 == 0 { texture_export::Format::Png16 } else { texture_export::Format::Png8 };
                     let mut steps = vec![
                         Step::Do(Message::Export(X::Open)),
-                        Step::Do(Message::Export(X::Preset(dialog.preset))),
-                        Step::Do(Message::Export(X::DirectX(dialog.directx))),
-                        Step::Do(Message::Export(X::Depth(dialog.depth))),
+                        Step::Do(Message::Export(X::Window(Event::ExportWith(chosen)))),
+                        Step::Do(Message::Export(X::Window(Event::DirectX(directx)))),
+                        Step::Do(Message::Export(X::Window(Event::Format(format)))),
                         Step::Do(Message::Export(X::Folder(Some(folder.clone())))),
                     ];
-                    let asked = dialog.clone();
+                    let asked = (chosen, directx, format, Some(folder.clone()));
+                    let kept = std::sync::Arc::new(std::sync::Mutex::new(None));
+                    let keep = kept.clone();
                     steps.push(Step::Check(Box::new(move |app: &App| match &app.ui.dialog {
                         // (The templates of the user's, read as it opened, are theirs.)
-                        Some(Dialog::Export(open))
-                            if (open.preset, open.template, open.directx, open.depth, &open.folder)
-                                == (asked.preset, asked.template, asked.directx, asked.depth, &asked.folder) =>
-                        {
+                        Some(Dialog::Export(open)) if (open.chosen, open.directx, open.format, open.folder.clone()) == asked => {
+                            if let Ok(mut kept) = keep.lock() {
+                                *kept = Some(open.as_ref().clone());
+                            }
                             None
                         }
-                        other => Some(format!("the export dialog is {other:?}, not {asked:?}")),
+                        other => Some(format!("the export window is {other:?}, not {asked:?}")),
                     })));
-                    steps.extend([Step::Do(Message::Export(X::Export)), Step::Wait]);
+                    steps.extend([Step::Do(Message::Export(X::Window(Event::Export))), Step::Wait]);
                     steps.push(Step::Check(Box::new(move |app: &App| {
                         if app.ui.dialog.is_some() {
                             return Some(format!("the export dialog stays open: {:?}", app.ui.dialog));
                         }
-                        let planned: Vec<PathBuf> = app.export_plan(&dialog, &folder).into_iter().map(|(path, _)| path).collect();
+                        let Some(dialog) = kept.lock().ok().and_then(|k| k.clone()) else { return Some("the export window was not seen open".into()) };
+                        let planned: Vec<PathBuf> = app.export_plan(&dialog, &folder).into_iter().map(|(path, _, _)| path).collect();
                         let files = match files_in(&folder) {
                             Ok(files) => files,
                             Err(e) => return Some(e),
                         };
                         if files.len() != planned.len() {
-                            return Some(format!("{} files exported with {:?}, {} planned", files.len(), dialog.preset, planned.len()));
+                            return Some(format!("{} files exported with {:?}, {} planned", files.len(), dialog.chosen, planned.len()));
                         }
                         for path in &planned {
                             if let Err(e) = image::open(path) {
-                                return Some(format!("{} ({:?}) cannot be read back: {e}", path.display(), dialog.preset));
+                                return Some(format!("{} ({:?}) cannot be read back: {e}", path.display(), dialog.chosen));
                             }
                         }
                         None

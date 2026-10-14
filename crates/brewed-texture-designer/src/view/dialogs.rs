@@ -322,51 +322,41 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
     modal(dialog_box(body, 1000.0), None)
 }
 
-/// The formats the files of a preset are written in.
-const EXPORT_FORMATS: [(&str, u32); 2] = [("PNG 8 bits", brewed_texture_core::nodes::DEPTH_8), ("PNG 16 bits", brewed_texture_core::nodes::DEPTH_16)];
-
-/// The export dialog: what is written, in what, and where; and the files, listed (the export
-/// window's, see the `export-window` crate).
+/// The export window (the `export-window` crate's), over the program's as the Settings are: not
+/// closed by a click beside it, the templates changed in it being written as they change.
 fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog) -> Element<'a, Message> {
     use crate::app::export_dialog::ExportMessage as X;
-    use export_window::Event;
     let folder = dialog.folder.as_ref().map_or_else(|| "No folder chosen yet".to_string(), |f| f.display().to_string());
     let planned = app.export_plan(dialog, dialog.folder.as_deref().unwrap_or(std::path::Path::new("")));
     let files = planned
         .iter()
-        .map(|(path, file)| export_window::File {
+        .map(|(path, file, format)| export_window::Listed {
             name: path.file_name().map_or_else(|| file.name.clone(), |n| n.to_string_lossy().into_owned()),
             said: file.said.clone(),
+            format: format.map_or_else(|| "As its Output says".to_string(), |f| f.name().to_string()),
         })
         .collect();
+    let has = brewed_texture_core::export_presets::maps(app.graph()).into_iter().filter_map(|m| m.usage).collect();
+    let [width, height] = app.graph().resolution;
     let content = export_window::Content {
         name: app.doc.entry().name.clone(),
-        preset: dialog.preset,
-        templates: dialog.templates.iter().map(|t| (t.name.clone(), t.about.clone())).collect(),
-        template: dialog.template,
+        size: format!("{width} × {height}"),
+        mine: &dialog.templates,
         templates_folder: crate::app::export_dialog::templates_folder().map(|f| f.display().to_string()),
-        problems: dialog.problems.clone(),
-        packs: !dialog.as_they_are(),
-        writes_directx: dialog.writes_directx(),
-        chosen: dialog.chosen_name().to_string(),
+        problems: &dialog.problems,
+        export_with: dialog.chosen,
         directx: dialog.directx,
-        formats: &EXPORT_FORMATS,
-        format: dialog.depth,
+        format: dialog.format,
         folder: crate::view::fitted(folder, style::TEXT_SIZE, style::ui_font(), None),
         folder_chosen: dialog.folder.is_some(),
         files,
+        tokens: &texture_export::naming::GRAPH_TOKENS,
+        values: app.export_values(),
+        has,
     };
-    let say = |event| match event {
-        Event::Preset(preset) => Message::Export(X::Preset(preset)),
-        Event::Template(index) => Message::Export(X::Template(index)),
-        Event::OpenTemplates => Message::Export(X::OpenTemplates),
-        Event::DirectX(directx) => Message::Export(X::DirectX(directx)),
-        Event::Format(depth) => Message::Export(X::Depth(depth)),
-        Event::Browse => Message::Export(X::Browse),
-        Event::Export => Message::Export(X::Export),
-        Event::Cancel => Message::Dialog(None),
-    };
-    modal(dialog_box(export_window::view(content, &style::export_look(), say), 680.0), None)
+    let window = export_window::view(content, &dialog.window, &style::export_look(), |event| Message::Export(X::Window(event)));
+    let window = container(window).width(Length::Fill).max_width(1220).height(Length::Fill).max_height(800).style(style::popup).clip(true);
+    opaque(mouse_area(container(center(opaque(window))).padding(24).width(Length::Fill).height(Length::Fill).style(style::scrim)))
 }
 
 /// The earlier versions of a package: each, when it was kept and what it is, to be restored in

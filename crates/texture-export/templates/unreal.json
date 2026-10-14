@@ -4,13 +4,13 @@
   "normals": "DirectX",
   "files": [
     {
-      "name": "T_$name_BaseColor",
+      "name": "T_$(graph)_BaseColor",
       "needs": ["BaseColor", "Opacity"],
       "parts": [{ "rgb": { "map": "BaseColor", "missing": 0.8 } }, { "one": { "map": "Opacity", "optional": true } }]
     },
-    { "name": "T_$name_Normal", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
+    { "name": "T_$(graph)_Normal", "needs": ["Normal"], "parts": [{ "rgb": { "map": "Normal" } }] },
     {
-      "name": "T_$name_ORM",
+      "name": "T_$(graph)_ORM",
       "needs": ["AmbientOcclusion", "Roughness", "Metallic"],
       "parts": [
         { "one": { "map": "AmbientOcclusion", "missing": 1.0 } },
@@ -18,7 +18,7 @@
         { "one": { "map": "Metallic", "missing": 0.0 } }
       ]
     },
-    { "name": "T_$name_Height", "needs": ["Height"], "parts": [{ "one": { "map": "Height" } }] },
-    { "name": "T_$name_Emissive", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
+    { "name": "T_$(graph)_Height", "needs": ["Height"], "parts": [{ "one": { "map": "Height" } }] },
+    { "name": "T_$(graph)_Emissive", "needs": ["Emissive"], "parts": [{ "rgb": { "map": "Emissive" } }] }
   ]
 }

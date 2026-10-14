@@ -297,7 +297,7 @@ pub enum Dialog {
     /// A new package, or a new graph of one, from a template (see [`home`]).
     NewGraph(home::NewGraphDialog),
     /// What is exported of the graph, in what and where (see [`export_dialog`]).
-    Export(export_dialog::ExportDialog),
+    Export(Box<export_dialog::ExportDialog>),
     /// The earlier versions of a package (see [`versions`]).
     Versions(versions::VersionsDialog),
     /// Files a package names that are not there (see [`MissingFiles`]).
@@ -467,6 +467,8 @@ pub struct Ui {
     /// The template of the user's chosen last in the export dialog (its name), in place of
     /// `export_preset`.
     pub export_template: Option<String>,
+    /// The format chosen last for the files of a template that says none.
+    pub export_format: texture_export::Format,
     pub menu: Option<MenuId>,
     pub submenu: Option<SubMenu>,
     pub context: Option<ContextMenu>,
@@ -1475,6 +1477,7 @@ impl App {
                 export_preset: brewed_texture_core::export_presets::Preset::Maps,
                 export_folder: None,
                 export_template: None,
+                export_format: texture_export::Format::Png8,
                 menu: None,
                 submenu: None,
                 context: None,
@@ -3734,7 +3737,9 @@ impl App {
                 let answer = match dialog {
                     Dialog::Unsaved(action) => Some(Message::SaveThen(action.clone())),
                     Dialog::NewGraph(_) => Some(Message::NewGraph(home::NewGraphMessage::Create)),
-                    Dialog::Export(dialog) if dialog.folder.is_some() => Some(Message::Export(export_dialog::ExportMessage::Export)),
+                    Dialog::Export(dialog) if dialog.folder.is_some() && dialog.window.tab != export_window::Tab::Templates => {
+                        Some(Message::Export(export_dialog::ExportMessage::Window(export_window::Event::Export)))
+                    }
                     Dialog::About | Dialog::Shortcuts | Dialog::Versions(_) => Some(Message::Dialog(None)),
                     _ => None,
                 };
