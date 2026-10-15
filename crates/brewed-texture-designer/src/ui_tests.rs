@@ -721,7 +721,7 @@ fn exports_follow_the_settings_chosen() {
         "General Export Parameters",
         "Output template",
         "Normal map format",
-        "As the template says (DirectX (Y−))",
+        "Template's defaults (DirectX (Y−))",
         "Exclude all",
         "Reset all",
         "Save settings",
@@ -733,7 +733,7 @@ fn exports_follow_the_settings_chosen() {
     // The sizes: as in the project, apart and first; then each.
     say(&mut w, Event::Menu(Some(Menu::Size)));
     w.input(&[]);
-    for said in ["As in the project (2048)", "1024", "8192"] {
+    for said in ["Project's settings (2048)", "1024", "8192"] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
     w.snapshot("export_size_menu");
@@ -766,9 +766,9 @@ fn exports_follow_the_settings_chosen() {
     w.input(&[]);
     for said in [
         "Normal map format",
-        "As package settings (Unreal Engine)",
-        "As in the project (2048)",
-        "As package settings (DirectX (Y−))",
+        "Package settings (Unreal Engine)",
+        "Project's settings (2048)",
+        "Package settings (DirectX (Y−))",
         "Its normal maps are written as DirectX (Y−); its Normal nodes make them as OpenGL (Y+), so their green is turned over.",
     ] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
@@ -795,9 +795,10 @@ fn exports_follow_the_settings_chosen() {
     say(&mut w, Event::Set(Some(0), Setting::Template(chosen_of(Preset::UnityUrp))));
     w.send(Message::Export(X::Folder(Some(0), Some(unity.clone()))));
     w.input(&[]);
-    for said in ["As global settings (tga 8 bits)", "As global settings (1024)", "Unity (URP)", unity.to_str().expect("a path")] {
+    for said in ["Global settings (tga 8 bits)", "Global settings (1024)", "Unity (URP)"] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
+    assert_eq!(dialog(&w).rows[0].own.folder.as_deref(), unity.to_str(), "its own folder");
     w.snapshot("export_package");
     let plan = w.app.export_plan(&dialog(&w));
     assert!(plan.iter().all(|p| p.path.parent() == Some(unity.as_path())), "into the package's folder");
@@ -809,7 +810,7 @@ fn exports_follow_the_settings_chosen() {
     say(&mut w, Event::Unset(edited, Which::Folder));
     say(&mut w, Event::Select(Some(edited)));
     w.input(&[]);
-    assert!(!texts(&mut w, "As package settings (Unity (URP))").is_empty(), "a graph follows its package");
+    assert!(!texts(&mut w, "Package settings (Unity (URP))").is_empty(), "a graph follows its package");
     // Kept with the package: what it says of its own, one step to undo, and offered as the
     // window opens again.
     say(&mut w, Event::SaveSettings);
@@ -903,7 +904,43 @@ fn templates_are_made_and_changed_in_the_export_window() {
     say(&mut w, Event::DragEnd);
     assert_eq!(dialog(&w).window.dragging, None, "the drag ends where it is let go");
     assert_eq!(dialog(&w).window.slot, Some((file, 0)), "the channel that took it is chosen");
+    // A click on a map takes nothing; pressed and moved, it is dragged.
+    let rough = export_window::Dragged { map: Some(MapId::from("roughness")), invert: false, normals: None, label: "Roughness".into() };
+    say(&mut w, Event::Press(rough.clone()));
+    say(&mut w, Event::DragEnd);
+    assert_eq!(dialog(&w).window.dragging, None, "a click takes nothing");
+    say(&mut w, Event::Press(rough.clone()));
+    say(&mut w, Event::Pointer(iced::Point::new(900.0, 300.0)));
+    say(&mut w, Event::Pointer(iced::Point::new(902.0, 301.0)));
+    assert_eq!(dialog(&w).window.dragging, None, "not yet: the pointer has hardly moved");
+    say(&mut w, Event::Pointer(iced::Point::new(880.0, 320.0)));
+    assert_eq!(dialog(&w).window.dragging, Some(rough), "dragged once it moves");
+    say(&mut w, Event::DragEnd);
+    // An output map copied, and moved by its handle to the top; then gone again.
+    let count = dialog(&w).templates[0].files.len();
+    say(&mut w, Event::Edit(mine, Edit::DuplicateFile(file)));
+    assert_eq!(dialog(&w).templates[0].files.len(), count + 1, "a copy after it");
+    say(&mut w, Event::Grab(file + 1));
+    say(&mut w, Event::Pointer(iced::Point::new(700.0, 200.0)));
+    say(&mut w, Event::OverRow(Some(0)));
+    w.input(&[]);
+    w.snapshot("export_moving");
+    say(&mut w, Event::Edit(mine, Edit::MoveFile { from: file + 1, to: 0 }));
+    say(&mut w, Event::DragEnd);
+    assert_eq!(dialog(&w).window.moving, None);
+    assert_eq!(dialog(&w).templates[0].files[0], dialog(&w).templates[0].files[file + 1], "the copy on top");
+    say(&mut w, Event::Edit(mine, Edit::RemoveFile(0)));
+    assert_eq!(dialog(&w).templates[0].files.len(), count);
+    say(&mut w, Event::Slot(Some((file, 0))));
     say(&mut w, Event::Edit(mine, Edit::Map { file, part: 1, map: Some(MapId::from("roughness")), invert: true, normals: None }));
+    // What a channel is made of, said plainly: the opacity in the base color's alpha.
+    say(&mut w, Event::Slot(Some((0, 1))));
+    w.input(&[]);
+    for said in ["Channel A", "Opacity", "Take from channel", "Invert", "If the graph has no Opacity", "Skip the file", "Leave the channel out", "Fill with"] {
+        assert!(!texts(&mut w, said).is_empty(), "{said}");
+    }
+    w.snapshot("export_channel");
+    say(&mut w, Event::Slot(Some((file, 1))));
     // Its name: a part chosen from the menu of them, which says what each is.
     say(&mut w, Event::Tokens(Some(file)));
     w.input(&[]);
@@ -912,8 +949,8 @@ fn templates_are_made_and_changed_in_the_export_window() {
         "$(package)",
         "( … )",
         "The graph's name, as a file's (blanks and what a file name cannot have as _)",
-        "1 − it",
-        "Where the graph has none",
+        "Invert",
+        "If the graph has no Roughness",
     ] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }

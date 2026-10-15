@@ -363,6 +363,8 @@ pub enum Edit {
         name: String,
     },
     RemoveFile(usize),
+    /// A copy of a file, put after it.
+    DuplicateFile(usize),
     /// The file `from` put at `to`.
     MoveFile {
         from: usize,
@@ -470,6 +472,10 @@ impl Template {
             Edit::Normals(normals) => self.normals = normals,
             Edit::AddFile { layout, name } => {
                 self.files.push(File { name, needs: Vec::new(), format: None, parts: layout.parts() });
+            }
+            Edit::DuplicateFile(at) => {
+                let copy = self.files.get(at).cloned().ok_or("no such file")?;
+                self.files.insert(at + 1, copy);
             }
             Edit::RemoveFile(at) => {
                 there(&self.files, at)?;
@@ -781,6 +787,10 @@ mod edits {
         t.apply(Edit::Map { file: 1, part: 0, map: Some(MapId::from("roughness")), invert: true, normals: None }).expect("smoothness");
         t.apply(Edit::Missing { file: 1, part: 0, missing: Missing::Value(2.0) }).expect("a value");
         t.apply(Edit::FileName { file: 1, name: "$(graph)_S".into() }).expect("a name");
+        t.apply(Edit::DuplicateFile(1)).expect("a copy");
+        assert_eq!((t.files.len(), &t.files[2].name), (3, &"$(graph)_S".to_string()), "a copy after it");
+        t.apply(Edit::RemoveFile(2)).expect("gone again");
+        assert!(t.apply(Edit::DuplicateFile(9)).is_err());
         t.apply(Edit::Format { file: 1, format: Some(Format::Exr32) }).expect("a format");
         assert!(matches!(&t.files[0].parts[0], Part::Rgb(input) if input.map == MapId::from("base_color")));
         assert!(

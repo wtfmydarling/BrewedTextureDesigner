@@ -193,7 +193,26 @@ pub struct State {
     pub dragging: Option<Dragged>,
     pub pointer: Point,
     pub over: Option<(usize, usize)>,
+    /// A map pressed, and where the pointer was when it first moved: it is dragged once the
+    /// pointer has gone a few pixels from there (a click takes nothing).
+    pub pressed: Option<Dragged>,
+    pub pressed_at: Option<Point>,
+    /// An output map moved by its handle, and the one it is over (it goes there).
+    pub moving: Option<usize>,
+    pub over_row: Option<usize>,
+    /// The map of the lists under the mouse (its key, see [`Dragged::key`]).
+    pub hovered: Option<String>,
 }
+
+impl Dragged {
+    /// What it is, as the lists tell their maps apart.
+    pub fn key(&self) -> String {
+        format!("{:?}|{}|{:?}|{}", self.map, self.invert, self.normals, self.label)
+    }
+}
+
+/// How far the pointer goes, pressed on a map, before the map is dragged.
+const DRAG_FROM: f32 = 4.0;
 
 impl State {
     /// The window as it opens: SETTINGS, the global settings; the template written with shown in
@@ -216,14 +235,24 @@ impl State {
             dragging: None,
             pointer: Point::ORIGIN,
             over: None,
+            pressed: None,
+            pressed_at: None,
+            moving: None,
+            over_row: None,
+            hovered: None,
         }
+    }
+
+    /// Whether the pointer is being followed: a map pressed or dragged, an output map moved.
+    pub fn following(&self) -> bool {
+        self.pressed.is_some() || self.dragging.is_some() || self.moving.is_some()
     }
 
     /// What `event` does to the window itself (what it does to the export and the templates is
     /// the program's).
     pub fn update(&mut self, event: &Event) {
         // (Whatever is done closes the list of options open.)
-        if !matches!(event, Event::Pointer(_) | Event::Over(_)) {
+        if !matches!(event, Event::Pointer(_) | Event::Over(_) | Event::OverRow(_) | Event::Hover(_) | Event::Unhover(_)) {
             self.menu = None;
         }
         match event {
@@ -249,18 +278,51 @@ impl State {
                 self.dragging = Some(dragged.clone());
                 self.over = None;
             }
-            Event::Pointer(at) => self.pointer = *at,
+            Event::Press(dragged) => {
+                self.pressed = Some(dragged.clone());
+                self.pressed_at = None;
+            }
+            Event::Pointer(at) => {
+                self.pointer = *at;
+                // (A map pressed is dragged once the pointer has gone from where it was.)
+                match self.pressed_at {
+                    None if self.pressed.is_some() => self.pressed_at = Some(*at),
+                    Some(from) if at.distance(from) > DRAG_FROM => {
+                        self.dragging = self.pressed.take();
+                        self.pressed_at = None;
+                        self.over = None;
+                    }
+                    _ => {}
+                }
+            }
             Event::Over(slot) => self.over = *slot,
+            Event::Grab(file) => {
+                self.moving = Some(*file);
+                self.over_row = None;
+                self.slot = None;
+                self.tokens = None;
+            }
+            Event::OverRow(row) => self.over_row = *row,
+            Event::Hover(key) => self.hovered = Some(key.clone()),
+            Event::Unhover(key) => {
+                if self.hovered.as_ref() == Some(key) {
+                    self.hovered = None;
+                }
+            }
             Event::DragEnd => {
                 self.dragging = None;
                 self.over = None;
+                self.pressed = None;
+                self.pressed_at = None;
+                self.moving = None;
+                self.over_row = None;
             }
             Event::Edit(_, Edit::Map { file, part, .. }) => {
                 // (A map dropped on a channel chooses it.)
                 self.slot = Some((*file, *part));
                 self.tokens = None;
             }
-            Event::Edit(_, Edit::RemoveFile(_) | Edit::AddFile { .. } | Edit::MoveFile { .. }) | Event::Reset(_) => {
+            Event::Edit(_, Edit::RemoveFile(_) | Edit::AddFile { .. } | Edit::MoveFile { .. } | Edit::DuplicateFile(_)) | Event::Reset(_) => {
                 self.slot = None;
                 self.tokens = None;
             }
@@ -281,10 +343,19 @@ pub enum Event {
     Slot(Option<(usize, usize)>),
     Tokens(Option<usize>),
     Deleting(Option<usize>),
+    /// A map pressed in a list (dragged once the pointer moves), dragged; the pointer moved;
+    /// the channel under a map dragged; the drag ended (the button let go anywhere).
+    Press(Dragged),
     Drag(Dragged),
     Pointer(Point),
     Over(Option<(usize, usize)>),
     DragEnd,
+    /// An output map taken by its handle, and the one it is moved over.
+    Grab(usize),
+    OverRow(Option<usize>),
+    /// A map of the lists under the mouse (its key), and gone from under it.
+    Hover(String),
+    Unhover(String),
     // What is exported: a row checked (a project: all of it), or all, or none.
     Check(usize, bool),
     IncludeAll(bool),
@@ -444,7 +515,7 @@ impl Chosen {
 /// What a format of the files is, said: "png 8 bits", as in the project.
 pub fn format_said(format: FileFormat) -> String {
     match format {
-        FileFormat::AsMade => "As in the project".into(),
+        FileFormat::AsMade => "Project's settings".into(),
         FileFormat::Of(format) => format.name(),
     }
 }
@@ -453,8 +524,8 @@ pub fn format_said(format: FileFormat) -> String {
 pub fn size_said(size: Size, made: Option<[u32; 2]>) -> String {
     let of = |[w, h]: [u32; 2]| if w == h { format!("{w}") } else { format!("{w} × {h}") };
     match (size, made) {
-        (Size::AsMade, Some(made)) => format!("As in the project ({})", of(made)),
-        (Size::AsMade, None) => "As in the project".into(),
+        (Size::AsMade, Some(made)) => format!("Project's settings ({})", of(made)),
+        (Size::AsMade, None) => "Project's settings".into(),
         (Size::Side(side), Some(made)) => of(Size::Side(side).of(made)),
         (Size::Side(side), None) => format!("{side}"),
     }
@@ -464,8 +535,8 @@ pub fn size_said(size: Size, made: Option<[u32; 2]>) -> String {
 fn written_said(written: NormalsWritten, template: Option<&Template>) -> String {
     match (written, template) {
         (NormalsWritten::Of(n), _) => normals_said(n).into(),
-        (NormalsWritten::AsTemplate, Some(t)) => format!("As the template says ({})", normals_said(t.normals)),
-        (NormalsWritten::AsTemplate, None) => "As the template says".into(),
+        (NormalsWritten::AsTemplate, Some(t)) => format!("Template's defaults ({})", normals_said(t.normals)),
+        (NormalsWritten::AsTemplate, None) => "Template's defaults".into(),
     }
 }
 
@@ -493,7 +564,7 @@ fn normals_choice<'a, M: Clone + 'a>(
     say: impl Fn(Event) -> M + Copy + 'a,
 ) -> Element<'a, M> {
     if template.is_none() {
-        return container(text("As each Output makes them (Raw Outputs)").size(look.small_size).color(look.colors.faint)).padding([4, 8]).into();
+        return still(look, "Each Output as it is (Raw Outputs)".into(), CONTROL);
     }
     let ways = [Normals::OpenGL, Normals::DirectX]
         .into_iter()
@@ -501,7 +572,7 @@ fn normals_choice<'a, M: Clone + 'a>(
         .collect();
     let first =
         vec![Offer::new(written_said(NormalsWritten::AsTemplate, template), to(NormalsWritten::AsTemplate), chosen == Some(NormalsWritten::AsTemplate))];
-    choice(look, state, Menu::Normals, said, as_else, 420.0, vec![first, between, ways], say)
+    choice(look, state, Menu::Normals, said, as_else, CONTROL, vec![first, between, ways], say)
 }
 
 fn normals_said(normals: Normals) -> &'static str {
@@ -593,7 +664,7 @@ fn path<'a, M: 'a>(look: &Look, said: String, dim: bool) -> Element<'a, M> {
 }
 
 /// A box to check, as the program's: a mark in a field.
-fn check<'a, M: Clone + 'a>(look: &Look, checked: bool, on: M) -> Element<'a, M> {
+pub(crate) fn check<'a, M: Clone + 'a>(look: &Look, checked: bool, on: M) -> Element<'a, M> {
     let look = *look;
     let mark = text(if checked { "✓" } else { "" }).size(look.small_size).color(look.colors.bright);
     button(container(mark).center_x(14).center_y(14)).padding(0).style(style::check(&look, checked)).on_press(on).into()
@@ -677,22 +748,54 @@ pub fn view<'a, M: Clone + 'a>(content: Content<'a>, state: &'a State, look: &Lo
     let line = move || container(space()).width(Length::Fill).height(1).style(style::line(&look));
     let window: Element<'a, M> =
         column![head, line(), container(page).width(Length::Fill).height(Length::Fill).style(style::page(&look)), line(), footer].into();
-    // A map dragged: its label follows the pointer; let go anywhere, the drag ends (on a channel,
-    // the channel took it first).
-    match &state.dragging {
-        Some(dragged) => {
-            let label = container(text(dragged.label.clone()).size(look.small_size)).padding([3, 8]).style(style::dragged(&look));
-            let at = Point::new(state.pointer.x + 14.0, state.pointer.y + 10.0);
-            let layer = stack![window, pin(label).position(at)];
-            mouse_area(layer).on_move(move |p| say(Event::Pointer(p))).on_release(say(Event::DragEnd)).interaction(iced::mouse::Interaction::Grabbing).into()
-        }
-        None => window,
+    // A map dragged, or an output map moved: its label follows the pointer; let go anywhere, the
+    // drag ends (on a channel, or a row, that took it first). The same widgets whatever is
+    // dragged, so nothing under them forgets where it was scrolled to.
+    let label: Option<String> = match (&state.dragging, state.moving) {
+        (Some(dragged), _) => Some(dragged.label.clone()),
+        (None, Some(moved)) => state.shown.template(&content.presets, content.mine).and_then(|t| t.files.get(moved)).map(|f| f.name.clone()),
+        (None, None) => None,
+    };
+    let ghost: Element<'a, M> = match label {
+        Some(label) => container(text(label).size(look.small_size)).padding([3, 8]).style(style::dragged(&look)).into(),
+        None => space().into(),
+    };
+    let at = Point::new(state.pointer.x + 14.0, state.pointer.y + 10.0);
+    let mut layer = mouse_area(stack![window, pin(ghost).position(at)]);
+    if state.following() {
+        layer = layer.on_move(move |p| say(Event::Pointer(p))).on_release(say(Event::DragEnd));
     }
+    if state.dragging.is_some() || state.moving.is_some() {
+        layer = layer.interaction(iced::mouse::Interaction::Grabbing);
+    }
+    layer.into()
+}
+
+/// How wide the control of a row of SETTINGS is, and each of two side by side (a kind of file and
+/// its depth): the controls of a page make one rectangle.
+const CONTROL: f32 = 520.0;
+const HALF: f32 = (CONTROL - 6.0) / 2.0;
+
+/// `word` with its first letter in capitals.
+fn capitalized(word: &str) -> String {
+    let mut letters = word.chars();
+    letters.next().map_or_else(String::new, |first| first.to_uppercase().chain(letters).collect())
+}
+
+/// A field that says what is set, where nothing is chosen in it (of a depth, what its kind says):
+/// as a list's field, still.
+pub(crate) fn still<'a, M: 'a>(look: &Look, said: String, width: f32) -> Element<'a, M> {
+    container(text(said).size(look.small_size).color(look.colors.dim).wrapping(text::Wrapping::None))
+        .padding([4, 8])
+        .width(Length::Fixed(width))
+        .clip(true)
+        .style(style::still(look))
+        .into()
 }
 
 /// A row of SETTINGS: what it is on the left, the control on the right.
 fn setting<'a, M: 'a>(look: &Look, label: impl text::IntoFragment<'a>, control: impl Into<Element<'a, M>>) -> Element<'a, M> {
-    row![text(label).size(look.text_size).color(look.colors.dim).width(Length::Fixed(220.0)), container(control).width(Length::Fill).max_width(620)]
+    row![text(label).size(look.text_size).color(look.colors.dim).width(Length::Fixed(220.0)), container(control).width(Length::Shrink)]
         .align_y(Alignment::Center)
         .height(Length::Fixed(34.0))
         .into()
@@ -753,6 +856,7 @@ fn folder_row<'a, M: Clone + 'a>(look: &Look, said: String, dim: bool, row: Opti
         button(text("Browse…").size(look.text_size)).padding([4, 10]).style(look.button).on_press(say(Event::Browse(row))),
     ]
     .spacing(6)
+    .width(Length::Fixed(CONTROL))
     .align_y(Alignment::Center);
     if let (Some(i), true) = (row, own) {
         line = line.push(button(text("✕").size(look.small_size)).padding([4, 8]).style(look.flat_button).on_press(say(Event::Unset(i, Which::Folder))));
@@ -775,7 +879,7 @@ fn template_offers<'a, M: Clone + 'a>(content: &Content<'a>, chosen: Option<Chos
 fn kind_offers<M: Clone>(chosen: Option<FileFormat>, between: Vec<Offer<M>>, to: impl Fn(FileFormat) -> M) -> Vec<Vec<Offer<M>>> {
     let kind = chosen.and_then(|f| if let FileFormat::Of(f) = f { Some(f.file_type()) } else { None });
     let kinds = FileType::ALL.into_iter().map(|k| Offer::new(k.name(), to(FileFormat::Of(k.formats()[0])), kind == Some(k))).collect();
-    vec![vec![Offer::new("As in the project", to(FileFormat::AsMade), chosen == Some(FileFormat::AsMade))], between, kinds]
+    vec![vec![Offer::new("Project's settings", to(FileFormat::AsMade), chosen == Some(FileFormat::AsMade))], between, kinds]
 }
 
 /// The sizes offered, of what is made `made`: as in the project, apart and first; then
@@ -795,10 +899,10 @@ fn depth_choice<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let formats = format.file_type().formats();
     if formats.len() == 1 {
-        return container(text(format.depth()).size(look.small_size).color(look.colors.dim)).padding([4, 8]).into();
+        return still(look, format.depth().into(), HALF);
     }
     let offers = formats.iter().map(|f| Offer::new(f.depth(), to(*f), *f == format)).collect();
-    choice(look, state, Menu::Depth, format.depth().into(), false, 200.0, vec![offers], say)
+    choice(look, state, Menu::Depth, format.depth().into(), false, HALF, vec![offers], say)
 }
 
 /// The global settings: where the files go, with which template, as what, how large.
@@ -813,7 +917,7 @@ fn global_settings<'a, M: Clone + 'a>(content: &Content<'a>, state: &'a State, l
         Menu::Template,
         global.template.name(&content.presets, content.mine),
         false,
-        420.0,
+        CONTROL,
         template_offers(content, Some(global.template), Vec::new(), move |t| set(Setting::Template(t))),
         say,
     );
@@ -823,13 +927,13 @@ fn global_settings<'a, M: Clone + 'a>(content: &Content<'a>, state: &'a State, l
         Menu::FileType,
         kind_said(global.format),
         false,
-        160.0,
+        HALF,
         kind_offers(Some(global.format), Vec::new(), move |f| set(Setting::Format(f))),
         say,
     );
     let depth: Element<'a, M> = match global.format {
         FileFormat::Of(format) => depth_choice(&look, state, format, move |f| set(Setting::Format(FileFormat::Of(f))), say),
-        FileFormat::AsMade => text("Each map as its Output says").size(look.small_size).color(c.faint).into(),
+        FileFormat::AsMade => still(&look, "Project's settings".into(), HALF),
     };
     let sizes = content.exported.iter().filter(|e| e.depth > 0).map(|e| e.size).collect::<Vec<_>>();
     let made = sizes.first().copied().filter(|first| sizes.iter().all(|s| s == first));
@@ -839,7 +943,7 @@ fn global_settings<'a, M: Clone + 'a>(content: &Content<'a>, state: &'a State, l
         Menu::Size,
         size_said(global.size, made),
         false,
-        260.0,
+        CONTROL,
         size_offers(Some(global.size), made, Vec::new(), move |s| set(Setting::Size(s))),
         say,
     );
@@ -885,7 +989,7 @@ fn global_settings<'a, M: Clone + 'a>(content: &Content<'a>, state: &'a State, l
 /// What a kind of file is, said, in its list.
 fn kind_said(format: FileFormat) -> String {
     match format {
-        FileFormat::AsMade => "As in the project".into(),
+        FileFormat::AsMade => "Project's settings".into(),
         FileFormat::Of(format) => format.file_type().name().into(),
     }
 }
@@ -905,7 +1009,7 @@ fn own_settings<'a, M: Clone + 'a>(
     let project = row.depth == 0;
     // What holds it, and what that says.
     let up = holder(&content.exported, i).map_or_else(|| content.global.clone(), |h| settings_of(&content.global, &content.exported, h));
-    let as_up = if project { "As global settings".to_string() } else { format!("As {} settings", content.project) };
+    let as_up = if project { "Global settings".to_string() } else { format!("{} settings", capitalized(content.project)) };
     let own = row.own.clone();
     let mine = up.with(&own);
     let set = move |s: Setting| say(Event::Set(Some(i), s));
@@ -927,7 +1031,7 @@ fn own_settings<'a, M: Clone + 'a>(
             None => format!("{as_up} ({})", up.template.name(&content.presets, content.mine)),
         },
         own.template.is_none(),
-        420.0,
+        CONTROL,
         template_offers(
             content,
             own.template,
@@ -945,14 +1049,14 @@ fn own_settings<'a, M: Clone + 'a>(
             None => format!("{as_up} ({})", format_said(up.format)),
         },
         own.format.is_none(),
-        260.0,
+        HALF,
         kind_offers(own.format, as_holder(format_said(up.format), Which::Format, own.format.is_none()), move |f| set(Setting::Format(f))),
         say,
     );
     let depth: Element<'a, M> = match (own.format, mine.format) {
         (Some(_), FileFormat::Of(format)) => depth_choice(&look, state, format, move |f| set(Setting::Format(FileFormat::Of(f))), say),
-        (Some(_), FileFormat::AsMade) => text("Each map as its Output says").size(look.small_size).color(c.faint).into(),
-        (None, _) => space().into(),
+        (Some(_), FileFormat::AsMade) | (None, FileFormat::AsMade) => still(&look, "Project's settings".into(), HALF),
+        (None, FileFormat::Of(format)) => still(&look, format.depth().into(), HALF),
     };
     let size = choice(
         &look,
@@ -963,7 +1067,7 @@ fn own_settings<'a, M: Clone + 'a>(
             None => format!("{as_up} ({})", size_said(up.size, made)),
         },
         own.size.is_none(),
-        300.0,
+        CONTROL,
         size_offers(own.size, made, as_holder(size_said(up.size, made), Which::Size, own.size.is_none()), move |s| set(Setting::Size(s))),
         say,
     );
@@ -978,9 +1082,9 @@ fn own_settings<'a, M: Clone + 'a>(
         head = head.push(text(format!("{w} × {h} in the {}", content.project)).size(look.small_size).color(c.dim));
     }
     let about = if project {
-        format!("What this {} says of its own is so for all its {}s; what says \"as global settings\" follows them.", content.project, content.thing)
+        format!("What this {} says of its own is so for all its {}s; what says \"Global settings\" follows them.", content.project, content.thing)
     } else {
-        format!("What this {} says of its own; what says \"as {} settings\" follows its {}.", content.thing, content.project, content.project)
+        format!("What this {} says of its own; what says \"{} settings\" follows its {}.", content.thing, capitalized(content.project), content.project)
     };
     let mut rows = column![head, text(about).size(look.small_size).color(c.faint), space().height(6)].spacing(2);
     rows = rows.push(setting(&look, "Output directory", folder_row(&look, folder, own.folder.is_none(), Some(i), own.folder.is_some(), say)));
@@ -1074,7 +1178,7 @@ impl Content<'_> {
     /// The depth the global settings write a file at that says no format of its own, said.
     fn global_depth(&self) -> String {
         match self.global.format {
-            FileFormat::AsMade => "as in the project".into(),
+            FileFormat::AsMade => "Project's settings".into(),
             FileFormat::Of(format) => format.depth().into(),
         }
     }

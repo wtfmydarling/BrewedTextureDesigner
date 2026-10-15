@@ -225,21 +225,69 @@ pub fn check(look: &Look, checked: bool) -> impl Fn(&Theme, button::Status) -> b
     }
 }
 
-/// A map of the lists of maps: a box of its own, apart from the next; under the mouse lit, edged
-/// bright and raised, so it is plain which is taken; while one is dragged, as it is.
-pub fn map_box(look: &Look) -> impl Fn(&Theme, button::Status) -> button::Style + use<> {
+/// A field that says what is set where nothing is chosen in it: as a list's field, still.
+pub fn still(look: &Look) -> impl Fn(&Theme) -> container::Style + use<> {
+    let c = look.colors;
+    move |_| container::Style {
+        background: Some(c.field.into()),
+        border: Border { color: alpha(c.edge, 0.6), width: 1.0, radius: 2.0.into() },
+        text_color: Some(c.dim),
+        ..Default::default()
+    }
+}
+
+/// A map of the lists: a box of its own, apart from the next; under the mouse lit, edged bright
+/// and raised, so it is plain which is taken.
+pub fn map_tile(look: &Look, hovered: bool) -> impl Fn(&Theme) -> container::Style + use<> {
+    let c = look.colors;
+    move |_| container::Style {
+        background: Some(Background::Color(if hovered { c.hover } else { c.raised })),
+        border: Border { color: if hovered { c.bright } else { c.edge }, width: 1.0, radius: 2.0.into() },
+        shadow: if hovered {
+            Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.4), offset: Vector::new(0.0, 1.0), blur_radius: 3.0 }
+        } else {
+            Shadow::default()
+        },
+        text_color: Some(c.text),
+        ..Default::default()
+    }
+}
+
+/// An output map's row: raised on the page; lifted (dim) while it is moved, edged bright where
+/// one moved would go.
+pub fn output_row(look: &Look, lifted: bool, target: bool) -> impl Fn(&Theme) -> container::Style + use<> {
+    let c = look.colors;
+    move |_| container::Style {
+        background: Some(if lifted { alpha(c.raised, 0.5) } else { c.raised }.into()),
+        border: Border { color: if target { c.bright } else { c.edge }, width: if target { 2.0 } else { 1.0 }, radius: 3.0.into() },
+        shadow: Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.35), offset: Vector::new(0.0, 1.0), blur_radius: 3.0 },
+        text_color: Some(c.text),
+        ..Default::default()
+    }
+}
+
+/// The handle an output map is moved by: a strip of the edge's color, lit under the mouse.
+pub fn handle(look: &Look, hovered: bool) -> impl Fn(&Theme) -> container::Style + use<> {
+    let c = look.colors;
+    move |_| container::Style {
+        background: Some(Background::Color(if hovered { c.hover } else { c.edge })),
+        text_color: Some(if hovered { c.bright } else { c.dim }),
+        border: Border { radius: 2.0.into(), ..Border::default() },
+        ..Default::default()
+    }
+}
+
+/// A button that opens what it says (the parts of a name): raised, edged, lit under the mouse;
+/// edged bright while what it opens is open.
+pub fn opener(look: &Look, open: bool) -> impl Fn(&Theme, button::Status) -> button::Style + use<> {
     let c = look.colors;
     move |_, status| {
-        let lit = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let lit = open || matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
             background: Some(Background::Color(if lit { c.hover } else { c.raised })),
-            text_color: c.text,
-            border: Border { color: if lit { c.bright } else { c.edge }, width: 1.0, radius: 2.0.into() },
-            shadow: if lit {
-                Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.4), offset: Vector::new(0.0, 1.0), blur_radius: 3.0 }
-            } else {
-                Shadow::default()
-            },
+            text_color: c.bright,
+            border: Border { color: if open { c.bright } else { c.edge }, width: 1.0, radius: 3.0.into() },
+            shadow: Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.35), offset: Vector::new(0.0, 1.0), blur_radius: 2.0 },
             snap: true,
         }
     }
