@@ -757,8 +757,7 @@ pub fn export_look() -> export_window::Look {
             faint: TEXT_FAINT,
             warning: WARNING,
             converted: rgb(222, 150, 60),
-            accent: rgb(58, 108, 186),
-            inherited: rgb(142, 178, 228),
+            inherited: rgb(214, 196, 158),
         },
     }
 }

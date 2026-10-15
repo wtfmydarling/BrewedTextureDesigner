@@ -437,8 +437,7 @@ pub struct Colors {
     pub warning: Color,
     /// The maps made of others (Painter's converted maps).
     pub converted: Color,
-    /// What is pressed first (the `$` of a name); a value that is as what holds it says.
-    pub accent: Color,
+    /// A value that is as what holds it says.
     pub inherited: Color,
 }
 
@@ -526,9 +525,15 @@ impl Chosen {
 }
 
 /// What a format of the files is, said: "png 8 bits", as in the project.
-pub fn format_said(format: FileFormat) -> String {
+/// What the files' own format is called: of a template, its defaults (each output map's own
+/// format); of the Outputs as they are, the project's settings (each Output's own).
+pub fn made_said(template: Option<&Template>) -> &'static str {
+    if template.is_some() { "Template's defaults" } else { "Project's settings" }
+}
+
+pub fn format_said(format: FileFormat, made: &str) -> String {
     match format {
-        FileFormat::AsMade => "Project's settings".into(),
+        FileFormat::AsMade => made.into(),
         FileFormat::Of(format) => format.name(),
     }
 }
@@ -886,10 +891,10 @@ fn template_offers<'a, M: Clone + 'a>(content: &Content<'a>, chosen: Option<Chos
 }
 
 /// The kinds of file offered: as in the project, apart and first; then `between`; the kinds.
-fn kind_offers<M: Clone>(chosen: Option<FileFormat>, between: Vec<Offer<M>>, to: impl Fn(FileFormat) -> M) -> Vec<Vec<Offer<M>>> {
+fn kind_offers<M: Clone>(made: &str, chosen: Option<FileFormat>, between: Vec<Offer<M>>, to: impl Fn(FileFormat) -> M) -> Vec<Vec<Offer<M>>> {
     let kind = chosen.and_then(|f| if let FileFormat::Of(f) = f { Some(f.file_type()) } else { None });
     let kinds = FileType::ALL.into_iter().map(|k| Offer::new(k.name(), to(FileFormat::Of(k.formats()[0])), kind == Some(k))).collect();
-    vec![vec![Offer::new("Project's settings", to(FileFormat::AsMade), chosen == Some(FileFormat::AsMade))], between, kinds]
+    vec![vec![Offer::new(made, to(FileFormat::AsMade), chosen == Some(FileFormat::AsMade))], between, kinds]
 }
 
 /// The sizes offered, of what is made `made`: as in the project, apart and first; then
@@ -935,15 +940,15 @@ fn global_settings<'a, M: Clone + 'a>(content: &Content<'a>, state: &'a State, l
         &look,
         state,
         Menu::FileType,
-        kind_said(global.format),
+        kind_said(global.format, made_said(global.template.template(&content.presets, content.mine))),
         false,
         HALF,
-        kind_offers(Some(global.format), Vec::new(), move |f| set(Setting::Format(f))),
+        kind_offers(made_said(global.template.template(&content.presets, content.mine)), Some(global.format), Vec::new(), move |f| set(Setting::Format(f))),
         say,
     );
     let depth: Element<'a, M> = match global.format {
         FileFormat::Of(format) => depth_choice(&look, state, format, move |f| set(Setting::Format(FileFormat::Of(f))), say),
-        FileFormat::AsMade => still(&look, "Project's settings".into(), HALF),
+        FileFormat::AsMade => still(&look, made_said(global.template.template(&content.presets, content.mine)).into(), HALF),
     };
     let sizes = content.exported.iter().filter(|e| e.depth > 0).map(|e| e.size).collect::<Vec<_>>();
     let made = sizes.first().copied().filter(|first| sizes.iter().all(|s| s == first));
@@ -1000,9 +1005,9 @@ fn global_settings<'a, M: Clone + 'a>(content: &Content<'a>, state: &'a State, l
 }
 
 /// What a kind of file is, said, in its list.
-fn kind_said(format: FileFormat) -> String {
+fn kind_said(format: FileFormat, made: &str) -> String {
     match format {
-        FileFormat::AsMade => "Project's settings".into(),
+        FileFormat::AsMade => made.into(),
         FileFormat::Of(format) => format.file_type().name().into(),
     }
 }
@@ -1058,17 +1063,24 @@ fn own_settings<'a, M: Clone + 'a>(
         state,
         Menu::FileType,
         match own.format {
-            Some(f) => kind_said(f),
-            None => format!("{as_up} ({})", format_said(up.format)),
+            Some(f) => kind_said(f, made_said(mine.template.template(&content.presets, content.mine))),
+            None => format!("{as_up} ({})", format_said(up.format, made_said(up.template.template(&content.presets, content.mine)))),
         },
         own.format.is_none(),
         HALF,
-        kind_offers(own.format, as_holder(format_said(up.format), Which::Format, own.format.is_none()), move |f| set(Setting::Format(f))),
+        kind_offers(
+            made_said(mine.template.template(&content.presets, content.mine)),
+            own.format,
+            as_holder(format_said(up.format, made_said(up.template.template(&content.presets, content.mine))), Which::Format, own.format.is_none()),
+            move |f| set(Setting::Format(f)),
+        ),
         say,
     );
     let depth: Element<'a, M> = match (own.format, mine.format) {
         (Some(_), FileFormat::Of(format)) => depth_choice(&look, state, format, move |f| set(Setting::Format(FileFormat::Of(f))), say),
-        (Some(_), FileFormat::AsMade) | (None, FileFormat::AsMade) => still(&look, "Project's settings".into(), HALF),
+        (Some(_), FileFormat::AsMade) | (None, FileFormat::AsMade) => {
+            still(&look, made_said(mine.template.template(&content.presets, content.mine)).into(), HALF)
+        }
         (None, FileFormat::Of(format)) => still(&look, format.depth().into(), HALF),
     };
     let size = choice(
@@ -1190,22 +1202,4 @@ fn files<'a, M: Clone + 'a>(content: &Content<'a>, look: &Look, say: impl Fn(Eve
         list = list.push(space().height(6));
     }
     container(scroll_box(container(list).padding([10, 12])).height(Length::Fill)).padding(8).into()
-}
-
-impl Content<'_> {
-    /// The depth the global settings write a file at that says no format of its own, said.
-    fn global_depth(&self) -> String {
-        match self.global.format {
-            FileFormat::AsMade => "Project's settings".into(),
-            FileFormat::Of(format) => format.depth().into(),
-        }
-    }
-
-    /// The extension of such a file, where the global settings say one.
-    fn global_extension(&self) -> Option<&'static str> {
-        match self.global.format {
-            FileFormat::AsMade => None,
-            FileFormat::Of(format) => Some(format.extension()),
-        }
-    }
 }

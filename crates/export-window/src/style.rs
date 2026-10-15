@@ -87,6 +87,8 @@ pub fn channel_color(tag: &str) -> Color {
         "G" => Color::from_rgb8(78, 176, 92),
         "B" => Color::from_rgb8(70, 132, 220),
         "A" => Color::from_rgb8(200, 200, 200),
+        // (Three channels of a map: of their own color, apart from the alpha's and gray's.)
+        "RGB" => Color::from_rgb8(168, 104, 200),
         _ => Color::from_rgb8(150, 150, 150),
     }
 }
@@ -288,23 +290,6 @@ pub fn opener(look: &Look, open: bool) -> impl Fn(&Theme, button::Status) -> but
             text_color: c.bright,
             border: Border { color: if open { c.bright } else { c.edge }, width: 1.0, radius: 3.0.into() },
             shadow: Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.35), offset: Vector::new(0.0, 1.0), blur_radius: 2.0 },
-            snap: true,
-        }
-    }
-}
-
-/// The button pressed first in a row (the `$` of a name): of the accent's color, bright.
-pub fn accent(look: &Look, open: bool) -> impl Fn(&Theme, button::Status) -> button::Style + use<> {
-    let c = look.colors;
-    move |_, status| {
-        let lit = open || matches!(status, button::Status::Hovered | button::Status::Pressed);
-        let base = c.accent;
-        let shade = |k: f32| Color { r: (base.r * k).min(1.0), g: (base.g * k).min(1.0), b: (base.b * k).min(1.0), a: 1.0 };
-        button::Style {
-            background: Some(Background::Color(if lit { shade(1.25) } else { base })),
-            text_color: Color::WHITE,
-            border: Border { color: if open { c.bright } else { shade(1.4) }, width: 1.0, radius: 3.0.into() },
-            shadow: Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.4), offset: Vector::new(0.0, 1.0), blur_radius: 3.0 },
             snap: true,
         }
     }

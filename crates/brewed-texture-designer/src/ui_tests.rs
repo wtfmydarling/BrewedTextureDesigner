@@ -744,7 +744,7 @@ fn exports_follow_the_settings_chosen() {
     assert_eq!(names, ["T_Brick_Wall_BaseColor.png", "T_Brick_Wall_Normal.png", "T_Brick_Wall_ORM.png", "T_Brick_Wall_Height.png"]);
     assert!(plan.iter().all(|p| p.size == [1024, 1024]), "as large as asked");
     let formats: Vec<Format> = plan.iter().map(|p| p.format).collect();
-    assert_eq!(formats, [Format::Png8, Format::Png8, Format::Png8, Format::Png16], "each as its Output says (the height of 16 bits)");
+    assert_eq!(formats, [Format::Png8; 4], "as the template says, whatever the Outputs (the height's is of 16 bits)");
     assert!(plan[1].file.said.contains("green turned over"), "Unreal's normals are DirectX's, the graph's OpenGL's: {}", plan[1].file.said);
     // Normal maps written one way whatever the template says: OpenGL's, as the graph makes them.
     say(&mut w, Event::Set(None, Setting::Normals(texture_export::NormalsWritten::Of(texture_export::Normals::OpenGL))));
@@ -862,9 +862,17 @@ fn templates_are_made_and_changed_in_the_export_window() {
     w.send(Message::Export(X::Open));
     say(&mut w, Event::Tab(Tab::Templates));
     w.input(&[]);
-    for said in
-        ["PRESETS", "OUTPUT MAPS", "INPUT MAPS", "CONVERTED MAPS", "CUSTOM MAPS", "T_Brick_Wall_ORM", "Ambient Occlusion", "Normal DirectX", "Coat Roughness"]
-    {
+    for said in [
+        "PRESETS",
+        "OUTPUT MAPS",
+        "INPUT MAPS",
+        "CONVERTED MAPS",
+        "CUSTOM MAPS",
+        "T_Brick_Wall_ORM.png",
+        "Ambient Occlusion",
+        "Normal DirectX",
+        "Coat Roughness",
+    ] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
     assert!(texts(&mut w, "built in: copy it to change it").is_empty(), "changed where it is");

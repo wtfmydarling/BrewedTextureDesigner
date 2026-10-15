@@ -17,7 +17,7 @@ use crate::{Chosen, Content, Dragged, Event, Look, Menu, Offer, State, caption, 
 const CHANNEL: (f32, f32) = (136.0, 40.0);
 /// How wide an output map's name is, and each of its kind of file and depth.
 const NAME: f32 = 230.0;
-const FORMAT: f32 = 104.0;
+const FORMAT: f32 = 150.0;
 
 /// The tags of the channels of `file`'s parts: `RGB`, `A`; `Gray` of a file of one channel.
 fn tags(file: &texture_export::File) -> Vec<String> {
@@ -42,6 +42,10 @@ fn label(part: &Part, names: &dyn Fn(&MapId) -> String) -> (String, bool) {
     match part {
         Part::Value { said, .. } if said.is_empty() => (String::new(), true),
         Part::Value { value, .. } => (format!("Constant {value}"), false),
+        Part::Rgb(input) if input.of.len() == 3 => {
+            let each: Vec<String> = input.of.iter().map(|p| label(p, names).0).map(|s| if s.is_empty() { "—".into() } else { s }).collect();
+            (each.join(" · "), false)
+        }
         Part::Rgb(input) | Part::One(input) => {
             let mut said = names(&input.map);
             if input.map.is_normal() {
@@ -188,7 +192,7 @@ fn outputs<'a, M: Clone + 'a>(
     if template.files.is_empty() {
         rows = rows.push(text("No output maps: create one above.").size(look.small_size).color(c.dim));
     }
-    let hint = "Drag maps from the right onto the channels; drag an output map by its handle to move it.";
+    let hint = "Drag maps from the right onto the channels; click a channel to clear it, or to split RGB into R, G and B and back; drag an output map by its handle to move it.";
     let said = match template.files.len() {
         1 => "1 output map will be exported.".to_string(),
         n => format!("{n} output maps will be exported."),
@@ -245,13 +249,14 @@ fn output_row<'a, M: Clone + 'a>(
                 button(text("$").size(look.text_size + 1.0).font(look.bold).center())
                     .width(Length::Fixed(30.0))
                     .padding([3, 0])
-                    .style(style::accent(&look, open))
+                    .style(style::opener(&look, open))
                     .on_press(say(Event::Tokens(if open { None } else { Some(f) }))),
             );
         }
         None => name = name.push(container(text(file.name.clone()).size(look.small_size).font(look.mono)).width(Length::Fixed(NAME)).padding([5, 8])),
     }
-    let extension = file.format.map(Format::extension).or(content.global_extension());
+    // (A template's own format: png of 8 bits where it says none.)
+    let extension = Some(file.format.unwrap_or(Format::Png8).extension());
     let values: Vec<(&str, &str)> = content.values.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let written = texture_export::naming::expand(&file.name, &values);
     let shown = extension.map_or_else(|| written.clone(), |e| format!("{written}.{e}"));
@@ -316,46 +321,42 @@ fn output_row<'a, M: Clone + 'a>(
     match editable {
         Some(i) => {
             let to = move |format: Option<Format>| say(Event::Edit(i, Edit::Format { file: f, format }));
-            let kind_of = file.format.map(Format::file_type);
-            let kinds = FileType::ALL.into_iter().map(|k| Offer::new(k.name(), to(Some(k.formats()[0])), kind_of == Some(k))).collect();
-            let kind = choice(
-                &look,
-                state,
-                Menu::Kind(f),
-                kind_of.map_or("Export settings", FileType::name).into(),
-                kind_of.is_none(),
-                FORMAT,
-                vec![vec![Offer::new("Export settings", to(None), kind_of.is_none())], kinds],
-                say,
-            );
-            let depth: Element<'a, M> = match file.format {
-                Some(format) if format.file_type().formats().len() > 1 => {
-                    let depths = format.file_type().formats().iter().map(|d| Offer::new(d.depth(), to(Some(*d)), *d == format)).collect();
-                    choice(&look, state, Menu::FileDepth(f), format.depth().into(), false, FORMAT, vec![depths], say)
-                }
-                Some(format) => still(&look, format.depth().into(), FORMAT),
-                None => still(&look, content.global_depth(), FORMAT),
+            let format = file.format.unwrap_or(Format::Png8);
+            let kinds = FileType::ALL.into_iter().map(|k| Offer::new(k.name(), to(Some(k.formats()[0])), format.file_type() == k)).collect();
+            let kind = choice(&look, state, Menu::Kind(f), format.file_type().name().into(), false, FORMAT, vec![kinds], say);
+            let depth: Element<'a, M> = if format.file_type().formats().len() > 1 {
+                let depths = format.file_type().formats().iter().map(|d| Offer::new(d.depth(), to(Some(*d)), *d == format)).collect();
+                choice(&look, state, Menu::FileDepth(f), format.depth().into(), false, FORMAT, vec![depths], say)
+            } else {
+                still(&look, format.depth().into(), FORMAT)
             };
             tools = tools.push(column![kind, depth].spacing(3));
-            let arrow = |label: &'static str, to: Option<usize>| {
-                button(text(label).size(look.small_size).center())
-                    .width(Length::Fixed(26.0))
-                    .padding([2, 0])
-                    .style(look.button)
-                    .on_press_maybe(to.map(|to| say(Event::Edit(i, Edit::MoveFile { from: f, to }))))
-            };
-            tools = tools.push(column![arrow("↑", f.checked_sub(1)), arrow("↓", (f + 1 < template.files.len()).then_some(f + 1))].spacing(3));
             tools = tools.push(
                 button(text("Duplicate").size(look.small_size))
                     .padding([4, 10])
                     .style(style::opener(&look, false))
                     .on_press(say(Event::Edit(i, Edit::DuplicateFile(f)))),
             );
-            tools =
-                tools.push(button(text("✕").size(look.small_size)).padding([3, 7]).style(look.flat_button).on_press(say(Event::Edit(i, Edit::RemoveFile(f)))));
+            let arrow = |label: &'static str, to: Option<usize>| {
+                button(text(label).size(look.caption_size).center())
+                    .width(Length::Fixed(22.0))
+                    .padding([1, 0])
+                    .style(look.flat_button)
+                    .on_press_maybe(to.map(|to| say(Event::Edit(i, Edit::MoveFile { from: f, to }))))
+            };
+            let away = button(text("✕").size(look.small_size).center())
+                .width(Length::Fixed(46.0))
+                .padding([3, 0])
+                .style(look.flat_button)
+                .on_press(say(Event::Edit(i, Edit::RemoveFile(f))));
+            tools = tools.push(
+                column![away, row![arrow("↑", f.checked_sub(1)), arrow("↓", (f + 1 < template.files.len()).then_some(f + 1))].spacing(2)]
+                    .spacing(2)
+                    .align_x(Alignment::Center),
+            );
         }
         None => {
-            let format = file.format.map_or_else(|| "Export settings".to_string(), |f| format!("{} {}", f.file_type().name(), f.depth()));
+            let format = file.format.unwrap_or(Format::Png8).name();
             tools = tools.push(text(format).size(look.small_size).color(c.dim));
         }
     }
@@ -432,7 +433,7 @@ enum Ways {
 fn taken_ways(dragged: &Dragged, channels: usize) -> Ways {
     match &dragged.map {
         Some(map) if map.is_normal() && dragged.normals.is_none() => Ways::Asked,
-        Some(map) if !map.gray() && !map.is_normal() => Ways::Asked,
+        Some(map) if !map.is_normal() => Ways::Asked,
         // (A gray map's gray, a normal map of a way, a constant: as they are.)
         _ => Ways::One(if channels == 3 { None } else { Some(0) }),
     }
@@ -478,6 +479,9 @@ fn dropped_menu<'a, M: Clone + 'a>(
             ("OpenGL".into(), edit(Some(Normals::OpenGL), own)),
             ("User's choice".into(), edit(None, own)),
         ]
+    } else if dragged.map.as_ref().is_some_and(MapId::gray) {
+        // (A gray map: its gray, in all three of an RGB box; or its alpha.)
+        vec![("Gray channel".into(), edit(dragged.normals, own)), ("A channel".into(), edit(dragged.normals, Some(3)))]
     } else {
         let mut ways = Vec::new();
         if channels == 3 {

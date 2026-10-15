@@ -425,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "brewed-texture-core"
-version = "0.2.0"
+version = "1.0.0-pre.1"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "brewed-texture-designer"
-version = "0.2.0"
+version = "1.0.0-pre.1"
 dependencies = [
  "block2 0.6.2",
  "brewed-texture-core",
@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "brewed-texture-engine"
-version = "0.2.0"
+version = "1.0.0-pre.1"
 dependencies = [
  "brewed-texture-core",
  "bytemuck",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "drop-down"
-version = "0.2.0"
+version = "1.0.0-pre.1"
 dependencies = [
  "iced",
 ]
@@ -1222,7 +1222,7 @@ dependencies = [
 
 [[package]]
 name = "export-window"
-version = "0.2.0"
+version = "1.0.0-pre.1"
 dependencies = [
  "drop-down",
  "iced",
@@ -1745,7 +1745,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "home-screen"
-version = "0.2.0"
+version = "1.0.0-pre.1"
 dependencies = [
  "iced",
  "scroll-box",
@@ -3855,7 +3855,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scroll-box"
-version = "0.2.0"
+version = "1.0.0-pre.1"
 dependencies = [
  "iced",
 ]
@@ -4312,7 +4312,7 @@ dependencies = [
 
 [[package]]
 name = "texture-export"
-version = "0.2.0"
+version = "1.0.0-pre.1"
 dependencies = [
  "serde",
  "serde_json",

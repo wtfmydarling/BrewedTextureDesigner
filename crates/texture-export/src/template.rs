@@ -260,7 +260,7 @@ impl File {
             return self.needs.clone();
         }
         let mut used = Vec::new();
-        for part in &self.parts {
+        for part in self.parts.iter().flat_map(Part::own) {
             if let Part::Rgb(input) | Part::One(input) = part
                 && !used.contains(&input.map)
             {
@@ -291,6 +291,14 @@ pub enum Part {
 }
 
 impl Part {
+    /// The parts it is: itself; of three channels each of its own (see [`Input::of`]), those.
+    pub fn own(&self) -> Vec<&Part> {
+        match self {
+            Part::Rgb(input) if input.of.len() == 3 => input.of.iter().collect(),
+            part => vec![part],
+        }
+    }
+
     /// How many channels of its file it fills.
     pub fn channels(&self) -> usize {
         match self {
@@ -330,6 +338,11 @@ pub struct Input {
     /// gray map's gray).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<u8>,
+    /// Of `rgb` made of three channels each of its own (R, G and B made one, see
+    /// [`Edit::Collapse`]): those three, in order; they are what it writes, and what it is split
+    /// into again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub of: Vec<Part>,
 }
 
 fn is_zero(v: &u8) -> bool {
@@ -340,7 +353,7 @@ impl Input {
     /// A map's part, as it is: no channel but the first, not turned over, and the file not
     /// written without it.
     pub fn of(map: MapId) -> Input {
-        Input { map, channel: 0, invert: false, missing: None, optional: false, normals: None, from: None }
+        Input { map, channel: 0, invert: false, missing: None, optional: false, normals: None, from: None, of: Vec::new() }
     }
 }
 
@@ -520,12 +533,14 @@ impl Template {
             Edit::Split { file: at, part } => {
                 let file = self.files.get_mut(at).ok_or("no such file")?;
                 let parts: Vec<Part> = match file.parts.get(part).ok_or("no such part")? {
+                    // (Three of their own, as they were.)
+                    Part::Rgb(input) if input.of.len() == 3 => input.of.clone(),
                     Part::Rgb(input) => {
                         let gray = input.map.gray();
                         (0..3u8)
                             .map(|c| {
                                 let channel = input.from.unwrap_or(if gray { 0 } else { c });
-                                Part::One(Input { channel, from: None, ..input.clone() })
+                                Part::One(Input { channel, from: None, of: Vec::new(), ..input.clone() })
                             })
                             .collect()
                     }
@@ -552,7 +567,13 @@ impl Template {
                     {
                         Part::Rgb(Input { channel: 0, from: None, ..r.clone() })
                     }
-                    _ => Part::Value { value: 0.0, said: String::new(), rgb: true },
+                    // Of no map at all: empty.
+                    (None, None, None) => Part::Value { value: 0.0, said: String::new(), rgb: true },
+                    // Each of its own: kept, all three.
+                    _ => {
+                        let map = ones.iter().flatten().next().map_or_else(|| MapId::from(""), |i| i.map.clone());
+                        Part::Rgb(Input { of: file.parts[..3].to_vec(), ..Input::of(map) })
+                    }
                 };
                 file.parts.splice(0..3, [whole]);
                 file.needs.clear();
@@ -613,7 +634,7 @@ pub fn plan_template<R: Copy>(template: &Template, maps: &[Map<R>], values: &[(&
         // What each part is, said, and the channels it fills.
         let mut said: Vec<(usize, String)> = Vec::new();
         let mut flipped = false;
-        for part in &file.parts {
+        for part in file.parts.iter().flat_map(Part::own) {
             match part {
                 Part::Value { value, said: what, rgb } => {
                     let channels = if *rgb { 3 } else { 1 };
@@ -906,7 +927,35 @@ mod split {
         assert!(t.files[0].parts[..3].iter().all(|p| matches!(p, Part::One(i) if i.channel == 0)), "its gray in each");
         t.apply(Edit::Map { file: 0, part: 1, map: Some(MapId::from("metallic")), invert: false, normals: None, channel: None }).expect("another");
         t.apply(Edit::Collapse { file: 0, part: 0 }).expect("collapsed");
-        assert!(matches!(&t.files[0].parts[0], Part::Value { rgb: true, said, .. } if said.is_empty()), "of no one map: empty");
+        // Three of their own made one: none of them lost; it writes them, and is split into them.
+        let Part::Rgb(kept) = &t.files[0].parts[0] else { panic!("one of three") };
+        assert_eq!(kept.of.len(), 3, "kept, all three");
+        let maps = |t: &Template| {
+            t.files[0]
+                .parts
+                .iter()
+                .flat_map(Part::own)
+                .filter_map(|p| if let Part::One(i) = p { Some(i.map.as_str().to_string()) } else { None })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(maps(&t), ["roughness", "metallic", "roughness"]);
+        let written = plan_template(
+            &t,
+            &[
+                Map { reference: 1u32, name: "r".into(), usage: Some(MapId::from("roughness")) },
+                Map { reference: 2, name: "m".into(), usage: Some(MapId::from("metallic")) },
+            ],
+            &[],
+            false,
+        );
+        assert!(
+            matches!(&written[0].what, Planned::Pack(s) if s.len() == 4 && s[1] == Source::Map { map: 2, channel: 0, invert: false }),
+            "{:?}",
+            written[0].what
+        );
+        t.apply(Edit::Split { file: 0, part: 0 }).expect("split again");
+        assert_eq!(maps(&t), ["roughness", "metallic", "roughness"], "as they were");
+        t.apply(Edit::Collapse { file: 0, part: 0 }).expect("one again");
         t.apply(map("base_color", Some(3))).expect("its alpha in three");
         assert!(matches!(&t.files[0].parts[0], Part::Rgb(i) if i.from == Some(3)));
         assert!(t.apply(Edit::Collapse { file: 0, part: 0 }).is_err(), "not three of one channel");

@@ -39,6 +39,15 @@ round in the autopilot that provokes it.
   what is exported) and give its own presets and name parts (`$(mesh)`, `$(textureSet)`…); the
   crates `texture-export`, `export-window`, `drop-down` and `scroll-box` are shared for that.
 
+## Releases
+
+- 1.0.0-pre.1 is the first version on `main` (tag `v1.0.0-pre.1`). Its GitHub release is made
+  from the tag (Releases → Draft a new release → the tag, "Set as a pre-release"), with the
+  builds attached.
+- Linux builds as **AppImage** and **Flatpak** (wanted over native packages): an AppImage of the
+  release binary with its desktop file and icon; a Flatpak manifest building from the tag. Then
+  a build for macOS (Apple Silicon), signed or not.
+
 ## The rest, by priority
 
 1. **Subgraphs**: resolution and tiling inherited from the graph that uses a graph, as in

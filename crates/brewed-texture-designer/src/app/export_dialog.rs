@@ -666,13 +666,12 @@ impl App {
                         }
                     }
                     for file in texture_export::plan_template(&template, &export_presets::maps(&entry.graph), &values, directx) {
-                        // A file of no format of its own: as the settings say (as made: as the
-                        // first map it is made of).
-                        let first = match &file.what {
-                            Planned::AsItIs(node) => Some(*node),
-                            Planned::Pack(sources) => sources.iter().find_map(|s| if let Source::Map { map, .. } = s { Some(*map) } else { None }),
+                        // As the export's settings say, or as the template says (png of 8 bits where it says
+                        // none): a template is the standard of its engine, whatever the Outputs are.
+                        let format = match settings.format {
+                            FileFormat::Of(format) => format,
+                            FileFormat::AsMade => file.format.unwrap_or(Format::Png8),
                         };
-                        let format = file.format.unwrap_or_else(|| chosen(first.map_or(Format::Png8, format_made)));
                         planned.push(PlannedExport { row: i, path: PathBuf::new(), file, format, size });
                     }
                 }
