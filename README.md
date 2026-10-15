@@ -3,7 +3,7 @@
 A node-based procedural texture editor in the spirit of Substance Designer — the first program of the Brewed family. Free and open source: [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option ([more](#license)).
 Rust · **wgpu** (nodes are drawn on the GPU by WGSL shaders) · **iced** (the interface) · **SIMD + multithreading** (`wide` + `rayon`) for the CPU side.
 
-What is still to be done, and how the work goes: [docs/next.md](docs/next.md).
+What is still to be done, and how the work goes: [docs/next.md](docs/next.md). How it is built for Windows, Linux (AppImage, Flatpak) and macOS: [packaging/README.md](packaging/README.md).
 
 ![Brewed Texture Designer](docs/screenshot.png)
 

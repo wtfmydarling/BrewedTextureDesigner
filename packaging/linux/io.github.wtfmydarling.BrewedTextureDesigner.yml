@@ -1,0 +1,43 @@
+# Flatpak of Brewed Texture Designer, built from the source of this checkout in the Freedesktop
+# SDK (against the runtime's own glibc). Built by packaging/linux/build-flatpak.sh.
+#
+# The crates are fetched while it builds (the network is shared with the build): a local build.
+# For Flathub, the crates are to be listed for an offline build (flatpak-cargo-generator) instead.
+id: io.github.wtfmydarling.BrewedTextureDesigner
+runtime: org.freedesktop.Platform
+runtime-version: "25.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: brewed-texture-designer
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Packages, the files they link to and the folders textures are exported to are anywhere.
+  - --filesystem=home
+  # Help → Reveal Log File, and the file manager shown a folder.
+  - --talk-name=org.freedesktop.FileManager1
+modules:
+  - name: brewed-texture-designer
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/brewed-texture-designer/cargo
+      build-args:
+        - --share=network
+    build-commands:
+      - cargo build --release --locked -p brewed-texture-designer
+      - install -Dm755 target/release/brewed-texture-designer /app/bin/brewed-texture-designer
+      - install -Dm644 packaging/linux/io.github.wtfmydarling.BrewedTextureDesigner.desktop /app/share/applications/io.github.wtfmydarling.BrewedTextureDesigner.desktop
+      - install -Dm644 packaging/linux/io.github.wtfmydarling.BrewedTextureDesigner.metainfo.xml /app/share/metainfo/io.github.wtfmydarling.BrewedTextureDesigner.metainfo.xml
+      - install -Dm644 packaging/linux/io.github.wtfmydarling.BrewedTextureDesigner.mime.xml /app/share/mime/packages/io.github.wtfmydarling.BrewedTextureDesigner.xml
+      - install -Dm644 crates/brewed-texture-designer/assets/logo.svg /app/share/icons/hicolor/scalable/apps/io.github.wtfmydarling.BrewedTextureDesigner.svg
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - .git

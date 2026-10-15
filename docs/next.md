@@ -44,9 +44,10 @@ round in the autopilot that provokes it.
 - 1.0.0-pre.1 is the first version on `main` (tag `v1.0.0-pre.1`). Its GitHub release is made
   from the tag (Releases → Draft a new release → the tag, "Set as a pre-release"), with the
   builds attached.
-- Linux builds as **AppImage** and **Flatpak** (wanted over native packages): an AppImage of the
-  release binary with its desktop file and icon; a Flatpak manifest building from the tag. Then
-  a build for macOS (Apple Silicon), signed or not.
+- Builds: the scripts of `packaging/` (see [packaging/README.md](../packaging/README.md)) make
+  the Windows installer, the AppImage, the Flatpak and the macOS disk image; no `.deb` or `.rpm`.
+  Still to do: run them on each system (the AppImage on Debian 13, for its older glibc), attach
+  what they make to the release, and an offline Flatpak build (its crates listed) for Flathub.
 
 ## The rest, by priority
 

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.wtfmydarling.BrewedTextureDesigner</id>
+  <name>Brewed Texture Designer</name>
+  <summary>A node-based procedural texture editor</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <description>
+    <p>
+      Textures made of nodes, in the spirit of Substance Designer: graphs of generators, filters
+      and blends computed on the GPU, packages of graphs that use each other, a 3D view of the
+      material, and an export for game engines (Unreal Engine, Unity, glTF) or as the outputs are.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.wtfmydarling.BrewedTextureDesigner.desktop</launchable>
+  <url type="homepage">https://github.com/wtfmydarling/BrewedTextureDesigner</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.0-pre.1" date="2026-10-15" type="development"/>
+  </releases>
+</component>
