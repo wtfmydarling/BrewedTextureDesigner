@@ -900,10 +900,10 @@ fn templates_are_made_and_changed_in_the_export_window() {
     w.input(&[]);
     assert!(!texts(&mut w, "Height").is_empty(), "the label of the map dragged");
     w.snapshot("export_dragging");
-    say(&mut w, Event::Edit(mine, Edit::Map { file, part: 0, map: Some(MapId::from("height")), invert: false, normals: None }));
+    say(&mut w, Event::Edit(mine, Edit::Map { file, part: 0, map: Some(MapId::from("height")), invert: false, normals: None, channel: None }));
     say(&mut w, Event::DragEnd);
     assert_eq!(dialog(&w).window.dragging, None, "the drag ends where it is let go");
-    assert_eq!(dialog(&w).window.slot, Some((file, 0)), "the channel that took it is chosen");
+    assert_eq!(dialog(&w).window.slot, None, "nothing asked of it: no menu");
     // A click on a map takes nothing; pressed and moved, it is dragged.
     let rough = export_window::Dragged { map: Some(MapId::from("roughness")), invert: false, normals: None, label: "Roughness".into() };
     say(&mut w, Event::Press(rough.clone()));
@@ -931,27 +931,44 @@ fn templates_are_made_and_changed_in_the_export_window() {
     assert_eq!(dialog(&w).templates[0].files[0], dialog(&w).templates[0].files[file + 1], "the copy on top");
     say(&mut w, Event::Edit(mine, Edit::RemoveFile(0)));
     assert_eq!(dialog(&w).templates[0].files.len(), count);
-    say(&mut w, Event::Slot(Some((file, 0))));
-    say(&mut w, Event::Edit(mine, Edit::Map { file, part: 1, map: Some(MapId::from("roughness")), invert: true, normals: None }));
-    // What a channel is made of, said plainly: the opacity in the base color's alpha.
-    say(&mut w, Event::Slot(Some((0, 1))));
+
+    say(&mut w, Event::Edit(mine, Edit::Map { file, part: 1, map: Some(MapId::from("roughness")), invert: true, normals: None, channel: None }));
+    // A channel pressed: a small menu, as Painter's: clear it, split three channels or make
+    // R, G and B one again.
+    say(&mut w, Event::Slot(Some((0, 0))));
     w.input(&[]);
-    for said in ["Channel A", "Opacity", "Take from channel", "Invert", "If the graph has no Opacity", "Skip the file", "Leave the channel out", "Fill with"] {
+    for said in ["Clear channel", "Split RGB"] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
-    w.snapshot("export_channel");
-    say(&mut w, Event::Slot(Some((file, 1))));
+    w.snapshot("export_channel_menu");
+    say(&mut w, Event::Edit(mine, Edit::Split { file: 0, part: 0 }));
+    assert_eq!(dialog(&w).templates[0].files[0].parts.len(), 4, "R, G, B and the alpha");
+    assert_eq!(dialog(&w).window.slot, None, "the menu closes");
+    say(&mut w, Event::Edit(mine, Edit::Collapse { file: 0, part: 0 }));
+    assert_eq!(dialog(&w).templates[0].files[0].parts.len(), 2, "RGB and the alpha again");
+    // A color map let go on a channel asks which of its channels; a normal map which way it is
+    // written.
+    let base = export_window::Dragged { map: Some(MapId::from("base_color")), invert: false, normals: None, label: "Base Color".into() };
+    say(&mut w, Event::Dropped(Some((file, 2, base))));
+    w.input(&[]);
+    for said in ["From Base Color", "R channel", "A channel"] {
+        assert!(!texts(&mut w, said).is_empty(), "{said}");
+    }
+    w.snapshot("export_dropped");
+    say(&mut w, Event::Edit(mine, Edit::Map { file, part: 2, map: Some(MapId::from("base_color")), invert: false, normals: None, channel: Some(3) }));
+    assert!(matches!(&dialog(&w).templates[0].files[file].parts[2], texture_export::Part::One(i) if i.channel == 3), "its alpha");
+    say(&mut w, Event::Edit(mine, Edit::Clear { file, part: 2 }));
+    let normal = export_window::Dragged { map: Some(MapId::from("normal")), invert: false, normals: None, label: "Normal".into() };
+    say(&mut w, Event::Dropped(Some((0, 0, normal))));
+    w.input(&[]);
+    for said in ["From Normal", "DirectX", "OpenGL", "User's choice"] {
+        assert!(!texts(&mut w, said).is_empty(), "{said}");
+    }
+    say(&mut w, Event::Dropped(None));
     // Its name: a part chosen from the menu of them, which says what each is.
     say(&mut w, Event::Tokens(Some(file)));
     w.input(&[]);
-    for said in [
-        "$(graph)",
-        "$(package)",
-        "( … )",
-        "The graph's name, as a file's (blanks and what a file name cannot have as _)",
-        "Invert",
-        "If the graph has no Roughness",
-    ] {
+    for said in ["$(graph)", "$(package)", "( … )", "The graph's name, as a file's (blanks and what a file name cannot have as _)"] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
     w.snapshot("export_editor");

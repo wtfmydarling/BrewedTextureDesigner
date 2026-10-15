@@ -292,3 +292,31 @@ pub fn opener(look: &Look, open: bool) -> impl Fn(&Theme, button::Status) -> but
         }
     }
 }
+
+/// The button pressed first in a row (the `$` of a name): of the accent's color, bright.
+pub fn accent(look: &Look, open: bool) -> impl Fn(&Theme, button::Status) -> button::Style + use<> {
+    let c = look.colors;
+    move |_, status| {
+        let lit = open || matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let base = c.accent;
+        let shade = |k: f32| Color { r: (base.r * k).min(1.0), g: (base.g * k).min(1.0), b: (base.b * k).min(1.0), a: 1.0 };
+        button::Style {
+            background: Some(Background::Color(if lit { shade(1.25) } else { base })),
+            text_color: Color::WHITE,
+            border: Border { color: if open { c.bright } else { shade(1.4) }, width: 1.0, radius: 3.0.into() },
+            shadow: Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.4), offset: Vector::new(0.0, 1.0), blur_radius: 3.0 },
+            snap: true,
+        }
+    }
+}
+
+/// What a menu says it is of (the map a channel is taken from): edged in red, as Painter edges it.
+pub fn from_box(look: &Look) -> impl Fn(&Theme) -> container::Style + use<> {
+    let c = look.colors;
+    move |_| container::Style {
+        background: Some(c.field.into()),
+        border: Border { color: Color::from_rgb8(200, 64, 56), width: 1.0, radius: 2.0.into() },
+        text_color: Some(c.bright),
+        ..Default::default()
+    }
+}

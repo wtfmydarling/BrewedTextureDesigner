@@ -23,9 +23,15 @@ impl MapId {
         self.0.strip_prefix("custom:").unwrap_or(&self.0).replace('_', " ")
     }
 
-    /// Whether the map is gray: one channel of it is written as a map of three.
-    pub(crate) fn gray(&self) -> bool {
-        matches!(self.as_str(), "height" | "ambient_occlusion" | "roughness" | "metallic")
+    /// Whether the map is gray: one channel of it is written as a map of three. A map of a color,
+    /// of a direction (a normal map, a tangent), a panorama, and one of no usage (which may be
+    /// either) are not; every other usage is a gray map of a value.
+    pub fn gray(&self) -> bool {
+        let id = self.as_str();
+        !(id.starts_with("custom:")
+            || id.ends_with("color")
+            || self.is_normal()
+            || matches!(id, "emissive" | "diffuse" | "specular" | "reflection" | "refraction" | "panorama" | "tangent" | "coat_tangent" | "ambient"))
     }
 
     /// Whether it is a normal map: its green turned over to be the other way's.

@@ -202,6 +202,9 @@ pub struct State {
     pub over_row: Option<usize>,
     /// The map of the lists under the mouse (its key, see [`Dragged::key`]).
     pub hovered: Option<String>,
+    /// A map let go over a channel (the output map, its part) that asks which of its channels,
+    /// or which way its normals are written: the menu of them open there.
+    pub dropped: Option<(usize, usize, Dragged)>,
 }
 
 impl Dragged {
@@ -240,6 +243,7 @@ impl State {
             moving: None,
             over_row: None,
             hovered: None,
+            dropped: None,
         }
     }
 
@@ -304,6 +308,10 @@ impl State {
             }
             Event::OverRow(row) => self.over_row = *row,
             Event::Hover(key) => self.hovered = Some(key.clone()),
+            Event::Dropped(dropped) => {
+                self.dropped = dropped.clone();
+                self.slot = None;
+            }
             Event::Unhover(key) => {
                 if self.hovered.as_ref() == Some(key) {
                     self.hovered = None;
@@ -317,9 +325,9 @@ impl State {
                 self.moving = None;
                 self.over_row = None;
             }
-            Event::Edit(_, Edit::Map { file, part, .. }) => {
-                // (A map dropped on a channel chooses it.)
-                self.slot = Some((*file, *part));
+            Event::Edit(_, Edit::Map { .. } | Edit::Clear { .. } | Edit::Split { .. } | Edit::Collapse { .. }) => {
+                self.slot = None;
+                self.dropped = None;
                 self.tokens = None;
             }
             Event::Edit(_, Edit::RemoveFile(_) | Edit::AddFile { .. } | Edit::MoveFile { .. } | Edit::DuplicateFile(_)) | Event::Reset(_) => {
@@ -356,6 +364,8 @@ pub enum Event {
     /// A map of the lists under the mouse (its key), and gone from under it.
     Hover(String),
     Unhover(String),
+    /// A map let go over a channel that asks how it is taken (its menu open), or none.
+    Dropped(Option<(usize, usize, Dragged)>),
     // What is exported: a row checked (a project: all of it), or all, or none.
     Check(usize, bool),
     IncludeAll(bool),
@@ -427,6 +437,9 @@ pub struct Colors {
     pub warning: Color,
     /// The maps made of others (Painter's converted maps).
     pub converted: Color,
+    /// What is pressed first (the `$` of a name); a value that is as what holds it says.
+    pub accent: Color,
+    pub inherited: Color,
 }
 
 /// How the window looks: the program's fonts, sizes, colors and widgets.
@@ -536,7 +549,7 @@ fn written_said(written: NormalsWritten, template: Option<&Template>) -> String 
     match (written, template) {
         (NormalsWritten::Of(n), _) => normals_said(n).into(),
         (NormalsWritten::AsTemplate, Some(t)) => format!("Template's defaults ({})", normals_said(t.normals)),
-        (NormalsWritten::AsTemplate, None) => "Template's defaults".into(),
+        (NormalsWritten::AsTemplate, None) => "Project's settings".into(),
     }
 }
 
@@ -563,9 +576,6 @@ fn normals_choice<'a, M: Clone + 'a>(
     to: impl Fn(NormalsWritten) -> M,
     say: impl Fn(Event) -> M + Copy + 'a,
 ) -> Element<'a, M> {
-    if template.is_none() {
-        return still(look, "Each Output as it is (Raw Outputs)".into(), CONTROL);
-    }
     let ways = [Normals::OpenGL, Normals::DirectX]
         .into_iter()
         .map(|n| Offer::new(normals_said(n), to(NormalsWritten::Of(n)), chosen == Some(NormalsWritten::Of(n))))
@@ -619,7 +629,7 @@ pub(crate) fn choice<'a, M: Clone + 'a>(
     let open = state.menu == Some(menu);
     let field = button(
         row![
-            text(said).size(look.small_size).color(if as_else { c.dim } else { c.text }).wrapping(text::Wrapping::None),
+            text(said).size(look.small_size).color(if as_else { c.inherited } else { c.text }).wrapping(text::Wrapping::None),
             space().width(Length::Fill),
             text("▾").size(look.small_size).color(c.dim),
         ]
@@ -655,7 +665,7 @@ pub(crate) fn choice<'a, M: Clone + 'a>(
 /// else says.
 fn path<'a, M: 'a>(look: &Look, said: String, dim: bool) -> Element<'a, M> {
     let look = *look;
-    let color = if dim { look.colors.dim } else { look.colors.text };
+    let color = if dim { look.colors.inherited } else { look.colors.text };
     iced::widget::responsive(move |room| {
         text((look.shorten)(&said, look.text_size, look.font, room.width)).size(look.text_size).color(color).wrapping(text::Wrapping::None).into()
     })
@@ -972,7 +982,10 @@ fn global_settings<'a, M: Clone + 'a>(content: &Content<'a>, state: &'a State, l
             normals_said(way),
             content.thing
         ),
-        None => format!("Raw Outputs: each Output of a {} is written with its own name, channels and format.", content.thing),
+        None => format!(
+            "Raw Outputs: each Output of a {} is written with its own name, channels and format; a normal map as its Normal nodes make it, or the way chosen.",
+            content.thing
+        ),
     };
     rows = rows.push(space().height(6)).push(text(note).size(look.small_size).color(c.faint));
     rows = rows.push(
@@ -1120,7 +1133,12 @@ fn own_settings<'a, M: Clone + 'a>(
             normals_said(way),
             normals_said(row.normals)
         ),
-        None => "Raw Outputs: each of its Outputs is written with its own name, channels and format.".into(),
+        None => match mine.normals {
+            NormalsWritten::Of(way) if way != row.normals => {
+                format!("Raw Outputs: each of its Outputs as it is; its normal maps written as {}, their green turned over.", normals_said(way))
+            }
+            _ => "Raw Outputs: each of its Outputs is written with its own name, channels and format.".into(),
+        },
     };
     rows = rows.push(space().height(6)).push(text(note).size(look.small_size).color(c.faint));
     rows.into()
@@ -1135,7 +1153,7 @@ fn files<'a, M: Clone + 'a>(content: &Content<'a>, look: &Look, say: impl Fn(Eve
     let mut list: Column<'a, M> = column![].spacing(2);
     for group in &content.files {
         let folder = group.folder.clone().unwrap_or_else(|| "no folder chosen yet".into());
-        let open = button(text("Open").size(look.small_size)).padding([1, 8]).style(look.flat_button);
+        let open = button(text("Open folder").size(look.small_size)).padding([2, 10]).style(style::opener(&look, false));
         let open = open.on_press_maybe(group.folder.is_some().then(|| say(Event::OpenFolder(Some(group.row)))));
         list = list.push(
             row![

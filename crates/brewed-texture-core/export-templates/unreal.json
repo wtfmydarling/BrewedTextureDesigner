@@ -8,7 +8,7 @@
       "needs": ["base_color", "opacity"],
       "parts": [{ "rgb": { "map": "base_color", "missing": 0.8 } }, { "one": { "map": "opacity", "optional": true } }]
     },
-    { "name": "T_$(graph)_Normal", "needs": ["normal"], "parts": [{ "rgb": { "map": "normal" } }] },
+    { "name": "T_$(graph)_Normal", "needs": ["normal"], "parts": [{ "rgb": { "map": "normal", "normals": "DirectX" } }] },
     {
       "name": "T_$(graph)_ORM",
       "needs": ["ambient_occlusion", "roughness", "metallic"],

@@ -5,12 +5,13 @@
 //! channels. A channel pressed shows what it is made of under its row. Every preset is changed
 //! where it is shown, the program's too (each then made again as it was with Reset).
 
+use drop_down::dropdown;
 use iced::widget::{Column, Row, button, column, container, mouse_area, row, space, text, text_input};
 use iced::{Alignment, Element, Length};
 use scroll_box::scroll_box;
-use texture_export::{Edit, FileType, Format, Layout, MapId, Missing, Normals, Part, Template};
+use texture_export::{Edit, FileType, Format, Layout, MapId, Normals, Part, Template};
 
-use crate::{Chosen, Content, Dragged, Event, Look, Menu, Offer, State, caption, check, choice, still, style};
+use crate::{Chosen, Content, Dragged, Event, Look, Menu, Offer, State, caption, choice, still, style};
 
 /// How wide and high the box of a channel is: of one channel or three, the same.
 const CHANNEL: (f32, f32) = (136.0, 40.0);
@@ -37,14 +38,20 @@ fn normals_said(normals: Normals) -> &'static str {
 /// What a part is made of, said in its channel: the map's name (as the input maps list it; a
 /// normal map with the way it is written, inverted where it is), or a value; empty where no map
 /// is given yet.
-fn label(part: &Part, template: &Template, names: &dyn Fn(&MapId) -> String) -> (String, bool) {
+fn label(part: &Part, names: &dyn Fn(&MapId) -> String) -> (String, bool) {
     match part {
         Part::Value { said, .. } if said.is_empty() => (String::new(), true),
         Part::Value { value, .. } => (format!("Constant {value}"), false),
         Part::Rgb(input) | Part::One(input) => {
             let mut said = names(&input.map);
             if input.map.is_normal() {
-                said = format!("{said} {}", normals_said(input.normals.unwrap_or(template.normals)));
+                said = match input.normals {
+                    Some(way) => format!("{said} {}", normals_said(way)),
+                    None => format!("{said} (user's choice)"),
+                };
+            }
+            if let (Part::Rgb(_), Some(c)) = (part, input.from) {
+                said = format!("{said} ({})", ["R", "G", "B", "A"][usize::from(c.min(3))]);
             }
             if input.invert {
                 said = format!("{said}, inverted");
@@ -195,9 +202,8 @@ fn outputs<'a, M: Clone + 'a>(
     column![container(head).padding([2, 4]), line, create, scroll_box(rows).height(Length::Fill), foot].spacing(6).into()
 }
 
-/// An output map: its handle, its name and the name it makes, its format, a copy and away; under
-/// them its channels; under those the parts of a name where asked, and what the channel chosen
-/// is made of.
+/// An output map: its handle, its name and the name it makes, its format, its place, a copy and
+/// away; under them its channels; under those the parts of a name where asked.
 #[allow(clippy::too_many_arguments)]
 fn output_row<'a, M: Clone + 'a>(
     content: &Content<'a>,
@@ -220,12 +226,12 @@ fn output_row<'a, M: Clone + 'a>(
             .or_else(|| content.custom.iter().find(|(m, _)| m == map).map(|(_, n)| n.clone()))
             .unwrap_or_else(|| map.word())
     };
-    // The first line: the name and its `$`; the format; a copy; away.
-    let mut first: Row<'a, M> = row![].spacing(6).align_y(Alignment::Center);
+    // The name and its `$`, and under it the name it makes now (a preview).
+    let mut name: Row<'a, M> = row![].spacing(6).align_y(Alignment::Center);
     match editable {
         Some(i) => {
             let placeholder = content.tokens.first().map_or_else(|| "BaseColor".to_string(), |t| format!("{}_BaseColor", t.written()));
-            first = first.push(
+            name = name.push(
                 text_input(&placeholder, &file.name)
                     .width(Length::Fixed(NAME))
                     .size(look.small_size)
@@ -235,51 +241,16 @@ fn output_row<'a, M: Clone + 'a>(
                     .on_input(move |s| say(Event::Edit(i, Edit::FileName { file: f, name: s }))),
             );
             let open = state.tokens == Some(f);
-            first = first.push(
-                button(text("$").size(look.text_size).font(look.bold).center())
-                    .width(Length::Fixed(28.0))
+            name = name.push(
+                button(text("$").size(look.text_size + 1.0).font(look.bold).center())
+                    .width(Length::Fixed(30.0))
                     .padding([3, 0])
-                    .style(style::opener(&look, open))
+                    .style(style::accent(&look, open))
                     .on_press(say(Event::Tokens(if open { None } else { Some(f) }))),
             );
         }
-        None => first = first.push(container(text(file.name.clone()).size(look.small_size).font(look.mono)).width(Length::Fixed(NAME)).padding([5, 8])),
+        None => name = name.push(container(text(file.name.clone()).size(look.small_size).font(look.mono)).width(Length::Fixed(NAME)).padding([5, 8])),
     }
-    first = first.push(space().width(Length::Fill));
-    first = first.push(text("Format").size(look.small_size).color(c.dim));
-    match editable {
-        Some(i) => {
-            let to = move |format: Option<Format>| say(Event::Edit(i, Edit::Format { file: f, format }));
-            let kind_of = file.format.map(Format::file_type);
-            let kinds = FileType::ALL.into_iter().map(|k| Offer::new(k.name(), to(Some(k.formats()[0])), kind_of == Some(k))).collect();
-            first = first.push(choice(
-                &look,
-                state,
-                Menu::Kind(f),
-                kind_of.map_or("Export settings", FileType::name).into(),
-                kind_of.is_none(),
-                FORMAT,
-                vec![vec![Offer::new("Export settings", to(None), kind_of.is_none())], kinds],
-                say,
-            ));
-            first = first.push(match file.format {
-                Some(format) if format.file_type().formats().len() > 1 => {
-                    let depths = format.file_type().formats().iter().map(|d| Offer::new(d.depth(), to(Some(*d)), *d == format)).collect();
-                    choice(&look, state, Menu::FileDepth(f), format.depth().into(), false, FORMAT, vec![depths], say)
-                }
-                Some(format) => still(&look, format.depth().into(), FORMAT),
-                None => still(&look, content.global_depth(), FORMAT),
-            });
-            first = first.push(small(&look, "Duplicate", Some(say(Event::Edit(i, Edit::DuplicateFile(f))))));
-            first =
-                first.push(button(text("✕").size(look.small_size)).padding([3, 7]).style(look.flat_button).on_press(say(Event::Edit(i, Edit::RemoveFile(f)))));
-        }
-        None => {
-            let format = file.format.map_or_else(|| "Export settings".to_string(), |f| format!("{} {}", f.file_type().name(), f.depth()));
-            first = first.push(text(format).size(look.small_size).color(c.dim));
-        }
-    }
-    // The name it makes now (a preview); parts of a name not known here.
     let extension = file.format.map(Format::extension).or(content.global_extension());
     let values: Vec<(&str, &str)> = content.values.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let written = texture_export::naming::expand(&file.name, &values);
@@ -291,33 +262,105 @@ fn output_row<'a, M: Clone + 'a>(
     if !unknown.is_empty() {
         preview = preview.push(text(format!("{} stands for nothing here", unknown.join(", "))).size(look.caption_size).color(c.warning));
     }
-    // The channels: a map dragged is dropped on them; pressed, what they are made of shows. Each
-    // a box of the same size.
+    // The channels: a map dragged is let go on them (asked how it is taken where it can be taken
+    // more ways than one); pressed, a menu of what is done with them. Each a box of the same size.
     let mut channels: Row<'a, M> = row![].spacing(6).align_y(Alignment::Center);
-    for (p, (part, tag)) in file.parts.iter().zip(tags(file)).enumerate() {
-        let (said, empty) = label(part, template, &names);
-        let chosen = state.slot == Some((f, p));
+    let tags = tags(file);
+    for (p, (part, tag)) in file.parts.iter().zip(&tags).enumerate() {
+        let (said, empty) = label(part, &names);
+        let chosen = state.slot == Some((f, p)) || state.dropped.as_ref().is_some_and(|(at, part, _)| (*at, *part) == (f, p));
         let over = state.over == Some((f, p)) && state.dragging.is_some();
         let face = column![
-            text(tag.clone()).size(look.small_size).font(look.bold).color(style::channel_color(&tag)),
+            text(tag.clone()).size(look.small_size).font(look.bold).color(style::channel_color(tag)),
             text(if empty { "—".to_string() } else { said }).size(look.caption_size).wrapping(text::Wrapping::None),
         ]
         .spacing(1)
         .align_x(Alignment::Center);
-        let cell = container(face).center_x(CHANNEL.0).center_y(CHANNEL.1).clip(true).style(style::channel(&look, &tag, chosen, over, empty));
+        let cell = container(face).center_x(CHANNEL.0).center_y(CHANNEL.1).clip(true).style(style::channel(&look, tag, chosen, over, empty));
         let mut area = mouse_area(cell);
-        if let Some(i) = editable {
-            match &state.dragging {
-                Some(dragged) => {
-                    let edit = Edit::Map { file: f, part: p, map: dragged.map.clone(), invert: dragged.invert, normals: dragged.normals };
-                    area = area.on_enter(say(Event::Over(Some((f, p))))).on_exit(say(Event::Over(None))).on_release(say(Event::Edit(i, edit)));
-                }
-                None => area = area.on_press(say(Event::Slot(if chosen { None } else { Some((f, p)) }))).interaction(iced::mouse::Interaction::Pointer),
+        let Some(i) = editable else {
+            channels = channels.push(area);
+            continue;
+        };
+        match &state.dragging {
+            Some(dragged) => {
+                let let_go = match taken_ways(dragged, part.channels()) {
+                    Ways::One(channel) => Event::Edit(i, map_edit(f, p, dragged, dragged.normals, channel)),
+                    Ways::Asked => Event::Dropped(Some((f, p, dragged.clone()))),
+                };
+                area = area.on_enter(say(Event::Over(Some((f, p))))).on_exit(say(Event::Over(None))).on_release(say(let_go));
             }
+            None => area = area.on_press(say(Event::Slot(if chosen { None } else { Some((f, p)) }))).interaction(iced::mouse::Interaction::Pointer),
+        }
+        // A map let go here that asks how it is taken: the menu of the ways, of the map.
+        if let Some((_, _, dragged)) = state.dropped.as_ref().filter(|(at, part, _)| (*at, *part) == (f, p)) {
+            let menu = dropped_menu(&look, dragged, part.channels(), f, p, i, say);
+            channels = channels.push(dropdown(area, menu, true).on_dismiss(say(Event::Dropped(None))));
+            continue;
+        }
+        // Pressed: clear it; split three channels, or make R, G and B one.
+        if state.slot == Some((f, p)) {
+            let mut items: Vec<(String, M)> = vec![("Clear channel".into(), say(Event::Edit(i, Edit::Clear { file: f, part: p })))];
+            if part.channels() == 3 {
+                items.push(("Split RGB".into(), say(Event::Edit(i, Edit::Split { file: f, part: p }))));
+            } else if p < 3 && file.parts.len() >= 3 && file.parts[..3].iter().all(|q| q.channels() == 1) && file.channels() >= 3 {
+                items.push(("Collapse RGB".into(), say(Event::Edit(i, Edit::Collapse { file: f, part: p }))));
+            }
+            channels = channels.push(dropdown(area, menu_of(&look, None, items), true).on_dismiss(say(Event::Slot(None))));
+            continue;
         }
         channels = channels.push(area);
     }
-    let mut body = column![first, preview, channels].spacing(6);
+    // The format, the depth under it; the place, a copy, away.
+    let mut tools: Row<'a, M> = row![].spacing(8).align_y(Alignment::Center);
+    match editable {
+        Some(i) => {
+            let to = move |format: Option<Format>| say(Event::Edit(i, Edit::Format { file: f, format }));
+            let kind_of = file.format.map(Format::file_type);
+            let kinds = FileType::ALL.into_iter().map(|k| Offer::new(k.name(), to(Some(k.formats()[0])), kind_of == Some(k))).collect();
+            let kind = choice(
+                &look,
+                state,
+                Menu::Kind(f),
+                kind_of.map_or("Export settings", FileType::name).into(),
+                kind_of.is_none(),
+                FORMAT,
+                vec![vec![Offer::new("Export settings", to(None), kind_of.is_none())], kinds],
+                say,
+            );
+            let depth: Element<'a, M> = match file.format {
+                Some(format) if format.file_type().formats().len() > 1 => {
+                    let depths = format.file_type().formats().iter().map(|d| Offer::new(d.depth(), to(Some(*d)), *d == format)).collect();
+                    choice(&look, state, Menu::FileDepth(f), format.depth().into(), false, FORMAT, vec![depths], say)
+                }
+                Some(format) => still(&look, format.depth().into(), FORMAT),
+                None => still(&look, content.global_depth(), FORMAT),
+            };
+            tools = tools.push(column![kind, depth].spacing(3));
+            let arrow = |label: &'static str, to: Option<usize>| {
+                button(text(label).size(look.small_size).center())
+                    .width(Length::Fixed(26.0))
+                    .padding([2, 0])
+                    .style(look.button)
+                    .on_press_maybe(to.map(|to| say(Event::Edit(i, Edit::MoveFile { from: f, to }))))
+            };
+            tools = tools.push(column![arrow("↑", f.checked_sub(1)), arrow("↓", (f + 1 < template.files.len()).then_some(f + 1))].spacing(3));
+            tools = tools.push(
+                button(text("Duplicate").size(look.small_size))
+                    .padding([4, 10])
+                    .style(style::opener(&look, false))
+                    .on_press(say(Event::Edit(i, Edit::DuplicateFile(f)))),
+            );
+            tools =
+                tools.push(button(text("✕").size(look.small_size)).padding([3, 7]).style(look.flat_button).on_press(say(Event::Edit(i, Edit::RemoveFile(f)))));
+        }
+        None => {
+            let format = file.format.map_or_else(|| "Export settings".to_string(), |f| format!("{} {}", f.file_type().name(), f.depth()));
+            tools = tools.push(text(format).size(look.small_size).color(c.dim));
+        }
+    }
+    let top = row![column![name, preview].spacing(4), space().width(Length::Fill), tools].align_y(Alignment::Center);
+    let mut body = column![top, channels].spacing(6);
     // The parts of a name, each said.
     if let (Some(i), true) = (editable, state.tokens == Some(f)) {
         let mut menu = column![].spacing(1);
@@ -353,13 +396,6 @@ fn output_row<'a, M: Clone + 'a>(
         }
         body = body.push(container(menu).padding(4).width(Length::Fixed(560.0)).style(style::menu(&look)));
     }
-    // What the channel chosen is made of.
-    if let (Some(i), Some((at, p))) = (editable, state.slot)
-        && at == f
-        && let (Some(part), Some(tag)) = (file.parts.get(p), tags(file).get(p))
-    {
-        body = body.push(options(i, f, p, part, tag, template, content, state, &look, say));
-    }
     // Its handle, on its left as high as it is: pressed, it is moved; let go over another output
     // map, it goes where that one is.
     let hovered = state.hovered.as_deref() == Some(&format!("handle:{f}"));
@@ -386,124 +422,73 @@ fn output_row<'a, M: Clone + 'a>(
     area.into()
 }
 
-/// What a channel is made of, under its row: which map (a constant, or none yet), which channel
-/// of it, inverted or not, and what is written where what is exported has no such map.
-#[allow(clippy::too_many_arguments)]
-fn options<'a, M: Clone + 'a>(
-    i: Chosen,
-    f: usize,
-    p: usize,
-    part: &Part,
-    tag: &str,
-    template: &Template,
-    content: &Content<'a>,
-    state: &'a State,
-    look: &Look,
-    say: impl Fn(Event) -> M + Copy + 'a,
-) -> Element<'a, M> {
-    let look = *look;
-    let c = look.colors;
-    let edit = move |e: Edit| say(Event::Edit(i, e));
-    let still_message = say(Event::Slot(state.slot));
-    let seg = move |options: Vec<(String, M, bool)>| {
-        let mut r = row![].spacing(0);
-        for (name, message, chosen) in options {
-            r = r.push(
-                button(text(name).size(look.small_size).font(if chosen { look.bold } else { look.font }))
-                    .padding([2, 8])
-                    .style(move |t, s| (look.segment)(t, s, chosen))
-                    .on_press(message),
-            );
-        }
-        container(r).style(look.segments)
-    };
-    let number = move |value: f32, make: Box<dyn Fn(f32) -> Edit + 'a>| {
-        let still_message = still_message.clone();
-        text_input("0 … 1", &format!("{value}"))
-            .width(Length::Fixed(64.0))
-            .size(look.small_size)
-            .padding([2, 6])
-            .style(look.text_input)
-            .on_input(move |s| s.trim().parse::<f32>().ok().filter(|v| v.is_finite()).map_or_else(|| still_message.clone(), |v| edit(make(v))))
-    };
-    let label = |s: String| text(s).size(look.small_size).color(c.dim).width(Length::Fixed(210.0));
-    let names = |map: &MapId| {
-        content
-            .inputs
-            .iter()
-            .find(|i| &i.map == map)
-            .map(|i| i.name.clone())
-            .or_else(|| content.custom.iter().find(|(m, _)| m == map).map(|(_, n)| n.clone()))
-            .unwrap_or_else(|| map.word())
-    };
-    let (made_of, _) = super_label(part, template, &names);
-    let mut lines = column![].spacing(6);
-    // Which channel, of what; the map gone from it.
-    let mut head =
-        row![text(format!("Channel {tag}")).size(look.small_size).font(look.bold).color(c.bright), text(made_of).size(look.small_size).color(c.text)]
-            .spacing(8)
-            .align_y(Alignment::Center);
-    head = head.push(space().width(Length::Fill));
-    match part {
-        Part::Value { said, .. } if said.is_empty() => {
-            head = head.push(small(&look, "Use a constant", Some(edit(Edit::Map { file: f, part: p, map: None, invert: false, normals: None }))));
-        }
-        _ => head = head.push(small(&look, "Remove", Some(edit(Edit::Clear { file: f, part: p })))),
-    }
-    lines = lines.push(head);
-    match part {
-        Part::Value { said, .. } if said.is_empty() => {
-            lines = lines.push(text("Drag a map onto it from the right, or use a constant.").size(look.small_size).color(c.faint));
-        }
-        Part::Value { value, .. } => {
-            lines = lines
-                .push(row![label("Value".into()), number(*value, Box::new(move |value| Edit::Value { file: f, part: p, value }))].align_y(Alignment::Center));
-        }
-        Part::Rgb(input) | Part::One(input) => {
-            let mut taken = row![].spacing(16).align_y(Alignment::Center);
-            if matches!(part, Part::One(_)) {
-                let channels = ["R", "G", "B", "A"]
-                    .iter()
-                    .enumerate()
-                    .map(|(n, s)| (s.to_string(), edit(Edit::Channel { file: f, part: p, channel: n as u8 }), usize::from(input.channel) == n))
-                    .collect();
-                taken = taken.push(row![label("Take from channel".into()), seg(channels)].align_y(Alignment::Center));
-            }
-            taken = taken.push(
-                row![
-                    check(&look, input.invert, edit(Edit::Invert { file: f, part: p, invert: !input.invert })),
-                    text("Invert").size(look.small_size).color(c.text)
-                ]
-                .spacing(6)
-                .align_y(Alignment::Center),
-            );
-            lines = lines.push(taken);
-            let value = input.missing.unwrap_or(0.0);
-            let mut missing = row![
-                label(format!("If the {} has no {}", content.thing, names(&input.map))),
-                seg(vec![
-                    ("Skip the file".into(), edit(Edit::Missing { file: f, part: p, missing: Missing::NoFile }), input.missing.is_none() && !input.optional),
-                    ("Leave the channel out".into(), edit(Edit::Missing { file: f, part: p, missing: Missing::LeaveOut }), input.optional),
-                    ("Fill with".into(), edit(Edit::Missing { file: f, part: p, missing: Missing::Value(value) }), input.missing.is_some()),
-                ]),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center);
-            if input.missing.is_some() {
-                missing = missing.push(number(value, Box::new(move |value| Edit::Missing { file: f, part: p, missing: Missing::Value(value) })));
-            }
-            lines = lines.push(missing);
-        }
-    }
-    container(lines).padding([8, 10]).width(Length::Fill).style(style::menu(&look)).into()
+/// How a map let go on a channel is taken: one way only (of that channel of it; none, its own),
+/// or asked (which channel of a color map; which way a normal map is written).
+enum Ways {
+    One(Option<u8>),
+    Asked,
 }
 
-/// What a part is made of, said in full (as its channel says it).
-fn super_label(part: &Part, template: &Template, names: &dyn Fn(&MapId) -> String) -> (String, bool) {
-    match label(part, template, names) {
-        (_, true) => ("empty".into(), true),
-        said => said,
+fn taken_ways(dragged: &Dragged, channels: usize) -> Ways {
+    match &dragged.map {
+        Some(map) if map.is_normal() && dragged.normals.is_none() => Ways::Asked,
+        Some(map) if !map.gray() && !map.is_normal() => Ways::Asked,
+        // (A gray map's gray, a normal map of a way, a constant: as they are.)
+        _ => Ways::One(if channels == 3 { None } else { Some(0) }),
     }
+}
+
+/// The edit that makes the part `p` of the output map `f` of `dragged`, its normals written as
+/// `normals`, of its `channel` (none: its own three).
+fn map_edit(f: usize, p: usize, dragged: &Dragged, normals: Option<Normals>, channel: Option<u8>) -> Edit {
+    Edit::Map { file: f, part: p, map: dragged.map.clone(), invert: dragged.invert, normals, channel }
+}
+
+/// A small menu, as Painter's: what it is of on top (edged red), then its items.
+fn menu_of<'a, M: Clone + 'a>(look: &Look, of: Option<String>, items: Vec<(String, M)>) -> Element<'a, M> {
+    let look = *look;
+    let mut list = column![].spacing(1);
+    if let Some(of) = of {
+        list = list.push(container(text(of).size(look.small_size)).padding([3, 8]).width(Length::Fill).style(style::from_box(&look)));
+        list = list.push(space().height(2));
+    }
+    for (label, message) in items {
+        list = list.push(button(text(label).size(look.small_size)).width(Length::Fill).padding([4, 10]).style(style::option(&look, false)).on_press(message));
+    }
+    container(list).padding(4).width(Length::Fixed(190.0)).style(style::menu(&look)).into()
+}
+
+/// The ways a map let go on a channel of `channels` is taken: of a normal map, which way it is
+/// written (or as the export's settings say: the user's choice); of a color map, which of its
+/// channels (of three: its own three, or one of them in all three).
+fn dropped_menu<'a, M: Clone + 'a>(
+    look: &Look,
+    dragged: &Dragged,
+    channels: usize,
+    f: usize,
+    p: usize,
+    i: Chosen,
+    say: impl Fn(Event) -> M + Copy + 'a,
+) -> Element<'a, M> {
+    let edit = |normals: Option<Normals>, channel: Option<u8>| say(Event::Edit(i, map_edit(f, p, dragged, normals, channel)));
+    let own = if channels == 3 { None } else { Some(0) };
+    let items: Vec<(String, M)> = if dragged.map.as_ref().is_some_and(MapId::is_normal) {
+        vec![
+            ("DirectX".into(), edit(Some(Normals::DirectX), own)),
+            ("OpenGL".into(), edit(Some(Normals::OpenGL), own)),
+            ("User's choice".into(), edit(None, own)),
+        ]
+    } else {
+        let mut ways = Vec::new();
+        if channels == 3 {
+            ways.push(("RGB channels".to_string(), edit(dragged.normals, None)));
+        }
+        for (c, name) in ["R", "G", "B", "A"].into_iter().enumerate() {
+            ways.push((format!("{name} channel"), edit(dragged.normals, Some(c as u8))));
+        }
+        ways
+    };
+    menu_of(look, Some(format!("From {}", dragged.label)), items)
 }
 
 /// The input maps: those of the program's usages, those of no usage the graph has, those made of
@@ -518,13 +503,18 @@ fn maps<'a, M: Clone + 'a>(
     let look = *look;
     let c = look.colors;
     // The maps the preset shown is made of: marked.
-    let used: Vec<MapId> = state
+    let used: Vec<(MapId, bool, Option<Normals>)> = state
         .shown
         .template(&content.presets, content.mine)
         .map(|t| {
-            t.files.iter().flat_map(|f| f.parts.iter()).filter_map(|p| if let Part::Rgb(i) | Part::One(i) = p { Some(i.map.clone()) } else { None }).collect()
+            t.files
+                .iter()
+                .flat_map(|f| f.parts.iter())
+                .filter_map(|p| if let Part::Rgb(i) | Part::One(i) = p { Some((i.map.clone(), i.invert, i.normals)) } else { None })
+                .collect()
         })
         .unwrap_or_default();
+    let uses = |d: &Dragged| d.map.as_ref().is_some_and(|m| used.iter().any(|(u, invert, normals)| u == m && *invert == d.invert && *normals == d.normals));
     let entry = move |dragged: Dragged, has: bool, uses: bool, color: Option<iced::Color>| -> Element<'a, M> {
         let mark: Element<'a, M> =
             if uses { container(space()).width(9).height(9).style(style::swatch(c.bright)).into() } else { container(space()).width(9).height(9).into() };
@@ -550,12 +540,14 @@ fn maps<'a, M: Clone + 'a>(
             list = list.push(container(text(group.clone()).size(look.caption_size).color(c.faint)).padding([6, 4]));
         }
         let dragged = Dragged { map: Some(input.map.clone()), invert: false, normals: None, label: input.name.clone() };
-        list = list.push(entry(dragged, content.has.contains(&input.map), used.contains(&input.map), None));
+        let marked = uses(&dragged);
+        list = list.push(entry(dragged, content.has.contains(&input.map), marked, None));
     }
     let mut custom = column![].spacing(2).padding([4, 4]);
     for (map, name) in &content.custom {
         let dragged = Dragged { map: Some(map.clone()), invert: false, normals: None, label: name.clone() };
-        custom = custom.push(entry(dragged, true, used.contains(map), None));
+        let marked = uses(&dragged);
+        custom = custom.push(entry(dragged, true, marked, None));
     }
     if content.custom.is_empty() {
         custom =
@@ -572,7 +564,8 @@ fn maps<'a, M: Clone + 'a>(
     for (name, map, invert, normals) in made {
         let id = MapId::from(map);
         let dragged = Dragged { map: Some(id.clone()), invert, normals, label: name.into() };
-        converted = converted.push(entry(dragged, content.has.contains(&id), false, Some(c.converted)));
+        let marked = uses(&dragged);
+        converted = converted.push(entry(dragged, content.has.contains(&id), marked, Some(c.converted)));
     }
     let strip = |title: &'static str| container(caption(&look, title)).padding([5, 8]).width(Length::Fill).style(style::strip(&look));
     let all = column![list, strip("Custom maps"), custom, strip("Converted maps"), converted];

@@ -631,8 +631,19 @@ impl App {
             match dialog.template_of(settings.template) {
                 // Each Output as it says: its name, channels and format (or the one chosen).
                 None => {
+                    // (A normal map written the other way than its Normal nodes make it: its green
+                    // turned over.)
+                    let maps = export_presets::maps(&entry.graph);
+                    let normal = |node: NodeId| maps.iter().any(|m| m.reference == node && m.usage.as_ref().is_some_and(texture_export::MapId::is_normal));
+                    let turned = matches!(settings.normals, NormalsWritten::Of(way) if way != row.normals);
                     for node in entry.graph.nodes_of(NodeKind::OUTPUT) {
-                        let file = PlannedFile { name: node.text("name").to_string(), what: Planned::AsItIs(node.id), said: String::new(), format: None };
+                        let name = node.text("name").to_string();
+                        let file = if turned && normal(node.id) {
+                            let sources = (0..3).map(|channel| Source::Map { map: node.id, channel, invert: channel == 1 }).collect();
+                            PlannedFile { name: name.clone(), what: Planned::Pack(sources), said: format!("{name} (green turned over)"), format: None }
+                        } else {
+                            PlannedFile { name: name.clone(), what: Planned::AsItIs(node.id), said: String::new(), format: None }
+                        };
                         planned.push(PlannedExport { row: i, path: PathBuf::new(), file, format: chosen(format_made(node.id)), size });
                     }
                 }
@@ -644,7 +655,15 @@ impl App {
                     let directx = row.normals == Normals::DirectX;
                     let mut template = template.clone();
                     if let NormalsWritten::Of(way) = settings.normals {
+                        // (Every normal map one way, whatever the template or its channels say.)
                         template.normals = way;
+                        for file in &mut template.files {
+                            for part in &mut file.parts {
+                                if let texture_export::Part::Rgb(input) | texture_export::Part::One(input) = part {
+                                    input.normals = None;
+                                }
+                            }
+                        }
                     }
                     for file in texture_export::plan_template(&template, &export_presets::maps(&entry.graph), &values, directx) {
                         // A file of no format of its own: as the settings say (as made: as the

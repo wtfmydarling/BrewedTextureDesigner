@@ -326,6 +326,10 @@ pub struct Input {
     /// DirectX, Normal OpenGL).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normals: Option<Normals>,
+    /// Of `rgb`: one channel of the map in all three (0 red … 3 alpha); none, its own three (a
+    /// gray map's gray).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<u8>,
 }
 
 fn is_zero(v: &u8) -> bool {
@@ -336,7 +340,7 @@ impl Input {
     /// A map's part, as it is: no channel but the first, not turned over, and the file not
     /// written without it.
     pub fn of(map: MapId) -> Input {
-        Input { map, channel: 0, invert: false, missing: None, optional: false, normals: None }
+        Input { map, channel: 0, invert: false, missing: None, optional: false, normals: None, from: None }
     }
 }
 
@@ -379,13 +383,26 @@ pub enum Edit {
         format: Option<Format>,
     },
     /// The part made of a map (`Some`; turned over where `invert`: smoothness of a roughness), or
-    /// a value (`None`).
+    /// a value (`None`); of the map's `channel` (of three channels: that one in all three; none,
+    /// its own).
     Map {
         file: usize,
         part: usize,
         map: Option<MapId>,
         invert: bool,
         normals: Option<Normals>,
+        channel: Option<u8>,
+    },
+    /// Three channels made one of each (R, G and B), as they were.
+    Split {
+        file: usize,
+        part: usize,
+    },
+    /// The three channels R, G and B (`part` one of them) made one of three: of the map they
+    /// are each a channel of, where they are its own three in order; else of none yet.
+    Collapse {
+        file: usize,
+        part: usize,
     },
     Channel {
         file: usize,
@@ -488,16 +505,56 @@ impl Template {
             }
             Edit::FileName { file: at, name } => self.files.get_mut(at).ok_or("no such file")?.name = name,
             Edit::Format { file: at, format } => self.files.get_mut(at).ok_or("no such file")?.format = format,
-            Edit::Map { file: at, part, map, invert, normals } => {
+            Edit::Map { file: at, part, map, invert, normals, channel } => {
                 let file = self.files.get_mut(at).ok_or("no such file")?;
                 let slot = file.parts.get_mut(part).ok_or("no such part")?;
                 let channels = slot.channels();
                 *slot = match map {
-                    Some(map) if channels == 3 => Part::Rgb(Input { invert, normals, ..Input::of(map) }),
-                    Some(map) => Part::One(Input { invert, normals, ..Input::of(map) }),
+                    Some(map) if channels == 3 => Part::Rgb(Input { invert, normals, from: channel.map(|c| c.min(3)), ..Input::of(map) }),
+                    Some(map) => Part::One(Input { invert, normals, channel: channel.unwrap_or(0).min(3), ..Input::of(map) }),
                     None => Part::Value { value: 0.0, said: "value".into(), rgb: channels == 3 },
                 };
                 // (What it needs is what it is made of, now.)
+                file.needs.clear();
+            }
+            Edit::Split { file: at, part } => {
+                let file = self.files.get_mut(at).ok_or("no such file")?;
+                let parts: Vec<Part> = match file.parts.get(part).ok_or("no such part")? {
+                    Part::Rgb(input) => {
+                        let gray = input.map.gray();
+                        (0..3u8)
+                            .map(|c| {
+                                let channel = input.from.unwrap_or(if gray { 0 } else { c });
+                                Part::One(Input { channel, from: None, ..input.clone() })
+                            })
+                            .collect()
+                    }
+                    Part::Value { value, said, rgb: true } => vec![Part::Value { value: *value, said: said.clone(), rgb: false }; 3],
+                    _ => return Err("only three channels are split".into()),
+                };
+                file.parts.splice(part..=part, parts);
+                file.needs.clear();
+            }
+            Edit::Collapse { file: at, part } => {
+                let file = self.files.get_mut(at).ok_or("no such file")?;
+                // (The parts R, G and B are the first three, each of one channel.)
+                if part > 2 || file.parts.len() < 3 || file.parts[..3].iter().any(|p| p.channels() != 1) {
+                    return Err("only R, G and B of one channel each are made one".into());
+                }
+                let ones: Vec<Option<&Input>> = file.parts[..3].iter().map(|p| if let Part::One(i) = p { Some(i) } else { None }).collect();
+                let whole = match (ones[0], ones[1], ones[2]) {
+                    (Some(r), Some(g), Some(b))
+                        if r.map == g.map
+                            && g.map == b.map
+                            && (r.channel, g.channel, b.channel) == (0, 1, 2)
+                            && r.invert == g.invert
+                            && g.invert == b.invert =>
+                    {
+                        Part::Rgb(Input { channel: 0, from: None, ..r.clone() })
+                    }
+                    _ => Part::Value { value: 0.0, said: String::new(), rgb: true },
+                };
+                file.parts.splice(0..3, [whole]);
                 file.needs.clear();
             }
             Edit::Channel { file: at, part, channel } => {
@@ -583,12 +640,13 @@ pub fn plan_template<R: Copy>(template: &Template, maps: &[Map<R>], values: &[(&
                     let target = input.normals.unwrap_or(template.normals);
                     let flip = input.map.is_normal() && directx != (target == Normals::DirectX);
                     if rgb {
-                        // A map's color, or a gray map's gray in all three.
+                        // A map's color, or a gray map's gray in all three, or one channel of a
+                        // map in all three.
                         let gray = input.map.gray();
                         for channel in 0..3 {
                             let turn = flip && channel == 1;
                             flipped |= turn;
-                            let channel = if gray { 0 } else { channel };
+                            let channel = input.from.map_or(if gray { 0 } else { channel }, |c| c.min(3));
                             sources.push(Source::Map { map: map.reference, channel, invert: invert != turn });
                         }
                     } else {
@@ -781,10 +839,10 @@ mod edits {
         t.apply(Edit::AddFile { layout: Layout::RgbAlpha, name: "$(graph)_C".into() }).expect("a file");
         t.apply(Edit::AddFile { layout: Layout::Separate, name: "$(graph)_2".into() }).expect("another");
         assert_eq!(t.files.iter().map(File::channels).collect::<Vec<_>>(), [4, 3]);
-        t.apply(Edit::Map { file: 0, part: 0, map: Some(MapId::from("base_color")), invert: false, normals: None }).expect("RGB of a map");
-        t.apply(Edit::Map { file: 0, part: 1, map: Some(MapId::from("opacity")), invert: false, normals: None }).expect("alpha of a map");
+        t.apply(Edit::Map { file: 0, part: 0, map: Some(MapId::from("base_color")), invert: false, normals: None, channel: None }).expect("RGB of a map");
+        t.apply(Edit::Map { file: 0, part: 1, map: Some(MapId::from("opacity")), invert: false, normals: None, channel: None }).expect("alpha of a map");
         t.apply(Edit::Missing { file: 0, part: 1, missing: Missing::LeaveOut }).expect("left out");
-        t.apply(Edit::Map { file: 1, part: 0, map: Some(MapId::from("roughness")), invert: true, normals: None }).expect("smoothness");
+        t.apply(Edit::Map { file: 1, part: 0, map: Some(MapId::from("roughness")), invert: true, normals: None, channel: None }).expect("smoothness");
         t.apply(Edit::Missing { file: 1, part: 0, missing: Missing::Value(2.0) }).expect("a value");
         t.apply(Edit::FileName { file: 1, name: "$(graph)_S".into() }).expect("a name");
         t.apply(Edit::DuplicateFile(1)).expect("a copy");
@@ -822,5 +880,35 @@ mod edits {
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(read, [(path, t)]);
         let _ = std::fs::remove_dir_all(&folder);
+    }
+}
+
+#[cfg(test)]
+mod split {
+    use super::*;
+
+    /// Three channels split into R, G and B of the map's own, and made one again; of a gray map,
+    /// its gray in each; of one channel, that one; R, G and B of no one map make an empty one.
+    #[test]
+    fn rgb_is_split_and_collapsed() {
+        let mut t = Template { name: "Mine".into(), about: String::new(), normals: Normals::OpenGL, files: Vec::new() };
+        t.apply(Edit::AddFile { layout: Layout::RgbAlpha, name: "a".into() }).expect("a file");
+        let map = |id: &str, channel| Edit::Map { file: 0, part: 0, map: Some(MapId::from(id)), invert: false, normals: None, channel };
+        t.apply(map("base_color", None)).expect("a color");
+        t.apply(Edit::Split { file: 0, part: 0 }).expect("split");
+        let channels: Vec<u8> = t.files[0].parts.iter().filter_map(|p| if let Part::One(i) = p { Some(i.channel) } else { None }).collect();
+        assert_eq!((t.files[0].parts.len(), channels), (4, vec![0, 1, 2]), "R, G, B and the alpha as it was");
+        t.apply(Edit::Collapse { file: 0, part: 1 }).expect("collapsed");
+        assert!(matches!(&t.files[0].parts[0], Part::Rgb(i) if i.map.as_str() == "base_color" && i.from.is_none()));
+        assert_eq!(t.files[0].channels(), 4);
+        t.apply(map("roughness", None)).expect("a gray map");
+        t.apply(Edit::Split { file: 0, part: 0 }).expect("split");
+        assert!(t.files[0].parts[..3].iter().all(|p| matches!(p, Part::One(i) if i.channel == 0)), "its gray in each");
+        t.apply(Edit::Map { file: 0, part: 1, map: Some(MapId::from("metallic")), invert: false, normals: None, channel: None }).expect("another");
+        t.apply(Edit::Collapse { file: 0, part: 0 }).expect("collapsed");
+        assert!(matches!(&t.files[0].parts[0], Part::Value { rgb: true, said, .. } if said.is_empty()), "of no one map: empty");
+        t.apply(map("base_color", Some(3))).expect("its alpha in three");
+        assert!(matches!(&t.files[0].parts[0], Part::Rgb(i) if i.from == Some(3)));
+        assert!(t.apply(Edit::Collapse { file: 0, part: 0 }).is_err(), "not three of one channel");
     }
 }
