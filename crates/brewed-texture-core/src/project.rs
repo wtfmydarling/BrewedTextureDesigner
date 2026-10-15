@@ -1241,6 +1241,7 @@ mod tests {
             template: Some("Unreal Engine".into()),
             format: Some(texture_export::FileFormat::Of(texture_export::Format::Tga8)),
             size: Some(texture_export::Size::Side(1024)),
+            normals: None,
             graphs: vec![crate::export_presets::GraphExportSettings {
                 graph: package.first(),
                 checked: true,
@@ -1248,7 +1249,7 @@ mod tests {
                 template: None,
                 format: None,
                 size: Some(texture_export::Size::AsMade),
-                normals: Some(texture_export::Normals::DirectX),
+                normals: Some(texture_export::NormalsWritten::Of(texture_export::Normals::DirectX)),
             }],
         });
         save(&path, &package, &HashMap::new(), package.first()).unwrap();

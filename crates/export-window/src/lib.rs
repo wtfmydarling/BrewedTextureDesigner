@@ -19,7 +19,7 @@ use iced::widget::{Column, button, column, container, mouse_area, pick_list, pin
 use iced::{Alignment, Color, Element, Font, Length, Point, Theme};
 use scroll_box::scroll_box;
 use texture_export::naming::Token;
-use texture_export::{Edit, FileFormat, FileType, Format, MapId, Normals, Size, Template};
+use texture_export::{Edit, FileFormat, FileType, Format, MapId, Normals, NormalsWritten, Size, Template};
 
 /// Which template: one of the program's presets (its place in [`Content::presets`]), or one of
 /// the user's.
@@ -85,7 +85,8 @@ pub enum Menu {
 }
 
 /// What an export is set to: where the files go (as the program says a path; none: no folder
-/// chosen), the template they are written with, as what, and how large. The global settings say
+/// chosen), the template they are written with, as what, how large, and which way normal maps
+/// are written. The global settings say
 /// each; a project, or one of what it exports, says what it wants of its own (see [`Own`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
@@ -93,18 +94,18 @@ pub struct Settings {
     pub template: Chosen,
     pub format: FileFormat,
     pub size: Size,
+    pub normals: NormalsWritten,
 }
 
 /// What a project, or one of what it exports, says of its own; where it says nothing, it is as
-/// what holds it says (a project: the global settings; one of what it exports: the project), and
-/// of its normal maps, as it makes them.
+/// what holds it says (a project: the global settings; one of what it exports: the project).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Own {
     pub folder: Option<String>,
     pub template: Option<Chosen>,
     pub format: Option<FileFormat>,
     pub size: Option<Size>,
-    pub normals: Option<Normals>,
+    pub normals: Option<NormalsWritten>,
 }
 
 impl Settings {
@@ -115,6 +116,7 @@ impl Settings {
             template: own.template.unwrap_or(self.template),
             format: own.format.unwrap_or(self.format),
             size: own.size.unwrap_or(self.size),
+            normals: own.normals.unwrap_or(self.normals),
         }
     }
 }
@@ -126,7 +128,7 @@ pub enum Setting {
     Template(Chosen),
     Format(FileFormat),
     Size(Size),
-    Normals(Normals),
+    Normals(NormalsWritten),
 }
 
 /// Which setting.
@@ -149,8 +151,8 @@ pub struct Exported {
     pub depth: u8,
     pub checked: bool,
     pub own: Own,
-    /// The size it is made at, and which way its normal maps point as it makes them (of a
-    /// project, nothing).
+    /// The size it is made at, and which way it makes its normal maps (of a project, nothing):
+    /// written the other way, their green is turned over.
     pub size: [u32; 2],
     pub normals: Normals,
 }
@@ -456,6 +458,50 @@ pub fn size_said(size: Size, made: Option<[u32; 2]>) -> String {
         (Size::Side(side), Some(made)) => of(Size::Side(side).of(made)),
         (Size::Side(side), None) => format!("{side}"),
     }
+}
+
+/// Which way normal maps are written, said, of `template` (none: Raw Outputs).
+fn written_said(written: NormalsWritten, template: Option<&Template>) -> String {
+    match (written, template) {
+        (NormalsWritten::Of(n), _) => normals_said(n).into(),
+        (NormalsWritten::AsTemplate, Some(t)) => format!("As the template says ({})", normals_said(t.normals)),
+        (NormalsWritten::AsTemplate, None) => "As the template says".into(),
+    }
+}
+
+/// The way normal maps end up written, of `template` (none: as each is made).
+fn written_way(written: NormalsWritten, template: Option<&Template>) -> Option<Normals> {
+    match written {
+        NormalsWritten::Of(n) => Some(n),
+        NormalsWritten::AsTemplate => template.map(|t| t.normals),
+    }
+}
+
+/// The list of which way normal maps are written: as the template says, apart and first; then
+/// `between` (as what holds it says); each way. Of Raw Outputs, nothing to choose: each Output
+/// is written as it is made.
+#[allow(clippy::too_many_arguments)]
+fn normals_choice<'a, M: Clone + 'a>(
+    look: &Look,
+    state: &State,
+    said: String,
+    as_else: bool,
+    chosen: Option<NormalsWritten>,
+    template: Option<&Template>,
+    between: Vec<Offer<M>>,
+    to: impl Fn(NormalsWritten) -> M,
+    say: impl Fn(Event) -> M + Copy + 'a,
+) -> Element<'a, M> {
+    if template.is_none() {
+        return container(text("As each Output makes them (Raw Outputs)").size(look.small_size).color(look.colors.faint)).padding([4, 8]).into();
+    }
+    let ways = [Normals::OpenGL, Normals::DirectX]
+        .into_iter()
+        .map(|n| Offer::new(normals_said(n), to(NormalsWritten::Of(n)), chosen == Some(NormalsWritten::Of(n))))
+        .collect();
+    let first =
+        vec![Offer::new(written_said(NormalsWritten::AsTemplate, template), to(NormalsWritten::AsTemplate), chosen == Some(NormalsWritten::AsTemplate))];
+    choice(look, state, Menu::Normals, said, as_else, 420.0, vec![first, between, ways], say)
 }
 
 fn normals_said(normals: Normals) -> &'static str {
@@ -803,16 +849,28 @@ fn global_settings<'a, M: Clone + 'a>(content: &Content<'a>, state: &'a State, l
     rows = rows.push(setting(&look, "Output template", template));
     rows = rows.push(setting(&look, "File type", row![kind, depth].spacing(6).align_y(Alignment::Center)));
     rows = rows.push(setting(&look, "Size", size));
-    let normals = match global.template.template(&content.presets, content.mine) {
-        Some(t) => format!(
-            "{} writes normal maps of {}; a {}'s that point the other way have their green turned over.",
-            t.name,
-            normals_said(t.normals),
+    let template = global.template.template(&content.presets, content.mine);
+    let normals = normals_choice(
+        &look,
+        state,
+        written_said(global.normals, template),
+        false,
+        Some(global.normals),
+        template,
+        Vec::new(),
+        move |n| set(Setting::Normals(n)),
+        say,
+    );
+    rows = rows.push(setting(&look, "Normal map format", normals));
+    let note = match written_way(global.normals, template) {
+        Some(way) => format!(
+            "Normal maps are written as {}; a {} whose Normal nodes make them the other way has their green turned over.",
+            normals_said(way),
             content.thing
         ),
         None => format!("Raw Outputs: each Output of a {} is written with its own name, channels and format.", content.thing),
     };
-    rows = rows.push(space().height(6)).push(text(normals).size(look.small_size).color(c.faint));
+    rows = rows.push(space().height(6)).push(text(note).size(look.small_size).color(c.faint));
     rows = rows.push(
         text(format!(
             "What a {} says of its own (choose it on the left) is so for all its {}s, and what a {} says of its own for it; the rest is as these say.",
@@ -929,37 +987,38 @@ fn own_settings<'a, M: Clone + 'a>(
     rows = rows.push(setting(&look, "Output template", template));
     rows = rows.push(setting(&look, "File type", row![kind, depth].spacing(6).align_y(Alignment::Center)));
     rows = rows.push(setting(&look, "Size", size));
+    let template = mine.template.template(&content.presets, content.mine);
+    // (What what holds it says, said as the way it comes to.)
+    let up_way = written_way(up.normals, template).map_or("as made", normals_said).to_string();
+    let normals = normals_choice(
+        &look,
+        state,
+        match own.normals {
+            Some(n) => written_said(n, template),
+            None => format!("{as_up} ({})", up_way),
+        },
+        own.normals.is_none(),
+        own.normals,
+        template,
+        as_holder(up_way.clone(), Which::Normals, own.normals.is_none()),
+        move |n| set(Setting::Normals(n)),
+        say,
+    );
+    rows = rows.push(setting(&look, "Normal map format", normals));
     if project {
         return rows.into();
     }
-    let normals = choice(
-        &look,
-        state,
-        Menu::Normals,
-        match own.normals {
-            Some(n) => normals_said(n).into(),
-            None => format!("As in the project ({})", normals_said(row.normals)),
-        },
-        own.normals.is_none(),
-        300.0,
-        vec![
-            vec![Offer::new(format!("As in the project ({})", normals_said(row.normals)), unset(Which::Normals), own.normals.is_none())],
-            [Normals::OpenGL, Normals::DirectX].into_iter().map(|n| Offer::new(normals_said(n), set(Setting::Normals(n)), own.normals == Some(n))).collect(),
-        ],
-        say,
-    );
-    rows = rows.push(setting(&look, "Its normal maps", normals));
-    let written = match mine.template.template(&content.presets, content.mine) {
-        Some(t) => format!(
-            "Its normal maps are made as {}; {} writes them as {}{}.",
-            normals_said(own.normals.unwrap_or(row.normals)),
-            t.name,
-            normals_said(t.normals),
-            if own.normals.unwrap_or(row.normals) == t.normals { "" } else { ", their green turned over" }
+    // (Which way it makes them is its Normal nodes' own: said, not chosen.)
+    let note = match written_way(mine.normals, template) {
+        Some(way) if way == row.normals => format!("Its normal maps are written as {}, as its Normal nodes make them.", normals_said(way)),
+        Some(way) => format!(
+            "Its normal maps are written as {}; its Normal nodes make them as {}, so their green is turned over.",
+            normals_said(way),
+            normals_said(row.normals)
         ),
         None => "Raw Outputs: each of its Outputs is written with its own name, channels and format.".into(),
     };
-    rows = rows.push(space().height(6)).push(text(written).size(look.small_size).color(c.faint));
+    rows = rows.push(space().height(6)).push(text(note).size(look.small_size).color(c.faint));
     rows.into()
 }
 

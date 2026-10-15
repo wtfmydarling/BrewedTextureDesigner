@@ -104,7 +104,8 @@ How its graphs are exported (`export`): what the package says of its own for all
 | `template` | string | The template the files are written with, by its name: `"Raw Outputs"` (each Output as it is), a preset of the program's (`"Unreal Engine"`, `"Unity (URP)"`, `"Unity (HDRP)"`, `"glTF 2.0"`) or one of the user's. Optional. |
 | `format` | string or object | `"AsMade"` (each file as its Output says), or `{"Of": "Png8"}`: `Png8`, `Png16`, `Jpeg8`, `Tga8`, `Bmp8`, `Tiff8`, `Tiff16`, `Tiff32`, `Exr16`, `Exr32`, `Hdr32`, `Dxt1` … `Dxt5`. Optional. |
 | `size` | string or object | `"AsMade"` (as large as each graph is made), or `{"Side": 1024}`: the longer side, in pixels, the other in proportion. Optional. |
-| `graphs` | array | Of each graph: `graph` (its id), `checked` (it is exported), and where it is not as the package says, its own `folder`, `template`, `format`, `size`, and `normals` (`"OpenGL"` or `"DirectX"`: which way its normal maps point). Optional. |
+| `normals` | string or object | Which way normal maps are written: `"AsTemplate"`, or `{"Of": "OpenGL"}` or `{"Of": "DirectX"}` whatever the template says. Optional. |
+| `graphs` | array | Of each graph: `graph` (its id), `checked` (it is exported), and where it is not as the package says, its own `folder`, `template`, `format`, `size` and `normals`. Optional. |
 
 A graph:
 

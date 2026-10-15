@@ -971,20 +971,23 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                     use crate::app::export_dialog::ExportMessage as X;
                     use brewed_texture_core::export_presets::Preset;
                     use export_window::{Event, Setting};
-                    use texture_export::{FileFormat, Format, Size};
+                    use texture_export::{FileFormat, Format, Normals, NormalsWritten, Size};
                     let folder = export.join(format!("preset-{exported}"));
                     let _ = std::fs::create_dir_all(&folder);
                     let chosen = crate::app::export_dialog::chosen_of(Preset::ALL[exported - 4]);
                     let format = FileFormat::Of(if exported % 2 == 0 { Format::Png16 } else { Format::Tga8 });
                     let size = if exported >= 7 { Size::Side(256) } else { Size::AsMade };
+                    // (Normal maps as the template says, and OpenGL's whatever it says.)
+                    let normals = if exported % 2 == 0 { NormalsWritten::Of(Normals::OpenGL) } else { NormalsWritten::AsTemplate };
                     let mut steps = vec![
                         Step::Do(Message::Export(X::Open)),
                         Step::Do(Message::Export(X::Window(Event::Set(None, Setting::Template(chosen))))),
                         Step::Do(Message::Export(X::Window(Event::Set(None, Setting::Format(format))))),
                         Step::Do(Message::Export(X::Window(Event::Set(None, Setting::Size(size))))),
+                        Step::Do(Message::Export(X::Window(Event::Set(None, Setting::Normals(normals))))),
                         Step::Do(Message::Export(X::Folder(None, Some(folder.clone())))),
                     ];
-                    let asked = export_window::Settings { folder: Some(folder.display().to_string()), template: chosen, format, size };
+                    let asked = export_window::Settings { folder: Some(folder.display().to_string()), template: chosen, format, size, normals };
                     let kept = std::sync::Arc::new(std::sync::Mutex::new(None));
                     let keep = kept.clone();
                     steps.push(Step::Check(Box::new(move |app: &App| match &app.ui.dialog {

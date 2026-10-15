@@ -22,7 +22,7 @@ use brewed_texture_engine::export::Packed;
 use brewed_texture_engine::{ExportJob, GraphExport, Request};
 use export_window::{Chosen, Event, Own, Setting, Settings, Which};
 use iced::Task;
-use texture_export::{FileFormat, Format, Normals, Size, Template};
+use texture_export::{FileFormat, Format, Normals, NormalsWritten, Size, Template};
 
 use super::{App, Dialog, Message, blocking};
 
@@ -247,7 +247,7 @@ impl App {
                 template: k.template.as_deref().and_then(|name| dialog.named(name)),
                 format: k.format,
                 size: k.size,
-                normals: None,
+                normals: k.normals,
             });
             rows.push(ExportRow { key, graph: None, name: doc.title(), checked: false, own, size: [0, 0], normals: Normals::OpenGL });
             for entry in graphs {
@@ -285,6 +285,7 @@ impl App {
             template: dialog.named(&self.ui.export_template).unwrap_or(chosen_of(Preset::Maps)),
             format: self.ui.export_format,
             size: self.ui.export_size,
+            normals: self.ui.export_normals,
         }
     }
 
@@ -312,7 +313,13 @@ impl App {
                 paths,
                 problems,
                 changed,
-                global: Settings { folder: None, template: chosen_of(Preset::Maps), format: FileFormat::AsMade, size: Size::AsMade },
+                global: Settings {
+                    folder: None,
+                    template: chosen_of(Preset::Maps),
+                    format: FileFormat::AsMade,
+                    size: Size::AsMade,
+                    normals: NormalsWritten::AsTemplate,
+                },
                 rows: Vec::new(),
                 window: export_window::State::new(chosen_of(Preset::Maps), &[]),
             };
@@ -353,7 +360,7 @@ impl App {
                     Setting::Template(t) => dialog.global.template = t,
                     Setting::Format(f) => dialog.global.format = f,
                     Setting::Size(s) => dialog.global.size = s,
-                    Setting::Normals(_) => {}
+                    Setting::Normals(n) => dialog.global.normals = n,
                 },
                 Some(i) => {
                     if let Some(own) = dialog.rows.get_mut(i).map(|r| &mut r.own) {
@@ -490,8 +497,13 @@ impl App {
         let folder = self.doc.path().and_then(|p| p.parent()).map(Path::to_path_buf);
         let edited = (self.doc_key, self.doc.current());
         let Some(Dialog::Export(dialog)) = &mut self.ui.dialog else { return };
-        dialog.global =
-            Settings { folder: folder.map(|f| f.display().to_string()), template: chosen_of(Preset::Maps), format: FileFormat::AsMade, size: Size::AsMade };
+        dialog.global = Settings {
+            folder: folder.map(|f| f.display().to_string()),
+            template: chosen_of(Preset::Maps),
+            format: FileFormat::AsMade,
+            size: Size::AsMade,
+            normals: NormalsWritten::AsTemplate,
+        };
         for row in &mut dialog.rows {
             row.own = Own::default();
             row.checked = (row.key, row.graph) == (edited.0, Some(edited.1));
@@ -514,6 +526,7 @@ impl App {
                 template: package.template.map(|t| dialog.name_of(t)),
                 format: package.format,
                 size: package.size,
+                normals: package.normals,
                 graphs: dialog
                     .rows
                     .iter()
@@ -555,6 +568,7 @@ impl App {
         self.ui.export_template = dialog.name_of(dialog.global.template);
         self.ui.export_format = dialog.global.format;
         self.ui.export_size = dialog.global.size;
+        self.ui.export_normals = dialog.global.normals;
         self.ui.export_folder = dialog.global.folder.as_ref().map(PathBuf::from).or(self.ui.export_folder.take());
         let planned = self.export_plan(&dialog);
         let folders: std::collections::BTreeSet<PathBuf> = checked.iter().filter_map(|&i| dialog.folder_of(i)).collect();
@@ -625,8 +639,14 @@ impl App {
                 Some(template) => {
                     let values = self.export_values_of(row.key, row.graph);
                     let values: Vec<(&str, &str)> = values.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-                    let directx = row.own.normals.unwrap_or(row.normals) == Normals::DirectX;
-                    for file in texture_export::plan_template(template, &export_presets::maps(&entry.graph), &values, directx) {
+                    // Its normal maps as its Normal nodes make them, written as the settings say
+                    // (as the template says, or one way whatever it says).
+                    let directx = row.normals == Normals::DirectX;
+                    let mut template = template.clone();
+                    if let NormalsWritten::Of(way) = settings.normals {
+                        template.normals = way;
+                    }
+                    for file in texture_export::plan_template(&template, &export_presets::maps(&entry.graph), &values, directx) {
                         // A file of no format of its own: as the settings say (as made: as the
                         // first map it is made of).
                         let first = match &file.what {

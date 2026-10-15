@@ -34,7 +34,7 @@ pub struct Template {
 }
 
 /// Which way a normal map's green points.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Normals {
     /// Y+: OpenGL's, Unity's, glTF's, Blender's.
     #[default]
@@ -193,6 +193,15 @@ pub enum FileFormat {
     #[default]
     AsMade,
     Of(Format),
+}
+
+/// Which way an export writes normal maps: as its template says, or one way whatever it says
+/// (a map made the other way has its green turned over).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NormalsWritten {
+    #[default]
+    AsTemplate,
+    Of(Normals),
 }
 
 /// How large an export writes its files: as the program makes its maps (its project's size, a

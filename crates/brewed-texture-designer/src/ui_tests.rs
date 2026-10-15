@@ -720,6 +720,8 @@ fn exports_follow_the_settings_chosen() {
         "Global settings",
         "General Export Parameters",
         "Output template",
+        "Normal map format",
+        "As the template says (DirectX (Y−))",
         "Exclude all",
         "Reset all",
         "Save settings",
@@ -744,6 +746,11 @@ fn exports_follow_the_settings_chosen() {
     let formats: Vec<Format> = plan.iter().map(|p| p.format).collect();
     assert_eq!(formats, [Format::Png8, Format::Png8, Format::Png8, Format::Png16], "each as its Output says (the height of 16 bits)");
     assert!(plan[1].file.said.contains("green turned over"), "Unreal's normals are DirectX's, the graph's OpenGL's: {}", plan[1].file.said);
+    // Normal maps written one way whatever the template says: OpenGL's, as the graph makes them.
+    say(&mut w, Event::Set(None, Setting::Normals(texture_export::NormalsWritten::Of(texture_export::Normals::OpenGL))));
+    let opengl = w.app.export_plan(&dialog(&w));
+    assert!(!opengl[1].file.said.contains("green turned over"), "as made: {}", opengl[1].file.said);
+    say(&mut w, Event::Set(None, Setting::Normals(texture_export::NormalsWritten::AsTemplate)));
     assert!(plan[2].file.said.ends_with("B 0 (no metallic)"), "no metallic map: the value written: {}", plan[2].file.said);
     say(&mut w, Event::Set(None, Setting::Format(FileFormat::Of(Format::Tga8))));
     say(&mut w, Event::Tab(Tab::Files));
@@ -757,7 +764,13 @@ fn exports_follow_the_settings_chosen() {
     say(&mut w, Event::Select(Some(edited)));
     say(&mut w, Event::Set(Some(edited), Setting::Size(Sizes::AsMade)));
     w.input(&[]);
-    for said in ["Its normal maps", "As package settings (Unreal Engine)", "As in the project (2048)", "As in the project (OpenGL (Y+))"] {
+    for said in [
+        "Normal map format",
+        "As package settings (Unreal Engine)",
+        "As in the project (2048)",
+        "As package settings (DirectX (Y−))",
+        "Its normal maps are written as DirectX (Y−); its Normal nodes make them as OpenGL (Y+), so their green is turned over.",
+    ] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
     w.snapshot("export_graph");

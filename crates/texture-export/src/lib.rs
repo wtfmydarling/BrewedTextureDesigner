@@ -20,6 +20,6 @@ mod template;
 pub use names::{file_stem, sanitize_file_name, unique_paths};
 pub use plan::{Map, MapId, Planned, PlannedFile, Source, as_they_are};
 pub use template::{
-    Edit, File, FileFormat, FileType, Format, Input, Layout, Missing, Normals, Part, Size, Template, new_template_path, plan_template, read_templates,
-    template_of, write_template,
+    Edit, File, FileFormat, FileType, Format, Input, Layout, Missing, Normals, NormalsWritten, Part, Size, Template, new_template_path, plan_template,
+    read_templates, template_of, write_template,
 };

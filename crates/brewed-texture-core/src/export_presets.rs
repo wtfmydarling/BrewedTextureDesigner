@@ -10,7 +10,7 @@ use crate::graph::{Graph, NodeId};
 use crate::instance::GraphId;
 use crate::nodes::{NodeKind, Usage};
 use texture_export::naming::Token;
-use texture_export::{FileFormat, Normals, Size, Template};
+use texture_export::{FileFormat, Normals, NormalsWritten, Size, Template};
 
 /// What the export window keeps with a package (its Save settings, see `docs/package-format.md`):
 /// what the package says of its own for all its graphs, where not as the global settings say
@@ -30,12 +30,15 @@ pub struct ExportSettings {
     pub format: Option<FileFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<Size>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normals: Option<NormalsWritten>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphs: Vec<GraphExportSettings>,
 }
 
 /// What a graph's export says of its own: whether it is exported, and where it is not as the
-/// package's settings say, its folder, template, format, size, and the way its normal maps point.
+/// package's settings say, its folder, template, format, size, and which way its normal maps are
+/// written.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GraphExportSettings {
     pub graph: GraphId,
@@ -50,7 +53,7 @@ pub struct GraphExportSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<Size>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub normals: Option<Normals>,
+    pub normals: Option<NormalsWritten>,
 }
 
 /// The parts of a file's name an export of a graph fills in.
