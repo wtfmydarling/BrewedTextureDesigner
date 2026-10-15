@@ -355,6 +355,9 @@ impl Package {
         // (The folder its graphs are exported to.)
         if let Some(export) = &mut self.export {
             map(&mut export.folder);
+            for graph in &mut export.graphs {
+                map(&mut graph.folder);
+            }
         }
         for entry in &mut self.graphs {
             let graph = Arc::make_mut(&mut entry.graph);

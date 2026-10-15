@@ -96,15 +96,15 @@ What the package is. A JSON object:
 | `extras` | object | What other programs keep with the package. Optional. |
 | `export` | object | How its graphs are exported, as the export window's Save settings kept it (below). Optional; a reader that cannot take it passes over it. |
 
-How its graphs are exported (`export`):
+How its graphs are exported (`export`): what the package says of its own for all its graphs, where not as the program's global settings say, and what each graph says of its own:
 
 | Field | Type | |
 |---|---|---|
 | `folder` | string | The folder the files go to, relative to the package's file where it can be. Optional. |
-| `template` | string | The template the files are written with, by its name: `"Raw Outputs"` (each Output as it is), a preset of the program's (`"Unreal Engine"`, `"Unity (URP)"`, `"Unity (HDRP)"`, `"glTF 2.0"`) or one of the user's. |
-| `format` | string or object | `"AsMade"` (each file as its Output says), or `{"Of": "Png8"}`: `Png8`, `Png16`, `Jpeg8`, `Tga8`, `Bmp8`, `Tiff8`, `Tiff16`, `Tiff32`, `Exr16`, `Exr32`, `Hdr32`, `Dxt1` … `Dxt5`. Optional: as made. |
-| `size` | string or object | `"AsMade"` (as large as each graph is made), or `{"Side": 1024}`: the longer side, in pixels, the other in proportion. Optional: as made. |
-| `graphs` | array | Of each graph: `graph` (its id), `checked` (it is exported), and where it is not as the rest says, its own `template`, `format`, `size`, and `normals` (`"OpenGL"` or `"DirectX"`: which way its normal maps point). Optional. |
+| `template` | string | The template the files are written with, by its name: `"Raw Outputs"` (each Output as it is), a preset of the program's (`"Unreal Engine"`, `"Unity (URP)"`, `"Unity (HDRP)"`, `"glTF 2.0"`) or one of the user's. Optional. |
+| `format` | string or object | `"AsMade"` (each file as its Output says), or `{"Of": "Png8"}`: `Png8`, `Png16`, `Jpeg8`, `Tga8`, `Bmp8`, `Tiff8`, `Tiff16`, `Tiff32`, `Exr16`, `Exr32`, `Hdr32`, `Dxt1` … `Dxt5`. Optional. |
+| `size` | string or object | `"AsMade"` (as large as each graph is made), or `{"Side": 1024}`: the longer side, in pixels, the other in proportion. Optional. |
+| `graphs` | array | Of each graph: `graph` (its id), `checked` (it is exported), and where it is not as the package says, its own `folder`, `template`, `format`, `size`, and `normals` (`"OpenGL"` or `"DirectX"`: which way its normal maps point). Optional. |
 
 A graph:
 

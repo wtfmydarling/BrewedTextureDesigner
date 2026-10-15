@@ -100,9 +100,9 @@ pub struct ExportDialog {
     /// The program's presets as the user changed them, in the order of [`Preset::ALL`] (none:
     /// as the program makes them).
     pub changed: Vec<Option<Template>>,
-    /// What all are exported with, and where.
+    /// Where and what all are exported with (what a package or a graph says of its own is its
+    /// row's).
     pub global: Settings,
-    pub folder: Option<PathBuf>,
     /// The packages open and their graphs.
     pub rows: Vec<ExportRow>,
     /// The window's own: its tab, the row and the template shown, its menus.
@@ -114,8 +114,8 @@ pub enum ExportMessage {
     Open,
     /// What is done in the window.
     Window(Event),
-    /// The folder chosen in a dialog of the system.
-    Folder(Option<PathBuf>),
+    /// The folder chosen in a dialog of the system, of the global settings (`None`) or of a row.
+    Folder(Option<usize>, Option<PathBuf>),
 }
 
 /// A file the window writes: of which row, where, of what, as what and how large.
@@ -162,9 +162,22 @@ impl ExportDialog {
         Preset::ALL.iter().position(|p| p.name() == name).map(Chosen::Preset).or_else(|| self.templates.iter().position(|t| t.name == name).map(Chosen::Mine))
     }
 
-    /// The settings of the row `i` (a graph's): the global ones, and what it says of its own.
+    /// The settings of the row `i`: the global ones, then what its package says of its own (of a
+    /// graph), then what it says.
     pub fn settings_of(&self, i: usize) -> Settings {
-        self.rows.get(i).map_or(self.global, |row| self.global.with(&row.own))
+        let Some(row) = self.rows.get(i) else { return self.global.clone() };
+        match row.graph {
+            None => self.global.with(&row.own),
+            Some(_) => {
+                let package = self.rows.iter().find(|r| r.key == row.key && r.graph.is_none());
+                package.map_or_else(|| self.global.clone(), |p| self.global.with(&p.own)).with(&row.own)
+            }
+        }
+    }
+
+    /// The folder the files of the row `i` go to (none: none chosen).
+    pub fn folder_of(&self, i: usize) -> Option<PathBuf> {
+        self.settings_of(i).folder.map(PathBuf::from)
     }
 
     /// The template of the user's `index` written to its file, where it is kept.
@@ -228,10 +241,19 @@ impl App {
             if graphs.is_empty() {
                 continue;
             }
-            rows.push(ExportRow { key, graph: None, name: doc.title(), checked: false, own: Own::default(), size: [0, 0], normals: Normals::OpenGL });
+            let folder = |f: &String| (!f.is_empty()).then(|| f.clone());
+            let own = kept.map_or_else(Own::default, |k| Own {
+                folder: folder(&k.folder),
+                template: k.template.as_deref().and_then(|name| dialog.named(name)),
+                format: k.format,
+                size: k.size,
+                normals: None,
+            });
+            rows.push(ExportRow { key, graph: None, name: doc.title(), checked: false, own, size: [0, 0], normals: Normals::OpenGL });
             for entry in graphs {
                 let saved = kept.and_then(|k| k.graphs.iter().find(|g| g.graph == entry.id));
                 let own = saved.map_or_else(Own::default, |g| Own {
+                    folder: folder(&g.folder),
                     template: g.template.as_deref().and_then(|name| dialog.named(name)),
                     format: g.format,
                     size: g.size,
@@ -254,21 +276,15 @@ impl App {
         rows
     }
 
-    /// The global settings and the folder as they were kept with the package being edited, or
-    /// as the export before offered them.
-    fn export_global(&self, dialog: &ExportDialog) -> (Settings, Option<PathBuf>) {
-        let last = Settings {
+    /// The global settings as the export before left them (what a package keeps is its own):
+    /// at first, the Outputs as they are, as large as they are made, in the package's folder.
+    fn export_global(&self, dialog: &ExportDialog) -> Settings {
+        let folder = self.ui.export_folder.clone().or_else(|| self.doc.path().and_then(|p| p.parent()).map(Path::to_path_buf));
+        Settings {
+            folder: folder.map(|f| f.display().to_string()),
             template: dialog.named(&self.ui.export_template).unwrap_or(chosen_of(Preset::Maps)),
             format: self.ui.export_format,
             size: self.ui.export_size,
-        };
-        let beside = || self.ui.export_folder.clone().or_else(|| self.doc.path().and_then(|p| p.parent()).map(Path::to_path_buf));
-        match &self.doc.package().export {
-            Some(kept) => (
-                Settings { template: dialog.named(&kept.template).unwrap_or(last.template), format: kept.format, size: kept.size },
-                (!kept.folder.is_empty()).then(|| PathBuf::from(&kept.folder)).or_else(beside),
-            ),
-            None => (last, beside()),
         }
     }
 
@@ -296,12 +312,11 @@ impl App {
                 paths,
                 problems,
                 changed,
-                global: Settings { template: chosen_of(Preset::Maps), format: FileFormat::AsMade, size: Size::AsMade },
-                folder: None,
+                global: Settings { folder: None, template: chosen_of(Preset::Maps), format: FileFormat::AsMade, size: Size::AsMade },
                 rows: Vec::new(),
                 window: export_window::State::new(chosen_of(Preset::Maps), &[]),
             };
-            (dialog.global, dialog.folder) = self.export_global(&dialog);
+            dialog.global = self.export_global(&dialog);
             dialog.rows = self.export_rows(&dialog);
             dialog.window = export_window::State::new(dialog.global.template, &dialog.presets());
             self.ui.dialog = Some(Dialog::Export(Box::new(dialog)));
@@ -310,11 +325,15 @@ impl App {
         let Some(Dialog::Export(dialog)) = &mut self.ui.dialog else { return Task::none() };
         let event = match message {
             ExportMessage::Open => return Task::none(),
-            ExportMessage::Folder(Some(folder)) => {
-                dialog.folder = Some(folder);
+            ExportMessage::Folder(row, Some(folder)) => {
+                let folder = Some(folder.display().to_string());
+                match row.and_then(|i| dialog.rows.get_mut(i)) {
+                    Some(row) => row.own.folder = folder,
+                    None => dialog.global.folder = folder,
+                }
                 return Task::none();
             }
-            ExportMessage::Folder(None) => return Task::none(),
+            ExportMessage::Folder(_, None) => return Task::none(),
             ExportMessage::Window(event) => event,
         };
         dialog.window.update(&event);
@@ -328,7 +347,7 @@ impl App {
                     heading_checks(&mut dialog.rows);
                 }
             }
-            Event::IncludeAll => dialog.rows.iter_mut().for_each(|r| r.checked = true),
+            Event::IncludeAll(checked) => dialog.rows.iter_mut().for_each(|r| r.checked = checked),
             Event::Set(row, setting) => match row {
                 None => match setting {
                     Setting::Template(t) => dialog.global.template = t,
@@ -350,6 +369,7 @@ impl App {
             Event::Unset(i, which) => {
                 if let Some(own) = dialog.rows.get_mut(i).map(|r| &mut r.own) {
                     match which {
+                        Which::Folder => own.folder = None,
                         Which::Template => own.template = None,
                         Which::Format => own.format = None,
                         Which::Size => own.size = None,
@@ -357,9 +377,12 @@ impl App {
                     }
                 }
             }
-            Event::Browse => {
-                // Where the folder is, or where the settings open file dialogs.
-                let folder = dialog.folder.clone();
+            Event::Browse(row) => {
+                // Where its folder is, or where the settings open file dialogs.
+                let folder = match row {
+                    Some(i) => dialog.folder_of(i),
+                    None => dialog.global.folder.as_ref().map(PathBuf::from),
+                };
                 let folder = folder.or_else(|| self.dialog_folder(None, false));
                 return Task::perform(
                     blocking(move || {
@@ -369,12 +392,16 @@ impl App {
                         }
                         picker.pick_folder()
                     }),
-                    |picked| Message::Export(ExportMessage::Folder(picked.flatten())),
+                    move |picked| Message::Export(ExportMessage::Folder(row, picked.flatten())),
                 );
             }
-            Event::OpenFolder => {
-                if let Some(folder) = &dialog.folder {
-                    crate::log_file::reveal(folder);
+            Event::OpenFolder(row) => {
+                let folder = match row {
+                    Some(i) => dialog.folder_of(i),
+                    None => dialog.global.folder.as_ref().map(PathBuf::from),
+                };
+                if let Some(folder) = folder {
+                    crate::log_file::reveal(&folder);
                 }
             }
             Event::New => {
@@ -463,8 +490,8 @@ impl App {
         let folder = self.doc.path().and_then(|p| p.parent()).map(Path::to_path_buf);
         let edited = (self.doc_key, self.doc.current());
         let Some(Dialog::Export(dialog)) = &mut self.ui.dialog else { return };
-        dialog.global = Settings { template: chosen_of(Preset::Maps), format: FileFormat::AsMade, size: Size::AsMade };
-        dialog.folder = folder;
+        dialog.global =
+            Settings { folder: folder.map(|f| f.display().to_string()), template: chosen_of(Preset::Maps), format: FileFormat::AsMade, size: Size::AsMade };
         for row in &mut dialog.rows {
             row.own = Own::default();
             row.checked = (row.key, row.graph) == (edited.0, Some(edited.1));
@@ -481,11 +508,12 @@ impl App {
         let mut kept = 0;
         let keys: Vec<u64> = dialog.rows.iter().filter(|r| r.graph.is_none()).map(|r| r.key).collect();
         for key in keys {
+            let package = dialog.rows.iter().find(|r| r.key == key && r.graph.is_none()).map(|r| r.own.clone()).unwrap_or_default();
             let settings = ExportSettings {
-                folder: dialog.folder.as_ref().map_or_else(String::new, |f| f.display().to_string()),
-                template: dialog.name_of(dialog.global.template),
-                format: dialog.global.format,
-                size: dialog.global.size,
+                folder: package.folder.unwrap_or_default(),
+                template: package.template.map(|t| dialog.name_of(t)),
+                format: package.format,
+                size: package.size,
                 graphs: dialog
                     .rows
                     .iter()
@@ -494,6 +522,7 @@ impl App {
                         Some(GraphExportSettings {
                             graph: r.graph?,
                             checked: r.checked,
+                            folder: r.own.folder.clone().unwrap_or_default(),
                             template: r.own.template.map(|t| dialog.name_of(t)),
                             format: r.own.format,
                             size: r.own.size,
@@ -517,13 +546,18 @@ impl App {
     fn export_now(&mut self) -> Task<Message> {
         let Some(Dialog::Export(dialog)) = &self.ui.dialog else { return Task::none() };
         let dialog = dialog.as_ref().clone();
-        let Some(folder) = dialog.folder.clone() else { return Task::none() };
+        // (Each graph checked has its folder.)
+        let checked: Vec<usize> = (0..dialog.rows.len()).filter(|&i| dialog.rows[i].checked && dialog.rows[i].graph.is_some()).collect();
+        if checked.iter().any(|&i| dialog.folder_of(i).is_none()) {
+            return Task::none();
+        }
         self.ui.dialog = None;
         self.ui.export_template = dialog.name_of(dialog.global.template);
         self.ui.export_format = dialog.global.format;
         self.ui.export_size = dialog.global.size;
-        self.ui.export_folder = Some(folder.clone());
-        let planned = self.export_plan(&dialog, &folder);
+        self.ui.export_folder = dialog.global.folder.as_ref().map(PathBuf::from).or(self.ui.export_folder.take());
+        let planned = self.export_plan(&dialog);
+        let folders: std::collections::BTreeSet<PathBuf> = checked.iter().filter_map(|&i| dialog.folder_of(i)).collect();
         let mut count = 0;
         for (i, row) in dialog.rows.iter().enumerate() {
             let files: Vec<&PlannedExport> = planned.iter().filter(|p| p.row == i).collect();
@@ -548,7 +582,11 @@ impl App {
             return Task::none();
         }
         self.res.exports_pending += count;
-        self.set_status(format!("Exporting {count} file(s) to {}…", folder.display()), false);
+        let to = match folders.len() {
+            1 => folders.first().map_or_else(String::new, |f| f.display().to_string()),
+            n => format!("{n} folders"),
+        };
+        self.set_status(format!("Exporting {count} file(s) to {to}…"), false);
         Task::none()
     }
 
@@ -561,9 +599,10 @@ impl App {
         vec![("graph".into(), name), ("package".into(), package)]
     }
 
-    /// The files the window writes of the graphs checked: planned, each with its path, the format
-    /// it is written in and its size.
-    pub(crate) fn export_plan(&self, dialog: &ExportDialog, folder: &Path) -> Vec<PlannedExport> {
+    /// The files the window writes of the graphs checked: planned, each with its path (in the
+    /// folder of its graph; of none chosen, its name alone), the format it is written in and its
+    /// size.
+    pub(crate) fn export_plan(&self, dialog: &ExportDialog) -> Vec<PlannedExport> {
         let mut planned: Vec<PlannedExport> = Vec::new();
         for (i, row) in dialog.rows.iter().enumerate() {
             let (true, Some(graph)) = (row.checked, row.graph) else { continue };
@@ -600,11 +639,21 @@ impl App {
                 }
             }
         }
-        // Each file its own path, of all the graphs at once (two graphs' Outputs may be named
-        // alike).
-        let named: Vec<(String, &str)> = planned.iter().map(|p| (p.file.name.clone(), p.format.extension())).collect();
-        for (p, path) in planned.iter_mut().zip(texture_export::unique_paths(folder, &named)) {
-            p.path = path;
+        // Each file its own path, of all the graphs going to a folder at once (two graphs' Outputs
+        // may be named alike).
+        let folders: Vec<PathBuf> = planned.iter().map(|p| dialog.folder_of(p.row).unwrap_or_default()).collect();
+        let mut done: Vec<&PathBuf> = Vec::new();
+        for folder in &folders {
+            if done.contains(&folder) {
+                continue;
+            }
+            done.push(folder);
+            let at: Vec<usize> = (0..planned.len()).filter(|&i| &folders[i] == folder).collect();
+            let named: Vec<(String, &str)> = at.iter().map(|&i| (planned[i].file.name.clone(), planned[i].format.extension())).collect();
+            let paths = texture_export::unique_paths(folder, &named);
+            for (i, path) in at.into_iter().zip(paths) {
+                planned[i].path = path;
+            }
         }
         planned
     }

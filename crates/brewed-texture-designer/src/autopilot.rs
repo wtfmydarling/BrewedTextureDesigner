@@ -982,14 +982,14 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                         Step::Do(Message::Export(X::Window(Event::Set(None, Setting::Template(chosen))))),
                         Step::Do(Message::Export(X::Window(Event::Set(None, Setting::Format(format))))),
                         Step::Do(Message::Export(X::Window(Event::Set(None, Setting::Size(size))))),
-                        Step::Do(Message::Export(X::Folder(Some(folder.clone())))),
+                        Step::Do(Message::Export(X::Folder(None, Some(folder.clone())))),
                     ];
-                    let asked = (export_window::Settings { template: chosen, format, size }, Some(folder.clone()));
+                    let asked = export_window::Settings { folder: Some(folder.display().to_string()), template: chosen, format, size };
                     let kept = std::sync::Arc::new(std::sync::Mutex::new(None));
                     let keep = kept.clone();
                     steps.push(Step::Check(Box::new(move |app: &App| match &app.ui.dialog {
                         // (The templates of the user's, read as it opened, are theirs.)
-                        Some(Dialog::Export(open)) if (open.global, open.folder.clone()) == asked => {
+                        Some(Dialog::Export(open)) if open.global == asked => {
                             if let Ok(mut kept) = keep.lock() {
                                 *kept = Some(open.as_ref().clone());
                             }
@@ -1003,7 +1003,7 @@ fn scenes(folder: &Path) -> VecDeque<Scene> {
                             return Some(format!("the export dialog stays open: {:?}", app.ui.dialog));
                         }
                         let Some(dialog) = kept.lock().ok().and_then(|k| k.clone()) else { return Some("the export window was not seen open".into()) };
-                        let planned = app.export_plan(&dialog, &folder);
+                        let planned = app.export_plan(&dialog);
                         let files = match files_in(&folder) {
                             Ok(files) => files,
                             Err(e) => return Some(e),

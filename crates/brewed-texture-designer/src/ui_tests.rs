@@ -709,9 +709,9 @@ fn exports_follow_the_settings_chosen() {
     assert_eq!(open.rows[0].graph, None, "its package first, a heading");
     // Raw Outputs: every Output, as the export always wrote them.
     let outputs = w.app.graph().nodes_of(NodeKind::OUTPUT).count();
-    assert_eq!(w.app.export_plan(&open, &dir).len(), outputs);
+    assert_eq!(w.app.export_plan(&open).len(), outputs);
     say(&mut w, Event::Set(None, Setting::Template(chosen_of(Preset::Unreal))));
-    w.send(Message::Export(X::Folder(Some(dir.clone()))));
+    w.send(Message::Export(X::Folder(None, Some(dir.clone()))));
     w.input(&[]);
     for said in [
         "SETTINGS",
@@ -720,7 +720,7 @@ fn exports_follow_the_settings_chosen() {
         "Global settings",
         "General Export Parameters",
         "Output template",
-        "Include all",
+        "Exclude all",
         "Reset all",
         "Save settings",
         "4 texture(s) selected for export",
@@ -737,7 +737,7 @@ fn exports_follow_the_settings_chosen() {
     w.snapshot("export_size_menu");
     say(&mut w, Event::Set(None, Setting::Size(Sizes::Side(1024))));
     assert_eq!(dialog(&w).window.menu, None, "the list closes");
-    let plan = w.app.export_plan(&dialog(&w), &dir);
+    let plan = w.app.export_plan(&dialog(&w));
     let names: Vec<String> = plan.iter().map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned()).collect();
     assert_eq!(names, ["T_Brick_Wall_BaseColor.png", "T_Brick_Wall_Normal.png", "T_Brick_Wall_ORM.png", "T_Brick_Wall_Height.png"]);
     assert!(plan.iter().all(|p| p.size == [1024, 1024]), "as large as asked");
@@ -757,35 +757,64 @@ fn exports_follow_the_settings_chosen() {
     say(&mut w, Event::Select(Some(edited)));
     say(&mut w, Event::Set(Some(edited), Setting::Size(Sizes::AsMade)));
     w.input(&[]);
-    for said in ["Its normal maps", "As global settings (Unreal Engine)", "As in the project (2048)"] {
+    for said in ["Its normal maps", "As package settings (Unreal Engine)", "As in the project (2048)", "As in the project (OpenGL (Y+))"] {
         assert!(!texts(&mut w, said).is_empty(), "{said}");
     }
     w.snapshot("export_graph");
-    assert!(w.app.export_plan(&dialog(&w), &dir).iter().all(|p| p.size == [2048, 2048]));
+    assert!(w.app.export_plan(&dialog(&w)).iter().all(|p| p.size == [2048, 2048]));
     say(&mut w, Event::Unset(edited, Which::Size));
-    assert!(w.app.export_plan(&dialog(&w), &dir).iter().all(|p| p.size == [1024, 1024]), "as the global settings again");
+    assert!(w.app.export_plan(&dialog(&w)).iter().all(|p| p.size == [1024, 1024]), "as the global settings again");
     // Nothing checked, nothing to export, and no list of it.
     say(&mut w, Event::Check(edited, false));
     w.input(&[]);
-    assert!(w.app.export_plan(&dialog(&w), &dir).is_empty());
+    assert!(w.app.export_plan(&dialog(&w)).is_empty());
     assert!(!texts(&mut w, "No graph is checked for export").is_empty());
-    say(&mut w, Event::IncludeAll);
+    say(&mut w, Event::IncludeAll(true));
     assert!(dialog(&w).rows.iter().all(|r| r.checked), "the package too");
-    // Kept with the package: one step to undo, and offered as the window opens again.
+    w.input(&[]);
+    assert!(!texts(&mut w, "Exclude all").is_empty(), "all included: excluded at once");
+    say(&mut w, Event::IncludeAll(false));
+    assert!(dialog(&w).rows.iter().all(|r| !r.checked));
+    say(&mut w, Event::IncludeAll(true));
+    // The package's own, for all its graphs: Unity's template, into a folder of its own.
+    let unity = dir.join("Unity");
+    say(&mut w, Event::Select(Some(0)));
+    say(&mut w, Event::Set(Some(0), Setting::Template(chosen_of(Preset::UnityUrp))));
+    w.send(Message::Export(X::Folder(Some(0), Some(unity.clone()))));
+    w.input(&[]);
+    for said in ["As global settings (tga 8 bits)", "As global settings (1024)", "Unity (URP)", unity.to_str().expect("a path")] {
+        assert!(!texts(&mut w, said).is_empty(), "{said}");
+    }
+    w.snapshot("export_package");
+    let plan = w.app.export_plan(&dialog(&w));
+    assert!(plan.iter().all(|p| p.path.parent() == Some(unity.as_path())), "into the package's folder");
+    assert_eq!(plan[0].path.file_name().unwrap().to_string_lossy(), "Brick_Wall_BaseMap.tga", "with the package's template");
+    // A graph's own over its package's: its own folder.
+    let own = dir.join("Own");
+    w.send(Message::Export(X::Folder(Some(edited), Some(own.clone()))));
+    assert!(w.app.export_plan(&dialog(&w)).iter().all(|p| p.path.parent() == Some(own.as_path())));
+    say(&mut w, Event::Unset(edited, Which::Folder));
+    say(&mut w, Event::Select(Some(edited)));
+    w.input(&[]);
+    assert!(!texts(&mut w, "As package settings (Unity (URP))").is_empty(), "a graph follows its package");
+    // Kept with the package: what it says of its own, one step to undo, and offered as the
+    // window opens again.
     say(&mut w, Event::SaveSettings);
     let kept = w.app.doc.package().export.clone().expect("kept with the package");
-    assert_eq!((kept.template.as_str(), kept.size, kept.format), ("Unreal Engine", Sizes::Side(1024), FileFormat::Of(Format::Tga8)));
+    assert_eq!((kept.template.as_deref(), kept.folder.as_str()), (Some("Unity (URP)"), unity.to_str().expect("a path")));
+    assert_eq!((kept.size, kept.format), (None, None), "the rest as the global settings say");
     assert!(kept.graphs.iter().any(|g| g.graph == w.app.doc.current() && g.checked));
     assert_eq!(w.app.doc.undo_label(), Some("Save Export Settings"));
     say(&mut w, Event::Cancel);
     w.send(Message::Export(X::Open));
     let again = dialog(&w);
-    assert_eq!((again.global.template, again.global.size, again.folder), (chosen_of(Preset::Unreal), Sizes::Side(1024), Some(dir.clone())));
+    assert_eq!((again.rows[0].own.template, again.rows[0].own.folder.clone()), (Some(chosen_of(Preset::UnityUrp)), unity.to_str().map(String::from)));
     // All as by default.
     say(&mut w, Event::ResetAll);
     assert_eq!(dialog(&w).global.template, chosen_of(Preset::Maps));
+    assert!(dialog(&w).rows.iter().all(|r| r.own == export_window::Own::default()));
     say(&mut w, Event::Set(None, Setting::Template(chosen_of(Preset::Unreal))));
-    w.send(Message::Export(X::Folder(Some(dir.clone()))));
+    w.send(Message::Export(X::Folder(None, Some(dir.clone()))));
     say(&mut w, Event::Export);
     assert_eq!(w.app.ui.dialog, None);
     assert_eq!(w.app.res.exports_pending, 4);
@@ -881,8 +910,8 @@ fn templates_are_made_and_changed_in_the_export_window() {
     say(&mut w, Event::Edit(mine, Edit::Format { file, format: Some(Format::Exr16) }));
     // Exported with: what it says now.
     say(&mut w, Event::Set(None, Setting::Template(mine)));
-    w.send(Message::Export(X::Folder(Some(dir.clone()))));
-    let plan = w.app.export_plan(&dialog(&w), &dir);
+    w.send(Message::Export(X::Folder(None, Some(dir.clone()))));
+    let plan = w.app.export_plan(&dialog(&w));
     let last = plan.last().expect("files").clone();
     assert_eq!(last.path.file_name().unwrap().to_string_lossy(), "HR_Brick_Wall.exr");
     assert_eq!(last.format, Format::Exr16);
@@ -2436,7 +2465,7 @@ fn stays_inside(message: &Message) -> bool {
         Message::Open
         | Message::Save
         | Message::SaveAs
-        | Message::Export(crate::app::export_dialog::ExportMessage::Window(export_window::Event::Browse))
+        | Message::Export(crate::app::export_dialog::ExportMessage::Window(export_window::Event::Browse(_)))
         | Message::ExportNode(_)
         | Message::BrowseFile(..)
         | Message::Pick(_)

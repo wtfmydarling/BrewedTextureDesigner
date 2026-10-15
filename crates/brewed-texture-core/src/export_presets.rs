@@ -13,32 +13,36 @@ use texture_export::naming::Token;
 use texture_export::{FileFormat, Normals, Size, Template};
 
 /// What the export window keeps with a package (its Save settings, see `docs/package-format.md`):
-/// where the files go, what they are written with, as what and how large, and of each graph
+/// what the package says of its own for all its graphs, where not as the global settings say
+/// (where the files go, what they are written with, as what and how large), and of each graph
 /// whether it is exported and what it says of its own.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ExportSettings {
-    /// The folder the files go to (relative to the package's file where it can be).
+    /// The folder the files go to (relative to the package's file where it can be; none: as the
+    /// global settings say).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub folder: String,
     /// The template, by its name: of a preset of the program's (`Raw Outputs`: each Output as it
     /// is), or of one of the user's.
-    #[serde(default)]
-    pub template: String,
-    #[serde(default)]
-    pub format: FileFormat,
-    #[serde(default)]
-    pub size: Size,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<FileFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<Size>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphs: Vec<GraphExportSettings>,
 }
 
 /// What a graph's export says of its own: whether it is exported, and where it is not as the
-/// package's settings say, its template, format, size, and the way its normal maps point.
+/// package's settings say, its folder, template, format, size, and the way its normal maps point.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GraphExportSettings {
     pub graph: GraphId,
     #[serde(default)]
     pub checked: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub folder: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

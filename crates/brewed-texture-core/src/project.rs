@@ -1238,12 +1238,13 @@ mod tests {
         // How it is exported, its folder beside it too.
         package.export = Some(crate::export_presets::ExportSettings {
             folder: dir.join("Exports").display().to_string(),
-            template: "Unreal Engine".into(),
-            format: texture_export::FileFormat::Of(texture_export::Format::Tga8),
-            size: texture_export::Size::Side(1024),
+            template: Some("Unreal Engine".into()),
+            format: Some(texture_export::FileFormat::Of(texture_export::Format::Tga8)),
+            size: Some(texture_export::Size::Side(1024)),
             graphs: vec![crate::export_presets::GraphExportSettings {
                 graph: package.first(),
                 checked: true,
+                folder: dir.join("Exports").join("Unreal").display().to_string(),
                 template: None,
                 format: None,
                 size: Some(texture_export::Size::AsMade),
@@ -1262,7 +1263,9 @@ mod tests {
         let there = load(&moved.join("a.brewtex")).unwrap().package;
         let found: Vec<&str> = there.files().map(|(.., p)| p).collect();
         assert_eq!(found, [moved.join("textures").join("a.png").display().to_string()]);
-        assert_eq!(there.export.map(|e| e.folder), Some(moved.join("Exports").display().to_string()), "exported beside it still");
+        let export = there.export.expect("its export");
+        assert_eq!(export.folder, moved.join("Exports").display().to_string(), "exported beside it still");
+        assert_eq!(export.graphs[0].folder, moved.join("Exports").join("Unreal").display().to_string(), "a graph's own too");
         // What is not a package says so.
         let not = |bytes: &[u8]| {
             std::fs::write(&path, bytes).unwrap();

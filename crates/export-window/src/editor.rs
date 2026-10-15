@@ -41,7 +41,7 @@ fn label(part: &Part, names: &dyn Fn(&MapId) -> String) -> (String, bool) {
     }
 }
 
-pub(crate) fn view<'a, M: Clone + 'a>(content: &Content<'a, M>, state: &'a State, look: &Look, say: impl Fn(Event) -> M + Copy + 'a) -> Element<'a, M> {
+pub(crate) fn view<'a, M: Clone + 'a>(content: &Content<'a>, state: &'a State, look: &Look, say: impl Fn(Event) -> M + Copy + 'a) -> Element<'a, M> {
     let look = *look;
     // (Whatever is shown is changed there.)
     let editable = state.shown.template(&content.presets, content.mine).is_some().then_some(state.shown);
@@ -61,7 +61,7 @@ fn small<'a, M: Clone + 'a>(look: &Look, label: &str, on: Option<M>) -> iced::wi
 }
 
 /// The presets: the program's and the user's, and what is done with them.
-fn presets<'a, M: Clone + 'a>(content: &Content<'a, M>, state: &'a State, look: &Look, say: impl Fn(Event) -> M + Copy + 'a) -> Element<'a, M> {
+fn presets<'a, M: Clone + 'a>(content: &Content<'a>, state: &'a State, look: &Look, say: impl Fn(Event) -> M + Copy + 'a) -> Element<'a, M> {
     let look = *look;
     let c = look.colors;
     let mine = match state.shown {
@@ -119,7 +119,7 @@ fn presets<'a, M: Clone + 'a>(content: &Content<'a, M>, state: &'a State, look: 
 
 /// The preset shown: its name, which way its normal maps point, its output maps.
 fn outputs<'a, M: Clone + 'a>(
-    content: &Content<'a, M>,
+    content: &Content<'a>,
     state: &'a State,
     editable: Option<Chosen>,
     look: &Look,
@@ -211,7 +211,7 @@ fn outputs<'a, M: Clone + 'a>(
 /// parts of a name where asked, and the options of its channel chosen.
 #[allow(clippy::too_many_arguments)]
 fn output_row<'a, M: Clone + 'a>(
-    content: &Content<'a, M>,
+    content: &Content<'a>,
     state: &'a State,
     editable: Option<Chosen>,
     template: &Template,
@@ -476,7 +476,7 @@ fn options<'a, M: Clone + 'a>(
 /// The input maps: those of the program's usages, those of no usage the graph has, those made of
 /// others; each dragged onto a channel.
 fn maps<'a, M: Clone + 'a>(
-    content: &Content<'a, M>,
+    content: &Content<'a>,
     state: &'a State,
     editable: Option<Chosen>,
     look: &Look,

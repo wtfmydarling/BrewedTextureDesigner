@@ -737,6 +737,7 @@ pub fn export_look() -> export_window::Look {
         primary_button,
         text_input,
         pick_list,
+        shorten: crate::view::shortened,
         // The program's surfaces: the window's bar, a pane's header, the panels, what is raised.
         colors: export_window::Colors {
             header: WINDOW,

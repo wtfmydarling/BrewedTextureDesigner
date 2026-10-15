@@ -1164,7 +1164,7 @@ fn answered_from(message: &Message) -> Option<PathBuf> {
         Message::Asked(_, answer) => answered_from(answer),
         Message::SavePicked(p) | Message::ExportNodePicked(_, p) | Message::FilePicked(_, p) => file(p),
         Message::OpenPicked(files) => files.first().and_then(|f| f.parent()).map(Path::to_path_buf),
-        Message::ExportFolderPicked(folder) | Message::Export(export_dialog::ExportMessage::Folder(folder)) => folder.clone(),
+        Message::ExportFolderPicked(folder) | Message::Export(export_dialog::ExportMessage::Folder(_, folder)) => folder.clone(),
         Message::Preview(PreviewMessage::EnvironmentPicked(p)) => file(p),
         Message::Explorer(ExplorerMessage::Located(_, _, p) | ExplorerMessage::ResourceSavePicked(_, _, p)) => file(p),
         Message::Explorer(ExplorerMessage::FilesPicked(_, files) | ExplorerMessage::ImportPicked(_, files)) => {
@@ -3735,7 +3735,7 @@ impl App {
                 let answer = match dialog {
                     Dialog::Unsaved(action) => Some(Message::SaveThen(action.clone())),
                     Dialog::NewGraph(_) => Some(Message::NewGraph(home::NewGraphMessage::Create)),
-                    Dialog::Export(dialog) if dialog.folder.is_some() && dialog.window.tab != export_window::Tab::Templates => {
+                    Dialog::Export(dialog) if dialog.window.tab != export_window::Tab::Templates => {
                         Some(Message::Export(export_dialog::ExportMessage::Window(export_window::Event::Export)))
                     }
                     Dialog::About | Dialog::Shortcuts | Dialog::Versions(_) => Some(Message::Dialog(None)),

@@ -326,8 +326,7 @@ fn new_graph<'a>(app: &'a App, dialog: &'a crate::app::home::NewGraphDialog) -> 
 /// closed by a click beside it, the templates changed in it being written as they change.
 fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog) -> Element<'a, Message> {
     use crate::app::export_dialog::ExportMessage as X;
-    let folder = dialog.folder.as_ref().map_or_else(|| "No folder chosen yet".to_string(), |f| f.display().to_string());
-    let planned = app.export_plan(dialog, dialog.folder.as_deref().unwrap_or(std::path::Path::new("")));
+    let planned = app.export_plan(dialog);
     // The files, under the graph each is of.
     let files = dialog
         .rows
@@ -335,7 +334,7 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
         .enumerate()
         .filter(|(_, row)| row.checked && row.graph.is_some())
         .map(|(i, row)| {
-            let listed = planned
+            let files = planned
                 .iter()
                 .filter(|p| p.row == i)
                 .map(|p| export_window::Listed {
@@ -346,7 +345,7 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
                     depth: p.format.depth().to_string(),
                 })
                 .collect();
-            (row.name.clone(), listed)
+            export_window::Group { name: row.name.clone(), row: i, folder: dialog.settings_of(i).folder, files }
         })
         .collect();
     // The maps a template may be made of: every usage of an Output; of the Outputs of no usage of
@@ -375,21 +374,20 @@ fn export<'a>(app: &'a App, dialog: &'a crate::app::export_dialog::ExportDialog)
             name: r.name.clone(),
             depth: u8::from(r.graph.is_some()),
             checked: r.checked,
-            own: r.own,
+            own: r.own.clone(),
             size: r.size,
             normals: r.normals,
         })
         .collect();
     let content = export_window::Content {
         thing: "graph",
+        project: "package",
         presets: dialog.presets(),
         mine: &dialog.templates,
         templates_folder: crate::app::export_dialog::templates_folder().map(|f| f.display().to_string()),
         problems: &dialog.problems,
         exported,
-        global: dialog.global,
-        folder: crate::view::fitted(folder, style::TEXT_SIZE, style::ui_font(), None),
-        folder_chosen: dialog.folder.is_some(),
+        global: dialog.global.clone(),
         files,
         tokens: &brewed_texture_core::export_presets::TOKENS,
         values,
